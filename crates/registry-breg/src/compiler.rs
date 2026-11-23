@@ -6987,12 +6987,14 @@ fn validate_event_condition(
     match event.when.as_ref() {
         Some(EventConditionSource::Fields {
             changed,
+            changed_any,
             before_equals,
             after_equals,
             before_is_null,
             after_is_null,
         }) => {
             if changed.is_empty()
+                && changed_any.is_empty()
                 && before_equals.is_empty()
                 && after_equals.is_empty()
                 && before_is_null.is_empty()
@@ -7006,11 +7008,17 @@ fn validate_event_condition(
             }
             let compatible = match event.trigger {
                 EventTrigger::Created => {
-                    changed.is_empty() && before_equals.is_empty() && before_is_null.is_empty()
+                    changed.is_empty()
+                        && changed_any.is_empty()
+                        && before_equals.is_empty()
+                        && before_is_null.is_empty()
                 }
                 EventTrigger::Patched => true,
                 EventTrigger::Tombstoned => {
-                    changed.is_empty() && after_equals.is_empty() && after_is_null.is_empty()
+                    changed.is_empty()
+                        && changed_any.is_empty()
+                        && after_equals.is_empty()
+                        && after_is_null.is_empty()
                 }
                 // A read has no before or after state to test.
                 EventTrigger::Read => false,
@@ -7022,24 +7030,40 @@ fn validate_event_condition(
                     "field predicates are unavailable for this event trigger",
                 ));
             }
-            for field in changed {
-                let path = format!("{hook_path}.when.changed[field={field}]");
-                if !fields.contains_key(field.as_str()) {
-                    errors.push(Diagnostic::error(
-                        "breg.event.when-field-unknown",
-                        &path,
-                        "an event condition refers to an unknown field",
-                    ));
-                }
-                if fields
-                    .get(field.as_str())
-                    .is_some_and(|field| field.encrypted)
-                {
-                    errors.push(Diagnostic::error(
-                        "breg.event.when-encrypted",
-                        &path,
-                        "an event condition cannot name an encrypted field",
-                    ));
+            if changed_any.len() == 1 {
+                errors.push(Diagnostic::error(
+                    "breg.event.when-changed-any-single",
+                    format!("{hook_path}.when.changedAny"),
+                    "changedAny lists two or more fields; use changed for a single field",
+                ));
+            }
+            if !changed.is_empty() && !changed_any.is_empty() {
+                errors.push(Diagnostic::error(
+                    "breg.event.when-changed-ambiguous",
+                    format!("{hook_path}.when"),
+                    "a condition sets either changed (every field changed) or changedAny (at least one changed), not both",
+                ));
+            }
+            for (member, listed) in [("changed", changed), ("changedAny", changed_any)] {
+                for field in listed {
+                    let path = format!("{hook_path}.when.{member}[field={field}]");
+                    if !fields.contains_key(field.as_str()) {
+                        errors.push(Diagnostic::error(
+                            "breg.event.when-field-unknown",
+                            &path,
+                            "an event condition refers to an unknown field",
+                        ));
+                    }
+                    if fields
+                        .get(field.as_str())
+                        .is_some_and(|field| field.encrypted)
+                    {
+                        errors.push(Diagnostic::error(
+                            "breg.event.when-encrypted",
+                            &path,
+                            "an event condition cannot name an encrypted field",
+                        ));
+                    }
                 }
             }
             for (member, unset) in [
@@ -7527,6 +7551,7 @@ fn event_condition_fields(
     match event.when.as_ref() {
         Some(EventConditionSource::Fields {
             changed,
+            changed_any,
             before_equals,
             after_equals,
             before_is_null,
@@ -7534,6 +7559,7 @@ fn event_condition_fields(
         }) => Box::new(
             changed
                 .iter()
+                .chain(changed_any.iter())
                 .chain(before_equals.keys())
                 .chain(after_equals.keys())
                 .chain(before_is_null.iter())

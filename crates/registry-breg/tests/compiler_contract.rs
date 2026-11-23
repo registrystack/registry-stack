@@ -9054,6 +9054,18 @@ fn an_unset_value_is_stated_explicitly_and_a_null_literal_is_refused() {
     refuses::<EventConditionSource>(json!({"type": "fields", "afterEquals": {"note": {"a": 1}}}));
     refuses::<EventConditionSource>(json!({"type": "fields", "afterIsNull": ["note", "note"]}));
 
+    reads::<EventConditionSource>(json!({"type": "fields", "changedAny": ["a", "b"]}));
+    refuses::<EventConditionSource>(json!({"type": "fields", "changedAny": ["a", "a"]}));
+    // `changedAny` is omitted when empty so earlier module digests hold.
+    let any = serde_json::to_value(
+        serde_json::from_value::<EventConditionSource>(
+            json!({"type": "fields", "changedAny": ["a", "b"]}),
+        )
+        .expect("a fields condition is read"),
+    )
+    .expect("a condition serializes");
+    assert_eq!(any["changedAny"], json!(["a", "b"]));
+
     // A condition that names no unset field is written as it was, so the
     // digest of a module that never compared with null does not move.
     let written = serde_json::to_value(

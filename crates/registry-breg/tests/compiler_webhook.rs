@@ -394,6 +394,55 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
 }
 
 #[test]
+fn changed_any_is_validated_like_changed_and_has_one_spelling() {
+    let patched_with = |when: Value| {
+        let mut source = project_value();
+        source["recordTypes"]["case"]["hooks"][0]["trigger"] = json!("patched");
+        source["recordTypes"]["case"]["hooks"][0]["when"] = when;
+        source
+    };
+    compile(&patched_with(json!({
+        "type": "fields",
+        "changedAny": ["label", "region"],
+        "afterEquals": {"region": "north"}
+    })))
+    .expect("changedAny is valid on a patched hook with another test");
+
+    assert_compile_code(
+        &patched_with(json!({"type": "fields", "changedAny": ["label", "unknown"]})),
+        "breg.event.when-field-unknown",
+    );
+    for trigger in ["created", "tombstoned"] {
+        let mut incompatible = patched_with(json!({
+            "type": "fields",
+            "changedAny": ["label", "region"]
+        }));
+        incompatible["recordTypes"]["case"]["hooks"][0]["trigger"] = json!(trigger);
+        assert_compile_code(&incompatible, "breg.event.when-trigger-incompatible");
+    }
+    assert_compile_code(
+        &patched_with(json!({"type": "fields", "changedAny": ["label"]})),
+        "breg.event.when-changed-any-single",
+    );
+    assert_compile_code(
+        &patched_with(json!({
+            "type": "fields",
+            "changed": ["label"],
+            "changedAny": ["label", "region"]
+        })),
+        "breg.event.when-changed-ambiguous",
+    );
+    let duplicate = parse_project_yaml(
+        &serde_json::to_vec(&patched_with(json!({
+            "type": "fields",
+            "changedAny": ["label", "label"]
+        })))
+        .expect("test project serializes"),
+    );
+    assert!(duplicate.is_err(), "a repeated changedAny field is refused");
+}
+
+#[test]
 fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     let mut patched = project_value();
     patched["recordTypes"]["case"]["hooks"][0]["trigger"] = json!("patched");

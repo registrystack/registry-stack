@@ -560,11 +560,27 @@ fn condition_matches(
     };
     let EventConditionSource::Fields {
         changed,
+        changed_any,
         before_equals,
         after_equals,
         before_is_null,
         after_is_null,
     } = condition;
+    if !changed_any.is_empty() {
+        let mut any_changed = false;
+        for field in changed_any {
+            let before_value = before
+                .and_then(|snapshot| snapshot.get(field))
+                .ok_or(OutboxError::InvalidProjection)?;
+            let after_value = after
+                .and_then(|snapshot| snapshot.get(field))
+                .ok_or(OutboxError::InvalidProjection)?;
+            any_changed |= before_value != after_value;
+        }
+        if !any_changed {
+            return Ok(false);
+        }
+    }
     for field in changed {
         let before_value = before
             .and_then(|snapshot| snapshot.get(field))
@@ -818,6 +834,56 @@ mod tests {
         let missing = serde_json::Map::new();
         assert!(matches!(
             condition_matches(Some(&condition), Some(&missing), Some(&missing)),
+            Err(OutboxError::InvalidProjection)
+        ));
+    }
+
+    #[test]
+    fn changed_requires_every_field_to_change_and_changed_any_requires_one() {
+        let snapshot = |name: &str, phone: &str| {
+            let Value::Object(map) = serde_json::json!({"name": name, "phone": phone}) else {
+                unreachable!("an object literal")
+            };
+            map
+        };
+        let condition = |source: Value| -> EventConditionSource {
+            serde_json::from_value(source).expect("a fields condition is read")
+        };
+        let all = condition(serde_json::json!({
+            "type": "fields", "changed": ["name", "phone"]
+        }));
+        let any = condition(serde_json::json!({
+            "type": "fields", "changedAny": ["name", "phone"]
+        }));
+        let any_and_after = condition(serde_json::json!({
+            "type": "fields",
+            "changedAny": ["name", "phone"],
+            "afterEquals": {"phone": "2"}
+        }));
+        let before = snapshot("a", "1");
+        for (after, all_expected, any_expected, any_and_after_expected) in [
+            (snapshot("b", "1"), false, true, false),
+            (snapshot("a", "2"), false, true, true),
+            (snapshot("b", "2"), true, true, true),
+            (snapshot("a", "1"), false, false, false),
+            (snapshot("b", "3"), true, true, false),
+        ] {
+            for (condition, expected) in [
+                (&all, all_expected),
+                (&any, any_expected),
+                (&any_and_after, any_and_after_expected),
+            ] {
+                assert_eq!(
+                    condition_matches(Some(condition), Some(&before), Some(&after))
+                        .expect("both snapshots hold the named fields"),
+                    expected,
+                    "{condition:?} against {after:?}"
+                );
+            }
+        }
+        let missing = serde_json::Map::new();
+        assert!(matches!(
+            condition_matches(Some(&any), Some(&missing), Some(&missing)),
             Err(OutboxError::InvalidProjection)
         ));
     }
