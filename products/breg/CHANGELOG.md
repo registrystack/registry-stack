@@ -24,14 +24,22 @@
   several values for one field. A record holding any other value answers
   `no-match`, decided in the generated lookup before any fact is returned.
   Evidence reports that apart from an unknown record, which BReg answers as an
-  unresolved lookup, so this rule does not hide that the record exists. `--optional-fields` names facts a record may
-  leave empty: a null value leaves the fact out of the answer and out of the
-  fact schema's `required` list, and the lookup still matches. A key absent
-  from the response stays a source protocol error. The command refuses a rule
-  on a field that is not an exported fact, a value that does not fit the
-  field's type, and a field that is both required to hold a value and optional.
-  Either option, when set, enters the export's `behaviorRevision`. An export
-  that sets neither keeps the revision it had.
+  unresolved lookup, so this rule does not hide that the record exists.
+  `--optional-fields` names facts a record may leave empty: a null value
+  leaves the fact out of the answer and out of the fact schema's `required`
+  list, and the lookup still matches. A key absent from the response stays a
+  source protocol error. The command refuses a rule on a field that is not an
+  exported fact, a value that does not fit the field's type, and a field that
+  is both required to hold a value and optional. A value fits a boolean,
+  int64, string, text, vocabulary, date, uuid or reference field. A date must
+  be a calendar date, a uuid or reference must be lowercase and hyphenated,
+  and no value may hold a control character. Either option, when set, enters
+  the export's `behaviorRevision` as the lookup compares it, so `7` and `007`
+  for an int64 are the same rule. An export that sets neither keeps the
+  revision it had.
+- `bregctl generate evidence-source` refuses an export whose generated schema
+  file is larger than the 256 KiB Evidence reads a schema within. Evidence
+  would refuse to load such a pack.
 - Hook conditions of `type: fields` accept `changedAny`, two or more fields of
   which at least one must change. `changed` keeps its meaning: every listed
   field must change. A condition sets one or the other, and both are valid only

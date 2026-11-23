@@ -63,7 +63,11 @@ Both name fields that are already in `--fields`, and without them the generated 
   For example, a person register can refuse inactive people even if a deployment's token claim is widened by mistake.
   The value is read according to the field's type.
   A boolean takes `true` or `false`, and an int64 takes a whole number.
-  A vocabulary field takes a code of the vocabulary, and a string takes text within the field's length bounds.
+  A vocabulary field takes a code of the vocabulary, a string takes text within the field's length bounds, and a text field takes text within its maximum length.
+  A date takes a calendar date as `YYYY-MM-DD`.
+  A uuid or reference field takes a lowercase hyphenated uuid, the spelling a record is read back in.
+  No value may hold a control character, and other field types cannot carry a required value.
+  The pack version binds each value as the lookup compares it, so `7` and `007` for an int64 are the same rule.
 - `--optional-fields A,B` names facts that a record may leave empty.
   A null value does not cause a no-match.
   The fact is left out of the answer, and the generated fact schema does not list it as required.
@@ -89,6 +93,10 @@ Generate the next version into another directory so that you can compare and rev
     alternatives_keep_one_route_and_selected_identity_with_stable_inventories,
     generated_pack_authentication_is_explicitly_selected,
     a_record_outside_the_allowed_values_answers_no_match_not_unresolved,
+    a_required_value_with_a_control_character_is_refused,
+    a_required_uuid_or_reference_value_must_be_canonical_lowercase,
+    a_required_date_value_must_be_a_real_calendar_date,
+    the_behavior_revision_binds_the_value_the_lookup_compares_not_its_spelling,
     an_optional_fact_that_is_null_still_matches_and_is_omitted;
     crates/registry-bregctl/tests/evidence_source.rs an_explicit_lookup_project_exports_an_evidence_source_without_edits. */}
 
@@ -218,6 +226,7 @@ It refuses a string selector field that accepts the empty value, an explicit or 
 Declare a `minimumLength` of at least 1, or maintain a reviewed custom adapter.
 Use a bounded string selector or maintain a reviewed custom adapter for unsupported shapes.
 Bounded scalar facts are supported; structured and spatial facts require a custom adapter.
+The export refuses a pack whose generated schema file would be larger than 256 KiB, the most Evidence reads a schema within, as many long vocabulary facts can be.
 
 {/* Evidence: crates/registry-breg/src/evidence_source/tests.rs
     emitted_extract_checks_the_returned_identity_by_exact_value_and_scalar_type,
@@ -231,7 +240,8 @@ Bounded scalar facts are supported; structured and spatial facts require a custo
     a_selector_field_pattern_stays_out_of_the_pack,
     every_fact_pattern_is_bound_into_the_behavior_revision,
     refuses_a_pattern_that_only_postgresql_reads_the_same_way,
-    the_export_accepts_exactly_the_patterns_both_engines_read_the_same_way;
+    the_export_accepts_exactly_the_patterns_both_engines_read_the_same_way,
+    refuses_an_export_whose_schema_evidence_would_not_read;
     crates/registry-breg/tests/postgres_evidence_source_patterns.rs;
     crates/registry-bregctl/tests/evidence_source.rs lookup.unresolved. */}
 
