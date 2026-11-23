@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.48.0 - 2026-11-23
+
 - BREAKING: `bregctl check` refuses an access profile that reads, filters or
   sorts a derived field when the profile cannot see every row the derived SQL
   links to on another Record type. The derived view runs under the caller's
