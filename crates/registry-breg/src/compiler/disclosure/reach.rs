@@ -560,6 +560,10 @@ fn derived_source_finding(
             ),
         ));
     }
+    // This rule is sound only while the SELECT policy built by
+    // `policy_authority_expression_for_alias` in `generated_ddl.rs` matches the
+    // request's boundary context entry by entry, by index and count. A change to
+    // that matching must revisit this comparison.
     if grant.row_boundaries != request.row_boundaries {
         return Some((
             CODE,
