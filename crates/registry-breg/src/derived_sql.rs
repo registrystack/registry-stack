@@ -122,13 +122,16 @@ fn count_source_scans<'a>(
 }
 
 /// Whether SQL which has already passed [`validate_derived_sql`] and reads
-/// `relation` at most once may still compute a row's value from several of
-/// its rows. That is so when the statement combines rows anywhere, with an
-/// aggregate or window function, `GROUP BY`, `HAVING` or `DISTINCT`, unless
-/// its top-level `SELECT` reads `relation` in its own `FROM` list, returns
-/// that relation's `id` as the key and groups by nothing or by that `id`.
-pub(crate) fn derived_sql_combines_rows_of(sql: &[u8], relation: &str) -> bool {
-    const VALIDATED: &str = "derived SQL was validated before its row combination check";
+/// `relation` at most once may still give a row a value computed from other
+/// rows of it. That is so unless its top-level `SELECT` reads `relation` in
+/// its own `FROM` list, returns that relation's `id`, read directly, as the
+/// key, and groups or picks distinct rows by nothing or by that `id`. Any
+/// other key, including one read through a table expression or a subquery,
+/// may name another row. An aggregate, `GROUP BY`, `HAVING` or `DISTINCT ON`
+/// over anything else combines or picks among rows; one nested in a subquery
+/// reads another relation, since `relation` is read once, at the top level.
+pub(crate) fn derived_sql_reads_other_rows_of(sql: &[u8], relation: &str) -> bool {
+    const VALIDATED: &str = "derived SQL was validated before its owner row check";
     let text = std::str::from_utf8(sql).expect(VALIDATED);
     let parsed = pg_query::parse(text, 0).expect(VALIDATED);
     let Some(PgNode::SelectStmt(root)) = root_node(&parsed) else {
@@ -143,40 +146,32 @@ pub(crate) fn derived_sql_combines_rows_of(sql: &[u8], relation: &str) -> bool {
                     && range.relname == relation
         )
     });
-    reads && combines_rows(&parsed) && !keeps_rows_apart(root, relation)
-}
-
-fn combines_rows(parsed: &pg_query::ParseResult) -> bool {
-    raw_nodes(parsed).into_iter().any(|node| match node {
-        NodeRef::FuncCall(function) => {
-            function.over.is_some()
-                || node_strings(&function.funcname).is_some_and(|name| admitted_aggregate(&name))
-        }
-        NodeRef::SelectStmt(select) => {
-            !select.group_clause.is_empty()
-                || select.having_clause.is_some()
-                || !select.distinct_clause.is_empty()
-                || !select.window_clause.is_empty()
-        }
-        _ => false,
-    })
+    reads && !keeps_rows_apart(root, relation)
 }
 
 /// Whether one `SELECT` yields at most one row of `relation` per output row,
-/// keyed by that row's `id`.
+/// keyed by that row's own `id`.
 fn keeps_rows_apart(select: &SelectStmt, relation: &str) -> bool {
-    let Some(qualifier) = select
+    let Some(qualifiers) = select
         .from_clause
         .iter()
-        .find_map(|node| direct_source_qualifier(node, relation))
+        .find_map(|node| direct_source_qualifiers(node, relation))
     else {
         return false;
     };
+    // With `relation` read directly in this `FROM` list, an unqualified `id`
+    // names its column, or the key in `DISTINCT ON`, unless another item has
+    // an `id` too, which PostgreSQL refuses as ambiguous.
     let is_id = |node: &PgNodeWrapper| {
         matches!(
             node.node.as_ref(),
             Some(PgNode::ColumnRef(column))
-                if node_strings(&column.fields).is_some_and(|fields| fields == [qualifier.as_str(), "id"])
+                if node_strings(&column.fields).is_some_and(|fields| {
+                    fields.split_last().is_some_and(|(column, qualifier)| {
+                        column == "id"
+                            && (qualifier.is_empty() || qualifiers.iter().any(|known| known == qualifier))
+                    })
+                })
         )
     };
     let key_is_id = select.target_list.first().is_some_and(|target| {
@@ -185,8 +180,16 @@ fn keeps_rows_apart(select: &SelectStmt, relation: &str) -> bool {
             Some(PgNode::ResTarget(target)) if target.val.as_deref().is_some_and(is_id)
         )
     });
+    // `DISTINCT ON` keeps one row of each group it names. A plain `DISTINCT`
+    // names no expression, and over rows keyed by `id` it drops none.
+    let distinct_keeps_rows = select
+        .distinct_clause
+        .iter()
+        .all(|node| node.node.is_none())
+        || select.distinct_clause.iter().any(is_id);
     // `HAVING` without `GROUP BY` makes the whole statement one group.
     key_is_id
+        && distinct_keeps_rows
         && if select.group_clause.is_empty() {
             select.having_clause.is_none()
         } else {
@@ -194,26 +197,29 @@ fn keeps_rows_apart(select: &SelectStmt, relation: &str) -> bool {
         }
 }
 
-/// The qualifier of `relation` when one `FROM` item reads it directly, as a
+/// The qualifiers of `relation` when one `FROM` item reads it directly, as a
 /// table or through joins, but not inside a subquery.
-fn direct_source_qualifier(node: &PgNodeWrapper, relation: &str) -> Option<String> {
+fn direct_source_qualifiers(node: &PgNodeWrapper, relation: &str) -> Option<Vec<Vec<String>>> {
     match node.node.as_ref()? {
         PgNode::RangeVar(range)
             if range.catalogname.is_empty()
                 && range.schemaname == "registry_source"
                 && range.relname == relation =>
         {
-            Some(
-                range
-                    .alias
-                    .as_ref()
-                    .map_or_else(|| range.relname.clone(), |alias| alias.aliasname.clone()),
-            )
+            Some(range.alias.as_ref().map_or_else(
+                || {
+                    vec![
+                        vec![range.relname.clone()],
+                        vec![range.schemaname.clone(), range.relname.clone()],
+                    ]
+                },
+                |alias| vec![vec![alias.aliasname.clone()]],
+            ))
         }
         PgNode::JoinExpr(join) => [join.larg.as_deref(), join.rarg.as_deref()]
             .into_iter()
             .flatten()
-            .find_map(|side| direct_source_qualifier(side, relation)),
+            .find_map(|side| direct_source_qualifiers(side, relation)),
         _ => None,
     }
 }
@@ -278,8 +284,61 @@ pub(crate) fn validate_derived_sql(
     let known_relations = source_columns.keys().map(String::as_str).collect();
     if !valid_ast(&parsed, &known_relations) || !valid_column_references(select, source_columns) {
         errors.push(sql_error(path));
+    } else if limits_returned_rows(select) {
+        errors.push(Diagnostic::error(
+            "breg.derived.sql-invalid",
+            path,
+            "derived SQL cannot apply LIMIT or OFFSET to the rows it returns, directly or through a table expression or FROM subquery, because which rows it returns would then depend on which rows the reader can see; pick among one row's linked rows in a correlated subquery instead",
+        ));
     }
     refuse_encrypted_columns(&parsed, encrypted_columns, path, errors);
+}
+
+/// Whether `LIMIT` or `OFFSET` narrows the rows a `SELECT` returns, on the
+/// statement itself or on a table expression or `FROM` subquery whose rows
+/// feed it. Those rank across every row the caller can see. A subquery in an
+/// expression, or a `LATERAL` subquery after the item it reads, runs once per
+/// outer row and may narrow the rows it picks from.
+fn limits_returned_rows(select: &SelectStmt) -> bool {
+    select.limit_count.is_some()
+        || select.limit_offset.is_some()
+        || select.with_clause.as_ref().is_some_and(|with| {
+            with.ctes.iter().any(|node| {
+                matches!(
+                    node.node.as_ref(),
+                    Some(PgNode::CommonTableExpr(cte))
+                        if cte.ctequery.as_deref().and_then(|query| query.node.as_ref()).is_some_and(|node| matches!(node, PgNode::SelectStmt(query) if limits_returned_rows(query)))
+                )
+            })
+        })
+        || select
+            .from_clause
+            .iter()
+            .enumerate()
+            .any(|(index, node)| from_item_limits_rows(node, index > 0))
+}
+
+fn from_item_limits_rows(node: &PgNodeWrapper, preceded: bool) -> bool {
+    match node.node.as_ref() {
+        Some(PgNode::RangeSubselect(range)) => !(range.lateral && preceded)
+            && range
+                .subquery
+                .as_deref()
+                .and_then(|query| query.node.as_ref())
+                .is_some_and(
+                    |node| matches!(node, PgNode::SelectStmt(query) if limits_returned_rows(query)),
+                ),
+        Some(PgNode::JoinExpr(join)) => {
+            join.larg
+                .as_deref()
+                .is_some_and(|left| from_item_limits_rows(left, preceded))
+                || join
+                    .rarg
+                    .as_deref()
+                    .is_some_and(|right| from_item_limits_rows(right, true))
+        }
+        _ => false,
+    }
 }
 
 /// Refuse any column reference that resolves to an encrypted field. The
@@ -1498,8 +1557,9 @@ mod tests {
     }
 
     #[test]
-    fn combining_owner_rows_needs_a_combination_that_keeps_no_row_apart() {
-        let combines = |sql: &str| derived_sql_combines_rows_of(sql.as_bytes(), "person");
+    fn owner_rows_stay_apart_only_under_their_own_id_read_directly() {
+        let reads_other_rows =
+            |sql: &str| derived_sql_reads_other_rows_of(sql.as_bytes(), "person");
         for sql in [
             "SELECT p.head AS id, count(p.id) AS size FROM registry_source.person p GROUP BY p.head",
             "SELECT p.head AS id, count(*) AS size FROM registry_source.person p GROUP BY p.head",
@@ -1507,29 +1567,73 @@ mod tests {
             "SELECT p.head AS id, every(p.active) AS all_active FROM registry_source.person p GROUP BY p.head",
             "SELECT p.head AS id FROM registry_source.person p GROUP BY p.head",
             "SELECT DISTINCT p.head AS id FROM registry_source.person p",
+            "SELECT DISTINCT ON (p.head) p.id AS id, true AS head FROM registry_source.person p ORDER BY p.head, p.id",
             "SELECT p.id AS id, count(p.id) AS size FROM registry_source.person p HAVING count(p.id) > 1",
-            // Rows read through a table expression or a subquery count as
-            // combined whenever anything combines rows.
+            // A key other than the row's own `id` names another row, whether
+            // or not anything combines rows.
+            "SELECT p.head AS id, true AS head FROM registry_source.person p",
+            "SELECT m.person AS id, true AS member FROM registry_source.member m JOIN registry_source.person p ON p.id = m.person",
+            // So does a key read through a table expression or a subquery.
+            "WITH people AS (SELECT p.id AS id, p.age AS age FROM registry_source.person p) SELECT a.id AS id, a.age AS age FROM people a",
+            "SELECT s.id AS id FROM (SELECT p.id AS id FROM registry_source.person p) s",
             "WITH heads AS (SELECT p.head AS id, count(p.id) AS size FROM registry_source.person p GROUP BY p.head) SELECT h.id AS id, h.size AS size FROM heads h",
             "WITH people AS (SELECT p.head AS id FROM registry_source.person p) SELECT a.id AS id, count(*) AS size FROM people a GROUP BY a.id",
             "SELECT s.id AS id, count(m.id) AS size FROM (SELECT p.id AS id FROM registry_source.person p) s LEFT JOIN registry_source.member m ON m.person = s.id GROUP BY s.id",
         ] {
-            assert!(combines(sql), "{sql}");
+            assert!(reads_other_rows(sql), "{sql}");
         }
         for sql in [
             "SELECT p.id AS id, p.age AS age FROM registry_source.person p",
             "SELECT p.id AS id, (registry_context.evaluation_date() - p.birth_date) / 365 AS age FROM registry_source.person p",
+            "SELECT id AS id, age AS age FROM registry_source.person",
+            "SELECT registry_source.person.id AS id, person.age AS age FROM registry_source.person",
             "SELECT p.id AS id, m.id IS NOT NULL AS member FROM registry_source.person p LEFT JOIN registry_source.member m ON m.person = p.id",
             "SELECT p.id AS id, count(m.id) AS size FROM registry_source.person p LEFT JOIN registry_source.member m ON m.person = p.id GROUP BY p.id",
             "SELECT person.id AS id, count(m.id) AS size FROM registry_source.member m RIGHT JOIN registry_source.person ON m.person = person.id GROUP BY person.district, person.id",
             "SELECT p.id AS id, count(m.id) AS size FROM registry_source.person p LEFT JOIN registry_source.member m ON m.person = p.id GROUP BY p.id HAVING count(m.id) > 1",
             "SELECT p.id AS id, (SELECT count(m.id) FROM registry_source.member m WHERE m.person = p.id) AS size FROM registry_source.person p",
             "SELECT DISTINCT p.id AS id, p.age AS age FROM registry_source.person p",
-            // A statement that reads another relation's rows combines none of
-            // the owner's.
+            "SELECT DISTINCT ON (p.id) p.id AS id, m.id AS member FROM registry_source.person p LEFT JOIN registry_source.member m ON m.person = p.id ORDER BY p.id, m.id",
+            "SELECT p.id AS id, (SELECT DISTINCT ON (m.person) m.id FROM registry_source.member m WHERE m.person = p.id ORDER BY m.person, m.id) AS member FROM registry_source.person p",
+            // A statement that reads only another relation's rows reads none
+            // of the owner's.
             "SELECT h.id AS id, count(m.id) AS size FROM registry_source.household h LEFT JOIN registry_source.member m ON m.household = h.id GROUP BY h.id",
         ] {
-            assert!(!combines(sql), "{sql}");
+            assert!(!reads_other_rows(sql), "{sql}");
+        }
+    }
+
+    #[test]
+    fn limit_and_offset_may_narrow_only_rows_picked_per_outer_row() {
+        let limits = |sql: &str| {
+            let parsed = pg_query::parse(sql, 0)
+                .unwrap_or_else(|error| panic!("test SQL did not parse: {sql}: {error}"));
+            let Some(PgNode::SelectStmt(select)) = root_node(&parsed) else {
+                panic!("not a SELECT: {sql}");
+            };
+            limits_returned_rows(select)
+        };
+        for sql in [
+            "SELECT h.id FROM registry_source.household h ORDER BY h.id LIMIT 10",
+            "SELECT h.id FROM registry_source.household h ORDER BY h.id OFFSET 10",
+            "SELECT h.id FROM registry_source.household h ORDER BY h.id FETCH FIRST 10 ROWS ONLY",
+            "WITH early AS (SELECT h.id AS id FROM registry_source.household h ORDER BY h.id LIMIT 10) SELECT e.id FROM early e",
+            "WITH outer_cte AS (WITH early AS (SELECT h.id AS id FROM registry_source.household h LIMIT 10) SELECT e.id FROM early e) SELECT o.id FROM outer_cte o",
+            "SELECT e.id FROM (SELECT h.id AS id FROM registry_source.household h LIMIT 10) e",
+            "SELECT m.id FROM registry_source.member m JOIN (SELECT h.id AS id FROM registry_source.household h OFFSET 1) e ON e.id = m.household",
+            // A `LATERAL` subquery with nothing before it reads no outer row.
+            "SELECT e.id FROM LATERAL (SELECT h.id AS id FROM registry_source.household h LIMIT 10) e",
+        ] {
+            assert!(limits(sql), "{sql}");
+        }
+        for sql in [
+            "SELECT h.id FROM registry_source.household h ORDER BY h.id",
+            "SELECT h.id, (SELECT m.id FROM registry_source.member m WHERE m.household = h.id ORDER BY m.id LIMIT 1) FROM registry_source.household h",
+            "SELECT h.id, EXISTS (SELECT 1 FROM registry_source.member m WHERE m.household = h.id OFFSET 1) FROM registry_source.household h",
+            "SELECT h.id, f.id FROM registry_source.household h LEFT JOIN LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE m.household = h.id ORDER BY m.id LIMIT 1) f ON true",
+            "SELECT h.id, f.id FROM registry_source.household h, LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE m.household = h.id LIMIT 1) f",
+        ] {
+            assert!(!limits(sql), "{sql}");
         }
     }
 

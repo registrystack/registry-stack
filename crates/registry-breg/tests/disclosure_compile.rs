@@ -1820,8 +1820,6 @@ fn a_derived_field_that_reads_its_own_record_type_twice_cannot_serve_a_reader_bo
     }
     let once = "SELECT p.id AS id, p.age AS household_size FROM registry_source.person p";
     assert_compiles_with_sql(&value, once);
-    let once_in_cte = "WITH people AS (SELECT p.id AS id, p.age AS age FROM registry_source.person p) SELECT a.id AS id, a.age AS household_size FROM people a";
-    assert_compiles_with_sql(&value, once_in_cte);
 
     person_permission(&mut value, REGISTRAR)["rowBoundaries"] = by_district();
     assert!(compile_with_sql(&value, SELF_JOIN_SQL).is_ok());
@@ -1870,6 +1868,130 @@ fn a_derived_field_that_combines_its_own_rows_in_one_read_cannot_serve_a_reader_
     assert_compiles_with_sql(
         &value,
         "SELECT p.head AS id, count(p.id) AS household_size FROM registry_source.person p GROUP BY p.head",
+    );
+}
+
+/// `DISTINCT ON` keeps one row among the owner rows that share a value, so the
+/// row it keeps depends on the rows the reader sees. A reader bounded by `id`
+/// sees only its own row and would find it kept every time. A reader under a
+/// boundary the rows share sees them all.
+#[test]
+fn a_derived_field_that_picks_among_its_own_rows_cannot_serve_a_reader_bounded_by_id() {
+    let path = "recordTypes[id=person].accessProfiles[id=registrar].rowBoundaries";
+    let mut value = self_join_source();
+    value["recordTypes"]["person"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id":"head","type":"reference","target":"person","classification":"internal"}),
+        );
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] =
+        json!([{"field":"id","claim":"person_id","operator":"equals"}]);
+    let pick = "SELECT DISTINCT ON (p.head) p.id AS id, 1::int8 AS household_size FROM registry_source.person p ORDER BY p.head, p.id";
+    let found = derived_diagnostics(&value, pick);
+    let (_, _, message) = found
+        .iter()
+        .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+        .unwrap_or_else(|| panic!("got {found:?}"));
+    for named in ["`registrar`", "`household-size`", "`person`", "`id`"] {
+        assert!(message.contains(named), "{named} in {message}");
+    }
+    // Naming the row's own `id` keeps every row.
+    assert_compiles_with_sql(
+        &value,
+        "SELECT DISTINCT ON (p.id) p.id AS id, p.age AS household_size FROM registry_source.person p ORDER BY p.id, p.age",
+    );
+
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] = by_district();
+    assert_compiles_with_sql(&value, pick);
+}
+
+/// A key other than the owner's own `id`, read directly, gives a row the value
+/// computed from other owner rows, combined or not: here a person is a head
+/// when someone names them. A reader bounded by `id` sees only its own row, so
+/// the value would be silently wrong. A key read through a table expression or
+/// a `FROM` subquery counts as another key too.
+#[test]
+fn a_derived_field_keyed_by_another_column_cannot_serve_a_reader_bounded_by_id() {
+    let path = "recordTypes[id=person].accessProfiles[id=registrar].rowBoundaries";
+    let mut value = source();
+    value["recordTypes"]["person"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id":"head","type":"reference","target":"person","classification":"internal"}),
+        );
+    value["recordTypes"]["person"]["derived"] = json!([{"id":"household","sql":"sql/derived.sql","key":"id",
+        "fields":[{"id":"is-head","type":"boolean","classification":"internal"}]}]);
+    person_permission(&mut value, REGISTRAR)["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("is-head"));
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] =
+        json!([{"field":"id","claim":"person_id","operator":"equals"}]);
+    let head = "SELECT p.head AS id, true AS is_head FROM registry_source.person p";
+    for sql in [
+        head,
+        "WITH people AS (SELECT p.id AS id, p.age AS age FROM registry_source.person p) SELECT a.id AS id, a.age > 17 AS is_head FROM people a",
+        "SELECT s.id AS id, true AS is_head FROM (SELECT p.id AS id FROM registry_source.person p) s",
+    ] {
+        let found = derived_diagnostics(&value, sql);
+        let (_, _, message) = found
+            .iter()
+            .find(|(code, found, _)| code == SOURCE_BOUNDARY && found == path)
+            .unwrap_or_else(|| panic!("{sql}: got {found:?}"));
+        for named in ["`registrar`", "`is-head`", "`person`", "`id`"] {
+            assert!(message.contains(named), "{named} in {message}");
+        }
+    }
+    for sql in [
+        "SELECT p.id AS id, p.head IS NULL AS is_head FROM registry_source.person p",
+        "SELECT id AS id, head IS NULL AS is_head FROM registry_source.person",
+    ] {
+        assert_compiles_with_sql(&value, sql);
+    }
+
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] = by_district();
+    assert_compiles_with_sql(&value, head);
+}
+
+/// `LIMIT` or `OFFSET` on the rows a derived relation returns ranks them across
+/// the whole Record type, so which rows get a value depends on the rows the
+/// reader can see, under any boundary or none. That is refused for every
+/// reader, also through a table expression or a `FROM` subquery. A correlated
+/// subquery may still pick among one row's linked rows.
+#[test]
+fn a_derived_relation_cannot_limit_the_rows_it_returns() {
+    let sql_path = "recordTypes[person].derived[household].sql";
+    let mut value = self_join_source();
+    for boundaries in [
+        json!([{"field":"id","claim":"person_id","operator":"equals"}]),
+        by_district(),
+        json!("unrestricted"),
+    ] {
+        person_permission(&mut value, REGISTRAR)["rowBoundaries"] = boundaries;
+        for sql in [
+            "SELECT p.id AS id, 1::int8 AS household_size FROM registry_source.person p ORDER BY p.id LIMIT 10",
+            "SELECT p.id AS id, 1::int8 AS household_size FROM registry_source.person p ORDER BY p.id OFFSET 10",
+            "WITH early AS (SELECT p.id AS id FROM registry_source.person p ORDER BY p.id LIMIT 10) SELECT e.id AS id, 1::int8 AS household_size FROM early e",
+            "SELECT e.id AS id, 1::int8 AS household_size FROM (SELECT p.id AS id FROM registry_source.person p ORDER BY p.id FETCH FIRST 10 ROWS ONLY) e",
+        ] {
+            let found = derived_diagnostics(&value, sql);
+            assert!(
+                found.iter().any(|(code, path, message)| code == "breg.derived.sql-invalid"
+                    && path == sql_path
+                    && message.contains("which rows the reader can see")),
+                "{sql}: got {found:?}"
+            );
+        }
+    }
+
+    let mut visits = visit_source();
+    person_permission(&mut visits, REGISTRAR)["rowBoundaries"] = by_district();
+    grant_visits(&mut visits, by_district());
+    assert_compiles_with_sql(
+        &visits,
+        "SELECT p.id AS id, (SELECT v.outcome = 'closed' FROM registry_source.visit v WHERE v.person = p.id ORDER BY v.id DESC LIMIT 1) AS has_closed_visit FROM registry_source.person p",
     );
 }
 
