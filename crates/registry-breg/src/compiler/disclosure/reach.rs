@@ -707,6 +707,9 @@ fn derived_source_refusal(
     let profile = &request.id;
     let reads = reads_derived_from(owner, source, reader);
     let own = source.id == owner.id;
+    // The messages below pass `readable` and `rewrite` by name rather than
+    // capture them, so an analyser that misses captured format arguments still
+    // sees them used.
     let (code, which, readable, rewrite) = if own {
         (
             "breg.disclosure.derived-reads-other-owner-rows",
@@ -744,6 +747,8 @@ fn derived_source_refusal(
                 "{reads}, but the profile cannot read `{source}` rows, {missed}: {rewrite}grant it `get` on `{source}`, with only {readable} readable and the row boundaries {boundaries} of its grant on `{request_entity}`",
                 source = source.id,
                 boundaries = describe_row_boundaries(&request.row_boundaries),
+                readable = readable,
+                rewrite = rewrite,
             ),
         ));
     };
@@ -756,6 +761,7 @@ fn derived_source_refusal(
             format!(
                 "{reads}, but its grant on `{request_entity}` is bounded by `id`, so the computation sees no other `{source}` row: {rewrite}do not grant the derived field",
                 source = source.id,
+                rewrite = rewrite,
             )
         } else {
             format!(
@@ -782,6 +788,7 @@ fn derived_source_refusal(
                 source = source.id,
                 source_rows = describe_row_boundaries(&grant.row_boundaries),
                 request_rows = describe_row_boundaries(&request.row_boundaries),
+                rewrite = rewrite,
             ),
         ));
     }
@@ -793,6 +800,7 @@ fn derived_source_refusal(
                 .required_purposes
                 .is_subset(&grant.required_purposes))
     {
+        // Passed by name below, like `readable` and `rewrite`.
         let (admitted, fix) = if request.required_purposes.is_empty() {
             (
                 "any purpose".to_owned(),
@@ -811,6 +819,9 @@ fn derived_source_refusal(
                 "{reads}, but its grant on `{source}` requires purpose {required} and its grant on `{request_entity}` admits {admitted}, so under any other purpose the computation misses every {which} `{source}` row: {rewrite}require no purpose on the grant on `{source}`, {fix}",
                 source = source.id,
                 required = backticked(grant.required_purposes.iter()),
+                rewrite = rewrite,
+                admitted = admitted,
+                fix = fix,
             ),
         ));
     }
