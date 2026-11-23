@@ -56,8 +56,9 @@ Both name fields that are already in `--fields`, and without them the generated 
 - `--require-value FIELD=VALUE` lists the values a fact field may hold.
   Repeat the flag to allow several values for one field.
   A record whose value is not listed answers no match, the same answer as a record whose fact is missing.
-  A record that does not exist answers unresolved instead.
-  Evidence returns the same public problem for both, so a caller cannot tell them apart, but the Evidence audit records them separately.
+  A caller gets the same answer for a refused record and an unknown one.
+  Only the Evidence audit record of a single request differs (`no-match` versus `unresolved`), so an operator can tell them apart.
+  A request batch audits both items as not available.
   The check runs in the generated lookup, never in derived logic.
   It runs after the identity check and before any fact is returned.
   Use it as defence in depth beside the access profile's row boundary.
@@ -96,6 +97,7 @@ Generate the next version into another directory so that you can compare and rev
     generated_pack_authentication_is_explicitly_selected,
     a_record_outside_the_allowed_values_answers_no_match_not_unresolved,
     crates/registry-evidence/src/runtime_tests.rs
+    a_refused_record_and_an_unknown_record_give_a_caller_the_same_answer,
     declared_existence_disclosure_mode_governs_the_public_collapse,
     a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it;
     crates/registry-breg/src/evidence_source/tests.rs

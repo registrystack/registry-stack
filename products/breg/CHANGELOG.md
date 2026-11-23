@@ -23,9 +23,9 @@
   `--require-value` lists the values a fact field may hold. Repeat it to allow
   several values for one field. A record holding any other value answers
   `no-match`, decided in the generated lookup before any fact is returned.
-  BReg answers an unknown record as an unresolved lookup. Evidence returns the
-  same public problem for both, and its audit records them separately, so the
-  rule does not hide from an audit reader that the record exists.
+  A caller gets the same answer for a refused record and an unknown one. Only
+  the Evidence audit record of a single request differs (`no-match` versus
+  `unresolved`), so an operator can tell them apart.
   `--optional-fields` names facts a record may leave empty: a null value
   leaves the fact out of the answer and out of the fact schema's `required`
   list, and the lookup still matches. A key absent from the response stays a
