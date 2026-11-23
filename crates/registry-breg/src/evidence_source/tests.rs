@@ -274,6 +274,10 @@ fn missing_fact_outcome_is_bound_into_behavior_revision() {
         &registry,
         entity,
         &options(),
+        &FactRules {
+            required: BTreeMap::new(),
+            optional: BTreeSet::new(),
+        },
         &BTreeSet::from(["status".into()]),
         vec![],
         Map::new(),
@@ -1091,6 +1095,162 @@ fn refuses_invalid_fact_rules() {
     let mut unexported = fact_rule_options();
     unexported.optional_fields = vec!["code".into()];
     assert_eq!(refused(&registry, &unexported).path, "optional-fields");
+}
+
+#[test]
+fn a_required_value_with_a_control_character_is_refused() {
+    // serde_json spells U+0008 and U+000C as `\b` and `\f`, escapes the Rhai
+    // parser refuses, and a value read back never needs a control character.
+    for kind in [
+        FieldTypeSource::String {
+            min_length: 0,
+            max_length: 16,
+        },
+        FieldTypeSource::Text { max_length: 16 },
+    ] {
+        for value in ["a\u{8}b", "a\u{c}b", "a\nb", "a\tb", "a\u{7f}b", "a\u{85}b"] {
+            let reason = required_value_literal(&kind, value).unwrap_err();
+            assert!(reason.contains("control character"), "{value:?}: {reason}");
+        }
+    }
+}
+
+#[test]
+fn a_required_text_value_with_quotes_and_backslashes_still_matches() {
+    let mut options = fact_rule_options();
+    options.required_values =
+        BTreeMap::from([("status".to_owned(), vec![r#"a"b\c'd"#.to_owned()])]);
+    let export = export_evidence_source(&compiled(&fact_rule_project(), SQL), &options).unwrap();
+    let outcome = run_lookup(
+        &export,
+        json!({"code":"A1","status":r#"a"b\c'd"#,"area":null}),
+    );
+    assert_eq!(outcome["lookup"], "matched");
+    let outcome = run_lookup(&export, json!({"code":"A1","status":"abcd","area":null}));
+    assert_eq!(outcome, json!({"lookup":"no-match"}));
+}
+
+#[test]
+fn a_required_uuid_or_reference_value_must_be_canonical_lowercase() {
+    let reference = FieldTypeSource::Reference {
+        target: "organization".into(),
+        on_delete: Default::default(),
+    };
+    for kind in [FieldTypeSource::Uuid, reference] {
+        let canonical = "0b6a2f9e-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        assert_eq!(
+            required_value_literal(&kind, canonical).unwrap(),
+            json!(canonical).to_string()
+        );
+        for value in [
+            "0B6A2F9E-3C4D-4E5F-8A9B-0C1D2E3F4A5B",
+            "0b6a2f9e-3c4d-4e5f-8a9b-0c1d2e3f4A5b",
+            "0b6a2f9e3c4d-4e5f-8a9b-0c1d2e3f4a5b-",
+            "------------------------------------",
+            "0b6a2f9e3c4d4e5f8a9b0c1d2e3f4a5b",
+            "{0b6a2f9e-3c4d-4e5f-8a9b-0c1d2e3f4a5b}",
+        ] {
+            let reason = required_value_literal(&kind, value).unwrap_err();
+            assert!(reason.contains("lowercase"), "{value}: {reason}");
+        }
+    }
+}
+
+#[test]
+fn a_required_date_value_must_be_a_real_calendar_date() {
+    for value in ["2024-02-29", "2026-12-31", "0001-01-01"] {
+        assert_eq!(
+            required_value_literal(&FieldTypeSource::Date, value).unwrap(),
+            json!(value).to_string()
+        );
+    }
+    for value in [
+        "2026-02-29",
+        "2026-13-01",
+        "2026-00-10",
+        "2026-04-31",
+        "2026-01-00",
+        "2026-1-01",
+        "26-01-01",
+    ] {
+        let reason = required_value_literal(&FieldTypeSource::Date, value).unwrap_err();
+        assert!(reason.contains("calendar date"), "{value}: {reason}");
+    }
+}
+
+fn counted_project() -> Value {
+    let mut project = fact_rule_project();
+    project["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"visits","type":"int64","classification":"internal"}));
+    project["accessProfiles"]["evidence-source"]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("visits"));
+    project
+}
+
+#[test]
+fn the_behavior_revision_binds_the_value_the_lookup_compares_not_its_spelling() {
+    let registry = compiled(&counted_project(), SQL);
+    let export = |values: &[&str]| {
+        let mut options = fact_rule_options();
+        options.fields = vec!["status".into(), "area".into(), "visits".into()];
+        options.required_values = BTreeMap::from([(
+            "visits".to_owned(),
+            values.iter().map(|value| (*value).to_owned()).collect(),
+        )]);
+        export_evidence_source(&registry, &options).unwrap()
+    };
+    let plain = export(&["7"]);
+    for spelling in [&["007"][..], &["+7"], &["7", "007"]] {
+        let other = export(spelling);
+        assert_eq!(
+            other.behavior_revision, plain.behavior_revision,
+            "{spelling:?}"
+        );
+        assert_eq!(other.artifacts, plain.artifacts, "{spelling:?}");
+    }
+    assert_ne!(export(&["8"]).behavior_revision, plain.behavior_revision);
+}
+
+#[test]
+fn refuses_an_export_whose_schema_evidence_would_not_read() {
+    // The fact schema lists every vocabulary code. Sixteen facts, each a
+    // 256-code vocabulary of long codes, pass every per-field bound and still
+    // exceed the 256 KiB Evidence reads a schema within.
+    let codes = (0..256)
+        .map(|index| format!("{index:0>120}"))
+        .collect::<Vec<_>>();
+    let mut project = project();
+    let mut ids = Vec::new();
+    for index in 0..16 {
+        let id = format!("kind-{index}");
+        project["recordTypes"]["record"]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":id,"type":"vocabulary-code","vocabulary":id,"values":codes,"classification":"internal"}));
+        project["accessProfiles"]["evidence-source"]["permissions"]["records"][0]["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(id));
+        ids.push(id);
+    }
+    let registry = compiled(&project, SQL);
+    let mut options = options();
+    options.fields = ids.clone();
+    let refusal = refused(&registry, &options);
+    assert_eq!(refusal.code, "breg.evidence-source.refused");
+    assert_eq!(refusal.path, "fields");
+    assert!(
+        refusal.message.contains("262144 bytes"),
+        "{}",
+        refusal.message
+    );
+    // Under the bound the same fields export.
+    options.fields = ids[..4].to_vec();
+    export_evidence_source(&registry, &options).unwrap();
 }
 
 #[test]

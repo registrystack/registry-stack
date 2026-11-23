@@ -108,6 +108,11 @@ pub struct EvidenceSourceExport {
     pub identity_fields: BTreeMap<String, Vec<String>>,
 }
 
+/// The largest schema file Evidence loads from a pack: `MAXIMUM_SCHEMA_BYTES`
+/// in `crates/registry-adapter-engine/src/evidence.rs`, which `load_schema`
+/// reads within. The export refuses a schema Evidence would refuse to load.
+const EVIDENCE_MAXIMUM_SCHEMA_BYTES: usize = 256 * 1024;
+
 fn refusal(path: &str, message: &str) -> Diagnostic {
     Diagnostic::error("breg.evidence-source.refused", path, message)
 }
@@ -454,6 +459,11 @@ struct FactRules {
 /// Spells one allowed value as a Rhai literal, or says why the field's type
 /// cannot hold it.
 fn required_value_literal(kind: &FieldTypeSource, value: &str) -> Result<String, &'static str> {
+    // A stored value never needs a control character, and serde_json spells
+    // U+0008 and U+000C as `\b` and `\f`, which the Rhai parser refuses.
+    if value.chars().any(char::is_control) {
+        return Err("a required value cannot hold a control character");
+    }
     let text = || json!(value).to_string();
     match kind {
         FieldTypeSource::Boolean => match value {
@@ -496,21 +506,25 @@ fn required_value_literal(kind: &FieldTypeSource, value: &str) -> Result<String,
                     4 | 7 => *byte == b'-',
                     _ => byte.is_ascii_digit(),
                 });
-            if shaped {
+            let format = time::macros::format_description!("[year]-[month]-[day]");
+            if shaped && time::Date::parse(value, format).is_ok() {
                 Ok(text())
             } else {
-                Err("a date field takes YYYY-MM-DD")
+                Err("a date field takes a calendar date as YYYY-MM-DD")
             }
         }
+        // A record reads a uuid back in its lowercase hyphenated form, so only
+        // that spelling can ever compare equal.
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => {
-            if value.len() == 36
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-            {
+            let canonical = value.len() == 36
+                && value.bytes().enumerate().all(|(index, byte)| match index {
+                    8 | 13 | 18 | 23 => byte == b'-',
+                    _ => matches!(byte, b'0'..=b'9' | b'a'..=b'f'),
+                });
+            if canonical {
                 Ok(text())
             } else {
-                Err("a uuid field takes a 36-character uuid")
+                Err("a uuid or reference field takes a lowercase hyphenated uuid")
             }
         }
         _ => Err("this field type cannot carry a required value; use a reviewed custom adapter"),
@@ -941,6 +955,7 @@ fn export_with_behavior(
         registry,
         entity,
         options,
+        &rules,
         &all_fields,
         profile_dependencies,
         dependencies,
@@ -979,6 +994,21 @@ fn export_with_behavior(
         .map_err(|_| refusal("export", "could not encode the route fact schema"))?;
     let response_bytes = serde_json::to_vec_pretty(&response)
         .map_err(|_| refusal("export", "could not encode the provider response schema"))?;
+    for (name, bytes) in [
+        ("route input", &inputs_bytes),
+        ("fact", &facts_bytes),
+        ("provider response", &response_bytes),
+    ] {
+        if bytes.len() > EVIDENCE_MAXIMUM_SCHEMA_BYTES {
+            return Err(refusal(
+                "fields",
+                &format!(
+                    "the generated {name} schema is {} bytes, over the {EVIDENCE_MAXIMUM_SCHEMA_BYTES} bytes Evidence reads a schema within; export fewer facts or use a reviewed custom adapter",
+                    bytes.len()
+                ),
+            ));
+        }
+    }
     let script_bytes = script.into_bytes();
     let protocol_bytes = serde_json::to_vec(&json!({
         "unresolvedProblem":{
@@ -1106,6 +1136,7 @@ fn selected_behavior(
     registry: &CompiledRegistry,
     entity: &CompiledEntity,
     options: &EvidenceSourceOptions,
+    rules: &FactRules,
     fields: &BTreeSet<String>,
     selectors: Vec<Value>,
     logical_fields: Map<String, Value>,
@@ -1162,14 +1193,11 @@ fn selected_behavior(
     if !membership.is_empty() {
         behavior["access"]["membershipBoundaries"] = json!(membership);
     }
-    if !options.required_values.is_empty() || !options.optional_fields.is_empty() {
-        let required = options
-            .required_values
-            .iter()
-            .map(|(id, values)| (id, values.iter().collect::<BTreeSet<_>>()))
-            .collect::<BTreeMap<_, _>>();
-        let optional = options.optional_fields.iter().collect::<BTreeSet<_>>();
-        behavior["factRules"] = json!({"requiredValues":required,"optionalFields":optional});
+    // The rules enter as the lookup compares them, so two spellings of one
+    // value, such as `7` and `007` for an int64, are one behavior.
+    if !rules.required.is_empty() || !rules.optional.is_empty() {
+        behavior["factRules"] =
+            json!({"requiredValues":rules.required,"optionalFields":rules.optional});
     }
     Ok(behavior)
 }
