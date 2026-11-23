@@ -9012,8 +9012,8 @@ async fn sec_exact_registry_lookup_declared_unresolved_maps_to_evidence_unavaila
 /// found record the lookup refuses with `no-match` and a record the source
 /// answers with its declared unresolved Problem give the caller the same
 /// public answer, on the HTTP request and in a batch. Only the audit of the
-/// single request differs (no-match versus unresolved), so an operator can
-/// tell them apart there. The batch audit records both items alike.
+/// single request and the source lookup metric record the difference
+/// (no-match versus unresolved). The batch audit records both items alike.
 #[tokio::test]
 async fn a_refused_record_and_an_unknown_record_give_a_caller_the_same_answer() {
     let server = MockServer::start().await;
@@ -9108,6 +9108,26 @@ async fn a_refused_record_and_an_unknown_record_give_a_caller_the_same_answer() 
             .count(),
         2
     );
+
+    // The source lookup metric counts every lookup, a batch item included, by
+    // its closed outcome.
+    let metrics =
+        crate::observability::Metrics::new(runtime.rate_limiter(), runtime.source_diagnostics())
+            .render();
+    let lookups = metrics
+        .lines()
+        .filter(|line| line.starts_with("evidence_source_lookups_total{"))
+        .collect::<Vec<_>>();
+    for outcome in ["no-match", "unresolved"] {
+        assert_eq!(
+            lookups
+                .iter()
+                .filter(|line| line.ends_with(&format!(",outcome=\"{outcome}\"}} 2")))
+                .count(),
+            1,
+            "{outcome}: {lookups:#?}"
+        );
+    }
 }
 
 #[tokio::test]

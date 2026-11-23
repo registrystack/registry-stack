@@ -56,9 +56,9 @@ Both name fields that are already in `--fields`, and without them the generated 
 - `--require-value FIELD=VALUE` lists the values a fact field may hold.
   Repeat the flag to allow several values for one field.
   A record whose value is not listed answers no match, the same answer as a record whose fact is missing.
-  A caller gets the same answer for a refused record and an unknown one.
-  Only the Evidence audit record of a single request differs (`no-match` versus `unresolved`), so an operator can tell them apart.
-  A request batch audits both items as not available.
+  A caller receives the same answer for a refused record and an unknown one.
+  Only the Evidence audit record of a single request and the `evidence_source_lookups_total` metric record the difference (`no-match` versus `unresolved`).
+  A request batch audits both items as not available, and the metric still counts them apart.
   The check runs in the generated lookup, never in derived logic.
   It runs after the identity check and before any fact is returned.
   Use it as defence in depth beside the access profile's row boundary.
