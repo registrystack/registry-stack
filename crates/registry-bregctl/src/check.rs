@@ -1713,7 +1713,8 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         "breg.disclosure.derived-reads-withheld-field" => "Remove the derived fields from the profile's readableFields, filterableFields and sortableFields, and from its read path grants, stop the derived SQL reading the withheld field, or add the profile to exemptProfiles.",
         "breg.disclosure.derived-reads-unreadable-source" => "Grant the profile get on the record type the derived SQL reads, with only its link fields readable and the rowBoundaries of the profile's grant on the record type that owns the derived field. Or remove the derived field from the profile.",
         "breg.disclosure.derived-reads-source-boundary" => "Give the profile's grant on the record type the derived SQL reads the same rowBoundaries as its grant on the record type that owns the derived field, and no requiredPurposes unless they include every purpose that grant requires. Or remove the derived field from the profile.",
-        "breg.disclosure.derived-reads-withheld-source-rows" => "Accept this finding if the derived value should leave out the rows the record condition, membershipBoundaries or requireConsent hides. Otherwise add the profile to exemptProfiles of the condition, or remove the derived field from the profile.",
+        "breg.disclosure.derived-reads-other-owner-rows" => "Read the record type that owns the derived field once, in the top-level FROM, with its own id as the key, and group or pick DISTINCT ON by nothing or by that id. A read path reader may instead read that record type under the rowBoundaries and requiredPurposes of its grant on the path's root. Or remove the derived field from the profile.",
+        "breg.disclosure.derived-reads-withheld-source-rows" => "Accept this finding if the derived value should leave out the rows the record condition, membershipBoundaries or requireConsent hides, or that rowBoundaries hide from a subquery that refers to no column of the row. Otherwise add the profile to exemptProfiles of the condition, link the subquery to the row, or remove the derived field from the profile.",
         "breg.disclosure.row-boundary-withheld-field" => "Bound the profile's rows by a field no condition withholds from it, or add the profile to exemptProfiles.",
         "breg.disclosure.membership-boundary-withheld-field" => "Bound the profile's rows by a membership on a field no condition withholds from it, or add the profile to exemptProfiles.",
         "breg.disclosure.consent-boundary-withheld-field" => "Point requireConsent on at a field no condition withholds from the profile, or add the profile to exemptProfiles.",
@@ -1974,11 +1975,27 @@ mod tests {
     }
 
     #[test]
+    fn derived_other_owner_rows_error_names_the_rewrite_not_a_grant_to_align() {
+        let code = "breg.disclosure.derived-reads-other-owner-rows";
+        let action = action_for(code, Severity::Error);
+        assert_ne!(action, CORRECT_SOURCE, "{code}");
+        for named in ["once", "top-level FROM", "own id", "DISTINCT ON"] {
+            assert!(action.contains(named), "{code}: {action}");
+        }
+        assert!(!action.contains("same rowBoundaries"), "{code}: {action}");
+    }
+
+    #[test]
     fn derived_source_rows_finding_names_each_protection_to_accept_or_exempt() {
         let code = "breg.disclosure.derived-reads-withheld-source-rows";
         let action = action_for(code, Severity::Warning);
         assert_ne!(action, REVIEW_FINDING, "{code}");
-        for setting in ["membershipBoundaries", "requireConsent", "exemptProfiles"] {
+        for setting in [
+            "rowBoundaries",
+            "membershipBoundaries",
+            "requireConsent",
+            "exemptProfiles",
+        ] {
             assert!(action.contains(setting), "{code}: {action}");
         }
         assert!(matches!(finding_rank_for_code(code), FindingRank::Hygiene));

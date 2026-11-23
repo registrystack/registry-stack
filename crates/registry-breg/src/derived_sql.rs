@@ -224,6 +224,76 @@ fn direct_source_qualifiers(node: &PgNodeWrapper, relation: &str) -> Option<Vec<
     }
 }
 
+/// The `registry_source` relations that SQL which has already passed
+/// [`validate_derived_sql`] reads in an expression subquery that refers to no
+/// column of any query around it, directly, through a table expression, or
+/// in a subquery nested in it. Such a subquery computes one value over every
+/// row of those relations that the reader sees, not over the rows linked to
+/// the row. A subquery resolves its columns from its own scopes first, so it
+/// refers to no outer column exactly when it resolves them all with no outer
+/// scope. Only the statement's top-level table expressions are taken as
+/// visible to it: one declared in a nested query may refer to that query's
+/// outer row, so a subquery that reads one counts as linked.
+pub(crate) fn derived_sql_unlinked_reads(
+    sql: &[u8],
+    source_columns: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    const VALIDATED: &str = "derived SQL was validated before its unlinked reads";
+    let text = std::str::from_utf8(sql).expect(VALIDATED);
+    let parsed = pg_query::parse(text, 0).expect(VALIDATED);
+    let Some(PgNode::SelectStmt(root)) = root_node(&parsed) else {
+        panic!("{VALIDATED}");
+    };
+    let mut top_level = BTreeMap::new();
+    for node in root.with_clause.iter().flat_map(|with| &with.ctes) {
+        let Some(PgNode::CommonTableExpr(cte)) = node.node.as_ref() else {
+            panic!("{VALIDATED}");
+        };
+        let Some(PgNode::SelectStmt(query)) = cte
+            .ctequery
+            .as_deref()
+            .and_then(|query| query.node.as_ref())
+        else {
+            panic!("{VALIDATED}");
+        };
+        let columns = select_output_columns(query, &cte.aliascolnames).expect(VALIDATED);
+        top_level.insert(cte.ctename.clone(), columns);
+    }
+    let ctes = raw_nodes(&parsed)
+        .into_iter()
+        .filter_map(|node| {
+            let NodeRef::CommonTableExpr(cte) = node else {
+                return None;
+            };
+            let query = cte.ctequery.as_deref()?.node.as_ref()?;
+            Some((cte.ctename.as_str(), query))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut reads = BTreeMap::new();
+    for node in raw_nodes(&parsed) {
+        let NodeRef::SubLink(link) = node else {
+            continue;
+        };
+        let Some(query @ PgNode::SelectStmt(select)) = link
+            .subselect
+            .as_deref()
+            .and_then(|query| query.node.as_ref())
+        else {
+            panic!("{VALIDATED}");
+        };
+        if validate_select_columns(
+            select,
+            source_columns,
+            &top_level,
+            &[],
+            &RefCell::new(BTreeMap::new()),
+        ) {
+            count_source_scans(query, &ctes, &mut Vec::new(), &mut reads);
+        }
+    }
+    reads.into_keys().collect()
+}
+
 /// Resolve the stored source columns read by SQL which has already passed
 /// [`validate_derived_sql`]. This reuses the validator's lexical scopes so
 /// aliases, correlated subqueries, and shadowing bind to the same source
@@ -1634,6 +1704,70 @@ mod tests {
             "SELECT h.id, f.id FROM registry_source.household h, LATERAL (SELECT m.id AS id FROM registry_source.member m WHERE m.household = h.id LIMIT 1) f",
         ] {
             assert!(!limits(sql), "{sql}");
+        }
+    }
+
+    #[test]
+    fn subqueries_that_refer_to_no_outer_column_read_rows_unlinked_to_the_row() {
+        let columns = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<BTreeSet<_>>()
+        };
+        let source_columns = BTreeMap::from([
+            ("household".to_owned(), columns(&["id", "code", "district"])),
+            (
+                "member".to_owned(),
+                columns(&["id", "household", "district"]),
+            ),
+            ("visit".to_owned(), columns(&["id", "member"])),
+        ]);
+        let unlinked = |sql: &str| {
+            derived_sql_unlinked_reads(sql.as_bytes(), &source_columns)
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        for (sql, expected) in [
+            (
+                "SELECT h.id AS id, (SELECT count(m.id) FROM registry_source.member m) AS size FROM registry_source.household h",
+                &["member"][..],
+            ),
+            // Nested in a subquery linked to the row, in its `WHERE`.
+            (
+                "SELECT h.id AS id, (SELECT count(m.id) FROM registry_source.member m WHERE m.household = h.id AND m.id > (SELECT max(v.member) FROM registry_source.visit v)) AS size FROM registry_source.household h",
+                &["visit"],
+            ),
+            // A subquery linked only to an unlinked one reads unlinked rows too.
+            (
+                "SELECT h.id AS id, (SELECT count(m.id) FROM registry_source.member m WHERE (SELECT count(v.id) FROM registry_source.visit v WHERE v.member = m.id) > 0) AS size FROM registry_source.household h",
+                &["member", "visit"],
+            ),
+            // Through a table expression it reads.
+            (
+                "WITH members AS (SELECT m.id AS id FROM registry_source.member m) SELECT h.id AS id, (SELECT count(x.id) FROM members x) AS size FROM registry_source.household h",
+                &["member"],
+            ),
+            // Inside a table expression the statement joins by the link.
+            (
+                "WITH counted AS (SELECT m.household AS household, (SELECT count(v.id) FROM registry_source.visit v) AS visits FROM registry_source.member m) SELECT h.id AS id, c.visits AS visits FROM registry_source.household h JOIN counted c ON c.household = h.id",
+                &["visit"],
+            ),
+            (
+                "SELECT h.id AS id, (SELECT count(m.id) FROM registry_source.member m WHERE m.household = h.id) AS size FROM registry_source.household h",
+                &[],
+            ),
+            // An unqualified column only the outer row has refers to it.
+            (
+                "SELECT h.id AS id, (SELECT count(m.id) FROM registry_source.member m WHERE m.district = code) AS size FROM registry_source.household h",
+                &[],
+            ),
+            (
+                "SELECT h.id AS id, count(m.id) AS size FROM registry_source.household h LEFT JOIN registry_source.member m ON m.household = h.id GROUP BY h.id",
+                &[],
+            ),
+        ] {
+            assert_eq!(unlinked(sql), expected, "{sql}");
         }
     }
 
