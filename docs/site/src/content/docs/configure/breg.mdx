@@ -383,6 +383,7 @@ A profile bounded by `id` cannot read a derived field over another Record type, 
 A derived field whose SQL reads its own Record type once needs no other grant.
 SQL can read its own Record type more than once, in a join, a subquery or a table expression used twice.
 It then reads other rows of that type, so the owner's Record type counts as a type the SQL reads.
+So does SQL that combines its rows with an aggregate, `GROUP BY` or `DISTINCT`, unless it returns each row's own `id` and any `GROUP BY` includes it.
 A profile bounded by `id` cannot read such a field.
 A read path reader needs its grant on the owner to match its grant on the path's root.
 
@@ -421,7 +422,7 @@ The derived value leaves out the rows that the protection hides.
 
 {/* Evidence: crates/registry-breg/src/compiler/disclosure/reach.rs, validate_derived_source_grants,
     derived_source_refusal and withheld_source_rows;
-    crates/registry-breg/src/derived_sql.rs, derived_sql_source_scans;
+    crates/registry-breg/src/derived_sql.rs, derived_sql_source_scans and derived_sql_combines_rows_of;
     crates/registry-breg/src/generated_ddl.rs, grant_reads_rows and policy_authority_expression_for_alias;
     crates/registry-breg/tests/disclosure_compile.rs, a_derived_field_cannot_read_a_record_type_its_reader_cannot_read,
     a_derived_field_cannot_read_a_record_type_under_other_row_boundaries,
@@ -430,6 +431,7 @@ The derived value leaves out the rows that the protection hides.
     reading_one_column_of_a_derived_relation_needs_every_source_it_reads,
     a_read_path_reader_must_read_the_derived_source_under_its_root_boundaries,
     a_derived_field_that_reads_its_own_record_type_twice_cannot_serve_a_reader_bounded_by_id,
+    a_derived_field_that_combines_its_own_rows_in_one_read_cannot_serve_a_reader_bounded_by_id,
     a_read_path_reader_of_a_self_joined_derived_field_must_read_the_owner_under_its_root_boundaries,
     a_record_condition_on_a_derived_source_that_binds_the_reader_is_a_finding,
     a_record_condition_on_a_self_joined_owner_that_binds_the_reader_is_a_finding,
