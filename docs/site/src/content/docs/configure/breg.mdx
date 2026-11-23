@@ -392,6 +392,9 @@ So does SQL whose key is not each row's own `id`, read from the Record type itse
 So does SQL that combines or picks among its rows with an aggregate, `GROUP BY` or `DISTINCT ON`, unless any `GROUP BY` or `DISTINCT ON` includes that `id`.
 A profile bounded by `id` cannot read such a field.
 A read path reader needs its grant on the owner to match its grant on the path's root.
+These refusals use `breg.disclosure.derived-reads-other-owner-rows`.
+To serve a profile bounded by `id`, read the Record type once, in the top-level `FROM`, keyed on its own `id`.
+Group or pick `DISTINCT ON` by nothing or by that `id`.
 
 The smallest grant is `get`, with only the link fields readable and the same row boundaries.
 Here a derived `member-count` field on `household` counts the linked `member` rows:
@@ -420,6 +423,12 @@ Matching boundaries assume that each linked row holds the same boundary value as
 A `member` recorded in a different district from its household is left out of the household's count, with no error.
 Keep boundary values consistent across linked records.
 
+A subquery that refers to no column of the row reads more than the linked rows.
+It computes one value over every row the reader sees.
+Such a subquery may read a Record type on which the reader's grant has row boundaries.
+`bregctl check` then reports the finding `breg.disclosure.derived-reads-withheld-source-rows`.
+The value is exact only for readers whose grant on that Record type is unbounded.
+
 Other protections on a Record type the SQL reads also leave rows out of the computation.
 They are a `record` disclosure condition that binds the reader, and `membershipBoundaries` or `requireConsent` on the reader's grant on that type.
 The same grant governs the profile's direct reads, where hiding those rows may be intended.
@@ -427,8 +436,8 @@ So `bregctl check` reports each one as the finding `breg.disclosure.derived-read
 The derived value leaves out the rows that the protection hides.
 
 {/* Evidence: crates/registry-breg/src/compiler/disclosure/reach.rs, validate_derived_source_grants,
-    derived_source_refusal and withheld_source_rows;
-    crates/registry-breg/src/derived_sql.rs, derived_sql_source_scans and derived_sql_reads_other_rows_of;
+    derived_source_refusal, withheld_source_rows and unlinked_source_rows;
+    crates/registry-breg/src/derived_sql.rs, derived_sql_source_scans, derived_sql_reads_other_rows_of and derived_sql_unlinked_reads;
     crates/registry-breg/src/generated_ddl.rs, grant_reads_rows and policy_authority_expression_for_alias;
     crates/registry-breg/tests/disclosure_compile.rs, a_derived_field_cannot_read_a_record_type_its_reader_cannot_read,
     a_derived_field_cannot_read_a_record_type_under_other_row_boundaries,
@@ -444,7 +453,9 @@ The derived value leaves out the rows that the protection hides.
     a_record_condition_on_a_derived_source_that_binds_the_reader_is_a_finding,
     a_record_condition_on_a_self_joined_owner_that_binds_the_reader_is_a_finding,
     a_membership_boundary_on_a_derived_source_grant_is_a_finding,
-    a_consent_requirement_on_a_derived_source_grant_is_a_finding and
+    a_consent_requirement_on_a_derived_source_grant_is_a_finding,
+    a_subquery_unlinked_to_the_row_is_a_finding_under_a_bounded_source_grant,
+    a_subquery_unlinked_to_the_row_over_the_owner_is_a_finding_under_a_bounded_grant and
     a_derived_field_may_read_source_fields_its_reader_cannot_read. */}
 
 ## Schedule a Record-controlled Action

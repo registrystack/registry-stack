@@ -21,7 +21,10 @@
   whose key is not each row's own `id`, read from the Record type itself
   rather than through a table expression or subquery, and SQL that combines
   or picks among its rows with an aggregate, `GROUP BY` or `DISTINCT ON`,
-  unless any `GROUP BY` or `DISTINCT ON` includes that `id`. A derived
+  unless any `GROUP BY` or `DISTINCT ON` includes that `id`. Those refusals
+  use `breg.disclosure.derived-reads-other-owner-rows` and name the rewrite:
+  read the Record type once, in the top-level `FROM`, key on its own `id`, and
+  group or pick `DISTINCT ON` by nothing or by that `id`. A derived
   field that reads its own Record type once, row by row, is unaffected. BReg
   cannot check that linked rows hold the same boundary values, so keep them
   consistent. A `record` disclosure condition that binds the reader on a
@@ -29,7 +32,10 @@
   the reader's grant on that type, leave rows out of the derived value. Each
   is reported as the finding
   `breg.disclosure.derived-reads-withheld-source-rows`, not refused, because
-  the same grant governs the profile's direct reads. Migration: for each
+  the same grant governs the profile's direct reads. So is a grant with row
+  boundaries on a Record type that a subquery referring to no column of the
+  row reads: its value covers only the rows the reader sees, and is exact
+  only for readers whose grant on that type is unbounded. Migration: for each
   refusal, grant the profile `get` on the named Record type with only the link
   fields readable and the row boundaries the message names, or remove the
   derived field from the profile.
