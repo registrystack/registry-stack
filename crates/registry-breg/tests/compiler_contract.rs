@@ -1576,6 +1576,12 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
             "allowCount":true
           }],
           "rowBoundaries": "unrestricted"
+        },{
+          "recordType":"group-membership","operations":["get"],
+          "readableFields":["household","person"],"rowBoundaries":"unrestricted"
+        },{
+          "recordType":"person","operations":["get"],
+          "readableFields":["legal-name"],"rowBoundaries":"unrestricted"
         }]}
       }}
     }"#;
@@ -1632,8 +1638,10 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         .tables
         .iter()
         .find(|table| table.entity_id == "person")
-        .and_then(|table| table.policies.first())
-        .and_then(|policy| policy.using_expression.as_deref())
+        .into_iter()
+        .flat_map(|table| &table.policies)
+        .filter_map(|policy| policy.using_expression.as_deref())
+        .find(|using| using.contains("registry.read_path_id"))
         .expect("target read-path RLS policy is compiled");
     assert!(path_policy.contains(&format!("\"{}\".\"record_id\"", person.physical_table)));
     let child_count = &household.derived_fields["child-count"].logical;

@@ -1909,6 +1909,13 @@ fn profile_supports_command(operations: &BTreeSet<Operation>, command: PolicyCom
     }
 }
 
+/// Whether a grant with these operations carries the row-security policy that
+/// lets its profile's requests read the record type's rows, as derived SQL
+/// does through `registry_source`.
+pub(crate) fn grant_reads_rows(operations: &BTreeSet<Operation>) -> bool {
+    profile_supports_command(operations, PolicyCommand::Select)
+}
+
 fn path_select_entities(entities: &BTreeMap<String, CompiledEntity>) -> BTreeSet<String> {
     let mut selected = BTreeSet::new();
     for source in entities.values() {
