@@ -4,7 +4,7 @@
   "status": "complete",
   "apiVersion": "id.registrystack.org/formats/casework/report/v1alpha2",
   "kind": "CaseworkReport",
-  "version": "0.47.1-dev",
+  "version": "0.48.0-dev",
   "databaseAccess": false,
   "filesChecked": 1,
   "networkAccess": false,

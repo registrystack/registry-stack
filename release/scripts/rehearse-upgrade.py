@@ -103,10 +103,11 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # hand migration products/evidence/reference/authoring-projects/CONFIG.md
 # describes. Release 0.46.0 renamed a Messaging access profile's `role` to
 # `actsAs`, so a 0.45.0 Messaging project is re-authored as the Messaging
-# CHANGELOG documents. This source reads the retained Evidence and Messaging
-# state 0.46.0 wrote, its immediate predecessor. Messaging keeps its version 100
+# CHANGELOG documents. Release 0.47.0 retained Evidence and Messaging state
+# while moving Messaging's keyed collections to mappings. This source reads the
+# state 0.47.0 wrote, its immediate predecessor. Messaging keeps its version 100
 # baseline and migrates forward through version 101.
-FORWARD_PATH_FLOOR = (0, 46, 0)
+FORWARD_PATH_FLOOR = (0, 47, 0)
 
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")

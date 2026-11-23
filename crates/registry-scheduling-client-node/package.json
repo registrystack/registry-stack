@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/scheduling-client-native",
-  "version": "0.47.1",
+  "version": "0.48.0",
   "description": "Internal Node.js native binding used by @registrystack/client.",
   "private": true,
   "license": "Apache-2.0",

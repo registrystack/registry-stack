@@ -1,0 +1,76 @@
+stack:
+  release: beta-60
+  version: 0.48.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.48.0
+
+artifacts:
+  registry-manifest: 0.48.0
+  evidence: 0.48.0
+  evidencectl: 0.48.0
+  evidence-oid4vci: 0.48.0
+  evidencectl-installer: 0.48.0
+  registry-docs: 0.48.0
+  discovery: 0.48.0
+  discoveryctl: 0.48.0
+  discovery-installer: 0.48.0
+  breg: 0.48.0
+  bregctl: 0.48.0
+  breg-mcp: 0.48.0
+  breg-mcp-installer: 0.48.0
+  breg-review: 0.48.0
+  breg-review-installer: 0.48.0
+  breg-installer: 0.48.0
+  casework: 0.48.0
+  caseworkctl: 0.48.0
+  casework-installer: 0.48.0
+  scheduling: 0.48.0
+  schedulingctl: 0.48.0
+  scheduling-installer: 0.48.0
+  messaging: 0.48.0
+  messagingctl: 0.48.0
+  messaging-installer: 0.48.0
+  registry-render: 0.48.0
+  registry-render-installer: 0.48.0
+  registry-manifest-installer: 0.48.0
+  coordinator: 0.48.0
+  coordinatorctl: 0.48.0
+  coordinator-installer: 0.48.0
+  adapter: 0.48.0
+  adapterctl: 0.48.0
+  adapter-installer: 0.48.0
+  rstack: 0.48.0
+  rstack-installer: 0.48.0
+  registry-language-server: 0.48.0
+  registry-client-node: 0.48.0
+  registry-client-python: 0.48.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 925f5cc0982954e6535f5dae198b61137a549b55ba480ff2dd73041ee8743883
+  entry_count: 334
+
+external:
+  thunderid:
+    kind: image-pin
+    repo: thunder-id/thunderid
+    ref: 12f517c4384004e360e26eb7eb1ab0501b678bb2
+    version: 1.0.1
+    images:
+      thunderid: ghcr.io/thunder-id/thunderid:1.0.1@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e
+  esignet-relay-authenticator:
+    kind: image-pin
+    repo: registrystack/esignet-relay-authenticator
+    ref: 9030f38aac2c85b2e7a2980ec23e2f8e72da97ff
+    version: 0.6.1
+    images:
+      authenticator: ghcr.io/registrystack/esignet-relay-authenticator:0.6.1@sha256:826ff864a981379dbbdd9bff0f663cd4c1952a1f1fa7c84a076bccce58931dd4
+      oidc-ui: ghcr.io/registrystack/esignet-oidc-ui:0.6.1@sha256:2629150e0733ad443d1e563d48790922c88968e93bbf5989a1b9c1974bc109c7
+
+warnings:
+  - code: breg-evidence-source-fact-patterns
+    classification: breaking-change
+    detail: Generated BReg Evidence sources now carry compatible fact patterns and decimal precision into their schemas and behaviorRevision. Regenerate and review each source with a patterned or decimal fact. Rewrite a refused pattern with explicit characters, or use a reviewed custom Adapter pack. See release/notes/v0.48.0.md.
+  - code: breg-derived-read-completeness
+    classification: breaking-change
+    detail: bregctl check refuses an access profile whose derived value can omit source rows under the reader's row security, and refuses LIMIT or OFFSET on the rows the derived relation returns. Align the source grants with the reader grant, or rewrite the SQL so each value uses complete visible rows. See release/notes/v0.48.0.md.
