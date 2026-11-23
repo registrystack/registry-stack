@@ -1840,6 +1840,60 @@ fn a_derived_field_that_reads_its_own_record_type_twice_cannot_serve_a_reader_bo
     assert!(compile_with_sql(&value, SELF_JOIN_SQL).is_ok());
 }
 
+/// Thirty table expressions, each joining the one before it to itself, read
+/// `person` 2^29 times. Counting those reads must not take that long: the
+/// project still compiles promptly, with the same verdict as one self-join.
+#[test]
+fn a_long_chain_of_self_joined_table_expressions_compiles_promptly() {
+    let path = "recordTypes[id=person].accessProfiles[id=registrar].rowBoundaries";
+    let mut ctes = vec!["c0 AS (SELECT p.id AS id FROM registry_source.person p)".to_owned()];
+    for index in 1..30 {
+        let previous = index - 1;
+        ctes.push(format!(
+            "c{index} AS (SELECT a.id AS id FROM c{previous} a JOIN c{previous} b ON b.id = a.id)"
+        ));
+    }
+    let sql = format!(
+        "WITH {} SELECT p.id AS id, count(x.id) AS household_size FROM registry_source.person p LEFT JOIN c29 x ON x.id = p.id GROUP BY p.id",
+        ctes.join(", ")
+    );
+    let mut value = self_join_source();
+    person_permission(&mut value, REGISTRAR)["rowBoundaries"] =
+        json!([{"field":"id","claim":"person_id","operator":"equals"}]);
+    let mut by_district_value = value.clone();
+    person_permission(&mut by_district_value, REGISTRAR)["rowBoundaries"] = by_district();
+    let (bounded_by_id, bounded_by_district) = finishes_within(30, move || {
+        (
+            derived_diagnostics(&value, &sql),
+            derived_diagnostics(&by_district_value, &sql),
+        )
+    });
+    let (_, _, message) = bounded_by_id
+        .iter()
+        .find(|(code, found, _)| code == OTHER_OWNER_ROWS && found == path)
+        .unwrap_or_else(|| panic!("got {bounded_by_id:?}"));
+    assert_names_the_owner_rewrite(message, "person");
+    assert!(bounded_by_district.is_empty(), "{bounded_by_district:?}");
+}
+
+/// Run `work` on its own thread and fail the test if it has not finished
+/// within `seconds`.
+fn finishes_within<T: Send + 'static>(
+    seconds: u64,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sender.send(work()));
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(seconds))
+        .unwrap_or_else(|error| match error {
+            std::sync::mpsc::RecvTimeoutError::Timeout => {
+                panic!("did not finish within {seconds} seconds")
+            }
+            std::sync::mpsc::RecvTimeoutError::Disconnected => panic!("panicked before finishing"),
+        })
+}
+
 /// SQL that combines rows of its owner's record type in one read computes a
 /// row's value from other rows too: here a head of household's count comes
 /// from the people who name them. A reader bounded by `id` would see only its
