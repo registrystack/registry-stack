@@ -1441,6 +1441,104 @@ fn a_read_path_reader_must_read_the_derived_source_under_its_root_boundaries() {
     assert_compiles_with_sql(&value, sql);
 }
 
+/// The grant follows the derived relation, not the column: one SQL statement
+/// computes every column of the relation, so reading one column needs the
+/// rows of every record type the statement reads.
+#[test]
+fn reading_one_column_of_a_derived_relation_needs_every_source_it_reads() {
+    let mut value = visit_source();
+    value["recordTypes"]["referral"] = json!({"primaryDataset":"test-dataset","route":"referrals","mutationMode":"mutable","classification":"internal",
+        "fields":[{"id":"person","type":"reference","target":"person","classification":"internal"}]});
+    value["recordTypes"]["person"]["derived"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"has-referral","type":"boolean","classification":"internal"}));
+    let sql = "SELECT p.id AS id, (count(v.id) FILTER (WHERE v.outcome = 'closed') > 0) AS has_closed_visit, (count(r.id) > 0) AS has_referral FROM registry_source.person p LEFT JOIN registry_source.visit v ON v.person = p.id LEFT JOIN registry_source.referral r ON r.person = p.id GROUP BY p.id";
+    grant_visits(&mut value, json!("unrestricted"));
+    let readable = &person_permission(&mut value, REGISTRAR)["readableFields"];
+    assert!(readable
+        .as_array()
+        .unwrap()
+        .contains(&json!("has-closed-visit")));
+    assert!(!readable
+        .as_array()
+        .unwrap()
+        .contains(&json!("has-referral")));
+
+    let found = derived_diagnostics(&value, sql);
+    let (_, _, message) = found
+        .iter()
+        .find(|(code, path, _)| {
+            code == UNREADABLE_SOURCE
+                && path == "recordTypes[id=referral].accessProfiles[id=registrar].operations"
+        })
+        .unwrap_or_else(|| panic!("expected {UNREADABLE_SOURCE} on referral, got {found:?}"));
+    assert!(message.contains("`has-closed-visit`"), "{message}");
+    assert!(
+        !found.iter().any(|(code, path, _)| {
+            [UNREADABLE_SOURCE, SOURCE_BOUNDARY].contains(&code.as_str())
+                && path.contains("[id=visit]")
+        }),
+        "{found:?}"
+    );
+
+    value["accessProfiles"][REGISTRAR]["permissions"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"recordType":"referral","operations":["get"],"rowBoundaries":"unrestricted",
+            "readableFields":["person"]}),
+        );
+    assert_compiles_with_sql(&value, sql);
+}
+
+/// Row boundaries are not judged one by one. The request installs the
+/// reader's boundaries for its grant on the owner as one ordered list, and a
+/// grant on the source sees a row only when its own list has the same length
+/// and the same field and operator at each position. A source grant with
+/// fewer boundaries than the reader's, or the same ones in another order,
+/// therefore sees no row at all, not more rows.
+#[test]
+fn a_derived_field_cannot_read_a_record_type_under_a_subset_or_reordering_of_its_readers_boundaries(
+) {
+    let region = || json!({"field":"region","claim":"region","operator":"equals"});
+    let district = || by_district()[0].clone();
+    let reader = json!([district(), region()]);
+    let path = "recordTypes[id=visit].accessProfiles[id=registrar].rowBoundaries";
+    let with_region = || {
+        let mut value = visit_source();
+        for record_type in ["person", "visit"] {
+            value["recordTypes"][record_type]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"id":"region","type":"string","maximumLength":32,"classification":"internal"}));
+        }
+        person_permission(&mut value, REGISTRAR)["rowBoundaries"] = reader.clone();
+        value
+    };
+
+    let mut same = with_region();
+    grant_visits(&mut same, reader.clone());
+    assert_compiles_with_sql(&same, VISIT_SQL);
+
+    for visits in [
+        json!([district()]),
+        json!([region()]),
+        json!("unrestricted"),
+        json!([region(), district()]),
+    ] {
+        let mut value = with_region();
+        grant_visits(&mut value, visits.clone());
+        let found = derived_diagnostics(&value, VISIT_SQL);
+        assert!(
+            found
+                .iter()
+                .any(|(code, found, _)| code == SOURCE_BOUNDARY && found == path),
+            "{visits}: got {found:?}"
+        );
+    }
+}
+
 /// A membership boundary is checked per row against the caller's own
 /// memberships. A source grant may omit one the reader's grant carries, or
 /// repeat its kind on a field of its own, but may not add one.
