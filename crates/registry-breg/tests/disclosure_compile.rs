@@ -1481,6 +1481,8 @@ fn evidence_options() -> registry_breg::evidence_source::EvidenceSourceOptions {
         connection: "registry".into(),
         authentication:
             registry_breg::evidence_source::EvidenceSourceAuthentication::StaticAuthorization,
+        required_values: std::collections::BTreeMap::new(),
+        optional_fields: Vec::new(),
     }
 }
 

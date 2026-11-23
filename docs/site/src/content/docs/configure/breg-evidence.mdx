@@ -48,6 +48,24 @@ Several AssertionDefinitions can reuse one Source without exporting it again.
 `--fields` names logical BReg fields, as does `--record-type`.
 The compiler resolves API property aliases, so a `registration-number` field can become the `registrationNumber` property on the wire while keeping its logical name in Evidence selectors and facts.
 
+### Require values and allow missing facts
+
+Two optional inputs shape what the generated lookup does with the returned record.
+Both name fields that are already in `--fields`, and without them the generated files are unchanged.
+
+- `--require-value FIELD=VALUE` lists the values a fact field may hold.
+  Repeat the flag to allow several values for one field.
+  A record whose value is not listed gets the same no-match outcome as a missing or unknown record, so nothing discloses that the record exists.
+  The check sits in the generated lookup, after the identity check and before any fact is returned, and never in derived logic.
+  Use it as defence in depth beside the access profile's row boundary, for example so a person register refuses inactive people even if a deployment's token claim is widened by mistake.
+  The value is read according to the field's type: `true` or `false` for a boolean, a whole number for an int64, a code of the vocabulary for a vocabulary field, and text within the field's length bounds for a string.
+- `--optional-fields A,B` names facts that a record may leave empty.
+  A null or missing value no longer causes a no-match: the fact is left out of the answer when it is empty, and the generated fact schema does not list it as required.
+  Use it when a record can legitimately have no value, such as a person with no recorded residence area.
+
+The command refuses a required value on a field that is not an exported fact, a value that does not fit the field's type, an empty value list, and a field that is both required to hold a value and optional.
+Both inputs are part of the pack version, so changing either one produces a new pack version.
+
 For each selected alternative, the generated request uses the fixed lookup route, method, and access profile.
 It asks for the selected facts plus only that alternative's identity fields, and those identity fields must already be readable.
 The command reports additional identity fields and generated profile names, and it refuses insufficient authority with a diagnostic.
@@ -58,7 +76,9 @@ Generate the next version into another directory so that you can compare and rev
 {/* Evidence: crates/registry-breg/src/evidence_source.rs export_evidence_source, oauth2-private-key-jwt, static-authorization;
     crates/registry-breg/src/evidence_source/tests.rs
     alternatives_keep_one_route_and_selected_identity_with_stable_inventories,
-    generated_pack_authentication_is_explicitly_selected;
+    generated_pack_authentication_is_explicitly_selected,
+    a_record_outside_the_allowed_values_gives_the_unknown_record_outcome,
+    an_optional_fact_that_is_missing_or_null_still_matches_and_is_omitted;
     crates/registry-bregctl/tests/evidence_source.rs an_explicit_lookup_project_exports_an_evidence_source_without_edits. */}
 
 ## Start with the maintained composition inputs

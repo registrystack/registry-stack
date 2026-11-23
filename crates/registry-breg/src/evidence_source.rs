@@ -89,6 +89,13 @@ pub struct EvidenceSourceOptions {
     pub source_id: String,
     pub connection: String,
     pub authentication: EvidenceSourceAuthentication,
+    /// Per fact field, the values a record may hold. A record with any other
+    /// value, or none, gets the unknown-record outcome. Values are spelled as
+    /// text and read according to the field's type.
+    pub required_values: BTreeMap<String, Vec<String>>,
+    /// Fact fields a record may leave empty. The fact is omitted when absent,
+    /// and the lookup still matches.
+    pub optional_fields: Vec<String>,
 }
 
 pub struct EvidenceSourceExport {
@@ -324,6 +331,136 @@ fn route_input_schema(selector: &Value) -> Value {
     schema
 }
 
+/// A fact field's allowed values as Rhai literals, and the fact fields that may
+/// be empty.
+struct FactRules {
+    required: BTreeMap<String, Vec<String>>,
+    optional: BTreeSet<String>,
+}
+
+/// Spells one allowed value as a Rhai literal, or says why the field's type
+/// cannot hold it.
+fn required_value_literal(kind: &FieldTypeSource, value: &str) -> Result<String, &'static str> {
+    let text = || json!(value).to_string();
+    match kind {
+        FieldTypeSource::Boolean => match value {
+            "true" | "false" => Ok(value.to_owned()),
+            _ => Err("a boolean field takes `true` or `false`"),
+        },
+        FieldTypeSource::Int64 => value
+            .parse::<i64>()
+            .map(|number| number.to_string())
+            .map_err(|_| "an integer field takes a whole number within the int64 range"),
+        FieldTypeSource::String {
+            min_length,
+            max_length,
+        } => {
+            let length = u32::try_from(value.chars().count()).unwrap_or(u32::MAX);
+            if (*min_length..=*max_length).contains(&length) {
+                Ok(text())
+            } else {
+                Err("the value is outside the field's declared length bounds")
+            }
+        }
+        FieldTypeSource::Text { max_length } => {
+            if u32::try_from(value.chars().count()).is_ok_and(|length| length <= *max_length) {
+                Ok(text())
+            } else {
+                Err("the value is longer than the field allows")
+            }
+        }
+        FieldTypeSource::VocabularyCode { values, .. } => {
+            if values.iter().any(|code| code == value) {
+                Ok(text())
+            } else {
+                Err("the value is not a code of the field's vocabulary")
+            }
+        }
+        FieldTypeSource::Date => {
+            let bytes = value.as_bytes();
+            let shaped = bytes.len() == 10
+                && bytes.iter().enumerate().all(|(index, byte)| match index {
+                    4 | 7 => *byte == b'-',
+                    _ => byte.is_ascii_digit(),
+                });
+            if shaped {
+                Ok(text())
+            } else {
+                Err("a date field takes YYYY-MM-DD")
+            }
+        }
+        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => {
+            if value.len() == 36
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+            {
+                Ok(text())
+            } else {
+                Err("a uuid field takes a 36-character uuid")
+            }
+        }
+        _ => Err("this field type cannot carry a required value; use a reviewed custom adapter"),
+    }
+}
+
+/// Checks the declared fact rules against the exported fact fields. A rule
+/// names an exported fact so the guard reads exactly what the pack projects.
+fn fact_rules(
+    entity: &CompiledEntity,
+    fields: &BTreeSet<String>,
+    options: &EvidenceSourceOptions,
+) -> Result<FactRules, Diagnostic> {
+    let mut optional = BTreeSet::new();
+    for id in &options.optional_fields {
+        if !fields.contains(id) {
+            return Err(refusal(
+                "optional-fields",
+                &format!("optional field `{id}` is not an exported fact field; add it to the fact fields or drop it"),
+            ));
+        }
+        if !optional.insert(id.clone()) {
+            return Err(refusal(
+                "optional-fields",
+                &format!("optional field `{id}` is listed more than once"),
+            ));
+        }
+    }
+    let mut required = BTreeMap::new();
+    for (id, values) in &options.required_values {
+        if !fields.contains(id) {
+            return Err(refusal(
+                "required-values",
+                &format!("required-value field `{id}` is not an exported fact field; add it to the fact fields or drop the rule"),
+            ));
+        }
+        if optional.contains(id) {
+            return Err(refusal(
+                "optional-fields",
+                &format!("field `{id}` is both required to hold a value and optional; choose one"),
+            ));
+        }
+        if values.is_empty() {
+            return Err(refusal(
+                "required-values",
+                &format!("field `{id}` needs at least one allowed value"),
+            ));
+        }
+        let kind = &field(entity, id)?.field_type;
+        let mut literals = BTreeSet::new();
+        for value in values {
+            literals.insert(required_value_literal(kind, value).map_err(|reason| {
+                refusal(
+                    "required-values",
+                    &format!("allowed value for field `{id}` does not fit its type: {reason}"),
+                )
+            })?);
+        }
+        required.insert(id.clone(), literals.into_iter().collect());
+    }
+    Ok(FactRules { required, optional })
+}
+
 /// Export multiple alternatives in one source. Each invocation replaces no
 /// files; the caller publishes this inventory to a new output directory.
 pub fn export_evidence_source(
@@ -416,6 +553,7 @@ pub fn export_evidence_source(
         }
         fact_properties.insert(id.clone(), scalar_schema(&field(entity, id)?.field_type)?);
     }
+    let rules = fact_rules(entity, &fields, options)?;
     let mut all_fields = fields.clone();
     let mut selector_profiles = BTreeMap::new();
     let mut identity_fields = BTreeMap::new();
@@ -593,23 +731,48 @@ pub fn export_evidence_source(
     }
     project_response.push_str("    #{data: #{domainData: projected}}\n}\n");
     extract.push_str(" else { throw \"unsupported source selector profile\"; }\n");
-    for id in &fields {
+    // A record outside a field's allowed values is refused here, in the
+    // lookup, exactly like an unknown record. It never reaches derived logic.
+    for (id, literals) in &rules.required {
+        let api_name = json!(field(entity, id)?.api_name);
+        let allowed = literals
+            .iter()
+            .map(|literal| format!("record[{api_name}] == {literal}"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        extract.push_str(&format!(
+            "    if !({allowed}) {{ return #{{lookup: \"no-match\"}}; }}\n"
+        ));
+    }
+    for id in fields.difference(&rules.optional) {
         extract.push_str(&format!(
             "    if record[{}] == () {{ return #{{lookup: \"no-match\"}}; }}\n",
             json!(field(entity, id)?.api_name)
         ));
     }
     let facts = fields
-        .iter()
+        .difference(&rules.optional)
         .map(|id| {
             field(entity, id)
                 .map(|logical| format!("{}: record[{}]", json!(id), json!(logical.api_name)))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    extract.push_str(&format!(
-        "    #{{lookup: \"matched\", facts: #{{{}}}}}\n}}\n",
-        facts.join(", ")
-    ));
+    if rules.optional.is_empty() {
+        extract.push_str(&format!(
+            "    #{{lookup: \"matched\", facts: #{{{}}}}}\n}}\n",
+            facts.join(", ")
+        ));
+    } else {
+        extract.push_str(&format!("    let facts = #{{{}}};\n", facts.join(", ")));
+        for id in &rules.optional {
+            let api_name = json!(field(entity, id)?.api_name);
+            extract.push_str(&format!(
+                "    if record[{api_name}] != () {{ facts[{id}] = record[{api_name}]; }}\n",
+                id = json!(id)
+            ));
+        }
+        extract.push_str("    #{lookup: \"matched\", facts: facts}\n}\n");
+    }
     extract.push_str(
         "fn is_unresolved(exchange) {\n    exchange.headers[\"camelhttpresponsecode\"] == 404\n}\n",
     );
@@ -665,7 +828,10 @@ pub fn export_evidence_source(
         "properties":route_input_properties,
         "oneOf":route_input_alternatives
     });
-    let facts_schema = object(fact_properties, fields.into_iter().collect());
+    let facts_schema = object(
+        fact_properties,
+        fields.difference(&rules.optional).cloned().collect(),
+    );
     let inputs_bytes = serde_json::to_vec_pretty(&inputs)
         .map_err(|_| refusal("export", "could not encode the route input schema"))?;
     let facts_bytes = serde_json::to_vec_pretty(&facts_schema)
@@ -851,6 +1017,15 @@ fn selected_behavior(
     let membership = membership_behavior(registry, entity, &options.access_profile)?;
     if !membership.is_empty() {
         behavior["access"]["membershipBoundaries"] = json!(membership);
+    }
+    if !options.required_values.is_empty() || !options.optional_fields.is_empty() {
+        let required = options
+            .required_values
+            .iter()
+            .map(|(id, values)| (id, values.iter().collect::<BTreeSet<_>>()))
+            .collect::<BTreeMap<_, _>>();
+        let optional = options.optional_fields.iter().collect::<BTreeSet<_>>();
+        behavior["factRules"] = json!({"requiredValues":required,"optionalFields":optional});
     }
     Ok(behavior)
 }
