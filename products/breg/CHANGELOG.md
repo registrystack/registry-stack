@@ -10,11 +10,11 @@
   JSON Schema reads differently. An export whose fields declare no pattern and
   include no decimal produces the same files. Migration: regenerate the export
   of a registry with a patterned or decimal field and review the changed pack
-  schemas on import; rewrite a refused pattern in plain syntax, or use a
+  schemas on import. Rewrite a refused pattern in plain syntax, or use a
   reviewed custom adapter.
 - `bregctl generate evidence-source` accepts `--require-value FIELD=VALUE` and
   `--optional-fields A,B`, both naming fields already in `--fields`.
-  `--require-value` lists the values a fact field may hold; repeat it to allow
+  `--require-value` lists the values a fact field may hold. Repeat it to allow
   several values for one field. A record holding any other value gets the same
   `no-match` outcome as an unknown record, decided in the generated lookup
   before any fact is returned. `--optional-fields` names facts a record may
@@ -23,7 +23,7 @@
   from the response stays a source protocol error. The command refuses a rule
   on a field that is not an exported fact, a value that does not fit the
   field's type, and a field that is both required to hold a value and optional.
-  Either option, when set, enters the export's `behaviorRevision`; an export
+  Either option, when set, enters the export's `behaviorRevision`. An export
   that sets neither keeps the revision it had.
 - Hook conditions of `type: fields` accept `changedAny`, two or more fields of
   which at least one must change. `changed` keeps its meaning: every listed
