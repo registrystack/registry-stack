@@ -53,11 +53,15 @@ pub(crate) fn derived_sql_dependencies(sql: &[u8]) -> DerivedSqlDependencies {
     dependencies
 }
 
-/// Count how many times SQL which has already passed [`validate_derived_sql`]
-/// reads each `registry_source` relation, counting the reads of a common
-/// table expression once for each reference to it. A table expression
-/// declared inside another query is counted where it is declared as well as
-/// where it is referenced, so a count can be too high but never too low.
+/// Count how many times, up to [`SOURCE_SCANS_COUNTED`], SQL which has
+/// already passed [`validate_derived_sql`] reads each `registry_source`
+/// relation, counting the reads of a common table expression once for each
+/// reference to it. A table expression declared inside another query is
+/// counted where it is declared as well as where it is referenced, so a count
+/// can be too high but never too low. Each table expression's reads are
+/// counted once and added at every reference to it, so a chain of
+/// expressions that each read the one before more than once takes time in
+/// proportion to its length, not to the reads it makes.
 pub(crate) fn derived_sql_source_scans(sql: &[u8]) -> BTreeMap<String, usize> {
     const VALIDATED: &str = "derived SQL was validated before its source scans";
     let text = std::str::from_utf8(sql).expect(VALIDATED);
@@ -83,16 +87,23 @@ pub(crate) fn derived_sql_source_scans(sql: &[u8]) -> BTreeMap<String, usize> {
     count_source_scans(
         &PgNode::SelectStmt(main),
         &ctes,
-        &mut Vec::new(),
+        &mut BTreeMap::new(),
         &mut scans,
     );
     scans
 }
 
+/// Where [`derived_sql_source_scans`] stops counting. Its callers only ask
+/// whether SQL reads a relation more than once.
+const SOURCE_SCANS_COUNTED: usize = 2;
+
+/// Add the reads under `node` to `scans`. `expressions` holds the reads of
+/// each table expression counted so far, or `None` for one still being
+/// counted, and is shared by every call over one statement.
 fn count_source_scans<'a>(
     node: &PgNode,
     ctes: &BTreeMap<&'a str, &'a PgNode>,
-    expanding: &mut Vec<&'a str>,
+    expressions: &mut BTreeMap<&'a str, Option<BTreeMap<String, usize>>>,
     scans: &mut BTreeMap<String, usize>,
 ) {
     for node in raw_subtree_nodes(node) {
@@ -103,7 +114,7 @@ fn count_source_scans<'a>(
             continue;
         }
         if range.schemaname == "registry_source" {
-            *scans.entry(range.relname.clone()).or_default() += 1;
+            add_source_scans(scans, &range.relname, 1);
         } else if let Some((&name, &query)) = range
             .schemaname
             .is_empty()
@@ -112,13 +123,24 @@ fn count_source_scans<'a>(
         {
             // A non-recursive expression cannot read itself; the guard only
             // keeps a malformed reference from looping.
-            if !expanding.contains(&name) {
-                expanding.push(name);
-                count_source_scans(query, ctes, expanding, scans);
-                expanding.pop();
+            if !expressions.contains_key(name) {
+                expressions.insert(name, None);
+                let mut reads = BTreeMap::new();
+                count_source_scans(query, ctes, expressions, &mut reads);
+                expressions.insert(name, Some(reads));
+            }
+            if let Some(Some(reads)) = expressions.get(name) {
+                for (relation, count) in reads {
+                    add_source_scans(scans, relation, *count);
+                }
             }
         }
     }
+}
+
+fn add_source_scans(scans: &mut BTreeMap<String, usize>, relation: &str, count: usize) {
+    let scans = scans.entry(relation.to_owned()).or_default();
+    *scans = (*scans + count).min(SOURCE_SCANS_COUNTED);
 }
 
 /// Whether SQL which has already passed [`validate_derived_sql`] and reads
@@ -269,6 +291,7 @@ pub(crate) fn derived_sql_unlinked_reads(
             Some((cte.ctename.as_str(), query))
         })
         .collect::<BTreeMap<_, _>>();
+    let mut expressions = BTreeMap::new();
     let mut reads = BTreeMap::new();
     for node in raw_nodes(&parsed) {
         let NodeRef::SubLink(link) = node else {
@@ -288,7 +311,7 @@ pub(crate) fn derived_sql_unlinked_reads(
             &[],
             &RefCell::new(BTreeMap::new()),
         ) {
-            count_source_scans(query, &ctes, &mut Vec::new(), &mut reads);
+            count_source_scans(query, &ctes, &mut expressions, &mut reads);
         }
     }
     reads.into_keys().collect()
@@ -1624,6 +1647,66 @@ mod tests {
             scans("WITH unused AS (SELECT m.id AS id FROM registry_source.member m) SELECT h.id FROM registry_source.household h"),
             counted(&[("household", 1)])
         );
+    }
+
+    /// `length` table expressions `c0` to `c{length - 1}`: the first reads
+    /// `registry_source.person` once, and each other one reads the one before
+    /// it twice when `doubled`, or once.
+    fn table_expression_chain(length: usize, doubled: bool) -> String {
+        let mut ctes = vec!["c0 AS (SELECT p.id AS id FROM registry_source.person p)".to_owned()];
+        for index in 1..length {
+            let previous = index - 1;
+            ctes.push(if doubled {
+                format!("c{index} AS (SELECT a.id AS id FROM c{previous} a JOIN c{previous} b ON b.id = a.id)")
+            } else {
+                format!("c{index} AS (SELECT a.id AS id FROM c{previous} a)")
+            });
+        }
+        format!("WITH {}", ctes.join(", "))
+    }
+
+    /// Run `work` on its own thread and fail the test if it has not finished
+    /// within `seconds`.
+    fn finishes_within<T: Send + 'static>(
+        seconds: u64,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || sender.send(work()));
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(seconds))
+            .unwrap_or_else(|error| match error {
+                std::sync::mpsc::RecvTimeoutError::Timeout => {
+                    panic!("did not finish within {seconds} seconds")
+                }
+                std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                    panic!("panicked before finishing")
+                }
+            })
+    }
+
+    #[test]
+    fn source_scans_count_each_table_expression_once_however_often_it_is_referenced() {
+        // Thirty expressions that each read the one before twice read `person`
+        // 2^29 times. The count stops at two and must not expand every
+        // reference to get there.
+        let doubled = table_expression_chain(30, true);
+        let single = table_expression_chain(30, false);
+        let source_columns =
+            BTreeMap::from([("person".to_owned(), BTreeSet::from(["id".to_owned()]))]);
+        let (twice, once, unlinked) = finishes_within(30, move || {
+            (
+                derived_sql_source_scans(format!("{doubled} SELECT x.id FROM c29 x").as_bytes()),
+                derived_sql_source_scans(format!("{single} SELECT x.id FROM c29 x").as_bytes()),
+                derived_sql_unlinked_reads(
+                    format!("{doubled} SELECT p.id AS id, (SELECT count(x.id) FROM c29 x) AS size FROM registry_source.person p").as_bytes(),
+                    &source_columns,
+                ),
+            )
+        });
+        assert_eq!(twice, BTreeMap::from([("person".to_owned(), 2)]));
+        assert_eq!(once, BTreeMap::from([("person".to_owned(), 1)]));
+        assert_eq!(unlinked, BTreeSet::from(["person".to_owned()]));
     }
 
     #[test]
