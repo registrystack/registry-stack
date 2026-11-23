@@ -2,18 +2,19 @@
 
 ## Unreleased
 
-- BREAKING: `bregctl generate evidence-source` carries a field's declared
-  `pattern` into the generated fact and response schemas, and states a decimal
-  fact's declared precision and scale as a `pattern`. Every pattern the
-  schemas carry also enters the export's `behaviorRevision`, so an export with
-  a patterned or decimal field gets a new pack version. The export refuses an
-  exported fact or identity field whose pattern uses PostgreSQL-only regular
-  expression syntax that JSON Schema reads differently. An export whose fields
-  declare no pattern and include no decimal produces the same files and the
-  same `behaviorRevision`. Migration: regenerate the export of a registry with
-  a patterned or decimal field and review the changed pack schemas and version
-  on import. Rewrite a refused pattern in plain syntax, or use a reviewed
-  custom adapter.
+- BREAKING: `bregctl generate evidence-source` carries a fact field's
+  declared `pattern` into the generated fact and response schemas, and states
+  a decimal fact's declared precision and scale as a `pattern`. Every pattern
+  the schemas carry also enters the export's `behaviorRevision`, so an export
+  with a patterned or decimal fact gets a new pack version. A selector field's
+  pattern stays out of the pack, because the generated lookup already requires
+  the returned identity to equal the caller's input. The export refuses a fact
+  field whose pattern uses PostgreSQL-only regular expression syntax that
+  JSON Schema reads differently. An export whose facts declare no pattern and
+  include no decimal produces the same files and the same `behaviorRevision`.
+  Migration: regenerate the export of a registry with a patterned or decimal
+  fact and review the changed pack schemas and version on import. Rewrite a
+  refused pattern in plain syntax, or use a reviewed custom adapter.
 - `bregctl generate evidence-source` accepts `--require-value FIELD=VALUE` and
   `--optional-fields A,B`, both naming fields already in `--fields`.
   `--require-value` lists the values a fact field may hold. Repeat it to allow

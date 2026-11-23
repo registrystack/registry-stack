@@ -855,7 +855,14 @@ fn export_with_behavior(
     let mut dependencies = Map::new();
     for id in &all_fields {
         let logical = field(entity, id)?;
-        let mut schema = field_schema(entity, logical)?;
+        // Only a fact carries its field's declared pattern. A selector-only
+        // field returns the caller's input, which the identity check already
+        // requires the record to equal exactly.
+        let mut schema = if fields.contains(id) {
+            field_schema(entity, logical)?
+        } else {
+            scalar_schema(&logical.field_type)?
+        };
         let mut dependency = serde_json::to_value(logical)
             .map_err(|_| refusal("fields", "could not encode field contract"))?;
         // Bind every pattern the schemas carry, declared or derived, so a
