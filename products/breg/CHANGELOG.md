@@ -21,9 +21,10 @@
 - `bregctl generate evidence-source` accepts `--require-value FIELD=VALUE` and
   `--optional-fields A,B`, both naming fields already in `--fields`.
   `--require-value` lists the values a fact field may hold. Repeat it to allow
-  several values for one field. A record holding any other value gets the same
-  `no-match` outcome as an unknown record, decided in the generated lookup
-  before any fact is returned. `--optional-fields` names facts a record may
+  several values for one field. A record holding any other value answers
+  `no-match`, decided in the generated lookup before any fact is returned.
+  Evidence reports that apart from an unknown record, which BReg answers as an
+  unresolved lookup, so this rule does not hide that the record exists. `--optional-fields` names facts a record may
   leave empty: a null value leaves the fact out of the answer and out of the
   fact schema's `required` list, and the lookup still matches. A key absent
   from the response stays a source protocol error. The command refuses a rule

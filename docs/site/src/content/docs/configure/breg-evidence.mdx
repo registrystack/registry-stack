@@ -55,8 +55,8 @@ Both name fields that are already in `--fields`, and without them the generated 
 
 - `--require-value FIELD=VALUE` lists the values a fact field may hold.
   Repeat the flag to allow several values for one field.
-  A record whose value is not listed gets the same no-match outcome as a missing or unknown record.
-  Nothing discloses that the record exists.
+  A record whose value is not listed answers no match, the same answer as a record whose fact is missing.
+  A record that does not exist answers unresolved instead, and Evidence reports the two differently, so a caller can tell that a refused record exists.
   The check runs in the generated lookup, never in derived logic.
   It runs after the identity check and before any fact is returned.
   Use it as defence in depth beside the access profile's row boundary.
@@ -88,7 +88,7 @@ Generate the next version into another directory so that you can compare and rev
     crates/registry-breg/src/evidence_source/tests.rs
     alternatives_keep_one_route_and_selected_identity_with_stable_inventories,
     generated_pack_authentication_is_explicitly_selected,
-    a_record_outside_the_allowed_values_gives_the_unknown_record_outcome,
+    a_record_outside_the_allowed_values_answers_no_match_not_unresolved,
     an_optional_fact_that_is_null_still_matches_and_is_omitted;
     crates/registry-bregctl/tests/evidence_source.rs an_explicit_lookup_project_exports_an_evidence_source_without_edits. */}
 
