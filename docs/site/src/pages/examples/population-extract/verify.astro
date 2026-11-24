@@ -9,7 +9,7 @@ const issuedDirectory = fileURLToPath(
   new URL('examples/population-extract/issued/', publicDir),
 );
 const records = await loadIssuedSpecimens(issuedDirectory);
-const canonical = 'https://docs.registrystack.org/dev/examples/population-extract/verify/';
+const canonical = new URL(Astro.url.pathname, Astro.site);
 ---
 
 <!doctype html>
@@ -30,6 +30,7 @@ const canonical = 'https://docs.registrystack.org/dev/examples/population-extrac
       content="Check a fictional Population register extract by its public test reference."
     />
     <link rel="canonical" href={canonical} />
+    <link rel="sitemap" href="../../../sitemap-index.xml" />
     <link rel="alternate" type="text/markdown" href="../verify.md" />
   </head>
   <body>
