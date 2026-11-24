@@ -459,6 +459,61 @@ seal when `serve` starts. Use a loopback timestamp authority (`http://127.0.0.1:
 is accepted on loopback only) or `withoutTimestamp` while you develop. Never copy a test seal's
 runtime into production.
 
+### Create a test-signed PDF
+
+Use `registry-render test-seal` to give a pack reviewer a signed specimen and the public
+certificate needed to verify it. The command takes fictional record data and an authored
+bundle or a verified package. For a scaffold created with
+`registry-render init ./letter`, add `seal: registry-office` to the `letter` document entry in
+`letter/manifest.yaml`. The scaffolded template already prints a test notice when
+`signing.testOnly` is true.
+
+```bash
+registry-render test-seal --bundle ./letter --type letter \
+  --data ./letter/fixtures/data.json --output ./letter-specimen
+```
+
+Open `letter-specimen/document.pdf` and check the test notice. Scope trust in
+`letter-specimen/test-root.pem` to this specimen by passing it directly to the offline validator
+from a Registry Stack source checkout.
+
+```bash
+uv run --script products/render/scripts/validate-seal.py \
+  --pdf ./letter-specimen/document.pdf --trust-root ./letter-specimen/test-root.pem
+```
+
+Each run creates a fresh test authority and makes one request to the local seal route in-process.
+Its private material is temporary. Choose a fresh output directory for each run so the PDF stays
+paired with its public root. The test seal uses PAdES B-B without a trusted timestamp. Verify it
+within the certificate's 90-day lifetime, or generate a fresh specimen later. Use `--issued-at`
+to set the date shown by the template. The signature uses the signing clock.
+For a layout-only preview, use `compile --preview-seal test-only`.
+
+To try a published sample, open the [fictional Population extract](../../examples/population-extract/issued/TEST-DBCF-00BC-A93D-ABB7-3A99/document.pdf).
+Scan its QR code or enter the printed reference on the [verification page](../../examples/population-extract/verify/).
+Select your copy of the PDF there to compare its SHA-256 on your device.
+To check its digital signature, use the offline validator above with the [public test certificate](../../examples/population-extract/issued/TEST-DBCF-00BC-A93D-ABB7-3A99/test-root.pem).
+
+To issue your own scannable PDF, run the Population extract example from a source checkout.
+It assigns a fresh reference, prints it beside the QR code, and records the signed file's SHA-256 for lookup.
+
+```bash
+cd products/render/examples/specimen-verification
+node issue.mjs --registry ./specimens --origin http://127.0.0.1:4371
+node serve.mjs --registry ./specimens --host 127.0.0.1 --port 4371
+```
+
+To scan with a phone on the same Wi-Fi, use the computer's private IPv4 address for both commands.
+The lookup reports fictional issuance. The offline validator checks the signature on the PDF itself.
+
+{/* Evidence: crates/registry-render/src/test_seal.rs, test-only local runtime and paired publication;
+    crates/registry-render/tests/test_seal.rs, command output and refusals;
+    products/render/examples/specimen-verification/issue.mjs, reference assignment and issuance receipt;
+    products/render/examples/specimen-verification/serve.mjs, manual entry and reference lookup;
+    products/render/examples/specimen-verification/test_scan.py, lookup from the QR on the signed page;
+    docs/site/src/pages/examples/population-extract/verify.astro, public verifier;
+    products/render/scripts/validate-seal.py, offline verification against an explicit trust root. */}
+
 ### Make a test seal in ten minutes
 
 Render refuses a CA certificate as the seal certificate, so a self-signed root alone cannot seal.

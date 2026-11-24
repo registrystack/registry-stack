@@ -1,0 +1,438 @@
+---
+import { fileURLToPath } from 'node:url';
+import { publicDir } from 'astro:config/server';
+
+import { loadIssuedSpecimens } from '../../../lib/population-extract/verification-data.mjs';
+
+const base = import.meta.env.BASE_URL;
+const issuedDirectory = fileURLToPath(
+  new URL('examples/population-extract/issued/', publicDir),
+);
+const records = await loadIssuedSpecimens(issuedDirectory);
+const canonical = 'https://docs.registrystack.org/dev/examples/population-extract/verify/';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#173b7a" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex,follow" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
+    />
+    <title>Verify a synthetic Population extract | Registry Stack Docs</title>
+    <meta
+      name="description"
+      content="Check a fictional Population register extract by its public test reference."
+    />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" type="text/markdown" href="../verify.md" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a
+        class="wordmark"
+        href={base}
+        aria-label="Registry Stack Docs home"
+        data-astro-prefetch="false"
+      >
+        <span class="brand-mark" aria-hidden="true">RS</span>
+        <span>Registry Stack</span>
+        <span class="docs-tag">Docs</span>
+      </a>
+      <span class="environment">Development example</span>
+    </header>
+
+    <main data-verifier data-records={JSON.stringify(records)}>
+      <header class="intro">
+        <p class="eyebrow">Synthetic Population Office</p>
+        <h1>Verify a Population register extract</h1>
+        <p>
+          Check whether a fictional test reference exists in this published development example.
+          The lookup shows no personal data.
+        </p>
+      </header>
+
+      <section id="result" class="result" aria-live="polite" tabindex="-1" hidden>
+        <div data-result="found" hidden>
+          <p class="result-label">Published test record</p>
+          <h2>Reference found</h2>
+          <dl>
+            <dt>Document type</dt>
+            <dd>Population register extract</dd>
+            <dt>Issued (UTC)</dt>
+            <dd><time id="issued-at"></time></dd>
+            <dt>Reference</dt>
+            <dd><code id="found-reference"></code></dd>
+            <dt>Signed PDF SHA-256</dt>
+            <dd><code id="signed-digest"></code></dd>
+          </dl>
+          <p class="boundary">
+            This lookup checks the reference and recorded file digest.
+            To verify the PDF signature, follow the <a href="../../../operate/registry-render/#create-a-test-signed-pdf" data-astro-prefetch="false">Render signing guide</a> using the public test certificate.
+          </p>
+          <nav class="record-links" aria-label="Synthetic record files">
+            <a id="pdf-link" href="" data-astro-prefetch="false">Open the synthetic PDF</a>
+            <a id="root-link" href="" download="test-root.pem" data-astro-prefetch="false">Download the public test certificate</a>
+          </nav>
+          <div class="file-check">
+            <h3>Compare your PDF</h3>
+            <p>
+              Choose a PDF to compare its SHA-256 on this device. The file stays in your browser.
+            </p>
+            <label for="original-file">Original PDF</label>
+            <input id="original-file" type="file" accept="application/pdf,.pdf" />
+            <p id="comparison" class="comparison" aria-live="polite"></p>
+          </div>
+        </div>
+
+        <div data-result="unknown" hidden>
+          <p class="result-label result-label-error">Not found</p>
+          <h2>Unknown reference</h2>
+          <p>No published synthetic record has this reference.</p>
+        </div>
+
+        <div data-result="malformed" hidden>
+          <p class="result-label result-label-error">Invalid reference</p>
+          <h2>Could not read reference</h2>
+          <p>Enter TEST followed by five groups of four hexadecimal characters.</p>
+        </div>
+      </section>
+
+      <section class="check-panel" aria-labelledby="form-title">
+        <h2 id="form-title">Check a reference</h2>
+        <p>Letter case, spaces and hyphens do not matter.</p>
+        <form id="reference-form" method="get" action="./">
+          <label for="reference">Reference</label>
+          <input
+            id="reference"
+            name="ref"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            placeholder="TEST-XXXX-XXXX-XXXX-XXXX-XXXX"
+            maxlength="64"
+            required
+          />
+          <button type="submit">Check reference</button>
+        </form>
+      </section>
+
+      <noscript>
+        <p class="noscript">Enable JavaScript to check a reference in the published test records.</p>
+      </noscript>
+    </main>
+
+    <script>
+      import '../../../lib/population-extract/verify-client.mjs';
+    </script>
+  </body>
+</html>
+
+<style>
+  :root {
+    color-scheme: light;
+    font-family: 'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: #3a3a3a;
+    background: #ffffff;
+    font-synthesis: none;
+    --blue: #173b7a;
+    --blue-dark: #102a56;
+    --ink: #161616;
+    --muted: #6a6a6a;
+    --rule: #d8dce2;
+    --paper: #eef2ec;
+    --error: #9d2c1d;
+  }
+
+  * {
+    box-sizing: border-box;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: #ffffff;
+  }
+
+  .site-header {
+    display: flex;
+    min-height: 60px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 2px solid var(--ink);
+    padding: 0 1.75rem;
+  }
+
+  .wordmark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: var(--ink);
+    font-size: 1.05rem;
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .brand-mark {
+    display: inline-grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    background: var(--blue);
+    color: #ffffff;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.8rem;
+    font-weight: 400;
+  }
+
+  .docs-tag,
+  .environment,
+  .eyebrow,
+  .result-label {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .docs-tag {
+    color: var(--blue);
+  }
+
+  .environment {
+    color: var(--muted);
+  }
+
+  main {
+    width: min(100% - 2rem, 45rem);
+    margin: 0 auto;
+    padding: clamp(2.2rem, 7vw, 4.5rem) 0 4rem;
+  }
+
+  .intro {
+    margin-bottom: 2rem;
+  }
+
+  .eyebrow,
+  .result-label {
+    margin: 0 0 0.65rem;
+    color: var(--blue);
+    font-weight: 600;
+  }
+
+  h1,
+  h2,
+  h3,
+  p {
+    margin-top: 0;
+  }
+
+  h1,
+  h2,
+  h3 {
+    color: var(--ink);
+    line-height: 1.16;
+  }
+
+  h1 {
+    max-width: 18ch;
+    margin-bottom: 1rem;
+    font-size: clamp(2.2rem, 8vw, 3.75rem);
+    letter-spacing: -0.035em;
+  }
+
+  h2 {
+    margin-bottom: 0.8rem;
+    font-size: 1.5rem;
+  }
+
+  h3 {
+    margin-bottom: 0.6rem;
+    font-size: 1.05rem;
+  }
+
+  p {
+    line-height: 1.58;
+  }
+
+  .intro > p:last-child {
+    max-width: 39rem;
+    color: #50545a;
+    font-size: 1.05rem;
+  }
+
+  .result,
+  .check-panel {
+    margin-top: 1.25rem;
+    border: 1px solid var(--rule);
+    padding: clamp(1.2rem, 5vw, 2rem);
+  }
+
+  .result {
+    border-top: 5px solid var(--blue);
+    background: var(--paper);
+  }
+
+  .result:focus-visible,
+  input:focus-visible,
+  button:focus-visible,
+  a:focus-visible {
+    outline: 3px solid #d4af4e;
+    outline-offset: 3px;
+  }
+
+  .result-label-error {
+    color: var(--error);
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: minmax(8rem, 0.65fr) minmax(0, 1.35fr);
+    gap: 0.6rem 1rem;
+    margin: 1.5rem 0;
+  }
+
+  dt {
+    color: var(--muted);
+  }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--ink);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.86em;
+  }
+
+  .boundary {
+    border-left: 4px solid #d4af4e;
+    padding: 0.75rem 1rem;
+    background: #fff8e8;
+  }
+
+  .record-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.25rem;
+    margin: 1.25rem 0;
+  }
+
+  a {
+    color: var(--blue);
+    font-weight: 600;
+    text-underline-offset: 0.18em;
+  }
+
+  a:hover {
+    color: var(--blue-dark);
+  }
+
+  .file-check {
+    margin-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+    padding-top: 1.35rem;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 0.45rem;
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  input {
+    width: 100%;
+    border: 1px solid #8d939b;
+    padding: 0.78rem 0.85rem;
+    background: #ffffff;
+    color: var(--ink);
+    font: inherit;
+  }
+
+  input[type='text'] {
+    text-transform: uppercase;
+  }
+
+  input[type='file'] {
+    padding: 0.65rem;
+  }
+
+  button {
+    width: 100%;
+    margin-top: 0.85rem;
+    border: 1px solid var(--blue);
+    padding: 0.78rem 1rem;
+    background: var(--blue);
+    color: #ffffff;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  button:hover {
+    background: var(--blue-dark);
+  }
+
+  .comparison {
+    min-height: 1.6em;
+    margin: 0.75rem 0 0;
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .comparison[data-match='no'],
+  .comparison[data-match='error'] {
+    color: var(--error);
+  }
+
+  .noscript {
+    margin-top: 1.2rem;
+    color: var(--muted);
+    font-size: 0.86rem;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  @media (max-width: 34rem) {
+    .site-header {
+      align-items: flex-start;
+      flex-direction: column;
+      padding: 0.8rem 1rem;
+    }
+
+    .environment {
+      padding-left: 2.9rem;
+    }
+
+    main {
+      width: min(100% - 1.2rem, 45rem);
+      padding-top: 2rem;
+    }
+
+    dl {
+      grid-template-columns: 1fr;
+      gap: 0.15rem;
+    }
+
+    dd {
+      margin-bottom: 0.65rem;
+    }
+  }
+</style>

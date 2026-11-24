@@ -89,7 +89,7 @@ pub fn serve(runtime_path: &Path) -> Result<i32, RenderProblem> {
 /// environment or memory or attach to it. A worker is a fresh executable and
 /// does not inherit the mark.
 #[cfg(target_os = "linux")]
-fn mark_not_dumpable() -> Result<(), RenderProblem> {
+pub(crate) fn mark_not_dumpable() -> Result<(), RenderProblem> {
     rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable).map_err(
         |err| {
             RenderProblem::new(
@@ -105,12 +105,13 @@ fn mark_not_dumpable() -> Result<(), RenderProblem> {
 /// and nothing here closes that: on macOS a worker that gained code
 /// execution can read the serving process's environment.
 #[cfg(not(target_os = "linux"))]
-fn mark_not_dumpable() -> Result<(), RenderProblem> {
+pub(crate) fn mark_not_dumpable() -> Result<(), RenderProblem> {
     Ok(())
 }
 
-async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
-    init_tracing();
+pub(crate) async fn load_service(
+    runtime_path: &Path,
+) -> Result<(runtime::RenderRuntime, String, Arc<Service>), RenderProblem> {
     let (runtime, config_id, positions) = runtime::load_with_positions(runtime_path)?;
     let oidc = crate::auth::verifier(&runtime).await?;
     let api_key = if oidc.is_none() {
@@ -142,7 +143,6 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // The address is settled before the steps with side effects (opening
     // the audit destination creates its directory), so a refused bind
     // leaves nothing half-made behind.
-    let bind: SocketAddr = runtime.listener.bind.socket_addr();
     if !runtime.listener.bind_allowed() {
         return Err(RenderProblem::new(
             ProblemKind::RuntimeInvalid,
@@ -231,6 +231,13 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             runtime.limits.concurrent_renders(),
         )),
     });
+    Ok((runtime, config_id, service))
+}
+
+async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
+    init_tracing();
+    let (runtime, config_id, service) = load_service(runtime_path).await?;
+    let bind: SocketAddr = runtime.listener.bind.socket_addr();
     tracing::info!(
         renderer = crate::display_version(),
         bundle = %service.bundle.bundle_hash,
@@ -387,7 +394,7 @@ fn init_tracing() {
         .try_init();
 }
 
-fn router(service: Arc<Service>) -> Router {
+pub(crate) fn router(service: Arc<Service>) -> Router {
     // API routes authenticate before anything buffers the body. Inside
     // auth: the body ceiling refuses as an audited RFC 9457 problem (with
     // the tower stream limit as the backstop for chunked or under-declared

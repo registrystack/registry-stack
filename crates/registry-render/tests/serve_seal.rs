@@ -30,6 +30,9 @@ mod common;
 use common::{
     answers_render_health, free_port, logged_health_request, move_to_fresh_port, server_output,
 };
+#[path = "common/signed_pdf.rs"]
+mod signed_pdf;
+use signed_pdf::{find, read_signed_file};
 
 const LIMITS: &str = "limits:\n  renderTimeoutSeconds: 20\n  maximumOutputBytes: 8388608\n  maximumRequestBytes: 8388608\n  maximumConcurrentRenders: 2\n";
 const NOTICE_BODY: &str =
@@ -932,65 +935,6 @@ fn first_revision_of(fixture: &Fixture, id: &str) -> registry_render::Rendered {
         registry_render::DEFAULT_MAX_OUTPUT_BYTES,
     )
     .expect("the first revision renders")
-}
-
-// ----- Reading a sealed file the way a validator starts -----
-
-struct SignedFile {
-    signed_parts: [Vec<u8>; 2],
-    cms_der: Vec<u8>,
-    /// The bytes `/Contents` reserves for the signature: half its hex
-    /// digits.
-    reserved: usize,
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-/// The length of a DER value from its tag and length octets.
-fn der_len(der: &[u8]) -> usize {
-    assert_eq!(der[0], 0x30, "a CMS ContentInfo is a SEQUENCE");
-    match der[1] {
-        short if short < 0x80 => 2 + usize::from(short),
-        long => {
-            let count = usize::from(long & 0x7f);
-            let length = der[2..2 + count]
-                .iter()
-                .fold(0usize, |acc, byte| (acc << 8) | usize::from(*byte));
-            2 + count + length
-        }
-    }
-}
-
-/// The signed byte ranges and the CMS of a file whose incremental update
-/// starts after `first_revision_len` bytes.
-fn read_signed_file(pdf: &[u8], first_revision_len: usize) -> SignedFile {
-    let update = &pdf[first_revision_len..];
-    let at = first_revision_len + find(update, b"/ByteRange [").expect("a ByteRange");
-    let close = at + find(&pdf[at..], b"]").expect("ByteRange end");
-    let values: Vec<usize> = std::str::from_utf8(&pdf[at + 12..close])
-        .unwrap()
-        .split_whitespace()
-        .map(|n| n.parse().unwrap())
-        .collect();
-    let [start, gap_start, gap_end, tail] = values[..] else {
-        panic!("four ByteRange values: {values:?}")
-    };
-    assert_eq!(start, 0);
-    assert_eq!(gap_end + tail, pdf.len(), "the byte range covers the file");
-    let hex_digits = &pdf[gap_start + 1..gap_end - 1];
-    let contents = hex::decode(hex_digits).expect("hex contents");
-    let cms_der = contents[..der_len(&contents)].to_vec();
-    assert!(
-        contents[cms_der.len()..].iter().all(|b| *b == 0),
-        "the reserved space after the CMS is zero padding"
-    );
-    SignedFile {
-        signed_parts: [pdf[..gap_start].to_vec(), pdf[gap_end..].to_vec()],
-        cms_der,
-        reserved: contents.len(),
-    }
 }
 
 // ----- Tests -----

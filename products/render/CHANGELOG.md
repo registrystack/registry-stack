@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `registry-render test-seal` creates a test-signed PDF and its public test CA
+  certificate from a bundle and an example record. Each run uses a fresh local
+  development signer.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: the render route and `compile --format json` send only the

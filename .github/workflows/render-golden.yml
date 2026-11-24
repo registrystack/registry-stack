@@ -28,6 +28,7 @@ on:
       - "crates/registry-platform-testing/**"
       - "crates/registry-platform-yaml/**"
       - "products/render/**"
+      - "docs/site/public/examples/population-extract/**"
       - "Cargo.lock"
       - "Cargo.toml"
       - ".github/workflows/render-golden.yml"
@@ -52,6 +53,7 @@ on:
       - "crates/registry-platform-testing/**"
       - "crates/registry-platform-yaml/**"
       - "products/render/**"
+      - "docs/site/public/examples/population-extract/**"
       - "Cargo.lock"
       - "Cargo.toml"
       - ".github/workflows/render-golden.yml"
@@ -109,4 +111,25 @@ jobs:
         run: cargo test --locked -p registry-render --test serve
 
       - name: Scaffold and CLI tests
-        run: cargo test --locked -p registry-render --test scaffold
+        run: cargo test --locked -p registry-render --test scaffold --test test_seal
+
+      - name: Set up Node for the specimen issuer
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.11.0
+
+      - name: Set up uv for the independent QR reader
+        if: runner.os == 'Linux'
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.11.16"
+
+      - name: Issue, scan and look up a test-signed extract
+        if: runner.os == 'Linux'
+        working-directory: products/render/examples/specimen-verification
+        env:
+          REGISTRY_RENDER_BIN: ${{ github.workspace }}/target/debug/registry-render
+        run: |
+          node --test issue.test.mjs serve.test.mjs
+          uv run --python 3.13 --script test_scan.py

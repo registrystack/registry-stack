@@ -1,0 +1,2 @@
+# Preserve signed specimen bytes across checkouts and downloads.
+public/examples/population-extract/issued/*/document.pdf binary

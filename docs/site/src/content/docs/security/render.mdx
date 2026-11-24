@@ -159,6 +159,19 @@ escapes, which a base64url member does not need.
     crates/registry-platform-crypto/src/lib.rs transit_discovery_refuses_what_initialization_refuses,
     transit_signer_accepts_openbao_native_metadata_and_sign_response_fixtures. */}
 
+The `test-seal` command generates a fresh development authority for each specimen.
+Pass its public root directly to the verifier for that PDF.
+In the Population example, the issuer assigns an opaque reference before signing.
+Scanning its QR code reveals the document type, reference, issuance time and signed-file fingerprint.
+The public example also lets readers download its fictional PDF and public test certificate.
+When you select your own copy for comparison, the browser hashes it on your device.
+To check the digital signature on a recipient's copy, verify that PDF against its test root.
+
+{/* Evidence: crates/registry-render/src/test_seal.rs write_test_chain;
+    products/render/examples/specimen-verification/issue.mjs issueSpecimen;
+    products/render/examples/specimen-verification/serve.mjs createVerificationServer;
+    docs/site/src/pages/examples/population-extract/verify.astro, public specimen lookup. */}
+
 ### `/ready` is unauthenticated
 
 Anyone who reaches the listener reads each seal's id, readiness, value-free reason and test-only

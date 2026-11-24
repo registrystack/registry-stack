@@ -46,6 +46,7 @@ pub mod runtime;
 pub mod schema;
 pub mod seal;
 pub mod server;
+mod test_seal;
 pub mod worker;
 pub mod world;
 
