@@ -1137,6 +1137,26 @@ fn public_check_refuses_fact_rules_and_facts_it_cannot_bound() {
 }
 
 #[test]
+fn public_check_refuses_a_projection_that_exceeds_the_response_limit() {
+    let registry = compiled(&long_note_project(), SQL);
+    let mut options = options();
+    options.fields = vec!["status".into(), "note".into()];
+    options.public_check = true;
+
+    let refusal = refused(&registry, &options);
+    assert_eq!(refusal.code, "breg.evidence-source.refused");
+    assert_eq!(refusal.path, "fields");
+    assert!(refusal.message.contains("64 KiB"), "{}", refusal.message);
+
+    options.public_check = false;
+    export_evidence_source(&registry, &options).unwrap();
+
+    options.public_check = true;
+    options.fields = vec!["status".into()];
+    export_evidence_source(&registry, &options).unwrap();
+}
+
+#[test]
 fn public_check_is_one_member_of_the_behavior_revision() {
     let registry = compiled(&pattern_project(AREA_PATTERN), SQL);
     let mut public = pattern_options();

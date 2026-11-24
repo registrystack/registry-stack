@@ -510,10 +510,10 @@ fn record_id_schema() -> Value {
 
 fn fact_properties() -> Value {
     json!({
-        "recordState": {"type": "string", "maxLength": 32},
-        "checkCode": {"type": "string", "maxLength": 64},
-        "holderName": {"type": "string", "maxLength": 64},
-        "expiresOn": {"type": "string", "maxLength": 16}
+        "recordState": {"type": "string"},
+        "checkCode": {"type": "string"},
+        "holderName": {"type": "string"},
+        "expiresOn": {"type": "string"}
     })
 }
 
@@ -1521,8 +1521,8 @@ fn public_check_status_values_outside_the_four_statuses_are_refused_at_load() {
 fn public_check_code_fact_must_be_a_string_fact_and_no_source_input_at_load() {
     let mut facts = fact_properties();
     facts["sequence"] = json!({"type": "integer"});
-    facts["recordId"] = json!({"type": "string", "maxLength": 32});
-    facts["number"] = json!({"type": "string", "maxLength": 32});
+    facts["recordId"] = json!({"type": "string"});
+    facts["number"] = json!({"type": "string"});
     let routes = pack_routes_with_steps(false, record_id_schema(), facts);
     let with_code_fact = |fact: &'static str| {
         load_edited_package(&routes, move |model, _| {

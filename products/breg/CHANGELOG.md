@@ -10,7 +10,9 @@
   request. Content rules belong in the Evidence definition's derivation. The
   flag is one more member of the behaviour the pack version digests, so the
   export is another pack version. `--optional-fields` and `--require-value`
-  are refused with it. The default export is unchanged.
+  are refused with it. The export also refuses a selection whose declared
+  field bounds can exceed the 64 KiB lookup response limit. The default
+  export is unchanged.
 - `bregctl generate identity-facts` and `external-source-facts` now refuse
   `--optional-fields` and `--require-value`, which only `evidence-source`
   reads. They were accepted and ignored.

@@ -104,6 +104,7 @@ pub fn compile_with_pack_routes(
     };
     let mut sources = Map::new();
     let mut source_facts = BTreeMap::new();
+    let mut pack_facts_before_projection = BTreeMap::new();
     for (id, source) in &project.sources {
         let source_at = FieldPath::root().key("sources").map_key(id.to_string());
         let matches = pack_routes
@@ -338,6 +339,7 @@ pub fn compile_with_pack_routes(
             "factSchema": facts_path
         });
         if let Some(projection) = projection {
+            pack_facts_before_projection.insert(id.as_str(), &route.facts_schema);
             compiled["projection"] = projection;
         }
         source_facts.insert(id.to_string(), facts_schema);
@@ -601,24 +603,17 @@ pub fn compile_with_pack_routes(
                 .map_key(id.to_string())
                 .key("publicCheck")
                 .key("checkCodeFact");
-            let facts = definition
-                .acquisition
-                .source
-                .as_ref()
-                .and_then(|source| source_facts.get(source.as_str()));
+            let source = definition.acquisition.source.as_ref();
+            let facts = source.and_then(|id| source_facts.get(id.as_str()));
             let is_string_fact = facts.is_some_and(|schema| {
                 schema["properties"][public_check.check_code_fact.as_str()]["type"] == "string"
             });
-            let is_input = definition
-                .acquisition
-                .source
-                .as_ref()
-                .is_some_and(|source| {
-                    project.sources[source].inputs.iter().any(|(name, input)| {
-                        name.as_str() == public_check.check_code_fact
-                            || input.selector.field.as_str() == public_check.check_code_fact
-                    })
-                });
+            let is_input = source.is_some_and(|id| {
+                project.sources[id].inputs.iter().any(|(name, input)| {
+                    name.as_str() == public_check.check_code_fact
+                        || input.selector.field.as_str() == public_check.check_code_fact
+                })
+            });
             if !is_string_fact || is_input {
                 return Err(vec![Finding::new(
                     at,
@@ -626,7 +621,25 @@ pub fn compile_with_pack_routes(
                     "checkCodeFact must name a string fact of the acquiring Source's facts schema, and the Source must not bind it as a request input",
                 )]);
             }
-            if let Some(member) = facts.and_then(|schema| facts_content_member(schema, "")) {
+            // The pack validates its facts before applying a Source projection.
+            let pack_facts = source
+                .and_then(|id| pack_facts_before_projection.get(id.as_str()))
+                .copied();
+            let source_schema_name = if pack_facts.is_some() {
+                "projected facts schema"
+            } else {
+                "pack facts schema"
+            };
+            let schemas = [
+                ("pack facts schema", pack_facts),
+                (source_schema_name, facts),
+            ];
+            let content = schemas.into_iter().find_map(|(name, schema)| {
+                schema
+                    .and_then(|schema| facts_content_member(schema, ""))
+                    .map(|member| (name, member))
+            });
+            if let Some((schema, member)) = content {
                 return Err(vec![Finding::new(
                     FieldPath::root()
                         .key("assertionDefinitions")
@@ -634,7 +647,7 @@ pub fn compile_with_pack_routes(
                         .key("publicCheck"),
                     "public-check-facts-content",
                     format!(
-                        "the facts schema of a public check Source states types only, and it declares `{member}`: a record that fails the schema answers source.unavailable before the check code is compared, which shows a caller without the code that the record exists"
+                        "the public check's {schema} must state only types. Move the content check at `{member}` into the derivation, which runs after the check code comparison"
                     ),
                 )]);
             }
@@ -703,6 +716,9 @@ fn insert_json_artifact(
 /// JSON pointer. Structure, annotations and an empty `required` list constrain
 /// nothing a stored value could fail.
 fn facts_content_member(schema: &Value, pointer: &str) -> Option<String> {
+    if schema.as_bool() == Some(false) {
+        return Some(pointer.to_owned());
+    }
     let members = schema.as_object()?;
     for (keyword, value) in members {
         let at = format!("{pointer}/{keyword}");
@@ -714,6 +730,7 @@ fn facts_content_member(schema: &Value, pointer: &str) -> Option<String> {
                     facts_content_member(property, &format!("{at}/{name}"))
                 })
             }),
+            "additionalProperties" if value.is_boolean() => None,
             "items" | "additionalProperties" => facts_content_member(value, &at),
             _ => Some(at),
         };
