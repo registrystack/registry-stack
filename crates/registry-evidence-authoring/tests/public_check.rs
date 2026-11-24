@@ -62,6 +62,13 @@ fn sha256_uri(bytes: &[u8]) -> String {
 }
 
 fn pack_routes_with(facts: Value, inputs: Value) -> Vec<CheckedPackRoute> {
+    pack_routes_with_facts_schema(
+        json!({"type": "object", "additionalProperties": false, "properties": facts}),
+        inputs,
+    )
+}
+
+fn pack_routes_with_facts_schema(facts_schema: Value, inputs: Value) -> Vec<CheckedPackRoute> {
     let required: Vec<String> = inputs["properties"]
         .as_object()
         .unwrap()
@@ -69,8 +76,6 @@ fn pack_routes_with(facts: Value, inputs: Value) -> Vec<CheckedPackRoute> {
         .cloned()
         .collect();
     let inputs_schema = json!({"type": "object", "additionalProperties": false, "required": required, "properties": inputs["properties"]});
-    let facts_schema =
-        json!({"type": "object", "additionalProperties": false, "properties": facts});
     let inputs_bytes = serde_json::to_vec(&inputs_schema).unwrap();
     let facts_bytes = serde_json::to_vec(&facts_schema).unwrap();
     let pack_bytes = serde_json::to_vec(&json!({
@@ -99,7 +104,7 @@ fn pack_routes_with(facts: Value, inputs: Value) -> Vec<CheckedPackRoute> {
 
 fn pack_routes() -> Vec<CheckedPackRoute> {
     pack_routes_with(
-        json!({"status": {"type": "string"}, "checkCode": {"type": "string", "pattern": "^[A-Z2-7]{24}$"}}),
+        json!({"status": {"type": "string"}, "checkCode": {"type": "string"}}),
         json!({"properties": {"recordId": {"type": "string", "minLength": 4, "maxLength": 32}}}),
     )
 }
@@ -284,6 +289,74 @@ fn refusal_5_the_code_fact_must_be_a_string_fact_the_source_does_not_take_as_inp
     );
     let findings = compile::compile_with_pack_routes(&bound, &scripts(), &routes).unwrap_err();
     assert_eq!(codes(&findings), ["public-check-code-fact"], "{findings:?}");
+}
+
+/// A record that fails the facts schema answers `source.unavailable` before
+/// the check code is compared, so a content rule there tells an uncoded caller
+/// that the record exists.
+#[test]
+fn refusal_5_the_source_facts_schema_of_a_public_check_states_types_only() {
+    let project = project_with(|_| {});
+    let inputs =
+        json!({"properties": {"recordId": {"type": "string", "minLength": 4, "maxLength": 32}}});
+    for (facts, member) in [
+        (
+            json!({"status": {"type": "string", "enum": ["valid"]}, "checkCode": {"type": "string"}}),
+            "/properties/status/enum",
+        ),
+        (
+            json!({"status": {"type": "string"}, "checkCode": {"type": "string", "pattern": "^[A-Z2-7]{24}$"}}),
+            "/properties/checkCode/pattern",
+        ),
+        (
+            json!({"status": {"type": "string"}, "checkCode": {"type": "string"}, "holder": {"type": "object", "properties": {"name": {"type": "string", "maxLength": 64}}}}),
+            "/properties/holder/properties/name/maxLength",
+        ),
+        (
+            json!({"status": {"type": "string"}, "checkCode": {"type": "string"}, "names": {"type": "array", "items": {"type": "string", "minLength": 1}}}),
+            "/properties/names/items/minLength",
+        ),
+    ] {
+        let findings = compile::compile_with_pack_routes(
+            &project,
+            &scripts(),
+            &pack_routes_with(facts, inputs.clone()),
+        )
+        .unwrap_err();
+        assert_eq!(
+            codes(&findings),
+            ["public-check-facts-content"],
+            "{findings:?}"
+        );
+        assert!(findings[0].message.contains(member), "{findings:?}");
+    }
+    let facts = json!({"status": {"type": "string", "description": "Record status"}, "checkCode": {"type": "string"}});
+    let routes = pack_routes_with_facts_schema(
+        json!({"type": "object", "additionalProperties": false, "required": ["status"], "properties": facts}),
+        inputs.clone(),
+    );
+    let findings = compile::compile_with_pack_routes(&project, &scripts(), &routes).unwrap_err();
+    assert_eq!(
+        codes(&findings),
+        ["public-check-facts-content"],
+        "{findings:?}"
+    );
+    assert!(findings[0].message.contains("/required"), "{findings:?}");
+    // Annotations and an empty required list constrain nothing.
+    let routes = pack_routes_with_facts_schema(
+        json!({"type": "object", "additionalProperties": false, "required": [], "properties": facts}),
+        inputs.clone(),
+    );
+    compile::compile_with_pack_routes(&project, &scripts(), &routes).unwrap();
+    // The rule binds the Source a public check reads, and no other Source.
+    let relying = project_with(|d| {
+        d.as_object_mut().unwrap().remove("publicCheck");
+    });
+    let constrained = pack_routes_with(
+        json!({"status": {"type": "string", "enum": ["valid"]}, "checkCode": {"type": "string"}}),
+        inputs,
+    );
+    compile::compile_with_pack_routes(&relying, &scripts(), &constrained).unwrap();
 }
 
 #[test]

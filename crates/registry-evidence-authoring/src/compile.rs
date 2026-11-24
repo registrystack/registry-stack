@@ -626,6 +626,18 @@ pub fn compile_with_pack_routes(
                     "checkCodeFact must name a string fact of the acquiring Source's facts schema, and the Source must not bind it as a request input",
                 )]);
             }
+            if let Some(member) = facts.and_then(|schema| facts_content_member(schema, "")) {
+                return Err(vec![Finding::new(
+                    FieldPath::root()
+                        .key("assertionDefinitions")
+                        .map_key(id.to_string())
+                        .key("publicCheck"),
+                    "public-check-facts-content",
+                    format!(
+                        "the facts schema of a public check Source states types only, and it declares `{member}`: a record that fails the schema answers source.unavailable before the check code is compared, which shows a caller without the code that the record exists"
+                    ),
+                )]);
+            }
             requirement["publicCheck"] = json!(public_check);
         }
         requirements.push(requirement);
@@ -685,6 +697,31 @@ fn insert_json_artifact(
         serde_json::to_vec_pretty(value).expect("JSON value serializes"),
         at,
     )
+}
+
+/// The first member of a facts schema that constrains more than a type, as a
+/// JSON pointer. Structure, annotations and an empty `required` list constrain
+/// nothing a stored value could fail.
+fn facts_content_member(schema: &Value, pointer: &str) -> Option<String> {
+    let members = schema.as_object()?;
+    for (keyword, value) in members {
+        let at = format!("{pointer}/{keyword}");
+        let found = match keyword.as_str() {
+            "type" | "title" | "description" | "$schema" | "$id" | "$comment" => None,
+            "required" if value.as_array().is_some_and(Vec::is_empty) => None,
+            "properties" => value.as_object().and_then(|properties| {
+                properties.iter().find_map(|(name, property)| {
+                    facts_content_member(property, &format!("{at}/{name}"))
+                })
+            }),
+            "items" | "additionalProperties" => facts_content_member(value, &at),
+            _ => Some(at),
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
 }
 
 fn insert_artifact(

@@ -87,7 +87,17 @@ has no relying party to scope a reference to, so the definition is refused with
 whose one selector profile has exactly one field, acquires through exactly one
 Source with no `holderPresented` block, keeps `existenceDisclosure` at
 `collapse-unresolved`, and the check code fact must be a string property of that
-Source's facts schema that the Source does not bind as an input. Each rule has
+Source's facts schema that the Source does not bind as an input. That facts
+schema states types only: besides `type`, `properties`, `items`,
+`additionalProperties`, an empty `required` list and annotations (`title`,
+`description`, `$schema`, `$id`, `$comment`), any member is refused with
+`public-check-facts-content`. Evidence compares the check code only after the
+Source returns a record, so a record that failed a bound, a pattern, a
+vocabulary or a required member would answer `source.unavailable` to a caller
+without the code and show that the record exists. Check content in the derive
+Function, which runs after the comparison. The rule reads the schema, not the
+Source script: a hand-written script must also omit a value whose type differs
+from the schema and must not throw on one record's content. Each rule has
 its own diagnostic in `evidencectl check`. Declaring `publicCheck` opens
 nothing on its own; the target authority's `publicCheck` activation does.
 
