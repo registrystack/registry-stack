@@ -1,0 +1,441 @@
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
+syntheticOnly: true
+common:
+  observedAt: '2026-09-06T00:00:00Z'
+  selectors:
+    subject:
+      profile: breg-8-registry-6-record-7-by-code
+      values:
+        code: SYNTHETIC-ACTIVE
+  expectedRequestParts:
+    query:
+    - name: accessProfile
+      value: evidence-source
+    - name: $select
+      value: checkCode,code,status
+    body:
+      selector: by-code
+      values:
+        code: SYNTHETIC-ACTIVE
+  expectedTransport:
+    path: /v1/records/records:lookup
+    fixedHeaders:
+    - name: Accept
+      value: application/json
+cases:
+- id: positive
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "status": "active", "checkCode": "K7QWM4XRT5PZ3NB6VHJYDC2A", "label": "SYNTHETIC-PRIVATE-LABEL"}}}
+  expected:
+    lookup: match
+    derivationRuns: true
+    signed: true
+    facts:
+      status: active
+      check-code: K7QWM4XRT5PZ3NB6VHJYDC2A
+    values:
+      urn:example:concept:record-check:status: valid
+      urn:example:concept:record-check:printed:
+        form: reviewed-structured-value
+        schema: urn:example:schema:record-check-fields
+        fields:
+          recordStatus: active
+- id: negative-retired
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "status": "retired", "checkCode": "K7QWM4XRT5PZ3NB6VHJYDC2A"}}}
+  expected:
+    lookup: match
+    derivationRuns: true
+    signed: true
+    facts:
+      status: retired
+      check-code: K7QWM4XRT5PZ3NB6VHJYDC2A
+    values:
+      urn:example:concept:record-check:status: revoked
+      urn:example:concept:record-check:printed:
+        form: reviewed-structured-value
+        schema: urn:example:schema:record-check-fields
+        fields:
+          recordStatus: retired
+- id: issued-before-check-codes
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "status": "active"}}}
+  expected:
+    lookup: match
+    derivationRuns: true
+    signed: true
+    facts:
+      status: active
+    values:
+      urn:example:concept:record-check:status: valid
+      urn:example:concept:record-check:printed:
+        form: reviewed-structured-value
+        schema: urn:example:schema:record-check-fields
+        fields:
+          recordStatus: active
+- id: status-outside-the-vocabulary
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "status": "pending", "checkCode": "K7QWM4XRT5PZ3NB6VHJYDC2A"}}}
+  expected:
+    lookup: match
+    facts:
+      status: pending
+      check-code: K7QWM4XRT5PZ3NB6VHJYDC2A
+    error: derivation_input_error
+    publicProblem: service.unavailable
+    derivationRuns: true
+    signed: false
+- id: mistyped-status
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "status": 7, "checkCode": "K7QWM4XRT5PZ3NB6VHJYDC2A"}}}
+  expected:
+    lookup: match
+    facts:
+      check-code: K7QWM4XRT5PZ3NB6VHJYDC2A
+    error: derivation_input_error
+    publicProblem: service.unavailable
+    derivationRuns: true
+    signed: false
+- id: missing-status
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body: {"data": {"domainData": {"code": "SYNTHETIC-ACTIVE", "checkCode": "K7QWM4XRT5PZ3NB6VHJYDC2A"}}}
+  expected:
+    lookup: match
+    facts:
+      check-code: K7QWM4XRT5PZ3NB6VHJYDC2A
+    error: derivation_input_error
+    publicProblem: service.unavailable
+    derivationRuns: true
+    signed: false
+- id: returned-identity-mismatch
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body: {"data": {"domainData": {"code": "SYNTHETIC-WRONG-IDENTITY", "status": "active", "checkCode": "K7QWM4XRT5PZ3NB6VHJYDC2A"}}}
+  expected:
+    lookup: no_match
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: missing-identity
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 200
+        headers:
+          content-type: application/json
+        body: {"data": {"domainData": {"status": "active", "checkCode": "K7QWM4XRT5PZ3NB6VHJYDC2A"}}}
+  expected:
+    lookup: no_match
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: no-match
+  acquisition:
+    intercepts:
+    - type: endpoint
+      endpoint: registry
+    - type: token-endpoint
+      endpoint: registry
+    exchanges:
+    - request:
+        endpoint: registry
+        tokenRequest: true
+        method: POST
+        path: /oauth2/token
+      response:
+        status: 200
+        body:
+          access_token: synthetic-registry-replay-token
+          token_type: Bearer
+          expires_in: 60
+    - request:
+        endpoint: registry
+        method: POST
+        path: /v1/records/records:lookup
+        query: '%24select=checkCode%2Ccode%2Cstatus&accessProfile=evidence-source'
+        headers:
+          accept: application/json
+        body:
+          selector: by-code
+          values:
+            code: SYNTHETIC-ACTIVE
+      response:
+        status: 404
+        headers:
+          content-type: application/problem+json
+        body: {"type": "https://id.registrystack.org/problems/registry-breg/lookup/unresolved", "title": "Not Found", "status": 404, "detail": "The requested record was not found.", "code": "lookup.unresolved", "traceId": "11111111111111111111111111111111"}
+  expected:
+    lookup: unresolved
+    publicProblem: evidence.unavailable
+    derivationRuns: false
+    signed: false
+- id: source-failure
+  sourceFailure: timeout
+  expected:
+    publicProblem: source.unavailable
+    signed: false
+privacyExpectation:
+  evidenceContains:
+  - urn:example:concept:record-check:status
+  evidenceExcludes:
+  - K7QWM4XRT5PZ3NB6VHJYDC2A
+  - breg-8-registry-6-record-7-by-code
+  - SYNTHETIC-ACTIVE
+  - SYNTHETIC-WRONG-IDENTITY
+  - SYNTHETIC-PRIVATE-LABEL
+  diagnosticsExclude:
+  - K7QWM4XRT5PZ3NB6VHJYDC2A
+  - SYNTHETIC-ACTIVE
+  - SYNTHETIC-WRONG-IDENTITY
+  - SYNTHETIC-PRIVATE-LABEL

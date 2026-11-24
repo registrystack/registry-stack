@@ -55,6 +55,7 @@ fn options() -> EvidenceSourceOptions {
         authentication: EvidenceSourceAuthentication::StaticAuthorization,
         required_values: BTreeMap::new(),
         optional_fields: Vec::new(),
+        public_check: false,
     }
 }
 fn file<'a>(export: &'a EvidenceSourceExport, path: &str) -> &'a [u8] {
@@ -925,6 +926,23 @@ fn run_lookup(export: &EvidenceSourceExport, record: Value) -> Value {
 
 /// As `run_lookup`, with a script error returned as its text.
 fn try_lookup(export: &EvidenceSourceExport, record: Value) -> Result<Value, String> {
+    run_entrypoint(
+        export,
+        "lookup",
+        json!({
+            "properties": {"bregEvidenceInputs": {"by-code--code": "A1"}},
+            "body": {"data": {"domainData": record}}
+        }),
+    )
+}
+
+/// Runs one generated entrypoint over an exchange, with a script error
+/// returned as its text.
+fn run_entrypoint(
+    export: &EvidenceSourceExport,
+    entrypoint: &str,
+    exchange: Value,
+) -> Result<Value, String> {
     let script = std::str::from_utf8(file(
         export,
         "adapter-packs/registry-status/scripts/lookup.rhai",
@@ -932,15 +950,32 @@ fn try_lookup(export: &EvidenceSourceExport, record: Value) -> Result<Value, Str
     .unwrap();
     let engine = rhai::Engine::new();
     let ast = engine.compile(script).unwrap();
-    let exchange = json!({
-        "properties": {"bregEvidenceInputs": {"by-code--code": "A1"}},
-        "body": {"data": {"domainData": record}}
-    });
-    let exchange = rhai::serde::to_dynamic(&exchange).unwrap();
     let outcome: rhai::Dynamic = engine
-        .call_fn(&mut rhai::Scope::new(), &ast, "lookup", (exchange,))
+        .call_fn(
+            &mut rhai::Scope::new(),
+            &ast,
+            entrypoint,
+            (rhai::serde::to_dynamic(exchange).unwrap(),),
+        )
         .map_err(|error| error.to_string())?;
     Ok(rhai::serde::from_dynamic(&outcome).unwrap())
+}
+
+/// Runs a returned record through the generated `project_response` and then
+/// `lookup`, as the pack's route does around its response schema.
+fn project_then_lookup(export: &EvidenceSourceExport, record: Value) -> Value {
+    let projection = run_entrypoint(
+        export,
+        "project_response",
+        json!({"body":{"data":{"domainData":record}}}),
+    )
+    .unwrap();
+    run_entrypoint(
+        export,
+        "lookup",
+        json!({"properties":{"bregEvidenceInputs":{"by-code--code":"A1"}},"body":projection}),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -948,37 +983,9 @@ fn public_check_projects_only_typed_members_and_treats_identity_disagreement_as_
     let registry = compiled(&fact_rule_project(), SQL);
     let mut options = options();
     options.fields = vec!["status".into(), "area".into(), "active".into()];
-    let export = export_evidence_source_with_transport(
-        &registry,
-        &options,
-        EvidenceSourceTransportProfile::PublicCheckTypesOnlyV1,
-    )
-    .unwrap();
-    let script = std::str::from_utf8(file(
-        &export,
-        "adapter-packs/registry-status/scripts/lookup.rhai",
-    ))
-    .unwrap();
-    let engine = rhai::Engine::new();
-    let ast = engine.compile(script).unwrap();
-    let run = |entrypoint, exchange: Value| -> Result<Value, Box<rhai::EvalAltResult>> {
-        let outcome: rhai::Dynamic = engine.call_fn(
-            &mut rhai::Scope::new(),
-            &ast,
-            entrypoint,
-            (rhai::serde::to_dynamic(exchange).unwrap(),),
-        )?;
-        Ok(rhai::serde::from_dynamic(&outcome).unwrap())
-    };
-    let properties = json!({"bregEvidenceInputs": {"by-code--code": "A1"}});
-    let route = |record| {
-        let projection = run(
-            "project_response",
-            json!({"body":{"data":{"domainData":record}}}),
-        )
-        .unwrap();
-        run("lookup", json!({"properties":properties,"body":projection})).unwrap()
-    };
+    options.public_check = true;
+    let export = export_evidence_source(&registry, &options).unwrap();
+    let route = |record| project_then_lookup(&export, record);
 
     // A type-correct string survives even when it violates content rules.
     let content = "outside the vocabulary and string bounds";
@@ -1006,8 +1013,196 @@ fn public_check_projects_only_typed_members_and_treats_identity_disagreement_as_
         json!({"data":[]}),
         json!({"data":{"domainData":[]}}),
     ] {
-        assert!(run("project_response", json!({"body":body})).is_err());
+        assert!(run_entrypoint(&export, "project_response", json!({"body":body})).is_err());
     }
+}
+
+/// `pattern_project` with an int64 `visits` field, so a public check export
+/// covers a patterned string, a decimal and an integer fact.
+fn public_check_typed_project() -> Value {
+    let mut project = pattern_project(AREA_PATTERN);
+    project["recordTypes"]["record"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"visits","type":"int64","classification":"internal"}));
+    project["accessProfiles"]["evidence-source"]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("visits"));
+    project
+}
+
+fn public_check_typed_options() -> EvidenceSourceOptions {
+    let mut options = pattern_options();
+    options.fields = vec!["area".into(), "amount".into(), "visits".into()];
+    options.public_check = true;
+    options
+}
+
+#[test]
+fn public_check_schemas_state_each_scalar_type_and_nothing_else() {
+    let export = export_evidence_source(
+        &compiled(&public_check_typed_project(), SQL),
+        &public_check_typed_options(),
+    )
+    .unwrap();
+    assert_eq!(
+        yaml(&export, "adapter-packs/registry-status/schemas/facts.json"),
+        json!({
+            "type":"object",
+            "additionalProperties":false,
+            "properties":{
+                "area":{"type":"string"},
+                "amount":{"type":"string"},
+                "visits":{"type":"integer"}
+            },
+            "required":[]
+        })
+    );
+    let response = yaml(
+        &export,
+        "adapter-packs/registry-status/schemas/response.json",
+    );
+    assert_eq!(
+        response["properties"]["data"]["properties"]["domainData"]["properties"],
+        json!({
+            "code":{"type":"string"},
+            "area":{"type":"string"},
+            "amount":{"type":"string"},
+            "visits":{"type":"integer"}
+        })
+    );
+}
+
+#[test]
+fn public_check_keeps_an_integer_and_a_string_spelled_fact_only_in_its_own_type() {
+    let export = export_evidence_source(
+        &compiled(&public_check_typed_project(), SQL),
+        &public_check_typed_options(),
+    )
+    .unwrap();
+    // The area breaks its declared pattern and the amount its precision. Both
+    // are strings, so both reach the derivation.
+    assert_eq!(
+        project_then_lookup(
+            &export,
+            json!({"code":"A1","area":"n","amount":"1234567.5","visits":7})
+        ),
+        json!({"lookup":"matched","facts":{"area":"n","amount":"1234567.5","visits":7}})
+    );
+    for record in [
+        json!({"code":"A1","area":1,"amount":12.5,"visits":"7"}),
+        json!({"code":"A1","area":true,"amount":12,"visits":7.5}),
+    ] {
+        assert_eq!(
+            project_then_lookup(&export, record),
+            json!({"lookup":"matched","facts":{}})
+        );
+    }
+}
+
+#[test]
+fn public_check_refuses_fact_rules_and_facts_it_cannot_bound() {
+    let registry = compiled(&fact_rule_project(), SQL);
+    let rules = fact_rule_options();
+    for (required_values, optional_fields) in [
+        (rules.required_values.clone(), Vec::new()),
+        (BTreeMap::new(), rules.optional_fields.clone()),
+    ] {
+        let mut options = fact_rule_options();
+        options.required_values = required_values;
+        options.optional_fields = optional_fields;
+        options.public_check = true;
+        let refusal = refused(&registry, &options);
+        assert_eq!(refusal.code, "breg.evidence-source.refused");
+        assert_eq!(refusal.path, "public-check");
+    }
+    // The ordinary export's string ceiling still applies. The response
+    // budget, tested below, is what keeps a record within the response limit.
+    for kind in [
+        FieldTypeSource::String {
+            min_length: 0,
+            max_length: 65_537,
+        },
+        FieldTypeSource::Text { max_length: 65_537 },
+        FieldTypeSource::Text { max_length: 0 },
+        FieldTypeSource::Crs84Point {
+            precision: 6,
+            bbox: None,
+        },
+    ] {
+        let refusal = public_check_fact_types(&kind).unwrap_err();
+        assert_eq!(refusal.path, "fields", "{kind:?}");
+    }
+    assert!(public_check_fact_types(&FieldTypeSource::Text { max_length: 65_536 }).is_ok());
+}
+
+#[test]
+fn public_check_refuses_fields_that_could_outgrow_the_response_limit() {
+    // A response over the limit fails the Source before Evidence compares the
+    // check code, so one long record would answer differently from a miss.
+    let registry = compiled(&long_note_project(), SQL);
+    let mut options = options();
+    options.fields = vec!["status".into(), "note".into()];
+    options.public_check = true;
+    let refusal = refused(&registry, &options);
+    assert_eq!(refusal.code, "breg.evidence-source.refused");
+    assert_eq!(refusal.path, "fields");
+    assert!(
+        refusal.message.contains("65536-byte response limit"),
+        "{}",
+        refusal.message
+    );
+    // The ordinary export reports an oversized response as a Source error.
+    options.public_check = false;
+    export_evidence_source(&registry, &options).unwrap();
+    options.public_check = true;
+    options.fields = vec!["status".into()];
+    export_evidence_source(&registry, &options).unwrap();
+
+    let text = |max_length| FieldTypeSource::Text { max_length };
+    let escaped = |kind: &FieldTypeSource| public_check_value_bytes(kind);
+    assert_eq!(escaped(&text(10)), 62);
+    assert_eq!(escaped(&FieldTypeSource::Boolean), 5);
+    assert_eq!(escaped(&FieldTypeSource::Int64), 20);
+    assert_eq!(
+        escaped(&FieldTypeSource::VocabularyCode {
+            vocabulary: "status".into(),
+            values: vec!["active".into(), "retired".into()],
+        }),
+        44
+    );
+}
+
+#[test]
+fn public_check_is_one_member_of_the_behavior_revision() {
+    let registry = compiled(&pattern_project(AREA_PATTERN), SQL);
+    let mut public = pattern_options();
+    public.public_check = true;
+    let (export, behavior) = export_with_behavior(&registry, &public).unwrap();
+    assert_eq!(behavior["publicCheck"], json!(true));
+    assert_eq!(
+        export.behavior_revision,
+        format!("sha256:{}", digest(&canonical(&behavior).unwrap()))
+    );
+    assert_eq!(
+        yaml(&export, "adapter-packs/registry-status/pack.yaml")["version"],
+        json!(export.behavior_revision)
+    );
+
+    // An ordinary export that makes every fact optional is another pack.
+    let mut optional = pattern_options();
+    optional.optional_fields.clone_from(&optional.fields);
+    let (ordinary, ordinary_behavior) = export_with_behavior(&registry, &optional).unwrap();
+    assert!(ordinary_behavior.get("publicCheck").is_none());
+    assert_ne!(ordinary.behavior_revision, export.behavior_revision);
+
+    // The pack carries no pattern, so a pattern change is not a new version.
+    let repatterned =
+        export_evidence_source(&compiled(&pattern_project("^[A-Z]{2,20}$"), SQL), &public).unwrap();
+    assert_eq!(repatterned.behavior_revision, export.behavior_revision);
+    let facts = "adapter-packs/registry-status/schemas/facts.json";
+    assert_eq!(file(&repatterned, facts), file(&export, facts));
 }
 
 fn fact_rule_export() -> EvidenceSourceExport {
@@ -1653,12 +1848,7 @@ fn every_fact_pattern_is_bound_into_the_behavior_revision() {
     for fields in [["area"], ["amount"], ["status"]] {
         let mut options = pattern_options();
         options.fields = fields.iter().map(|id| id.to_string()).collect();
-        let (export, behavior) = export_with_behavior(
-            &registry,
-            &options,
-            EvidenceSourceTransportProfile::Ordinary,
-        )
-        .unwrap();
+        let (export, behavior) = export_with_behavior(&registry, &options).unwrap();
         assert_eq!(
             export.behavior_revision,
             format!("sha256:{}", digest(&canonical(&behavior).unwrap()))
@@ -1706,12 +1896,7 @@ fn a_selector_field_pattern_stays_out_of_the_pack() {
         if let Some(pattern) = pattern {
             project["recordTypes"]["record"]["fields"][0]["pattern"] = json!(pattern);
         }
-        export_with_behavior(
-            &compiled(&project, SQL),
-            &pattern_options(),
-            EvidenceSourceTransportProfile::Ordinary,
-        )
-        .unwrap()
+        export_with_behavior(&compiled(&project, SQL), &pattern_options()).unwrap()
     };
     let (plain, plain_behavior) = export(None);
     for pattern in ["^[A-Z][0-9]$", "^\\w+$"] {

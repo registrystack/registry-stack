@@ -98,6 +98,7 @@ fn evidence_source_options(
             registry_breg::evidence_source::EvidenceSourceAuthentication::Oauth2PrivateKeyJwt,
         required_values: std::collections::BTreeMap::new(),
         optional_fields: Vec::new(),
+        public_check: false,
     }
 }
 
@@ -1643,6 +1644,7 @@ mod tests {
                 authentication: registry_breg::evidence_source::EvidenceSourceAuthentication::Oauth2PrivateKeyJwt,
                 required_values: std::collections::BTreeMap::new(),
                 optional_fields: Vec::new(),
+                public_check: false,
             },
         )
         .unwrap();

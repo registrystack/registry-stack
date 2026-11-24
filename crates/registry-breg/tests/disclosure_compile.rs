@@ -2539,6 +2539,7 @@ fn evidence_options() -> registry_breg::evidence_source::EvidenceSourceOptions {
             registry_breg::evidence_source::EvidenceSourceAuthentication::StaticAuthorization,
         required_values: std::collections::BTreeMap::new(),
         optional_fields: Vec::new(),
+        public_check: false,
     }
 }
 

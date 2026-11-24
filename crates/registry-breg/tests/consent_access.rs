@@ -616,6 +616,7 @@ fn evidence_source_export_refuses_a_gated_profile() {
                 registry_breg::evidence_source::EvidenceSourceAuthentication::StaticAuthorization,
             required_values: std::collections::BTreeMap::new(),
             optional_fields: Vec::new(),
+            public_check: false,
         },
     ) {
         Ok(_) => panic!("a gated profile must not be exported as an Evidence source"),

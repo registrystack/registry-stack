@@ -3830,14 +3830,12 @@
               "environment": null
             },
             {
-              "display": "--transport-profile <TRANSPORT_PROFILE>",
-              "description": "Opt in to a public-check transport profile (evidence-source only). All facts become optional and type-only. Review a separate Evidence definition that validates content after check-code comparison",
+              "display": "--public-check",
+              "description": "Export the Source of an Evidence public check (evidence-source only). The facts schema states types only, every fact is optional, and a record whose identity disagrees with the request answers no-match. Check content in the Evidence definition's derivation, which runs after the check code comparison",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
-              "possible_values": [
-                "public-check-types-only-v1"
-              ],
+              "possible_values": [],
               "environment": null
             },
             {
