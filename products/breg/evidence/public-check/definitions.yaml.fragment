@@ -1,0 +1,55 @@
+functions:
+  record-check:
+    interface: assertion-derive/v1
+    source: functions/record-check.rhai
+assertionDefinitions:
+  record-check:
+    question: Is this record currently valid, and what does it state?
+    semantics:
+      requirement: urn:example:requirement:record-check:v1
+      kind: information-requirement
+      evidenceType: urn:example:evidence:record-check
+      referenceFrameworks:
+      - urn:example:framework:record-state:v1
+    purpose: record-verification
+    grantCeiling:
+      authorities:
+      - organizational
+      actorKinds:
+      - service
+      valueOrigins:
+      - request
+      audiences:
+      - urn:example:audience:local-evidence
+    subjects:
+    - role: subject
+      selectors:
+      - breg-8-registry-6-record-7-by-code
+    acquisition:
+      source: registry-check
+    derive:
+      function: record-check
+    outputs:
+      status:
+        concept: urn:example:concept:record-check:status
+        type: controlled-category
+        values:
+        - valid
+        - revoked
+      printed:
+        concept: urn:example:concept:record-check:printed
+        type: reviewed-structured-value
+        schema: schemas/record-check-fields.json
+        maximumSerializedBytes: 256
+    validitySeconds: 300
+    subjectBinding: audience-scoped
+    representations:
+    - signed-jws
+    fixtures: fixtures/record-check.yaml
+    disclosureGuard:
+      families:
+      - urn:example:disclosure-family:record-check
+    publicCheck:
+      checkCodeFact: check-code
+      statusOutput: status
+      fieldsOutput: printed

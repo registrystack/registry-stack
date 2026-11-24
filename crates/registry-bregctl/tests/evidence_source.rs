@@ -341,29 +341,57 @@ fn invalid_fact_rule_flags_are_refused_without_publishing_files() {
 }
 
 #[test]
-fn fact_rule_flags_apply_only_to_evidence_source() {
+fn evidence_source_flags_apply_only_to_evidence_source() {
     let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
     let project = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/evidence/registry")
         .canonicalize()
         .unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .args(["--format", "json", "generate", "odrl"])
-        .arg(project)
-        .args(["--require-value", "status=active", "--output"])
-        .arg(temp.path().canonicalize().unwrap().join("odrl"))
-        .output()
-        .unwrap();
-    assert!(!result.status.success());
+    // The argument check runs before either facts target reads this file.
+    let runtime = root.join("runtime.yaml");
+    for (artifact, code) in [
+        ("odrl", "odrl.arguments"),
+        ("identity-facts", "identity-facts.arguments"),
+        ("external-source-facts", "external-source-facts.arguments"),
+    ] {
+        for flags in [
+            &["--require-value", "status=active"][..],
+            &["--optional-fields", "status"],
+            &["--public-check"],
+        ] {
+            let output = root.join("output");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+            command
+                .args(["--format", "json", "generate", artifact])
+                .arg(&project)
+                .args(flags)
+                .arg("--output")
+                .arg(&output);
+            if artifact != "odrl" {
+                command.arg("--runtime-config").arg(&runtime);
+            }
+            let result = command.output().unwrap();
+            assert!(!result.status.success(), "{artifact} {flags:?}");
+            let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(
+                report["diagnostics"][0]["code"], code,
+                "{artifact} {flags:?}"
+            );
+            let message = report["diagnostics"][0]["message"].as_str().unwrap();
+            assert!(message.contains("accepts --"), "{artifact} {flags:?}");
+            assert!(!output.exists(), "{artifact} {flags:?}");
+        }
+    }
 }
 
 #[test]
-fn public_check_transport_is_explicit_type_only_and_has_its_own_identity() {
+fn public_check_export_is_explicit_type_only_and_another_pack_version() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let ordinary = root.join("ordinary");
     let public = root.join("public");
-    let flags = ["--transport-profile", "public-check-types-only-v1"];
+    let flags = ["--public-check"];
     for (directory, flags) in [(&ordinary, &[][..]), (&public, &flags[..])] {
         let result = export_with_flags(directory, "status", flags);
         assert!(
@@ -425,6 +453,11 @@ fn public_check_transport_is_explicit_type_only_and_has_its_own_identity() {
         );
         assert!(!result.status.success());
         assert!(!refused.exists());
-        assert!(String::from_utf8_lossy(&result.stdout).contains("transport-profile"));
+        let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "breg.evidence-source.refused"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "public-check");
     }
 }

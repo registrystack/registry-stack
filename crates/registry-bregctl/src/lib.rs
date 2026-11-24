@@ -688,11 +688,13 @@ struct GenerateArgs {
     /// still matches.
     #[arg(long, value_delimiter = ',')]
     optional_fields: Vec<String>,
-    /// Opt in to a public-check transport profile (evidence-source only).
-    /// All facts become optional and type-only. Review a separate Evidence
-    /// definition that validates content after check-code comparison.
-    #[arg(long, value_enum)]
-    transport_profile: Option<EvidenceSourceTransportProfileArg>,
+    /// Export the Source of an Evidence public check (evidence-source only).
+    /// The facts schema states types only, every fact is optional, and a
+    /// record whose identity disagrees with the request answers no-match.
+    /// Check content in the Evidence definition's derivation, which runs
+    /// after the check code comparison.
+    #[arg(long)]
+    public_check: bool,
     /// Stable source identity inside the Evidence authoring project.
     #[arg(long)]
     source_id: Option<String>,
@@ -702,12 +704,6 @@ struct GenerateArgs {
     /// Authentication contract the generated Adapter pack requires from its endpoint binding.
     #[arg(long, value_enum)]
     authentication: Option<EvidenceSourceAuthenticationArg>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum EvidenceSourceTransportProfileArg {
-    #[value(name = "public-check-types-only-v1")]
-    PublicCheckTypesOnlyV1,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -8777,7 +8773,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             || !args.fields.is_empty()
             || !args.require_values.is_empty()
             || !args.optional_fields.is_empty()
-            || args.transport_profile.is_some()
+            || args.public_check
             || args.source_id.is_some()
             || args.connection.is_some()
             || args.authentication.is_some()
@@ -8818,31 +8814,19 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
         authentication: args.authentication.unwrap_or_default().into(),
         required_values,
         optional_fields: args.optional_fields.clone(),
+        public_check: args.public_check,
     };
     let profile = profile(args.production);
     let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;
-    use registry_breg::evidence_source::{
-        export_evidence_source, export_evidence_source_with_transport,
-        EvidenceSourceTransportProfile,
-    };
-    let export = match args.transport_profile {
-        None => export_evidence_source(&compiled, &options),
-        Some(EvidenceSourceTransportProfileArg::PublicCheckTypesOnlyV1) => {
-            export_evidence_source_with_transport(
-                &compiled,
-                &options,
-                EvidenceSourceTransportProfile::PublicCheckTypesOnlyV1,
+    let export = registry_breg::evidence_source::export_evidence_source(&compiled, &options)
+        .map_err(|diagnostic| {
+            source_failure(
+                "generate",
+                diagnostic,
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::CorrectAuthoringSource,
             )
-        }
-    }
-    .map_err(|diagnostic| {
-        source_failure(
-            "generate",
-            diagnostic,
-            DiagnosticArtifact::RegistryProject,
-            SuggestedAction::CorrectAuthoringSource,
-        )
-    })?;
+        })?;
     write_artifacts(&args.output, &export.artifacts).map_err(|diagnostic| {
         source_failure(
             "generate",
@@ -8898,6 +8882,9 @@ fn generate_external_source_facts(args: &GenerateArgs) -> Result<SuccessReport, 
         || args.entity.is_some()
         || !args.selectors.is_empty()
         || !args.fields.is_empty()
+        || !args.require_values.is_empty()
+        || !args.optional_fields.is_empty()
+        || args.public_check
         || args.source_id.is_some()
         || args.connection.is_some()
         || args.authentication.is_some()
@@ -9041,6 +9028,9 @@ fn generate_identity_facts(args: &GenerateArgs) -> Result<SuccessReport, Failure
         || args.entity.is_some()
         || !args.selectors.is_empty()
         || !args.fields.is_empty()
+        || !args.require_values.is_empty()
+        || !args.optional_fields.is_empty()
+        || args.public_check
         || args.source_id.is_some()
         || args.connection.is_some()
         || args.authentication.is_some()
@@ -9126,7 +9116,7 @@ fn generate_odrl(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
         || !args.fields.is_empty()
         || !args.require_values.is_empty()
         || !args.optional_fields.is_empty()
-        || args.transport_profile.is_some()
+        || args.public_check
         || args.source_id.is_some()
         || args.connection.is_some()
     {

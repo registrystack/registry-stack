@@ -80,14 +80,6 @@ impl EvidenceSourceAuthentication {
     }
 }
 
-/// The response handling contract of the generated Evidence lookup.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum EvidenceSourceTransportProfile {
-    #[default]
-    Ordinary,
-    PublicCheckTypesOnlyV1,
-}
-
 /// Technical choices only. Questions, permissions, targets and credentials stay with
 /// the Evidence project and its operator.
 pub struct EvidenceSourceOptions {
@@ -107,6 +99,14 @@ pub struct EvidenceSourceOptions {
     /// Fact fields a record may leave empty. The fact is omitted when absent,
     /// and the lookup still matches.
     pub optional_fields: Vec<String>,
+    /// Export the Source of an Evidence public check. Evidence compares the
+    /// check code only after the lookup succeeds, so a lookup that fails on a
+    /// record's content would tell a caller who holds a document number but no
+    /// check code something about that record. The facts schema therefore
+    /// states types only, every fact is optional, a fact of another type is
+    /// omitted, and a record whose identity disagrees with the request answers
+    /// no match. The Evidence definition's derivation checks content.
+    pub public_check: bool,
 }
 
 pub struct EvidenceSourceExport {
@@ -128,6 +128,11 @@ const EVIDENCE_MAXIMUM_SCHEMA_BYTES: usize = 256 * 1024;
 /// each pack script within. The export refuses a lookup script Evidence would
 /// refuse to load.
 const EVIDENCE_MAXIMUM_SCRIPT_BYTES: usize = 65_536;
+/// The response bytes the adapter pack lets the registry lookup return.
+const MAXIMUM_RESPONSE_BYTES: u64 = 65_536;
+/// The share of a public check response kept for the record envelope: the
+/// record and revision identifiers and the response `meta`.
+const PUBLIC_CHECK_ENVELOPE_BYTES: u64 = 8_192;
 
 fn refusal(path: &str, message: &str) -> Diagnostic {
     Diagnostic::error("breg.evidence-source.refused", path, message)
@@ -347,16 +352,24 @@ fn field_schema(
     Ok(schema)
 }
 
-fn scalar_schema(kind: &FieldTypeSource) -> Result<Value, Diagnostic> {
+/// A string field needs a declared bound within Evidence's schema ceiling.
+fn string_bound(kind: &FieldTypeSource) -> Result<(), Diagnostic> {
     match kind {
         FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length }
             if *max_length == 0 || *max_length > 65_536 =>
         {
-            return Err(refusal(
+            Err(refusal(
                 "fields",
                 "the scalar string bound exceeds Evidence's schema ceiling of 65536 characters; use a smaller fact or a custom adapter",
-            ));
+            ))
         }
+        _ => Ok(()),
+    }
+}
+
+fn scalar_schema(kind: &FieldTypeSource) -> Result<Value, Diagnostic> {
+    string_bound(kind)?;
+    match kind {
         FieldTypeSource::VocabularyCode { values, .. }
             if values.len() > 256 || values.iter().any(|value| value.chars().count() > 65_536) =>
         {
@@ -399,11 +412,14 @@ fn scalar_schema(kind: &FieldTypeSource) -> Result<Value, Diagnostic> {
     })
 }
 
-/// A public-check fact conveys its scalar type. Content validation belongs to
-/// the definition's derivation, after Evidence verifies the check code.
+/// The JSON Schema type and the Rhai type of a public check field. The pack
+/// states nothing else about it. Content validation belongs to the
+/// definition's derivation, after Evidence compares the check code. The string
+/// ceiling stays, since the pack's schemas no longer bound a string's length.
 fn public_check_fact_types(
     kind: &FieldTypeSource,
 ) -> Result<(&'static str, &'static str), Diagnostic> {
+    string_bound(kind)?;
     match kind {
         FieldTypeSource::Boolean => Ok(("boolean", "bool")),
         FieldTypeSource::Int64 => Ok(("integer", "i64")),
@@ -415,7 +431,36 @@ fn public_check_fact_types(
         | FieldTypeSource::Uuid
         | FieldTypeSource::Reference { .. }
         | FieldTypeSource::VocabularyCode { .. } => Ok(("string", "string")),
-        _ => Err(refusal("fields", "public-check transport supports scalar facts; use a reviewed custom Evidence adapter for other field types")),
+        _ => Err(refusal(
+            "fields",
+            "a public check export supports scalar facts; use a reviewed custom Evidence adapter for other field types",
+        )),
+    }
+}
+
+/// The most bytes one value of a public check field takes in a JSON response.
+/// A string character takes up to six bytes, the `\uXXXX` escape of a control
+/// character. Field types the export refuses count as nothing.
+fn public_check_value_bytes(kind: &FieldTypeSource) -> u64 {
+    let string = |characters: u64| 2 + 6 * characters;
+    match kind {
+        FieldTypeSource::Boolean => 5,
+        FieldTypeSource::Int64 => 20,
+        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
+            string(u64::from(*max_length))
+        }
+        FieldTypeSource::Decimal { precision, .. } => string(u64::from(*precision) + 3),
+        FieldTypeSource::Date => string(10),
+        FieldTypeSource::Timestamp => string(64),
+        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => string(36),
+        FieldTypeSource::VocabularyCode { values, .. } => string(
+            values
+                .iter()
+                .map(|value| value.chars().count() as u64)
+                .max()
+                .unwrap_or(0),
+        ),
+        _ => 0,
     }
 }
 
@@ -654,27 +699,13 @@ pub fn export_evidence_source(
     registry: &CompiledRegistry,
     options: &EvidenceSourceOptions,
 ) -> Result<EvidenceSourceExport, Diagnostic> {
-    export_evidence_source_with_transport(
-        registry,
-        options,
-        EvidenceSourceTransportProfile::Ordinary,
-    )
-}
-
-/// Export an explicitly selected transport contract for the same governed lookup.
-pub fn export_evidence_source_with_transport(
-    registry: &CompiledRegistry,
-    options: &EvidenceSourceOptions,
-    transport_profile: EvidenceSourceTransportProfile,
-) -> Result<EvidenceSourceExport, Diagnostic> {
-    export_with_behavior(registry, options, transport_profile).map(|(export, _)| export)
+    export_with_behavior(registry, options).map(|(export, _)| export)
 }
 
 /// The export and the behavior material its `behavior_revision` digests.
 fn export_with_behavior(
     registry: &CompiledRegistry,
     options: &EvidenceSourceOptions,
-    transport_profile: EvidenceSourceTransportProfile,
 ) -> Result<(EvidenceSourceExport, Value), Diagnostic> {
     for (path, name) in [
         ("source-id", &options.source_id),
@@ -739,12 +770,12 @@ fn export_with_behavior(
             "select 1 to 16 distinct existing selector profiles",
         ));
     }
-    let public_check = transport_profile == EvidenceSourceTransportProfile::PublicCheckTypesOnlyV1;
+    let public_check = options.public_check;
     if public_check && (!options.optional_fields.is_empty() || !options.required_values.is_empty())
     {
         return Err(refusal(
-            "transport-profile",
-            "public-check-types-only-v1 makes every fact optional; omit optional-fields and required-values and enforce content rules in the Evidence definition after check-code comparison",
+            "public-check",
+            "a public check export makes every fact optional and states no content rule; omit optional-fields and required-values, and check content in the Evidence definition's derivation, which runs after the check code comparison",
         ));
     }
     let mut artifacts = Vec::new();
@@ -1040,8 +1071,11 @@ fn export_with_behavior(
     let script = format!("{select_fields}\n{prepare}\n{project_response}\n{extract}");
     let mut response_fields = Map::new();
     let mut dependencies = Map::new();
+    let mut public_check_response_bytes = PUBLIC_CHECK_ENVELOPE_BYTES;
     for id in &all_fields {
         let logical = field(entity, id)?;
+        public_check_response_bytes +=
+            logical.api_name.len() as u64 + 4 + public_check_value_bytes(&logical.field_type);
         // Only a fact carries its field's declared pattern. A selector-only
         // field returns the caller's input, which the identity check already
         // requires the record to equal exactly.
@@ -1058,10 +1092,6 @@ fn export_with_behavior(
         // pack version identifies one set of schema bytes.
         if let Some(pattern) = schema.get("pattern") {
             dependency["pattern"] = pattern.clone();
-        } else if public_check && fields.contains(id) {
-            if let Some(pattern) = declared_pattern(entity, id) {
-                dependency["pattern"] = json!(pattern);
-            }
         }
         dependencies.insert(id.clone(), dependency);
         if !public_check {
@@ -1075,7 +1105,17 @@ fn export_with_behavior(
         }
         response_fields.insert(logical.api_name.clone(), schema);
     }
-    let mut behavior = selected_behavior(
+    // A response over the limit fails the Source before Evidence compares the
+    // check code, so the size of one record must never decide the answer.
+    if public_check && public_check_response_bytes > MAXIMUM_RESPONSE_BYTES {
+        return Err(refusal(
+            "fields",
+            &format!(
+                "the selected fields could take {public_check_response_bytes} bytes for one record, over the {MAXIMUM_RESPONSE_BYTES}-byte response limit; a public check must answer a long record like any other, so select fewer or shorter fields"
+            ),
+        ));
+    }
+    let behavior = selected_behavior(
         registry,
         entity,
         options,
@@ -1084,6 +1124,7 @@ fn export_with_behavior(
         profile_dependencies,
         dependencies,
     )?;
+    let behavior_revision = format!("sha256:{}", digest(&canonical(&behavior)?));
     let prefix = &options.source_id;
     let response = object(
         Map::from_iter([(
@@ -1182,17 +1223,17 @@ fn export_with_behavior(
         "component":"http",
         "authentication":{"type":options.authentication.as_str()},
         "attemptTimeoutMilliseconds":5000,
-        "maximumResponseBytes":65536,
+        "maximumResponseBytes":MAXIMUM_RESPONSE_BYTES,
         "requestHeaders":["accept"],
         "operations":[{"id":"lookup","safeUpstream":true}],
         "hostProtocol":{"id":"registry-lookup-v1","config":pin(protocol_path,&protocol_bytes)},
         "testedVersions":["breg-evidence-lookup-v2"]
     });
-    let mut pack = json!({
+    let pack = json!({
         "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
         "kind":"AdapterPack",
         "id":prefix,
-        "version":null,
+        "version":behavior_revision,
         "testedVersions":["breg-evidence-lookup-v2"],
         "endpoints":[endpoint],
         "sourceRoutes":[{
@@ -1217,20 +1258,6 @@ fn export_with_behavior(
         "scripts":[script_reference],
         "capabilities":{"components":["http"],"languages":["constant","exchangeProperty","jsonpath","rhai"],"eips":["choice","setBody","setHeader","setProperty","stop","to"]}
     });
-    if public_check {
-        // Bind the emitted contract and its exact artifact bytes before adding
-        // the pack version that identifies this closure. Its placeholder
-        // preserves the ordinary serializer's member order.
-        behavior["transportProfile"] = json!("public-check-types-only-v1");
-        behavior["pack"] = pack.clone();
-        behavior["artifacts"] = json!(artifacts
-            .iter()
-            .map(|artifact| (&artifact.path, &artifact.sha256))
-            .collect::<BTreeMap<_, _>>());
-        behavior["sourceBinding"] = json!({"connection":options.connection,"inputs":source_inputs});
-    }
-    let behavior_revision = format!("sha256:{}", digest(&canonical(&behavior)?));
-    pack["version"] = json!(behavior_revision);
     artifacts.push(document(format!("{pack_root}/pack.yaml"), &pack)?);
     artifacts.push(enveloped_document(
         format!("sources/{prefix}.yaml"),
@@ -1347,6 +1374,11 @@ fn selected_behavior(
     if !rules.required.is_empty() || !rules.optional.is_empty() {
         behavior["factRules"] =
             json!({"requiredValues":rules.required,"optionalFields":rules.optional});
+    }
+    // A public check pack handles the same selected behavior differently, so
+    // it is another pack version.
+    if options.public_check {
+        behavior["publicCheck"] = json!(true);
     }
     Ok(behavior)
 }

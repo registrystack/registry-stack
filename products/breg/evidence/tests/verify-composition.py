@@ -19,6 +19,7 @@ import yaml
 
 INPUTS = Path(__file__).resolve().parents[1]
 BREG_DEFINITIONS = {"record-active", "record-status-pair"}
+PUBLIC_CHECK = INPUTS / "public-check"
 OFFLINE_REQUESTER_HEADER = "b2ZmbGluZS1maXh0dXJlLXByaW5jaXBhbA"
 OFFLINE_PURPOSE_HEADER = "cmVjb3JkLXZlcmlmaWNhdGlvbg"
 
@@ -85,6 +86,148 @@ def bind_logged_fixture_headers(project: Path) -> None:
                 headers["registry-access-requester"] = OFFLINE_REQUESTER_HEADER
                 headers["registry-access-purpose"] = OFFLINE_PURPOSE_HEADER
         write(path, fixture)
+
+
+def new_local_target(project: Path, target: Path, binaries: dict[str, Path],
+                     environment: dict[str, str]) -> None:
+    """Generate a complete local target and bind the synthetic registry connection."""
+    run(binaries["evidencectl"], "target", "new", target, "--local", "--project", project,
+        environment=environment)
+    settings = read(target / "target.yaml")
+    settings["connections"]["record-status-extract"] = {"endpoints": {}}
+    settings["connections"]["registry"] = {
+        "endpoints": {
+            "registry": {
+                "origin": "http://127.0.0.1:8090",
+                "authentication": {
+                    "type": "oauth2-private-key-jwt",
+                    "tokenEndpoint": "http://127.0.0.1:8091/oauth2/token",
+                    "clientIdRef": "secret:file/registry-client-id",
+                    "clientAssertionKeyRef": "secret:file/registry-client-key",
+                    "clientAssertionAudience": "http://127.0.0.1:8091",
+                    "scope": "registry:evidence:lookup", "maximumCacheSeconds": 60,
+                },
+            },
+        },
+    }
+    # A target binds every extract profile its Sources use. `target new --local`
+    # already carries the starter's binding from the project's local-target.yaml;
+    # the script states it again beside the connections it writes.
+    settings["extracts"] = {"record-status-extract": {"path": "extracts/record-status.sqlite"}}
+    write(target / "target.yaml", settings)
+
+
+def facts_schema(pack_root: Path) -> dict:
+    pack = read(pack_root / "pack.yaml")
+    return read(pack_root / pack["sourceRoutes"][0]["evidence"]["factsSchema"]["path"])
+
+
+def verify_public_check(workspace: Path, binaries: dict[str, Path],
+                        environment: dict[str, str], offline_cases: dict[str, int]) -> dict:
+    """A public check reads the registry through a `--public-check` export.
+
+    Evidence compares the check code only after the Source lookup succeeds, so
+    this export states types only and the definition's derivation checks content.
+    """
+    registry, project = workspace / "check-registry", workspace / "check-evidence"
+    target, candidate = workspace / "check-target", workspace / "check-candidate"
+    shutil.copytree(INPUTS / "registry", registry)
+    model = read(registry / "registry.yaml")
+    model["recordTypes"]["record"]["fields"].append({
+        "id": "check-code", "apiName": "checkCode", "type": "string",
+        "minimumLength": 24, "maximumLength": 24, "classification": "internal",
+    })
+    for profile in model["accessProfiles"].values():
+        for permission in profile["permissions"]["records"]:
+            permission["readableFields"].append("check-code")
+    write(registry / "registry.yaml", model)
+    arguments = (
+        "generate", "evidence-source", registry,
+        "--access-profile", "evidence-source", "--record-type", "record",
+        "--selector", "by-code", "--fields", "status,check-code",
+        "--source-id", "registry-check", "--connection", "registry",
+        "--authentication", "oauth2-private-key-jwt",
+    )
+    ordinary, exported = workspace / "check-ordinary-export", workspace / "check-export"
+    run(binaries["bregctl"], *arguments, "--output", ordinary, environment=environment)
+    run(binaries["bregctl"], *arguments, "--public-check", "--output", exported,
+        environment=environment)
+    # The ordinary export refuses a record on its content before Evidence sees
+    # the check code. The public check export keeps the types and nothing else.
+    ordinary_facts = facts_schema(ordinary / "adapter-packs/registry-check")
+    assert ordinary_facts["properties"]["status"]["enum"] == ["active", "retired"]
+    assert ordinary_facts["properties"]["check-code"]["maxLength"] == 24
+    assert ordinary_facts["required"] == ["check-code", "status"]
+    facts = facts_schema(exported / "adapter-packs/registry-check")
+    assert facts["properties"] == {
+        "check-code": {"type": "string"}, "status": {"type": "string"},
+    }, facts
+    assert not facts.get("required"), "a public check Source requires no fact"
+    revisions = [
+        json.loads((export / "source-export.json").read_text())["provenance"]["behaviorRevision"]
+        for export in [ordinary, exported]
+    ]
+    assert revisions[0] != revisions[1], "a public check export is another pack version"
+    refused = run(binaries["bregctl"], *arguments, "--public-check", "--optional-fields",
+                  "status", "--output", workspace / "check-refused-export",
+                  environment=environment, refused=True)
+    assert "breg.evidence-source.refused" in refused, refused
+    assert not (workspace / "check-refused-export").exists()
+
+    fragment = read(PUBLIC_CHECK / "definitions.yaml.fragment")
+
+    def author(directory: Path, export: Path) -> None:
+        run(binaries["evidencectl"], "init", directory, "--starter",
+            INPUTS / "offline-starter", "--profile", "local", environment=environment)
+        run(binaries["evidencectl"], "source", "import", export, "--project", directory,
+            environment=environment)
+        authored = read(directory / "evidence.yaml")
+        authored["functions"].update(fragment["functions"])
+        authored["assertionDefinitions"].update(fragment["assertionDefinitions"])
+        write(directory / "evidence.yaml", authored)
+        for name in ["functions", "fixtures", "schemas"]:
+            shutil.copytree(PUBLIC_CHECK / name, directory / name, dirs_exist_ok=True)
+
+    # Evidence refuses the same definition over the ordinary export.
+    mistaken = workspace / "check-ordinary-evidence"
+    author(mistaken, ordinary)
+    refused = run(binaries["evidencectl"], "check", mistaken, environment=environment,
+                  refused=True)
+    assert "public-check-facts-content" in refused, refused
+
+    author(project, exported)
+    new_local_target(project, target, binaries, environment)
+    # Declaring publicCheck opens nothing. The target authority activates it.
+    settings = read(target / "target.yaml")
+    authority_path = target / settings["authority"]
+    authority = read(authority_path)
+    authority["publicCheck"] = {"definition": "record-check"}
+    write(authority_path, authority)
+    run(binaries["evidencectl"], "check", project, "--target", target,
+        environment=environment)
+    fixtures = check_fixtures(project, binaries, environment, target=target, expected={
+        **offline_cases, "fixtures/record-check.yaml": 10,
+    })
+    run(binaries["evidencectl"], "package", project, "--target", target,
+        "--output", candidate, environment=environment)
+    bundle = read(candidate / "bundle/evidence.yaml")
+    source = bundle["sources"]["registry-check"]
+    assert source["pack"]["version"] == revisions[1]
+    requirement = next(item for item in bundle["requirements"] if item["handle"] == "record-check")
+    assert requirement["publicCheck"] == {
+        "checkCodeFact": "check-code", "statusOutput": "status", "fieldsOutput": "printed",
+    }
+    assert facts_schema(candidate / "bundle" / source["pack"]["artifactPrefix"]) == facts
+    report = json.loads(run(binaries["evidence"], "bundle-check", "--bundle",
+                            candidate / "bundle", "--json", environment=environment))
+    assert len(report["requirements"]) == 2
+    return {
+        "publicCheckBehaviorRevision": revisions[1],
+        "publicCheckFixtureCases": sum(
+            item["evaluatedCases"] for item in fixtures["fixtures"]
+            if item["path"] == "fixtures/record-check.yaml"
+        ),
+    }
 
 
 def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
@@ -169,30 +312,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     write(project / "evidence.yaml", imported)
     for directory in ["functions", "fixtures"]:
         shutil.copytree(INPUTS / "starter" / directory, project / directory, dirs_exist_ok=True)
-    run(binaries["evidencectl"], "target", "new", target, "--local", "--project", project,
-        environment=environment)
-    settings = read(target / "target.yaml")
-    settings["connections"]["record-status-extract"] = {"endpoints": {}}
-    settings["connections"]["registry"] = {
-        "endpoints": {
-            "registry": {
-                "origin": "http://127.0.0.1:8090",
-                "authentication": {
-                    "type": "oauth2-private-key-jwt",
-                    "tokenEndpoint": "http://127.0.0.1:8091/oauth2/token",
-                    "clientIdRef": "secret:file/registry-client-id",
-                    "clientAssertionKeyRef": "secret:file/registry-client-key",
-                    "clientAssertionAudience": "http://127.0.0.1:8091",
-                    "scope": "registry:evidence:lookup", "maximumCacheSeconds": 60,
-                },
-            },
-        },
-    }
-    # A target binds every extract profile its Sources use. `target new --local`
-    # already carries the starter's binding from the project's local-target.yaml;
-    # the script states it again beside the connections it writes.
-    settings["extracts"] = {"record-status-extract": {"path": "extracts/record-status.sqlite"}}
-    write(target / "target.yaml", settings)
+    new_local_target(project, target, binaries, environment)
     run(binaries["evidencectl"], "check", project, "--target", target,
         environment=environment)
     fixtures = check_fixtures(project, binaries, environment, target=target, expected={
@@ -241,6 +361,8 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     report = json.loads(run(binaries["evidence"], "bundle-check", "--bundle", bundle_path,
                             "--json", environment=environment))
     assert len(report["requirements"]) == 3
+
+    public_check = verify_public_check(workspace, binaries, environment, offline_cases)
 
     # The same generated pack must execute when the Registry model requires
     # host-owned access attribution. A copied project keeps this proof isolated
@@ -346,6 +468,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         "consumedChangeRevisions": "both BReg definitions changed; offline definition unchanged",
         "nativeSourceUpdate": "passed", "renamedFactUpdate": "refused without authored changes",
         "loggedFixtureCases": sum(item["evaluatedCases"] for item in logged_fixtures["fixtures"]),
+        **public_check,
     }
 
 

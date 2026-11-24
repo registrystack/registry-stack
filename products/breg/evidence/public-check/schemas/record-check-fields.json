@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:example:schema:record-check-fields",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recordStatus"],
+  "properties": {
+    "recordStatus": {"type": "string", "enum": ["active", "retired"]}
+  }
+}

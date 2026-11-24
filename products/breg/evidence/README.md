@@ -11,6 +11,7 @@ See [the export contract](https://docs.registrystack.org/configure/breg-evidence
 | `registry/` | Explicit native BReg project with two unique selectors, status facts, an operator and a lookup-only source profile. |
 | `offline-starter/` | Complete native EvidenceProject with a pinned SQLite adapter pack, a derive Function, a local target, complete target authority and 13 SQLite fixtures. |
 | `starter/` | Reviewed authoring fragment, derive Functions and 24 fixtures for two definitions sharing the imported BReg Source. |
+| `public-check/` | Reviewed fragment, derive Function, output schema and 10 fixtures for a public check over a `--public-check` export. |
 | `tests/verify-composition.py` | Offline maintainer proof using matching installed binaries. |
 
 The default `bregctl init` creates a minimal contact directory with editor clients.
@@ -90,6 +91,9 @@ outputs privately. The runner starts no services and proves:
   revisions unchanged and a consumed change leaving the offline definition unchanged.
 - Native source update and incompatible fact rename refusal before authored changes.
 - Guided connection's matching-tool requirement and missing-session refusal.
+- A public check over a `--public-check` export: type-only facts, another pack
+  version, refused fact rules, its 10 fixtures, and Evidence's refusal of the
+  same definition over the ordinary export.
 
 The offline runner does not establish successful retained-session attachment,
 HTTP authorization, live signing or service operation. Those need the separate

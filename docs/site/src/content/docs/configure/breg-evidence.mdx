@@ -261,26 +261,44 @@ The export refuses a pack whose generated schema is larger, as many long vocabul
     crates/registry-breg/tests/postgres_evidence_source_patterns.rs;
     crates/registry-bregctl/tests/evidence_source.rs lookup.unresolved. */}
 
-### Export transport for a public check
+### Export a Source for a public check
 
-Use `--transport-profile public-check-types-only-v1` when you export a separate Source for an Evidence public-check definition.
-Give that export its own `--source-id` and pin the generated pack version in the Source.
-Omit `--optional-fields` and `--require-value`. This profile makes every selected fact optional and validates only its scalar type before Evidence compares the check code.
+Add `--public-check` when you export the Source for an Evidence [public check](../../operate/evidence-audit/#expose-the-public-check-route).
+Evidence compares the [check code](../../operate/evidence-audit/#generate-check-codes) only after the Source returns a record.
+A pack that fails on one record's content before that comparison shows a caller without the code that the record exists.
+This export therefore states each fact's scalar type and nothing else.
+
+Give the export its own `--source-id` and pin the generated pack version in the Source.
+Omit `--optional-fields` and `--require-value`. Every selected fact is optional.
+A string field still needs a declared maximum length within Evidence's limit of 65,536 characters.
 
 A valid record can return missing, null, or mistyped members. The adapter omits those facts.
+A mistyped member is omitted, not reported, so a wrong field type in the registry shows only as a missing fact in your derivation.
 A missing, mistyped, or unequal returned selector identity answers no match.
-Transport and malformed response envelopes still fail as source errors.
-The request keeps the same lookup, access profile, projection, selector validation and response byte limit.
+The ordinary export treats that as a Source error.
+A no-match count on this Source can therefore also mean the registry returned the wrong record.
+Transport failures and malformed response envelopes still fail as Source errors.
+A response over the pack's limit of 65,536 bytes also fails as a Source error before the comparison.
+`bregctl` therefore refuses a selection whose declared field lengths could exceed that limit for one record.
+Select fewer or shorter fields if it does.
+The request keeps the same lookup, access profile, projected fields, selector validation and response byte limit.
 
-If your public check requires field bounds, formats, patterns, or vocabulary membership, enforce them in the Evidence derivation or output contract after check-code comparison.
-Review the definition and target activation separately. Keep the existing Source for relying and wallet definitions that already use the ordinary transport.
+If your public check requires field bounds, formats, patterns, or vocabulary membership, enforce them in the Evidence derivation or output contract. Both run after the check code comparison.
+`evidencectl check` refuses a public check definition whose Source facts schema states more than types (`public-check-facts-content`). That refuses an ordinary export that states bounds, a vocabulary or required facts.
+Review the definition and target activation separately. Keep the existing Source for relying and wallet definitions that use the ordinary export.
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs, public_check_fact_types;
     crates/registry-breg/src/evidence_source/tests.rs,
-    public_check_projects_only_typed_members_and_treats_identity_disagreement_as_no_match;
+    public_check_projects_only_typed_members_and_treats_identity_disagreement_as_no_match,
+    public_check_schemas_state_each_scalar_type_and_nothing_else,
+    public_check_keeps_an_integer_and_a_string_spelled_fact_only_in_its_own_type,
+    public_check_refuses_fact_rules_and_facts_it_cannot_bound,
+    public_check_is_one_member_of_the_behavior_revision;
     crates/registry-bregctl/tests/evidence_source.rs,
-    public_check_transport_is_explicit_type_only_and_has_its_own_identity;
-    crates/registry-evidence/src/public_check_tests.rs, every_miss_is_one_identical_not_found. */}
+    public_check_export_is_explicit_type_only_and_another_pack_version;
+    crates/registry-evidence-authoring/tests/public_check.rs,
+    refusal_5_the_source_facts_schema_of_a_public_check_states_types_only;
+    products/breg/evidence/tests/verify-composition.py, verify_public_check. */}
 
 ## Import and update ordinary files
 

@@ -2,11 +2,21 @@
 
 ## Unreleased
 
-- `bregctl generate evidence-source --transport-profile public-check-types-only-v1`
-  exports an explicitly selected lookup with optional, type-only facts for a
-  separately reviewed Evidence public check. The generated pack pins this
-  transport contract and its artifacts. The default exporter retains its
-  existing contract.
+- `bregctl generate evidence-source --public-check` exports the Source of an
+  Evidence public check. Evidence compares the check code only after the
+  Source returns a record, so this export states each fact's scalar type and
+  nothing else, makes every fact optional, omits a missing, null or mistyped
+  fact, and answers no match when the returned identity disagrees with the
+  request. Content rules belong in the Evidence definition's derivation. The
+  flag is one more member of the behaviour the pack version digests, so the
+  export is another pack version. `--optional-fields` and `--require-value`
+  are refused with it. So is a selection whose declared field lengths could
+  exceed the pack's 65,536-byte response limit for one record, since a
+  response over the limit fails before the comparison. The default export is
+  unchanged.
+- `bregctl generate identity-facts` and `external-source-facts` now refuse
+  `--optional-fields` and `--require-value`, which only `evidence-source`
+  reads. They were accepted and ignored.
 
 ## 0.48.0 - 2026-11-23
 

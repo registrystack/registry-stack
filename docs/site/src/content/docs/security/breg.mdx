@@ -160,16 +160,32 @@ A request batch audits both items as not available, and the metric still counts 
     declared_existence_disclosure_mode_governs_the_public_collapse,
     a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it. */}
 
-The opt-in `public-check-types-only-v1` export binds its response handling and artifact digests into the pack version with the selected lookup contract.
-The generated public-check adapter checks exact returned identity before returning any facts and omits missing, null, and mistyped facts.
-Review the public Source, Evidence derivation, and target activation together. The derivation and output contract enforce content requirements after Evidence compares the check code. Returned envelope failures remain observable as source failures.
+### Public check export
+
+`bregctl generate evidence-source --public-check` exports the Source of an Evidence [public check](../evidence/#the-public-certificate-check).
+Evidence compares the check code only after the Source returns a record.
+A failure on one record's content before that comparison would show a caller without the code that the record exists.
+The generated adapter therefore states only each fact's scalar type and omits missing, null and mistyped facts.
+It answers no match when the returned identity is missing or differs from the request.
+The derivation and output contract of the Evidence definition enforce content requirements after the comparison.
+The export is another pack version: `publicCheck` is part of the behaviour the pack version digests, with the selected lookup contract and the artifact digests.
+
+Two signals remain before the comparison.
+A malformed response envelope fails as a Source error.
+So does a response over the pack's limit of 65,536 bytes.
+The exporter refuses a selection whose declared field lengths could exceed that limit, so a record within its declared bounds cannot reach it.
+
+Review the public Source, the Evidence derivation and the target activation together.
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs, public_check_fact_types;
     crates/registry-breg/src/evidence_source/tests.rs,
-    public_check_projects_only_typed_members_and_treats_identity_disagreement_as_no_match;
+    public_check_projects_only_typed_members_and_treats_identity_disagreement_as_no_match,
+    public_check_schemas_state_each_scalar_type_and_nothing_else,
+    public_check_refuses_fields_that_could_outgrow_the_response_limit,
+    public_check_is_one_member_of_the_behavior_revision;
     crates/registry-bregctl/tests/evidence_source.rs,
-    public_check_transport_is_explicit_type_only_and_has_its_own_identity;
-    crates/registry-evidence/src/public_check_tests.rs, every_miss_is_one_identical_not_found. */}
+    public_check_export_is_explicit_type_only_and_another_pack_version;
+    products/evidence/contracts/security-invariant-matrix.yaml, V1-I59. */}
 
 ### Disclosure conditions
 
