@@ -1117,8 +1117,7 @@ fn public_check_refuses_fact_rules_and_facts_it_cannot_bound() {
         assert_eq!(refusal.code, "breg.evidence-source.refused");
         assert_eq!(refusal.path, "public-check");
     }
-    // The ordinary export's string ceiling still applies. The response
-    // budget, tested below, is what keeps a record within the response limit.
+    // The ordinary export's string ceiling still applies.
     for kind in [
         FieldTypeSource::String {
             min_length: 0,
@@ -1135,43 +1134,6 @@ fn public_check_refuses_fact_rules_and_facts_it_cannot_bound() {
         assert_eq!(refusal.path, "fields", "{kind:?}");
     }
     assert!(public_check_fact_types(&FieldTypeSource::Text { max_length: 65_536 }).is_ok());
-}
-
-#[test]
-fn public_check_refuses_fields_that_could_outgrow_the_response_limit() {
-    // A response over the limit fails the Source before Evidence compares the
-    // check code, so one long record would answer differently from a miss.
-    let registry = compiled(&long_note_project(), SQL);
-    let mut options = options();
-    options.fields = vec!["status".into(), "note".into()];
-    options.public_check = true;
-    let refusal = refused(&registry, &options);
-    assert_eq!(refusal.code, "breg.evidence-source.refused");
-    assert_eq!(refusal.path, "fields");
-    assert!(
-        refusal.message.contains("65536-byte response limit"),
-        "{}",
-        refusal.message
-    );
-    // The ordinary export reports an oversized response as a Source error.
-    options.public_check = false;
-    export_evidence_source(&registry, &options).unwrap();
-    options.public_check = true;
-    options.fields = vec!["status".into()];
-    export_evidence_source(&registry, &options).unwrap();
-
-    let text = |max_length| FieldTypeSource::Text { max_length };
-    let escaped = |kind: &FieldTypeSource| public_check_value_bytes(kind);
-    assert_eq!(escaped(&text(10)), 62);
-    assert_eq!(escaped(&FieldTypeSource::Boolean), 5);
-    assert_eq!(escaped(&FieldTypeSource::Int64), 20);
-    assert_eq!(
-        escaped(&FieldTypeSource::VocabularyCode {
-            vocabulary: "status".into(),
-            values: vec!["active".into(), "retired".into()],
-        }),
-        44
-    );
 }
 
 #[test]

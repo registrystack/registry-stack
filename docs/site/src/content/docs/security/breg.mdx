@@ -173,7 +173,7 @@ The export is another pack version: `publicCheck` is part of the behaviour the p
 Two signals remain before the comparison.
 A malformed response envelope fails as a Source error.
 So does a response over the pack's limit of 65,536 bytes.
-The exporter refuses a selection whose declared field lengths could exceed that limit, so a record within its declared bounds cannot reach it.
+The exporter does not check the selected fields against that limit, so keep the fields of a public check short.
 
 Review the public Source, the Evidence derivation and the target activation together.
 
@@ -181,7 +181,6 @@ Review the public Source, the Evidence derivation and the target activation toge
     crates/registry-breg/src/evidence_source/tests.rs,
     public_check_projects_only_typed_members_and_treats_identity_disagreement_as_no_match,
     public_check_schemas_state_each_scalar_type_and_nothing_else,
-    public_check_refuses_fields_that_could_outgrow_the_response_limit,
     public_check_is_one_member_of_the_behavior_revision;
     crates/registry-bregctl/tests/evidence_source.rs,
     public_check_export_is_explicit_type_only_and_another_pack_version;
