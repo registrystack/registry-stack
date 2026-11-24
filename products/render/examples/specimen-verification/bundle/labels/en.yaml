@@ -1,0 +1,34 @@
+apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
+kind: RenderLabels
+labels:
+  authority: Synthetic Population Office
+  title: Population register extract
+  subtitle: Selected particulars from the population register for the person named below.
+  title-unsigned: unsigned fictional specimen
+  title-test-seal: test-seal fictional specimen
+  title-seal-preview: seal-preview fictional specimen
+  status-unsigned: FICTIONAL UNSIGNED
+  status-test-seal: FICTIONAL TEST SEAL
+  status-seal-preview: FICTIONAL SEAL PREVIEW
+  fallback-signer: the synthetic issuing authority
+  fictional-prefix: This example uses a fictional register entry.
+  unsigned-note: This fictional example is unsigned.
+  test-seal-authority: "Render test-seal authority:"
+  test-seal-note: "TEST SEAL: not a valid official document."
+  seal-authority: "Render seal authority:"
+  seal-preview-note: This fictional specimen is not an issued document.
+  registered-person: REGISTERED PERSON
+  person-number: Person number
+  register-details: Register details
+  given-name: Given name
+  family-name: Family name
+  jurisdiction: Jurisdiction
+  register: Register
+  register-name: Synthetic Population Register
+  extract-prepared: Extract prepared
+  verify-heading: Verify this specimen
+  document-reference: DOCUMENT REFERENCE
+  manual-lookup: MANUAL LOOKUP
+  manual-lookup-help: Open this address and enter the document reference.
+  scan-to-verify: Scan to verify
+  about-heading: About this specimen

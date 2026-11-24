@@ -202,6 +202,33 @@ pub enum Command {
         #[arg(long, default_value = ".", hide = true)]
         bundle: PathBuf,
     },
+    /// Create a locally test-signed PDF and its public test CA certificate.
+    TestSeal {
+        /// Authored bundle or verified package containing a document with a declared seal.
+        #[arg(long)]
+        bundle: PathBuf,
+        /// Document type id, as declared in the manifest.
+        #[arg(long = "type")]
+        document: String,
+        /// JSON file holding the example record's data object.
+        #[arg(long)]
+        data: PathBuf,
+        /// New directory for document.pdf and test-root.pem. An existing path is refused.
+        #[arg(long, value_name = "DIRECTORY")]
+        output: PathBuf,
+        /// Primary locale of the example document.
+        #[arg(long)]
+        locale: Option<String>,
+        /// Document issuance time (RFC 3339). Defaults to the current time for this specimen.
+        #[arg(long)]
+        issued_at: Option<String>,
+        /// Asset `name=path`, where the file holds base64 text.
+        #[arg(long = "asset", value_parser = parse_asset_arg)]
+        assets: Vec<(String, PathBuf)>,
+        /// Emit the test signing report in this format.
+        #[arg(long, value_enum, default_value_t = crate::check::OutputFormat::Human)]
+        format: crate::check::OutputFormat,
+    },
     /// Render one document offline.
     Compile {
         /// Authored bundle or package directory.
@@ -397,7 +424,9 @@ pub fn report_problem(problem: RenderProblem, json: bool) -> i32 {
 /// print as problem documents instead of prose).
 fn wants_json(cli: &Cli) -> bool {
     match &cli.command {
-        Command::Compile { format, .. } | Command::Validate { format, .. } => {
+        Command::Compile { format, .. }
+        | Command::Validate { format, .. }
+        | Command::TestSeal { format, .. } => {
             matches!(format, crate::check::OutputFormat::Json)
         }
         _ => false,
@@ -541,6 +570,22 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                 println!("{}", serde_json::json!({"valid": true}));
             } else {
                 println!("ok");
+            }
+            Ok(0)
+        }
+        Command::TestSeal {
+            bundle, document, data, output, locale, issued_at, assets, format,
+        } => {
+            let now = issued_at.is_none();
+            let issued = parse_issued_at(issued_at, now)?;
+            let limit = crate::runtime::LimitsRuntime::default().request_bytes();
+            let request = read_request_files(&data, &locale, &assets, Some(issued), Some(limit))?;
+            let report = crate::test_seal::run(&bundle, &document, &request, &output)?;
+            if matches!(format, crate::check::OutputFormat::Json) {
+                println!("{report}");
+            } else {
+                println!("Wrote a test-signed PDF to {} and its public test CA certificate to {}.",
+                    output.join("document.pdf").display(), output.join("test-root.pem").display());
             }
             Ok(0)
         }
@@ -736,13 +781,23 @@ pub(crate) fn read_request(
     assets: &[(String, PathBuf)],
     issued_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<RenderRequest, RenderProblem> {
+    read_request_files(data_path, locale, assets, issued_at, None)
+}
+
+fn read_request_files(
+    data_path: &Path,
+    locale: &Option<String>,
+    assets: &[(String, PathBuf)],
+    issued_at: Option<chrono::DateTime<chrono::Utc>>,
+    mut bytes_left: Option<usize>,
+) -> Result<RenderRequest, RenderProblem> {
     use crate::problem::ProblemKind;
-    let bytes = std::fs::read(data_path).map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::InvalidArgument,
-            format!("cannot read {}: {err}", data_path.display()),
-        )
-    })?;
+    let bytes = read_input(
+        data_path,
+        &mut bytes_left,
+        ProblemKind::InvalidArgument,
+        &data_path.display().to_string(),
+    )?;
     let data: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| {
         RenderProblem::new(
             ProblemKind::DataInvalid,
@@ -757,10 +812,12 @@ pub(crate) fn read_request(
     }
     let mut asset_map = BTreeMap::new();
     for (name, path) in assets {
-        let b64 = std::fs::read_to_string(path).map_err(|err| {
+        let label = format!("asset {name:?}");
+        let bytes = read_input(path, &mut bytes_left, ProblemKind::AssetInvalid, &label)?;
+        let b64 = std::str::from_utf8(&bytes).map_err(|err| {
             RenderProblem::new(
                 ProblemKind::AssetInvalid,
-                format!("cannot read asset {name:?}: {err}"),
+                format!("cannot read {label}: {err}"),
             )
         })?;
         asset_map.insert(name.clone(), b64.trim().to_owned());
@@ -777,6 +834,33 @@ pub(crate) fn read_request(
         assets: asset_map,
         issued_at,
     })
+}
+
+/// The local seal route has an aggregate request ceiling. Apply it while reading, including
+/// for streams whose length is not known in advance. Other authoring commands keep their limits.
+fn read_input(
+    path: &Path,
+    bytes_left: &mut Option<usize>,
+    kind: crate::ProblemKind,
+    label: &str,
+) -> Result<Vec<u8>, RenderProblem> {
+    use std::io::Read as _;
+    let io_error = |err| RenderProblem::new(kind, format!("cannot read {label}: {err}"));
+    let Some(remaining) = bytes_left else {
+        return std::fs::read(path).map_err(io_error);
+    };
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(*remaining as u64 + 1).read_to_end(&mut bytes))
+        .map_err(io_error)?;
+    if bytes.len() > *remaining {
+        return Err(RenderProblem::new(
+            crate::ProblemKind::BodyTooLarge,
+            "the example data and assets exceed the local seal request limit",
+        ));
+    }
+    *remaining -= bytes.len();
+    Ok(bytes)
 }
 
 /// One offline render through the same supervised worker serve uses, so the

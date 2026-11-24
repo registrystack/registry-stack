@@ -8104,6 +8104,7 @@ dependencies = [
  "chrono",
  "clap",
  "comemo",
+ "der 0.8.2",
  "hayro-syntax 0.9.0",
  "hex",
  "jsonschema",

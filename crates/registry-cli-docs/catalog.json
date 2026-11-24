@@ -22544,6 +22544,104 @@
           "subcommands": []
         },
         {
+          "name": "test-seal",
+          "invocation": "registry-render test-seal",
+          "about": "Create a locally test-signed PDF and its public test CA certificate",
+          "long_about": null,
+          "usage": "registry-render test-seal [OPTIONS] --bundle <BUNDLE> --type <DOCUMENT> --data <DATA> --output <DIRECTORY>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--bundle <BUNDLE>",
+              "description": "Authored bundle or verified package containing a document with a declared seal",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--type <DOCUMENT>",
+              "description": "Document type id, as declared in the manifest",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--data <DATA>",
+              "description": "JSON file holding the example record's data object",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "New directory for document.pdf and test-root.pem. An existing path is refused",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--locale <LOCALE>",
+              "description": "Primary locale of the example document",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--issued-at <ISSUED_AT>",
+              "description": "Document issuance time (RFC 3339). Defaults to the current time for this specimen",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset <ASSETS>",
+              "description": "Asset `name=path`, where the file holds base64 text",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the test signing report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "compile",
           "invocation": "registry-render compile",
           "about": "Render one document offline",

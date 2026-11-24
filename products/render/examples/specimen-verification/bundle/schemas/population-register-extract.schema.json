@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record-number",
+    "forename",
+    "surname",
+    "area",
+    "reference",
+    "verify-url"
+  ],
+  "properties": {
+    "record-number": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "forename": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "surname": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "area": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "reference": {
+      "type": "string",
+      "pattern": "^TEST-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$"
+    },
+    "verify-url": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^https?://[^/?# ]+/(?:[^?# ]+/)*verify/?\\?ref=TEST-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$"
+    }
+  }
+}

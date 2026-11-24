@@ -425,6 +425,11 @@ impl Bundle {
     /// operator inspect or compile the exact package they will deploy while
     /// keeping `package` itself source-only and write-once.
     pub fn load_for_preview(root: &Path) -> Result<Self, RenderProblem> {
+        Self::load_for_authoring(root).map(|(bundle, _)| bundle)
+    }
+
+    /// Preserve the verified package identity when an authoring command needs to serve the input.
+    pub(crate) fn load_for_authoring(root: &Path) -> Result<(Self, Option<String>), RenderProblem> {
         match std::fs::symlink_metadata(root.join(registry_platform_config::package::SUM_FILE)) {
             Ok(_) => {
                 let verified = registry_platform_config::package::verify_package(
@@ -433,9 +438,14 @@ impl Bundle {
                     "registry-render package",
                 )
                 .map_err(crate::runtime::package_problem)?;
-                Self::load_package(root, &verified)
+                Ok((
+                    Self::load_package(root, &verified)?,
+                    Some(verified.digest().to_owned()),
+                ))
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::load(root),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok((Self::load(root)?, None))
+            }
             Err(error) => Err(RenderProblem::new(
                 ProblemKind::ManifestInvalid,
                 format!(
