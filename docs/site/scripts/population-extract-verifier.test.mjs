@@ -169,7 +169,8 @@ test('Astro route is prefix-aware and contains no telemetry or external assets',
     'utf8',
   );
   assert.match(route, /import\.meta\.env\.BASE_URL/);
-  assert.match(route, /https:\/\/docs\.registrystack\.org\/dev\/examples\/population-extract\/verify\//);
+  assert.match(route, /new URL\(Astro\.url\.pathname, Astro\.site\)/);
+  assert.match(route, /rel="sitemap" href="\.\.\/\.\.\/\.\.\/sitemap-index\.xml"/);
   assert.match(route, /name="robots" content="noindex,follow"/);
   assert.match(route, /style-src 'self' 'unsafe-inline'/);
   assert.doesNotMatch(route, /frame-ancestors/);
