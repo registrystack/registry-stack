@@ -316,6 +316,14 @@ fn refusal_5_the_source_facts_schema_of_a_public_check_states_types_only() {
             json!({"status": {"type": "string"}, "checkCode": {"type": "string"}, "names": {"type": "array", "items": {"type": "string", "minLength": 1}}}),
             "/properties/names/items/minLength",
         ),
+        (
+            json!({"status": false, "checkCode": {"type": "string"}}),
+            "/properties/status",
+        ),
+        (
+            json!({"checkCode": {"type": "string"}, "names": {"type": "array", "items": false}}),
+            "/properties/names/items",
+        ),
     ] {
         let findings = compile::compile_with_pack_routes(
             &project,
@@ -330,7 +338,11 @@ fn refusal_5_the_source_facts_schema_of_a_public_check_states_types_only() {
         );
         assert!(findings[0].message.contains(member), "{findings:?}");
     }
-    let facts = json!({"status": {"type": "string", "description": "Record status"}, "checkCode": {"type": "string"}});
+    let facts = json!({
+        "status": {"type": "string", "description": "Record status"},
+        "checkCode": {"type": "string"},
+        "details": {"type": "object", "additionalProperties": false, "properties": {"reference": {"type": "string"}}}
+    });
     let routes = pack_routes_with_facts_schema(
         json!({"type": "object", "additionalProperties": false, "required": ["status"], "properties": facts}),
         inputs.clone(),
@@ -357,6 +369,74 @@ fn refusal_5_the_source_facts_schema_of_a_public_check_states_types_only() {
         inputs,
     );
     compile::compile_with_pack_routes(&relying, &scripts(), &constrained).unwrap();
+}
+
+#[test]
+fn public_check_checks_facts_before_and_after_projection() {
+    let mut authored = project_value();
+    authored["sources"]["certificate-record"]["projection"] = json!({
+        "source": "projections/facts.rhai",
+        "entrypoint": "project_facts",
+        "schema": "schemas/projected-facts.json"
+    });
+    let project: EvidenceProject = serde_json::from_value(authored).unwrap();
+    let projected = json!({
+        "$id": "https://example.org/schemas/projected-facts/v1",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"status": {"type": "string"}, "checkCode": {"type": "string"}}
+    });
+    let mut assets = scripts();
+    assets.insert(
+        "projections/facts.rhai".to_owned(),
+        "fn project_facts(source) { source }".to_owned(),
+    );
+    assets.insert(
+        "schemas/projected-facts.json".to_owned(),
+        projected.to_string(),
+    );
+    compile::compile_with_pack_routes(&project, &assets, &pack_routes()).unwrap();
+
+    let constrained = pack_routes_with(
+        json!({"status": {"type": "string", "maxLength": 32}, "checkCode": {"type": "string"}}),
+        json!({"properties": {"recordId": {"type": "string", "minLength": 4, "maxLength": 32}}}),
+    );
+    let findings = compile::compile_with_pack_routes(&project, &assets, &constrained).unwrap_err();
+    assert_eq!(
+        codes(&findings),
+        ["public-check-facts-content"],
+        "{findings:?}"
+    );
+    assert!(
+        findings[0].message.contains("pack facts schema"),
+        "{findings:?}"
+    );
+    assert!(
+        findings[0].message.contains("/properties/status/maxLength"),
+        "{findings:?}"
+    );
+
+    let mut projected = projected;
+    projected["properties"]["status"]["maxLength"] = json!(32);
+    assets.insert(
+        "schemas/projected-facts.json".to_owned(),
+        projected.to_string(),
+    );
+    let findings =
+        compile::compile_with_pack_routes(&project, &assets, &pack_routes()).unwrap_err();
+    assert_eq!(
+        codes(&findings),
+        ["public-check-facts-content"],
+        "{findings:?}"
+    );
+    assert!(
+        findings[0].message.contains("projected facts schema"),
+        "{findings:?}"
+    );
+    assert!(
+        findings[0].message.contains("/properties/status/maxLength"),
+        "{findings:?}"
+    );
 }
 
 #[test]

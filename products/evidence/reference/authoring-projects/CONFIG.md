@@ -87,11 +87,13 @@ has no relying party to scope a reference to, so the definition is refused with
 whose one selector profile has exactly one field, acquires through exactly one
 Source with no `holderPresented` block, keeps `existenceDisclosure` at
 `collapse-unresolved`, and the check code fact must be a string property of that
-Source's facts schema that the Source does not bind as an input. That facts
-schema states types only: besides `type`, `properties`, `items`,
+Source's facts schema that the Source does not bind as an input. The pack facts
+schema and any Source projection's facts schema state types only. Besides
+`type`, `properties`, `items`,
 `additionalProperties`, an empty `required` list and annotations (`title`,
 `description`, `$schema`, `$id`, `$comment`), any member is refused with
-`public-check-facts-content`. Evidence compares the check code only after the
+`public-check-facts-content`. The check also refuses a boolean schema that
+rejects a fact or an item. Evidence compares the check code only after the
 Source returns a record, so a record that failed a bound, a pattern, a
 vocabulary or a required member would answer `source.unavailable` to a caller
 without the code and show that the record exists. Check content in the derive

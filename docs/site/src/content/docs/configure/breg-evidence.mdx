@@ -279,7 +279,8 @@ The ordinary export treats that as a Source error.
 A no-match count on this Source can therefore also mean the registry returned the wrong record.
 Transport failures and malformed response envelopes still fail as Source errors.
 A response over the pack's limit of 65,536 bytes also fails as a Source error before the comparison.
-`bregctl` does not check the selected fields against that limit, so select few, short fields for a public check.
+`bregctl` checks the declared bounds of the selected fields against that limit.
+If the export is refused, select fewer fields or reduce their declared maximum lengths.
 The request keeps the same lookup, access profile, projected fields, selector validation and response byte limit.
 
 If your public check requires field bounds, formats, patterns, or vocabulary membership, enforce them in the Evidence derivation or output contract. Both run after the check code comparison.

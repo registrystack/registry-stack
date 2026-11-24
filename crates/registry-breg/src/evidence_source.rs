@@ -128,6 +128,9 @@ const EVIDENCE_MAXIMUM_SCHEMA_BYTES: usize = 256 * 1024;
 /// each pack script within. The export refuses a lookup script Evidence would
 /// refuse to load.
 const EVIDENCE_MAXIMUM_SCRIPT_BYTES: usize = 65_536;
+const LOOKUP_RESPONSE_BYTES: u64 = 65_536;
+/// Reserve room for the BReg Record envelope and its metadata.
+const RECORD_ENVELOPE_BYTES: u64 = 8_192;
 
 fn refusal(path: &str, message: &str) -> Diagnostic {
     Diagnostic::error("breg.evidence-source.refused", path, message)
@@ -431,6 +434,24 @@ fn public_check_fact_types(
             "a public check export supports scalar facts; use a reviewed custom Evidence adapter for other field types",
         )),
     }
+}
+
+fn public_check_value_bytes(kind: &FieldTypeSource) -> u64 {
+    let characters = match kind {
+        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
+            u64::from(*max_length)
+        }
+        FieldTypeSource::VocabularyCode { values, .. } => values
+            .iter()
+            .map(|value| value.chars().count() as u64)
+            .max()
+            .unwrap_or(0),
+        FieldTypeSource::Decimal { precision, .. } => u64::from(*precision) + 3,
+        // The other supported scalars use short, fixed wire formats.
+        _ => 64,
+    };
+    // JSON quotes plus at most six bytes per character in BReg's JSON encoding.
+    2 + 6 * characters
 }
 
 fn selector_schema(kind: &FieldTypeSource) -> Result<(Value, u64), Diagnostic> {
@@ -901,11 +922,25 @@ fn export_with_behavior(
                 "the complete composite selector exceeds Evidence's 8192-byte bound",
             ));
         }
-        let projection = selected
-            .iter()
-            .map(|id| field(entity, id).map(|field| field.api_name.clone()))
-            .collect::<Result<Vec<_>, _>>()?
-            .join(",");
+        let mut projection = Vec::with_capacity(selected.len());
+        let mut response_bytes = RECORD_ENVELOPE_BYTES;
+        for id in &selected {
+            let logical = field(entity, id)?;
+            projection.push(logical.api_name.as_str());
+            if public_check {
+                // The API name is ASCII. Allow quotes, a colon and a comma.
+                response_bytes += logical.api_name.len() as u64
+                    + 4
+                    + public_check_value_bytes(&logical.field_type);
+            }
+        }
+        if response_bytes > LOOKUP_RESPONSE_BYTES {
+            return Err(refusal(
+                "fields",
+                "the selected fields can exceed the 64 KiB public-check response limit. Select fewer fields or reduce their declared maximum lengths",
+            ));
+        }
+        let projection = projection.join(",");
         let condition = required_inputs
             .iter()
             .map(|input| format!("inputs.contains({})", json!(input)))
@@ -1179,7 +1214,7 @@ fn export_with_behavior(
         "component":"http",
         "authentication":{"type":options.authentication.as_str()},
         "attemptTimeoutMilliseconds":5000,
-        "maximumResponseBytes":65536,
+        "maximumResponseBytes":LOOKUP_RESPONSE_BYTES,
         "requestHeaders":["accept"],
         "operations":[{"id":"lookup","safeUpstream":true}],
         "hostProtocol":{"id":"registry-lookup-v1","config":pin(protocol_path,&protocol_bytes)},
