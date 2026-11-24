@@ -994,7 +994,7 @@ gh workflow run release-upgrade-rehearsal.yml \
 ```
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-earliest release this source reads retained state from, `v0.47.0`, and the script
+earliest release this source reads retained state from, `v0.48.0`, and the script
 refuses to start from any earlier release rather than skipping the check.
 `v0.43.0` continued the forward state path from `v0.42.0`; `v0.44.0` retained
 Evidence and Messaging state while starting the product baselines described
@@ -1005,7 +1005,8 @@ re-authored as the Messaging changelog describes. `v0.47.0` reads Messaging's
 `providers`, `senderProfiles` and `accessProfiles` as maps keyed by id. The
 rehearsal rewrites a `v0.46.0` project in that form, rebuilds its package, and
 applies the rebuilt package over the previous activation, as the Messaging
-changelog describes. Current source reads the retained state `v0.47.0` wrote,
+changelog describes. `v0.48.0` retained both products' state without a
+migration. Current source reads the retained state `v0.48.0` wrote,
 so older state must first move through each intervening release.
 The retained path started at `v0.42.0` because no product reads `v0.41.0` state:
 BReg and Casework start on a fresh database, Evidence starts at its normalized
