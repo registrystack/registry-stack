@@ -1,5 +1,5 @@
 current: latest
-released: v0.47.0
+released: v0.48.0
 published_archive_limit: 3
 docsets:
   - id: latest
@@ -51,45 +51,45 @@ docsets:
     label: v0.48.0
     path: /v/0.48.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.48.0
     repo_docs_source: monorepo
     published_at: 2026-11-23
-    description: Registry Stack v0.48.0 beta-60 candidate documentation set.
+    description: Released Registry Stack v0.48.0 beta-60 documentation set.
     products:
       registry-stack:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-discovery:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-manifest:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-evidence:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-casework:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-scheduling:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-render:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-messaging:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-breg-services:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-coordinator:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
       registry-adapter:
         version: v0.48.0
-        ref: v0.48.0
+        ref: 0d4f292653d5b72547262a7b23c83a4feb3341ec
   - id: v0.47.0
     label: v0.47.0
     path: /v/0.47.0/

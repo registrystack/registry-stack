@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/render-client-native",
-  "version": "0.48.0",
+  "version": "0.49.0",
   "description": "Internal Node.js binding for the Registry Render adapter.",
   "private": true,
   "license": "Apache-2.0",
