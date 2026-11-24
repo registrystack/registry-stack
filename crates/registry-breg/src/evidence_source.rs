@@ -128,11 +128,6 @@ const EVIDENCE_MAXIMUM_SCHEMA_BYTES: usize = 256 * 1024;
 /// each pack script within. The export refuses a lookup script Evidence would
 /// refuse to load.
 const EVIDENCE_MAXIMUM_SCRIPT_BYTES: usize = 65_536;
-/// The response bytes the adapter pack lets the registry lookup return.
-const MAXIMUM_RESPONSE_BYTES: u64 = 65_536;
-/// The share of a public check response kept for the record envelope: the
-/// record and revision identifiers and the response `meta`.
-const PUBLIC_CHECK_ENVELOPE_BYTES: u64 = 8_192;
 
 fn refusal(path: &str, message: &str) -> Diagnostic {
     Diagnostic::error("breg.evidence-source.refused", path, message)
@@ -435,32 +430,6 @@ fn public_check_fact_types(
             "fields",
             "a public check export supports scalar facts; use a reviewed custom Evidence adapter for other field types",
         )),
-    }
-}
-
-/// The most bytes one value of a public check field takes in a JSON response.
-/// A string character takes up to six bytes, the `\uXXXX` escape of a control
-/// character. Field types the export refuses count as nothing.
-fn public_check_value_bytes(kind: &FieldTypeSource) -> u64 {
-    let string = |characters: u64| 2 + 6 * characters;
-    match kind {
-        FieldTypeSource::Boolean => 5,
-        FieldTypeSource::Int64 => 20,
-        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
-            string(u64::from(*max_length))
-        }
-        FieldTypeSource::Decimal { precision, .. } => string(u64::from(*precision) + 3),
-        FieldTypeSource::Date => string(10),
-        FieldTypeSource::Timestamp => string(64),
-        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => string(36),
-        FieldTypeSource::VocabularyCode { values, .. } => string(
-            values
-                .iter()
-                .map(|value| value.chars().count() as u64)
-                .max()
-                .unwrap_or(0),
-        ),
-        _ => 0,
     }
 }
 
@@ -1071,11 +1040,8 @@ fn export_with_behavior(
     let script = format!("{select_fields}\n{prepare}\n{project_response}\n{extract}");
     let mut response_fields = Map::new();
     let mut dependencies = Map::new();
-    let mut public_check_response_bytes = PUBLIC_CHECK_ENVELOPE_BYTES;
     for id in &all_fields {
         let logical = field(entity, id)?;
-        public_check_response_bytes +=
-            logical.api_name.len() as u64 + 4 + public_check_value_bytes(&logical.field_type);
         // Only a fact carries its field's declared pattern. A selector-only
         // field returns the caller's input, which the identity check already
         // requires the record to equal exactly.
@@ -1104,16 +1070,6 @@ fn export_with_behavior(
                 .remove("enum");
         }
         response_fields.insert(logical.api_name.clone(), schema);
-    }
-    // A response over the limit fails the Source before Evidence compares the
-    // check code, so the size of one record must never decide the answer.
-    if public_check && public_check_response_bytes > MAXIMUM_RESPONSE_BYTES {
-        return Err(refusal(
-            "fields",
-            &format!(
-                "the selected fields could take {public_check_response_bytes} bytes for one record, over the {MAXIMUM_RESPONSE_BYTES}-byte response limit; a public check must answer a long record like any other, so select fewer or shorter fields"
-            ),
-        ));
     }
     let behavior = selected_behavior(
         registry,
@@ -1223,7 +1179,7 @@ fn export_with_behavior(
         "component":"http",
         "authentication":{"type":options.authentication.as_str()},
         "attemptTimeoutMilliseconds":5000,
-        "maximumResponseBytes":MAXIMUM_RESPONSE_BYTES,
+        "maximumResponseBytes":65536,
         "requestHeaders":["accept"],
         "operations":[{"id":"lookup","safeUpstream":true}],
         "hostProtocol":{"id":"registry-lookup-v1","config":pin(protocol_path,&protocol_bytes)},
