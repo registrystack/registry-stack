@@ -160,6 +160,17 @@ A request batch audits both items as not available, and the metric still counts 
     declared_existence_disclosure_mode_governs_the_public_collapse,
     a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it. */}
 
+The opt-in `public-check-types-only-v1` export binds its response handling and artifact digests into the pack version with the selected lookup contract.
+The generated public-check adapter checks exact returned identity before returning any facts and omits missing, null, and mistyped facts.
+Review the public Source, Evidence derivation, and target activation together. The derivation and output contract enforce content requirements after Evidence compares the check code. Returned envelope failures remain observable as source failures.
+
+{/* Evidence: crates/registry-breg/src/evidence_source.rs, public_check_fact_types;
+    crates/registry-breg/src/evidence_source/tests.rs,
+    public_check_projects_only_typed_members_and_treats_identity_disagreement_as_no_match;
+    crates/registry-bregctl/tests/evidence_source.rs,
+    public_check_transport_is_explicit_type_only_and_has_its_own_identity;
+    crates/registry-evidence/src/public_check_tests.rs, every_miss_is_one_identical_not_found. */}
+
 ### Disclosure conditions
 
 A disclosure condition withholds a Record, its history, or named fields from every access profile it

@@ -80,6 +80,14 @@ impl EvidenceSourceAuthentication {
     }
 }
 
+/// The response handling contract of the generated Evidence lookup.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EvidenceSourceTransportProfile {
+    #[default]
+    Ordinary,
+    PublicCheckTypesOnlyV1,
+}
+
 /// Technical choices only. Questions, permissions, targets and credentials stay with
 /// the Evidence project and its operator.
 pub struct EvidenceSourceOptions {
@@ -391,6 +399,26 @@ fn scalar_schema(kind: &FieldTypeSource) -> Result<Value, Diagnostic> {
     })
 }
 
+/// A public-check fact conveys its scalar type. Content validation belongs to
+/// the definition's derivation, after Evidence verifies the check code.
+fn public_check_fact_types(
+    kind: &FieldTypeSource,
+) -> Result<(&'static str, &'static str), Diagnostic> {
+    match kind {
+        FieldTypeSource::Boolean => Ok(("boolean", "bool")),
+        FieldTypeSource::Int64 => Ok(("integer", "i64")),
+        FieldTypeSource::String { .. }
+        | FieldTypeSource::Text { .. }
+        | FieldTypeSource::Decimal { .. }
+        | FieldTypeSource::Date
+        | FieldTypeSource::Timestamp
+        | FieldTypeSource::Uuid
+        | FieldTypeSource::Reference { .. }
+        | FieldTypeSource::VocabularyCode { .. } => Ok(("string", "string")),
+        _ => Err(refusal("fields", "public-check transport supports scalar facts; use a reviewed custom Evidence adapter for other field types")),
+    }
+}
+
 fn selector_schema(kind: &FieldTypeSource) -> Result<(Value, u64), Diagnostic> {
     let string = |maximum: u64| -> Result<(Value, u64), Diagnostic> {
         if maximum == 0 || maximum > 8192 {
@@ -626,13 +654,27 @@ pub fn export_evidence_source(
     registry: &CompiledRegistry,
     options: &EvidenceSourceOptions,
 ) -> Result<EvidenceSourceExport, Diagnostic> {
-    export_with_behavior(registry, options).map(|(export, _)| export)
+    export_evidence_source_with_transport(
+        registry,
+        options,
+        EvidenceSourceTransportProfile::Ordinary,
+    )
+}
+
+/// Export an explicitly selected transport contract for the same governed lookup.
+pub fn export_evidence_source_with_transport(
+    registry: &CompiledRegistry,
+    options: &EvidenceSourceOptions,
+    transport_profile: EvidenceSourceTransportProfile,
+) -> Result<EvidenceSourceExport, Diagnostic> {
+    export_with_behavior(registry, options, transport_profile).map(|(export, _)| export)
 }
 
 /// The export and the behavior material its `behavior_revision` digests.
 fn export_with_behavior(
     registry: &CompiledRegistry,
     options: &EvidenceSourceOptions,
+    transport_profile: EvidenceSourceTransportProfile,
 ) -> Result<(EvidenceSourceExport, Value), Diagnostic> {
     for (path, name) in [
         ("source-id", &options.source_id),
@@ -697,6 +739,14 @@ fn export_with_behavior(
             "select 1 to 16 distinct existing selector profiles",
         ));
     }
+    let public_check = transport_profile == EvidenceSourceTransportProfile::PublicCheckTypesOnlyV1;
+    if public_check && (!options.optional_fields.is_empty() || !options.required_values.is_empty())
+    {
+        return Err(refusal(
+            "transport-profile",
+            "public-check-types-only-v1 makes every fact optional; omit optional-fields and required-values and enforce content rules in the Evidence definition after check-code comparison",
+        ));
+    }
     let mut artifacts = Vec::new();
     let mut fact_properties = Map::new();
     let disclosure = crate::disclosure::plan(entity, &options.access_profile);
@@ -718,9 +768,18 @@ fn export_with_behavior(
                 "every exported fact must already be readable under the selected profile and have an Evidence-compatible field name",
             ));
         }
-        fact_properties.insert(id.clone(), field_schema(entity, field(entity, id)?)?);
+        let logical = field(entity, id)?;
+        let schema = if public_check {
+            json!({"type":public_check_fact_types(&logical.field_type)?.0})
+        } else {
+            field_schema(entity, logical)?
+        };
+        fact_properties.insert(id.clone(), schema);
     }
-    let rules = fact_rules(entity, &fields, options)?;
+    let mut rules = fact_rules(entity, &fields, options)?;
+    if public_check {
+        rules.optional.clone_from(&fields);
+    }
     let mut all_fields = fields.clone();
     let mut selector_profiles = BTreeMap::new();
     let mut identity_fields = BTreeMap::new();
@@ -830,7 +889,11 @@ fn export_with_behavior(
             ));
             selected.insert(id.clone());
             all_fields.insert(id.clone());
-            checks.push_str(&format!("        if record[{api}] == () || type_of(record[{api}]) != type_of(inputs[{input}]) || record[{api}] != inputs[{input}] {{ throw \"source_protocol_error\"; }}\n",api=json!(logical.api_name),input=json!(input)));
+            if public_check {
+                checks.push_str(&format!("        if !record.contains({api}) || type_of(record[{api}]) != type_of(inputs[{input}]) || record[{api}] != inputs[{input}] {{ return #{{lookup: \"no-match\"}}; }}\n",api=json!(logical.api_name),input=json!(input)));
+            } else {
+                checks.push_str(&format!("        if record[{api}] == () || type_of(record[{api}]) != type_of(inputs[{input}]) || record[{api}] != inputs[{input}] {{ throw \"source_protocol_error\"; }}\n",api=json!(logical.api_name),input=json!(input)));
+            }
         }
         if maximum > 8192 {
             return Err(refusal(
@@ -887,24 +950,40 @@ fn export_with_behavior(
             "the union of selected identity and fact fields exceeds Evidence's 64 projected properties; split the alternatives into separate sources",
         ));
     }
-    let mut project_response = String::from(
-        "fn project_response(exchange) {\n    let record = exchange.body[\"data\"][\"domainData\"];\n    let projected = #{};\n",
-    );
+    let mut project_response = if public_check {
+        String::from(
+            "fn project_response(exchange) {\n    let body = exchange.body;\n    if type_of(body) != \"map\" || type_of(body[\"data\"]) != \"map\" || type_of(body[\"data\"][\"domainData\"]) != \"map\" { throw \"source_protocol_error\"; }\n    let record = body[\"data\"][\"domainData\"];\n    let projected = #{};\n",
+        )
+    } else {
+        String::from(
+            "fn project_response(exchange) {\n    let record = exchange.body[\"data\"][\"domainData\"];\n    let projected = #{};\n",
+        )
+    };
     for id in &all_fields {
-        let api_name = json!(field(entity, id)?.api_name);
-        project_response.push_str(&format!(
-            "    if record.contains({api_name}) {{ projected[{api_name}] = record[{api_name}]; }}\n"
-        ));
+        let logical = field(entity, id)?;
+        let api_name = json!(logical.api_name);
+        if public_check {
+            let scalar_type = json!(public_check_fact_types(&logical.field_type)?.1);
+            project_response.push_str(&format!(
+                "    if record.contains({api_name}) && type_of(record[{api_name}]) == {scalar_type} {{ projected[{api_name}] = record[{api_name}]; }}\n"
+            ));
+        } else {
+            project_response.push_str(&format!(
+                "    if record.contains({api_name}) {{ projected[{api_name}] = record[{api_name}]; }}\n"
+            ));
+        }
     }
     project_response.push_str("    #{data: #{domainData: projected}}\n}\n");
     extract.push_str(" else { throw \"unsupported source selector profile\"; }\n");
     // A null optional fact is absent data. A missing key means the projection
     // or the read grant lost the field, which is a protocol error.
-    for id in &rules.optional {
-        extract.push_str(&format!(
-            "    if !record.contains({}) {{ throw \"source_protocol_error\"; }}\n",
-            json!(field(entity, id)?.api_name)
-        ));
+    if !public_check {
+        for id in &rules.optional {
+            extract.push_str(&format!(
+                "    if !record.contains({}) {{ throw \"source_protocol_error\"; }}\n",
+                json!(field(entity, id)?.api_name)
+            ));
+        }
     }
     // A record outside a field's allowed values is refused here, in the
     // lookup, with the no-match answer of a missing fact. An unknown record is
@@ -943,8 +1022,13 @@ fn export_with_behavior(
         extract.push_str(&format!("    let facts = #{{{}}};\n", facts.join(", ")));
         for id in &rules.optional {
             let api_name = json!(field(entity, id)?.api_name);
+            let present = if public_check {
+                format!("record.contains({api_name})")
+            } else {
+                format!("record[{api_name}] != ()")
+            };
             extract.push_str(&format!(
-                "    if record[{api_name}] != () {{ facts[{id}] = record[{api_name}]; }}\n",
+                "    if {present} {{ facts[{id}] = record[{api_name}]; }}\n",
                 id = json!(id)
             ));
         }
@@ -961,7 +1045,9 @@ fn export_with_behavior(
         // Only a fact carries its field's declared pattern. A selector-only
         // field returns the caller's input, which the identity check already
         // requires the record to equal exactly.
-        let mut schema = if fields.contains(id) {
+        let mut schema = if public_check {
+            json!({"type":public_check_fact_types(&logical.field_type)?.0})
+        } else if fields.contains(id) {
             field_schema(entity, logical)?
         } else {
             scalar_schema(&logical.field_type)?
@@ -972,18 +1058,24 @@ fn export_with_behavior(
         // pack version identifies one set of schema bytes.
         if let Some(pattern) = schema.get("pattern") {
             dependency["pattern"] = pattern.clone();
+        } else if public_check && fields.contains(id) {
+            if let Some(pattern) = declared_pattern(entity, id) {
+                dependency["pattern"] = json!(pattern);
+            }
         }
         dependencies.insert(id.clone(), dependency);
-        schema["type"] = json!([schema["type"], "null"]);
-        // A null vocabulary value is absent data, not a protocol mismatch.
-        // The fixed fact schema still enforces the vocabulary after extraction.
-        schema
-            .as_object_mut()
-            .expect("scalar schema object")
-            .remove("enum");
+        if !public_check {
+            schema["type"] = json!([schema["type"], "null"]);
+            // A null vocabulary value is absent data, not a protocol mismatch.
+            // The fixed fact schema still enforces the vocabulary after extraction.
+            schema
+                .as_object_mut()
+                .expect("scalar schema object")
+                .remove("enum");
+        }
         response_fields.insert(logical.api_name.clone(), schema);
     }
-    let behavior = selected_behavior(
+    let mut behavior = selected_behavior(
         registry,
         entity,
         options,
@@ -992,7 +1084,6 @@ fn export_with_behavior(
         profile_dependencies,
         dependencies,
     )?;
-    let behavior_revision = format!("sha256:{}", digest(&canonical(&behavior)?));
     let prefix = &options.source_id;
     let response = object(
         Map::from_iter([(
@@ -1097,11 +1188,11 @@ fn export_with_behavior(
         "hostProtocol":{"id":"registry-lookup-v1","config":pin(protocol_path,&protocol_bytes)},
         "testedVersions":["breg-evidence-lookup-v2"]
     });
-    let pack = json!({
+    let mut pack = json!({
         "apiVersion":"id.registrystack.org/formats/adapter/pack/v1alpha1",
         "kind":"AdapterPack",
         "id":prefix,
-        "version":behavior_revision,
+        "version":null,
         "testedVersions":["breg-evidence-lookup-v2"],
         "endpoints":[endpoint],
         "sourceRoutes":[{
@@ -1126,6 +1217,20 @@ fn export_with_behavior(
         "scripts":[script_reference],
         "capabilities":{"components":["http"],"languages":["constant","exchangeProperty","jsonpath","rhai"],"eips":["choice","setBody","setHeader","setProperty","stop","to"]}
     });
+    if public_check {
+        // Bind the emitted contract and its exact artifact bytes before adding
+        // the pack version that identifies this closure. Its placeholder
+        // preserves the ordinary serializer's member order.
+        behavior["transportProfile"] = json!("public-check-types-only-v1");
+        behavior["pack"] = pack.clone();
+        behavior["artifacts"] = json!(artifacts
+            .iter()
+            .map(|artifact| (&artifact.path, &artifact.sha256))
+            .collect::<BTreeMap<_, _>>());
+        behavior["sourceBinding"] = json!({"connection":options.connection,"inputs":source_inputs});
+    }
+    let behavior_revision = format!("sha256:{}", digest(&canonical(&behavior)?));
+    pack["version"] = json!(behavior_revision);
     artifacts.push(document(format!("{pack_root}/pack.yaml"), &pack)?);
     artifacts.push(enveloped_document(
         format!("sources/{prefix}.yaml"),
