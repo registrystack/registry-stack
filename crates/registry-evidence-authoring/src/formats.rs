@@ -319,6 +319,7 @@ pub fn finding_action(code: &str) -> &'static str {
         "public-check-entity-reference-output" => "Remove the entity-reference Outputs from a definition that has publicCheck; a public check has no relying party to scope them to.",
         "public-check-existence-disclosure" => "Remove existenceDisclosure or set it to collapse-unresolved.",
         "public-check-code-fact" => "Name a string fact the Source's facts schema declares, and keep it out of the Source's inputs.",
+        "public-check-facts-content" => "Keep only `type` on each fact and remove the required list, then check content in the derive Function. For a BReg Source, export it again with `bregctl generate evidence-source --public-check`.",
         "authority-public-check" => "Activate a definition that exists in the project and declares publicCheck.",
         "selector-field-bounds" => "Declare the closed selector field type and its required bounds or codelist reference.",
         "kebab-case" | "date-time" | "x-evidencectl-mock" | "x-evidencectl-recursive-ref" => "Correct the inspected OpenAPI description as the message describes.",

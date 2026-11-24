@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- BREAKING (experimental surface): `evidencectl check` and `evidencectl package`
+  refuse a `publicCheck` definition whose Source facts schema states more than
+  types (`public-check-facts-content`). A bound, a pattern, a vocabulary or a
+  non-empty `required` list would fail one record's content before the check
+  code is compared, and the resulting `503 source.unavailable` would show a
+  caller without the code that the record exists. Keep only `type` on each
+  fact and check content in the derive Function. The diagnostic names the
+  first such member as a JSON pointer. The runtime bundle loader does not
+  repeat this check. For a BReg Source, export it with
+  `bregctl generate evidence-source --public-check`.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: an `EvidenceProject`'s human `label` and `description` move from
