@@ -3830,6 +3830,17 @@
               "environment": null
             },
             {
+              "display": "--transport-profile <TRANSPORT_PROFILE>",
+              "description": "Opt in to a public-check transport profile (evidence-source only). All facts become optional and type-only. Review a separate Evidence definition that validates content after check-code comparison",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "public-check-types-only-v1"
+              ],
+              "environment": null
+            },
+            {
               "display": "--source-id <SOURCE_ID>",
               "description": "Stable source identity inside the Evidence authoring project",
               "always_required": false,

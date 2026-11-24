@@ -207,7 +207,7 @@ Select a reviewed `request` lookup when the caller's authorised selector values 
 
 ## Review identity and fact handling
 
-The generated extraction adapter uses Evidence's optional `extract(response, selectors, context)` form.
+The ordinary export uses Evidence's optional `extract(response, selectors, context)` form.
 It checks the returned selected identity's scalar type and exact value before returning matched facts.
 A missing, wrongly typed, or mismatched identity fails as a source protocol error.
 No AssertionDefinition can skip that check by replacing its derive Function.
@@ -260,6 +260,27 @@ The export refuses a pack whose generated schema is larger, as many long vocabul
     refuses_an_export_whose_schema_evidence_would_not_read;
     crates/registry-breg/tests/postgres_evidence_source_patterns.rs;
     crates/registry-bregctl/tests/evidence_source.rs lookup.unresolved. */}
+
+### Export transport for a public check
+
+Use `--transport-profile public-check-types-only-v1` when you export a separate Source for an Evidence public-check definition.
+Give that export its own `--source-id` and pin the generated pack version in the Source.
+Omit `--optional-fields` and `--require-value`. This profile makes every selected fact optional and validates only its scalar type before Evidence compares the check code.
+
+A valid record can return missing, null, or mistyped members. The adapter omits those facts.
+A missing, mistyped, or unequal returned selector identity answers no match.
+Transport and malformed response envelopes still fail as source errors.
+The request keeps the same lookup, access profile, projection, selector validation and response byte limit.
+
+If your public check requires field bounds, formats, patterns, or vocabulary membership, enforce them in the Evidence derivation or output contract after check-code comparison.
+Review the definition and target activation separately. Keep the existing Source for relying and wallet definitions that already use the ordinary transport.
+
+{/* Evidence: crates/registry-breg/src/evidence_source.rs, public_check_fact_types;
+    crates/registry-breg/src/evidence_source/tests.rs,
+    public_check_projects_only_typed_members_and_treats_identity_disagreement_as_no_match;
+    crates/registry-bregctl/tests/evidence_source.rs,
+    public_check_transport_is_explicit_type_only_and_has_its_own_identity;
+    crates/registry-evidence/src/public_check_tests.rs, every_miss_is_one_identical_not_found. */}
 
 ## Import and update ordinary files
 

@@ -943,6 +943,73 @@ fn try_lookup(export: &EvidenceSourceExport, record: Value) -> Result<Value, Str
     Ok(rhai::serde::from_dynamic(&outcome).unwrap())
 }
 
+#[test]
+fn public_check_projects_only_typed_members_and_treats_identity_disagreement_as_no_match() {
+    let registry = compiled(&fact_rule_project(), SQL);
+    let mut options = options();
+    options.fields = vec!["status".into(), "area".into(), "active".into()];
+    let export = export_evidence_source_with_transport(
+        &registry,
+        &options,
+        EvidenceSourceTransportProfile::PublicCheckTypesOnlyV1,
+    )
+    .unwrap();
+    let script = std::str::from_utf8(file(
+        &export,
+        "adapter-packs/registry-status/scripts/lookup.rhai",
+    ))
+    .unwrap();
+    let engine = rhai::Engine::new();
+    let ast = engine.compile(script).unwrap();
+    let run = |entrypoint, exchange: Value| -> Result<Value, Box<rhai::EvalAltResult>> {
+        let outcome: rhai::Dynamic = engine.call_fn(
+            &mut rhai::Scope::new(),
+            &ast,
+            entrypoint,
+            (rhai::serde::to_dynamic(exchange).unwrap(),),
+        )?;
+        Ok(rhai::serde::from_dynamic(&outcome).unwrap())
+    };
+    let properties = json!({"bregEvidenceInputs": {"by-code--code": "A1"}});
+    let route = |record| {
+        let projection = run(
+            "project_response",
+            json!({"body":{"data":{"domainData":record}}}),
+        )
+        .unwrap();
+        run("lookup", json!({"properties":properties,"body":projection})).unwrap()
+    };
+
+    // A type-correct string survives even when it violates content rules.
+    let content = "outside the vocabulary and string bounds";
+    assert_eq!(
+        route(json!({"code":"A1","status":content,"area":{"nested":1},"active":false})),
+        json!({"lookup":"matched","facts":{"status":content,"active":false}})
+    );
+    for record in [
+        json!({"code":"A1"}),
+        json!({"code":"A1","status":null,"area":null,"active":"false"}),
+        json!({"code":"A1","status":12,"area":[1],"active":null}),
+    ] {
+        assert_eq!(route(record), json!({"lookup":"matched","facts":{}}));
+    }
+    for record in [
+        json!({}),
+        json!({"code":null}),
+        json!({"code":1}),
+        json!({"code":"a1","status":"active"}),
+    ] {
+        assert_eq!(route(record), json!({"lookup":"no-match"}));
+    }
+    for body in [
+        json!({}),
+        json!({"data":[]}),
+        json!({"data":{"domainData":[]}}),
+    ] {
+        assert!(run("project_response", json!({"body":body})).is_err());
+    }
+}
+
 fn fact_rule_export() -> EvidenceSourceExport {
     let mut options = fact_rule_options();
     options.selectors = vec!["by-code".into()];
@@ -1586,7 +1653,12 @@ fn every_fact_pattern_is_bound_into_the_behavior_revision() {
     for fields in [["area"], ["amount"], ["status"]] {
         let mut options = pattern_options();
         options.fields = fields.iter().map(|id| id.to_string()).collect();
-        let (export, behavior) = export_with_behavior(&registry, &options).unwrap();
+        let (export, behavior) = export_with_behavior(
+            &registry,
+            &options,
+            EvidenceSourceTransportProfile::Ordinary,
+        )
+        .unwrap();
         assert_eq!(
             export.behavior_revision,
             format!("sha256:{}", digest(&canonical(&behavior).unwrap()))
@@ -1634,7 +1706,12 @@ fn a_selector_field_pattern_stays_out_of_the_pack() {
         if let Some(pattern) = pattern {
             project["recordTypes"]["record"]["fields"][0]["pattern"] = json!(pattern);
         }
-        export_with_behavior(&compiled(&project, SQL), &pattern_options()).unwrap()
+        export_with_behavior(
+            &compiled(&project, SQL),
+            &pattern_options(),
+            EvidenceSourceTransportProfile::Ordinary,
+        )
+        .unwrap()
     };
     let (plain, plain_behavior) = export(None);
     for pattern in ["^[A-Z][0-9]$", "^\\w+$"] {

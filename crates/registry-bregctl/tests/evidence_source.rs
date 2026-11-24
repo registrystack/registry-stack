@@ -12,6 +12,10 @@ use std::{
 };
 
 fn export(output: &Path, fields: &str) -> Output {
+    export_with_flags(output, fields, &[])
+}
+
+fn export_with_flags(output: &Path, fields: &str, flags: &[&str]) -> Output {
     let project = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/evidence/registry")
         .canonicalize()
@@ -37,6 +41,7 @@ fn export(output: &Path, fields: &str) -> Output {
             "--output",
         ])
         .arg(output)
+        .args(flags)
         .output()
         .unwrap()
 }
@@ -350,4 +355,76 @@ fn fact_rule_flags_apply_only_to_evidence_source() {
         .output()
         .unwrap();
     assert!(!result.status.success());
+}
+
+#[test]
+fn public_check_transport_is_explicit_type_only_and_has_its_own_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let ordinary = root.join("ordinary");
+    let public = root.join("public");
+    let flags = ["--transport-profile", "public-check-types-only-v1"];
+    for (directory, flags) in [(&ordinary, &[][..]), (&public, &flags[..])] {
+        let result = export_with_flags(directory, "status", flags);
+        assert!(
+            result.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let pack_path = "adapter-packs/registry-status/pack.yaml";
+    let source_path = "sources/registry-status.yaml";
+    let facts_path = "adapter-packs/registry-status/schemas/facts.json";
+    let inputs_path = "adapter-packs/registry-status/schemas/inputs.json";
+    let read = |directory: &Path, relative| fs::read(directory.join(relative)).unwrap();
+    let document = |directory: &Path, relative| -> Value {
+        serde_norway::from_slice(&read(directory, relative)).unwrap()
+    };
+    let public_pack = document(&public, pack_path);
+    let ordinary_pack = document(&ordinary, pack_path);
+    assert_eq!(
+        document(&public, source_path)["pack"]["version"],
+        public_pack["version"]
+    );
+    assert_ne!(public_pack["version"], ordinary_pack["version"]);
+    assert_eq!(public_pack["endpoints"], ordinary_pack["endpoints"]);
+    let operation = |pack: &Value| pack["sourceRoutes"][0]["steps"][4].clone();
+    assert_eq!(operation(&public_pack), operation(&ordinary_pack));
+    assert_eq!(read(&public, inputs_path), read(&ordinary, inputs_path));
+    assert_eq!(
+        document(&public, facts_path),
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"status":{"type":"string"}},
+            "required": []
+        })
+    );
+    assert_ne!(read(&public, facts_path), read(&ordinary, facts_path));
+
+    let repeat = root.join("repeat");
+    assert!(export_with_flags(&repeat, "status", &flags)
+        .status
+        .success());
+    assert_eq!(
+        read(&public, "source-export.json"),
+        read(&repeat, "source-export.json")
+    );
+
+    for rule in [
+        ["--require-value", "status=active"],
+        ["--optional-fields", "status"],
+    ] {
+        let refused = root.join("refused");
+        let result = export_with_flags(
+            &refused,
+            "status",
+            &flags.into_iter().chain(rule).collect::<Vec<_>>(),
+        );
+        assert!(!result.status.success());
+        assert!(!refused.exists());
+        assert!(String::from_utf8_lossy(&result.stdout).contains("transport-profile"));
+    }
 }

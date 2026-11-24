@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `bregctl generate evidence-source --transport-profile public-check-types-only-v1`
+  exports an explicitly selected lookup with optional, type-only facts for a
+  separately reviewed Evidence public check. The generated pack pins this
+  transport contract and its artifacts. The default exporter retains its
+  existing contract.
+
 ## 0.48.0 - 2026-11-23
 
 - BREAKING: `bregctl check` refuses an access profile that reads, filters or

@@ -688,6 +688,11 @@ struct GenerateArgs {
     /// still matches.
     #[arg(long, value_delimiter = ',')]
     optional_fields: Vec<String>,
+    /// Opt in to a public-check transport profile (evidence-source only).
+    /// All facts become optional and type-only. Review a separate Evidence
+    /// definition that validates content after check-code comparison.
+    #[arg(long, value_enum)]
+    transport_profile: Option<EvidenceSourceTransportProfileArg>,
     /// Stable source identity inside the Evidence authoring project.
     #[arg(long)]
     source_id: Option<String>,
@@ -697,6 +702,12 @@ struct GenerateArgs {
     /// Authentication contract the generated Adapter pack requires from its endpoint binding.
     #[arg(long, value_enum)]
     authentication: Option<EvidenceSourceAuthenticationArg>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum EvidenceSourceTransportProfileArg {
+    #[value(name = "public-check-types-only-v1")]
+    PublicCheckTypesOnlyV1,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -8766,6 +8777,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             || !args.fields.is_empty()
             || !args.require_values.is_empty()
             || !args.optional_fields.is_empty()
+            || args.transport_profile.is_some()
             || args.source_id.is_some()
             || args.connection.is_some()
             || args.authentication.is_some()
@@ -8809,15 +8821,28 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
     };
     let profile = profile(args.production);
     let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;
-    let export = registry_breg::evidence_source::export_evidence_source(&compiled, &options)
-        .map_err(|diagnostic| {
-            source_failure(
-                "generate",
-                diagnostic,
-                DiagnosticArtifact::RegistryProject,
-                SuggestedAction::CorrectAuthoringSource,
+    use registry_breg::evidence_source::{
+        export_evidence_source, export_evidence_source_with_transport,
+        EvidenceSourceTransportProfile,
+    };
+    let export = match args.transport_profile {
+        None => export_evidence_source(&compiled, &options),
+        Some(EvidenceSourceTransportProfileArg::PublicCheckTypesOnlyV1) => {
+            export_evidence_source_with_transport(
+                &compiled,
+                &options,
+                EvidenceSourceTransportProfile::PublicCheckTypesOnlyV1,
             )
-        })?;
+        }
+    }
+    .map_err(|diagnostic| {
+        source_failure(
+            "generate",
+            diagnostic,
+            DiagnosticArtifact::RegistryProject,
+            SuggestedAction::CorrectAuthoringSource,
+        )
+    })?;
     write_artifacts(&args.output, &export.artifacts).map_err(|diagnostic| {
         source_failure(
             "generate",
@@ -9101,6 +9126,7 @@ fn generate_odrl(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
         || !args.fields.is_empty()
         || !args.require_values.is_empty()
         || !args.optional_fields.is_empty()
+        || args.transport_profile.is_some()
         || args.source_id.is_some()
         || args.connection.is_some()
     {
