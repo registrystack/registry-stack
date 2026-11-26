@@ -104,6 +104,23 @@ fn compiled() -> registry_breg::CompiledRegistry {
     )
     .unwrap()
 }
+
+#[test]
+fn payment_examples_pass_authoring_checks() {
+    for name in ["payment-fee-issuance", "g2p-disbursement"] {
+        let project = root().join("products/breg/examples").join(name);
+        let output = run(&["--format", "json", "check", project.to_str().unwrap()]);
+        assert!(
+            output.status.success(),
+            "{name}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["ok"], true, "{name}");
+    }
+}
+
 #[test]
 fn model_and_actions_share_the_compiled_definition_inspector() {
     let registry = compiled();

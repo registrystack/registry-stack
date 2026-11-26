@@ -307,7 +307,7 @@ secretProviders:
 database:
   runtimeUrlRef: $runtime_ref
   migrationUrlRef: $migration_ref
-  trustedRootCertificateRef: secret:file/postgres-ca
+  caBundleRef: secret:file/postgres-ca
   pool: {maximumConnections: 4, waitTimeoutMilliseconds: 2000, createTimeoutMilliseconds: 2000, recycleTimeoutMilliseconds: 2000}
   roles: {migration: $migration_role, runtime: $runtime_role}
 package: {root: $package_root}
