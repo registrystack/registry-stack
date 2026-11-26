@@ -15,11 +15,28 @@
   other caller, a record outside the row boundary and an empty slot get the
   same 404. New problems are `attachment.slot-write-once` (409),
   `attachment.too-large` (413), `attachment.content-type` (415) and
-  `attachment.digest-mismatch` (422). `bregctl check` refuses a slot on a
-  patch effect, a Proposal-mode Action, an Action with Evidence and a timer
-  Action. History erasure removes a record's file references, and the bytes
-  go once no record or Proposal refers to them. Proposal erasure keeps bytes
-  a record refers to. The Rust client gains `download_record_attachment`.
+  `attachment.digest-mismatch` (422). `bregctl check` refuses a request file
+  on a patch effect, an Action with Evidence and a timer Action. An applied
+  Proposal can also fill a record slot. The create or patch effect of a
+  Proposal Action names the Proposal file to promote, as
+  `"attachments": {"<record slot>": {"fromAttachment": "<Proposal slot>"}}`.
+  The record slot then refers to the same stored bytes, so nothing is copied.
+  The reference commits with the applied revision. An empty optional Proposal
+  slot leaves the record slot empty. `bregctl check` refuses a promotion from
+  a Proposal slot the Action does not declare, into a slot the target record
+  type does not declare, from a Proposal slot that accepts a content type or
+  size the record slot does not, into a record slot classified less
+  restricted than the Proposal slot, and a second promotion into one slot of
+  one record. Promotions and an immediate Action's request files are part
+  of the Action's definition revision. When the record slot already holds a
+  file, apply answers `409 attachment.slot-write-once` and nothing commits.
+  When the Proposal file's verification is pending or rejected, apply
+  answers `412 precondition.failed` and nothing commits. History erasure
+  removes a record's file references, and the bytes go once no record or
+  Proposal refers to them. Proposal erasure keeps bytes a record refers to,
+  including promoted files, and removes the rest. The Rust and Python
+  clients gain `download_record_attachment`, and the Node.js client gains
+  `downloadRecordAttachment`.
 - BREAKING: record file references live in the
   `registry_internal.registry_record_attachments` table, and the managed
   schema fingerprint changes with it. The fingerprint also covers a new index

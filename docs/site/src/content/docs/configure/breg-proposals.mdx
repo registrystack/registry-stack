@@ -642,6 +642,58 @@ The facility template combines supporting-document display with current Record a
 {/* Evidence: crates/registry-breg/tests/postgres_facility_proposal.rs supporting-document;
     crates/registry-breg/src/compiler/review_context.rs review_context. */}
 
+## Keep a supporting document on the record
+
+A Proposal file can stay with the record that the Proposal writes.
+The record type declares a file slot, as [Keep a file with a Record](../breg/#keep-a-file-with-a-record) explains.
+A create or patch effect then names the Proposal slot that fills it:
+
+```yaml
+    plan:
+      type: fixed
+      effects:
+        - id: application
+          target: {fromInput: application}
+          operation: patch
+          set: {status: {fromInput: status}}
+          attachments:
+            evidence: {fromAttachment: supporting-document}
+```
+
+The key is the record slot. `fromAttachment` names the Proposal slot.
+Applying the Proposal promotes the file it froze at submission.
+The record slot then refers to the same stored bytes, so nothing is copied.
+The reference commits with the record revision the effect writes, or nothing commits.
+An optional Proposal slot that was empty at submission leaves the record slot empty.
+
+`bregctl check` refuses a promotion when:
+
+- the Action does not declare the Proposal slot
+- the target record type does not declare the record slot
+- the Proposal slot accepts a media type that the record slot does not
+- the Proposal slot accepts files larger than the record slot's `maximumBytes`
+- the record slot's `classification` is less restricted than the Proposal slot's, such as `internal` for a `restricted` file
+- two promotions fill one slot of one record
+
+Each refusal is `breg.action.attachment-invalid`.
+
+Record slots are write-once.
+When the record slot already holds a file, Apply answers `409 attachment.slot-write-once`.
+When verification of the Proposal file is pending or has rejected it, Apply answers `412 precondition.failed`.
+In both cases nothing from the apply commits.
+
+Callers read the promoted file through the record, under the record grant's `readableAttachments`.
+Operator erasure of the Proposal keeps bytes that a record refers to.
+
+{/* Evidence: crates/registry-breg/src/immediate_actions.rs, compile_attachment_promotions;
+    crates/registry-breg/src/mutation/proposal.rs, promote_proposal_attachments;
+    crates/registry-breg/tests/attachment_promotion_compiler.rs;
+    crates/registry-breg/tests/postgres_record_attachments.rs,
+    an_applied_proposal_promotes_its_file_by_reference_and_erasure_keeps_it,
+    promotion_into_a_filled_slot_answers_409_and_rolls_back_the_whole_apply;
+    crates/registry-breg/tests/postgres_proposal_s3.rs,
+    promotion_references_the_verified_s3_object_and_refuses_unverified_bytes. */}
+
 ## Retain or erase detail
 
 `retain` keeps detail.

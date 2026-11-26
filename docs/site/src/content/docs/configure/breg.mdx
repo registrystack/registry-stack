@@ -176,8 +176,9 @@ A Record type declares at most eight slots, each up to 16 MiB with at most 16 me
 A slot ID cannot reuse a field ID.
 `writeOnce: true` is required, because nothing replaces a file once a slot holds one.
 
-Only the create effect of an immediate Action writes a slot.
-The effect names the slot and the request file that fills it:
+Two things fill a slot: the create effect of an immediate Action, or an applied Proposal that promotes one of its files.
+[Keep a supporting document on the record](../breg-proposals/#keep-a-supporting-document-on-the-record) covers the Proposal path.
+An immediate Action's effect names the slot and the request file that fills it:
 
 ```yaml
     plan:
@@ -191,7 +192,7 @@ The effect names the slot and the request file that fills it:
             evidence: {fromAttachment: evidence}
 ```
 
-`bregctl check` refuses a slot on a patch effect, a Proposal-mode Action, an Action with Evidence and a timer Action.
+`bregctl check` refuses a request file on a patch effect, an Action with Evidence and a timer Action.
 A file name cannot reuse an Action input ID.
 
 The request carries every file the Action names in `attachments`, beside `input`.
