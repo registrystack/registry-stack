@@ -221,9 +221,12 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
   const bill = await createBill('recovery');
   await issue(bill, 'absent-receipt', 'unpaid-issue', [412]);
   await collect(bill, 'extra-facts', [422], paymentToken, { amount: 1, paid: true });
+  const positionalIntent = [bill.billId, bill.billVersion];
+  await exchange('POST', collectionPath, { token: paymentToken, body: positionalIntent, key: 'wrong-body-shape', expected: [422] });
   await collect(bill, 'missing-scope', [403], issuer.token('payment-coordinator', 'urn:registry:payment-adapter', ''));
   await collect(bill, 'citizen', [401], null);
-  assert.equal(ledger().requestCount, 0); check('unpaid issuance, forged financial fields and unauthorized callers refused');
+  await exchange('POST', collectionPath, { body: positionalIntent, key: 'unauthenticated', expected: [401] });
+  assert.equal(ledger().requestCount, 0); check('unpaid issuance, invalid request bodies and unauthorized callers refused');
 
   registryProxy.drop(`/v1/actions/${fixture.bind.action}`);
   await collect(bill, 'original', [503]); assert.equal(ledger().requestCount, 0);
