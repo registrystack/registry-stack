@@ -228,6 +228,7 @@ is read, and stores the reason on the subject access log entry of a Record type 
 The compiler refuses the key on a profile that grants an operation that does not check the header.
 BReg writes no subject-log entry for a Proposal attachment download or a Proposal review read, even
 when the review shows fields of a Record type with `accessLog`.
+A Record attachment download writes one when its Record type has `accessLog`.
 Those reads are recorded only in BReg's [audit records](../../operate/breg-monitor/#read-audit-records).
 See obligation 22 and `BREG-RES-27` for what remains.
 
@@ -270,6 +271,48 @@ the Proposal read already reports that its detail was erased.
     record_history_omits_the_proposal_when_ownership_does_not_match,
     record_history_keeps_the_proposal_after_operator_erasure;
     products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-217. */}
+
+### Record files
+
+A Record type's file slot is written once, by the create effect of an immediate Action.
+The file commits in the transaction that writes the record, its history, the idempotency receipt and
+any hook event.
+BReg checks the media type, the size and the SHA-256 digest before it writes anything.
+A slot that already holds a file refuses a second one with `409 attachment.slot-write-once`.
+Erasing the slot's reference leaves a value-free marker, so the slot is never filled again.
+The runtime role can only add and read references, so it cannot replace or remove one.
+Hook events never carry file bytes.
+
+A download needs the slot in the selected profile's `readableAttachments`, and `bregctl check` accepts
+that grant only beside `get` on the Record type.
+BReg checks the grant and a keyed principal before any I/O.
+It then finds the record through the Record type's ordinary read relation, so row boundaries,
+consent and lifecycle apply as they do on `GET`.
+It loads the reference and the bytes in the same transaction, under the lock that deletion takes.
+It releases the bytes only when they match the stored size and digest.
+A profile without the grant gets `404 resource.not_found`, with no digest.
+So do a record outside the boundary, an empty slot and a file that verification has not approved.
+A download is recorded in BReg's read audit and, when the Record type has `accessLog`, in the
+subject access log.
+
+History erasure removes a record's file references with the revisions that added them.
+BReg deletes the bytes only when no other record and no Proposal refers to them.
+Proposal erasure and attachment cleanup count record references too.
+The verification worker also checks files that only a record holds.
+
+{/* Evidence: crates/registry-breg/src/api/record_attachments.rs;
+    crates/registry-breg/src/postgres/record_attachment_read.rs, read_record_attachment;
+    crates/registry-breg/src/attachment_store.rs, attach_record_reference, load_record_attachment,
+    erase_record_attachments and retire_unreferenced;
+    crates/registry-breg/tests/postgres_record_attachments.rs,
+    profiles_without_the_grant_or_outside_the_row_boundary_cannot_read,
+    a_file_waiting_for_or_refused_by_verification_is_concealed,
+    a_write_once_slot_refuses_a_second_file_even_after_erasure,
+    a_failed_commit_leaves_neither_the_record_nor_the_file,
+    record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers_to,
+    proposal_erasure_never_removes_bytes_a_record_refers_to;
+    products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-218, BREG-SEC-219 and
+    BREG-SEC-220. */}
 
 ## Operator obligations
 

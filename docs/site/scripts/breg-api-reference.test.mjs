@@ -38,6 +38,7 @@ test('routes include governed access-log, native Proposal attachment, and GIS su
   const rows = new Map(routes.rows.map((row) => [row[0], row]));
   const expected = [
     ['`GET /v1/records/{route}/{record_id}/access-log`', ['declares `accessLog`', 'current subject']],
+    ['`GET /v1/records/{route}/{record_id}/attachments/{slot_id}`', ['declares the slot in `attachments`', '`readableAttachments`']],
     ['`GET /v1/proposals/{proposal_id}/attachments/{slot_id}`', ['declares the slot', 'caller-authorized download']],
     ['`PATCH /v1/proposals/{proposal_id}/attachments/{slot_id}`', ['Draft Proposal', 'caller-authorized upload']],
     ['`DELETE /v1/proposals/{proposal_id}/attachments/{slot_id}`', ['Draft Proposal', 'caller-authorized removal']],
@@ -91,5 +92,7 @@ test('native Action and Proposal route families agree with the canonical generat
   }
   assert.ok(!JSON.stringify(tables).includes('changeRequest'));
   assert.ok(!JSON.stringify(tables).includes('submit-request'));
-  assert.ok(!table('routes').rows.some((row) => /records.*attachments/.test(row[0])));
+  // A record slot is written only by an immediate Action create effect, so no
+  // direct record route writes or removes a file.
+  assert.ok(!table('routes').rows.some((row) => /^`(POST|PATCH|PUT|DELETE) \/v1\/records.*attachments/.test(row[0])));
 });

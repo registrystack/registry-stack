@@ -34,9 +34,9 @@ The examples use the record types and Actions of the facility template.
 
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
-| `history erase` | The retained revisions of one record up to a revision number, the correction context and outbox payloads that referenced them, and the held responses that could replay them. | The current record, every later revision, the audit journal, and each spent idempotency key. |
+| `history erase` | The retained revisions of one record up to a revision number, the correction context and outbox payloads that referenced them, the held responses that could replay them, and the record's file references from those revisions. | The current record, every later revision, the audit journal, each spent idempotency key, and file bytes another reference still needs. |
 | `proposal-retention erase` | The payload detail of one Proposal submission version: frozen snapshots, draft input, application reasons, Review payloads, held responses, and attachment references. | The Proposal's value-free state history, record history, and each spent idempotency key. |
-| `proposal-retention cleanup-attachments` | Unreferenced attachment bytes in external storage that are waiting for deletion. | Live attachment references, Proposal detail, and deletion tombstones. |
+| `proposal-retention cleanup-attachments` | Unreferenced attachment bytes in external storage that are waiting for deletion, from Proposals and from records. | Live attachment references, Proposal detail, and deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context an Action kept, once their 24-hour window has closed. | Assertions still inside their window, and the receipts of the Actions that used them. |
 | `idempotency-retention erase-expired` | Held responses past their horizon, with the raw issuer, principal value, and key each was sent under. | Every spent key, as a digest, so a retry is still refused rather than run. |
 
@@ -122,6 +122,22 @@ package again afterwards.
     crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
     crates/registry-breg/src/postgres/interlock.rs, history_coverage_admits_successor;
     crates/registry-breg/tests/postgres_history_erasure.rs. */}
+
+### Files kept with the record
+
+A Record type's file slot belongs to the revision that filled it.
+Erasing through that revision removes the record's file reference in the same transaction.
+The download then answers 404, as for an empty slot.
+The slot keeps a value-free marker, so it is never filled again.
+Bytes go once no other record and no Proposal refers to them.
+Database bytes go at once.
+External bytes wait for [external attachment cleanup](#retry-external-attachment-cleanup).
+An `erase-and-rebaseline` field-encryption migration keeps the record's files.
+
+{/* Evidence: crates/registry-breg/src/attachment_store.rs, erase_record_attachments and
+    retire_unreferenced;
+    crates/registry-breg/src/history_erasure.rs;
+    crates/registry-breg/tests/postgres_record_attachments.rs. */}
 
 ## Restore snapshot coverage after an erasure
 
@@ -244,7 +260,7 @@ Erased the retained Proposal.
 
 Listing again shows `"detailErased":true`. A pinned version, or an Action in `retain` mode, is
 refused and left intact: finish the Proposal under its ordinary authority first. Identical
-attachment bytes stay while another retained reference needs them. A Review still waiting on
+attachment bytes stay while another retained reference needs them, including a record's file. A Review still waiting on
 remote recovery keeps the exact request and acceptance that recovery needs.
 
 {/* Evidence: crates/registry-breg/src/proposal_retention.rs, detail_is_pinned (draft, submitted),

@@ -153,6 +153,96 @@ delivery.
 {/* Evidence: crates/registry-breg/src/contract.rs (RegistryProject, PermissionsSource);
     products/breg/generated/authoring/registry-project.schema.json. */}
 
+## Keep a file with a Record
+
+A Record type can keep a file, such as a signed form, beside its fields.
+Declare each file slot under `attachments` on the Record type:
+
+```yaml
+  application:
+    route: applications
+    primaryDataset: directory
+    mutationMode: mutable
+    attachments:
+      - id: evidence
+        maximumBytes: 1048576
+        contentTypes: [application/pdf]
+        classification: restricted
+        writeOnce: true
+```
+
+A slot declares its byte limit, its accepted media types and its classification.
+A Record type declares at most eight slots, each up to 16 MiB with at most 16 media types.
+A slot ID cannot reuse a field ID.
+`writeOnce: true` is required, because nothing replaces a file once a slot holds one.
+
+Only the create effect of an immediate Action writes a slot.
+The effect names the slot and the request file that fills it:
+
+```yaml
+    plan:
+      type: fixed
+      effects:
+        - id: application
+          target: {recordType: application}
+          operation: create
+          set: {name: {fromInput: name}}
+          attachments:
+            evidence: {fromAttachment: evidence}
+```
+
+`bregctl check` refuses a slot on a patch effect, a Proposal-mode Action, an Action with Evidence and a timer Action.
+A file name cannot reuse an Action input ID.
+
+The request carries every file the Action names in `attachments`, beside `input`.
+Each file has its media type, its SHA-256 digest in lowercase hexadecimal and its base64 content:
+
+```json
+{
+  "input": {"name": "Example applicant"},
+  "attachments": {
+    "evidence": {"contentType": "application/pdf", "sha256": "<digest>", "content": "<base64>"}
+  }
+}
+```
+
+BReg checks every file before it writes anything:
+
+| Problem | Status | Cause |
+| --- | --- | --- |
+| `attachment.content-type` | 415 | The media type is not one the slot declares. |
+| `attachment.too-large` | 413 | The file is larger than the slot's `maximumBytes`. |
+| `attachment.digest-mismatch` | 422 | The digest does not match the bytes. |
+| `action.guard_failed` | 412 | A commit guard failed, so nothing was written. |
+| `attachment.slot-write-once` | 409 | The slot already holds a file. |
+
+The record, its history, the file reference, the idempotency receipt and any hook event commit together, or none of them commits.
+Hook events never carry file bytes.
+
+Reading a file needs its own grant.
+List the slot in `readableAttachments` on a record grant that includes `get`:
+
+```yaml
+records:
+  - recordType: application
+    operations: [get]
+    readableFields: [name]
+    readableAttachments: [evidence]
+```
+
+The caller downloads the file from `GET /v1/records/applications/{record_id}/attachments/evidence`.
+The response has the stored media type and a `Repr-Digest` header with the stored SHA-256 digest.
+A profile without the grant gets 404.
+So do a record outside the profile's row boundaries, an empty slot and a file that verification has not approved.
+When the Record type keeps an [access log](../../operate/breg-access-log/), each download is recorded in it.
+History erasure removes the file reference, as [Erase retained history](../../operate/breg-retention/#erase-retained-history) explains.
+
+{/* Evidence: crates/registry-breg/src/contract.rs (RecordAttachmentSlotSource, EffectAttachmentSource);
+    crates/registry-breg/src/compiler/attachments.rs validate_record_slots();
+    crates/registry-breg/src/api/record_attachments.rs;
+    crates/registry-breg/src/attachment_store.rs, load_record_attachment;
+    crates/registry-breg/tests/postgres_record_attachments.rs. */}
+
 ## Generate business identifiers
 
 The UUID in each Record envelope remains the stable Record identity.
