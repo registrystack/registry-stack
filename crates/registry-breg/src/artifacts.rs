@@ -2268,6 +2268,10 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
     let mut paths = Map::new();
     let mut input_schemas = Map::new();
     let mut has_access_log = false;
+    let has_proposal_actions = actions
+        .actions
+        .iter()
+        .any(|action| action.execution.is_proposal());
     for route in &routes.routes {
         // An import grant is exercised only through the ingestion-run
         // surface, which the static document does not describe.
@@ -2304,6 +2308,7 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
                 request_schema_ref: &request_schema_ref,
                 readable_fields: None,
                 access_profiles: OpenApiAccessProfiles::All,
+                proposal_links: has_proposal_actions,
             }),
         );
         if route.operation == Operation::Get
@@ -2769,6 +2774,11 @@ pub(crate) struct OpenApiOperationSpec<'a> {
     pub request_schema_ref: &'a str,
     pub readable_fields: Option<&'a BTreeSet<String>>,
     pub access_profiles: OpenApiAccessProfiles<'a>,
+    /// Whether a revision response declares the optional `proposal` member.
+    /// The static document declares it for a registry with a Proposal
+    /// Action. The caller-filtered document declares it only when the
+    /// selected profile would receive the link.
+    pub proposal_links: bool,
 }
 
 const OPENAPI_EXAMPLE_TRACE_ID: &str = "11111111111111111111111111111111";
@@ -4109,7 +4119,9 @@ fn revision_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Va
     if let Some(change_context) = revision_change_context_schema(spec) {
         properties.insert("changeContext".to_owned(), change_context);
     }
-    properties.insert("proposal".to_owned(), revision_proposal_schema());
+    if spec.proposal_links {
+        properties.insert("proposal".to_owned(), revision_proposal_schema());
+    }
     let item = json!({
         "type": "object",
         "additionalProperties": false,
@@ -5237,6 +5249,7 @@ mod spatial_tests {
             request_schema_ref: "site",
             readable_fields: None,
             access_profiles: OpenApiAccessProfiles::Selected(profile),
+            proposal_links: false,
         })
     }
 

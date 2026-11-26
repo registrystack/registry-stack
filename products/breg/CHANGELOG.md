@@ -22,8 +22,10 @@
   a record refers to. The Rust client gains `download_record_attachment`.
 - BREAKING: record file references live in the
   `registry_internal.registry_record_attachments` table, and the managed
-  schema fingerprint changes with it. Migration: install the release on a
-  fresh database.
+  schema fingerprint changes with it. The fingerprint also covers a new index
+  on the Proposal result rows by target record and revision, which record
+  history uses to name the Proposal behind a revision. Migration: install the
+  release on a fresh database.
 - Every registry revision changes on upgrade, even for a project that
   declares no slots, because the problem code list in the generated OpenAPI
   document grew. Per-action contract revisions do not change. Operators who
@@ -31,16 +33,16 @@
 - Record history names the Proposal that produced a revision. A revision list
   item and a revision detail gain an optional `proposal` member with
   `actionId`, `proposalId` and `submissionVersion`, derived from the existing
-  Proposal result rows with no migration. The member appears only when the
-  selected access profile could read that Proposal under its `get` grant,
-  ownership and row boundaries. Otherwise the member is absent and the
-  response is unchanged. A revision written by an immediate Action, a direct
-  write, a batch or an import never carries it. Operator Proposal erasure
-  keeps the link. Task-grant callers do not see it.
-- The model explanation schema now declares `derivation` on a derived field:
-  a non-empty string naming the derived relation the registry uses to work the
-  field out when the record is read. `bregctl explain model` already emitted
-  it. Stored fields still omit it.
+  Proposal result rows. The member appears only when the selected access
+  profile could read that Proposal under its `get` grant, ownership and row
+  boundaries. Otherwise the member is absent and the response is unchanged.
+  A revision written by an immediate Action, a direct write, a batch or an
+  import never carries it. Operator Proposal erasure keeps the link.
+  Task-grant callers do not see it, and it disappears once a record the
+  Proposal targeted is tombstoned. A link check that cannot finish answers
+  `503 source.unavailable`. The generated OpenAPI document declares the member
+  only for a registry with a Proposal Action, and the caller-filtered document
+  only for a caller who would receive it.
 - `bregctl generate evidence-source --public-check` exports the Source of an
   Evidence public check. Evidence compares the check code only after the
   Source returns a record, so this export states each fact's scalar type and
@@ -55,6 +57,10 @@
 - `bregctl generate identity-facts` and `external-source-facts` now refuse
   `--optional-fields` and `--require-value`, which only `evidence-source`
   reads. They were accepted and ignored.
+- The model explanation schema now declares `derivation` on a derived field:
+  a non-empty string naming the derived relation the registry uses to work the
+  field out when the record is read. `bregctl explain model` already emitted
+  it. Stored fields still omit it.
 
 ## 0.48.0 - 2026-11-23
 

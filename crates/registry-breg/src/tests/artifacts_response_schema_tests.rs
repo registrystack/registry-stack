@@ -1245,6 +1245,7 @@ fn the_required_filter_refusal_is_documented_only_where_a_profile_requires_a_fil
             request_schema_ref: "person",
             readable_fields: None,
             access_profiles: super::OpenApiAccessProfiles::Selected(profile),
+            proposal_links: false,
         });
         assert_eq!(declares(&operation["responses"]), declared, "{profile}");
     }

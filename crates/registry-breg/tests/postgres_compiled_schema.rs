@@ -369,6 +369,73 @@ async fn immediate_action_catalog_localizes_its_conditional_internal_index() {
     database.cleanup().await;
 }
 
+/// A revision read finds the Proposal that wrote each revision on its page
+/// by target record and revision, so the Proposal results table carries an
+/// index in that order, and the managed catalog names it when it is missing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn proposal_results_catalog_localizes_its_target_revision_index() {
+    let registry = compiled_action_registry();
+    let database = TestDatabase::create(1).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("the Action-bearing Registry installs its exact catalog");
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+
+    let definition: Option<String> = database
+        .admin
+        .query_opt(
+            "SELECT pg_catalog.pg_get_indexdef(c.oid)
+             FROM pg_catalog.pg_class c
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = 'registry_internal'
+               AND c.relname = 'registry_proposal_results_by_target'",
+            &[],
+        )
+        .await
+        .expect("the test administrator reads the index catalog")
+        .map(|row| row.get(0));
+    assert_eq!(
+        definition.as_deref(),
+        Some(
+            "CREATE INDEX registry_proposal_results_by_target \
+             ON registry_internal.registry_proposal_results \
+             USING btree (target_entity_id, target_record_id, target_revision)"
+        ),
+        "the Proposal results table is indexed by target record and revision"
+    );
+    assert_eq!(
+        catalog_drift_objects(&database.admin, &registry, &catalog)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "a pristine catalog with the Proposal results index has no named drift"
+    );
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             DROP INDEX registry_internal.registry_proposal_results_by_target",
+        )
+        .await
+        .expect("the test administrator removes the Proposal results index");
+    let named_drift = catalog_drift_objects(&database.admin, &registry, &catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("the test administrator restores the Proposal results index");
+    assert_eq!(
+        named_drift,
+        ["registry_internal.registry_proposal_results_by_target".to_owned()]
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 /// The source view is not a barrier view, so the planner flattens it and may
 /// evaluate a caller predicate before the lifecycle condition of the view.
 /// Row security does not rest on that order: PostgreSQL applies the policies

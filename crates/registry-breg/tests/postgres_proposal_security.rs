@@ -2544,6 +2544,10 @@ async fn frozen_changes_inspection_covers_patch_and_create_without_applying_or_r
 }
 
 fn caller(subject: &str) -> VerifiedRequestClaims {
+    caller_in(subject, "zone-a")
+}
+
+fn caller_in(subject: &str, jurisdiction: &str) -> VerifiedRequestClaims {
     VerifiedRequestClaims::authenticated(
         "registry_principal",
         subject,
@@ -2551,7 +2555,7 @@ fn caller(subject: &str) -> VerifiedRequestClaims {
         Some("registry-administration".into()),
         BTreeMap::from([(
             "jurisdiction".into(),
-            VerifiedClaimValue::direct_string("zone-a").unwrap(),
+            VerifiedClaimValue::direct_string(jurisdiction).unwrap(),
         )]),
     )
     .unwrap()
@@ -2672,6 +2676,50 @@ fn proposal_member(id: &str) -> Value {
     json!({"actionId":"correct-name","proposalId":id,"submissionVersion":1})
 }
 
+/// The response status and the exact body bytes, for byte comparisons.
+async fn raw_get(http: &client_http::ClientHttp, path: &str) -> (StatusCode, String) {
+    let response = reqwest::Client::new()
+        .get(format!("{}{path}", http.base_url))
+        .send()
+        .await
+        .unwrap();
+    (response.status(), response.text().await.unwrap())
+}
+
+/// The revision paths a link appears on: the history list and the
+/// single-revision read of the revision the Proposal wrote.
+fn linked_paths(target: &str, profile: &str) -> [String; 2] {
+    [
+        format!("/v1/records/targets/{target}/revisions?accessProfile={profile}"),
+        format!("/v1/records/targets/{target}/revisions/2?accessProfile={profile}"),
+    ]
+}
+
+async fn assert_no_link(http: &client_http::ClientHttp, target: &str, profile: &str) {
+    for path in linked_paths(target, profile) {
+        let (code, value, _) = send(http, Method::GET, &path, Value::Null, None, None).await;
+        assert_eq!(code, StatusCode::OK, "{path}: {value}");
+        assert!(
+            !value.to_string().contains("\"proposal\":"),
+            "{path}: {value}"
+        );
+    }
+}
+
+async fn assert_link(http: &client_http::ClientHttp, target: &str, profile: &str, id: &str) {
+    let [list, single] = linked_paths(target, profile);
+    let (code, value, _) = send(http, Method::GET, &list, Value::Null, None, None).await;
+    assert_eq!(code, StatusCode::OK, "{value}");
+    assert_eq!(
+        value["items"][0]["proposal"],
+        proposal_member(id),
+        "{value}"
+    );
+    let (code, value, _) = send(http, Method::GET, &single, Value::Null, None, None).await;
+    assert_eq!(code, StatusCode::OK, "{value}");
+    assert_eq!(value["data"]["proposal"], proposal_member(id), "{value}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_history_names_the_proposal_for_a_caller_who_can_read_it() {
     let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
@@ -2697,10 +2745,41 @@ async fn record_history_names_the_proposal_for_a_caller_who_can_read_it() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_links_proposals_over_a_single_connection_pool() {
+    let fixture =
+        client_http::ClientFixture::start_with_pool(compile(link_source()), clerk(), 1, |m| m)
+            .await;
+    let (_, target, id) = linked_history(&fixture).await;
+    let list = history(&fixture.http, "targets", &target, "clerk").await;
+    assert_eq!(
+        list["items"][0]["proposal"],
+        proposal_member(&id),
+        "the record connection is back in the pool before the link check: {list}"
+    );
+    let (code, detail, _) = send(
+        &fixture.http,
+        Method::GET,
+        &format!("/v1/records/targets/{target}/revisions/2?accessProfile=clerk"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{detail}");
+    assert_eq!(detail["data"]["proposal"], proposal_member(&id), "{detail}");
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_history_omits_the_proposal_from_a_profile_without_a_proposal_grant() {
     let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
-    let (_, target, _) = linked_history(&fixture).await;
+    let (_, target, id) = linked_history(&fixture).await;
     let with_link = history(&fixture.http, "targets", &target, "clerk").await;
+    assert_eq!(
+        with_link["items"][0]["proposal"],
+        proposal_member(&id),
+        "the same fixture names the Proposal to a caller who can read it: {with_link}"
+    );
     let without = history(&fixture.http, "targets", &target, "history-only").await;
     let mut expected = with_link["items"].clone();
     for item in expected.as_array_mut().unwrap() {
@@ -2710,18 +2789,226 @@ async fn record_history_omits_the_proposal_from_a_profile_without_a_proposal_gra
         without["items"], expected,
         "a profile that cannot read the Proposal sees exactly the unlinked history"
     );
-    assert!(!without.to_string().contains("\"proposal\":"), "{without}");
+    assert_no_link(&fixture.http, &target, "history-only").await;
     fixture.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_history_omits_the_proposal_when_ownership_does_not_match() {
     let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
-    let (_, target, _) = linked_history(&fixture).await;
+    let (_, target, id) = linked_history(&fixture).await;
+    assert_link(&fixture.http, &target, "clerk", &id).await;
     let other = fixture.client_for(caller("another-clerk")).await;
     let list = history(&other, "targets", &target, "clerk").await;
     assert_eq!(list["items"].as_array().unwrap().len(), 2, "{list}");
-    assert!(!list.to_string().contains("\"proposal\":"), "{list}");
+    assert_no_link(&other, &target, "clerk").await;
+    // The refused caller gets the exact bytes the owner gets, less the member.
+    let member = format!(
+        r#""proposal":{{"actionId":"correct-name","proposalId":"{id}","submissionVersion":1}}"#
+    );
+    for path in linked_paths(&target, "clerk") {
+        let (code, linked) = raw_get(&fixture.http, &path).await;
+        assert_eq!(code, StatusCode::OK, "{linked}");
+        let (code, unlinked) = raw_get(&other, &path).await;
+        assert_eq!(code, StatusCode::OK, "{unlinked}");
+        assert_eq!(linked.matches(&member).count(), 1, "{path}: {linked}");
+        let expected = if linked.contains(&format!(",{member}")) {
+            linked.replacen(&format!(",{member}"), "", 1)
+        } else {
+            linked.replacen(&format!("{member},"), "", 1)
+        };
+        assert_eq!(
+            unlinked, expected,
+            "{path}: the omission is byte-identical to an unlinked revision"
+        );
+    }
+    fixture.finish().await;
+}
+
+/// The link source with a profile that reads every target's history and holds
+/// a Proposal get grant bounded to the caller's jurisdiction.
+fn row_boundary_link_source() -> Value {
+    let mut project = link_source();
+    project["accessProfiles"]["auditor"] = json!({"principalClaim":"registry_principal",
+        "requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],
+        "permissions":{"records":[
+            {"recordType":"target","operations":["get","revisions"],"revisionAccess":true,
+                "readableFields":["name","jurisdiction","organization"],"rowBoundaries":"unrestricted"}],
+            "proposals":[{"action":"correct-name","operations":["get"],"ownership":"caller",
+                "targets":[{"recordType":"target","rowBoundaries":
+                    [{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}});
+    project
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_omits_the_proposal_outside_the_proposal_row_boundary() {
+    let fixture =
+        client_http::ClientFixture::start(compile(row_boundary_link_source()), clerk()).await;
+    let (_, target, id) = linked_history(&fixture).await;
+    let inside = fixture.client_for(caller_in("author", "zone-a")).await;
+    assert_link(&inside, &target, "auditor", &id).await;
+    let outside = fixture.client_for(caller_in("author", "zone-b")).await;
+    let list = history(&outside, "targets", &target, "auditor").await;
+    assert_eq!(
+        list["items"].as_array().unwrap().len(),
+        2,
+        "the record grant still shows the history: {list}"
+    );
+    assert_no_link(&outside, &target, "auditor").await;
+    fixture.finish().await;
+}
+
+/// The link source with the task-grant profile allowed to read target
+/// history, so only the task-grant exclusion keeps the link from it.
+fn task_grant_link_source() -> Value {
+    let mut project = link_source();
+    let reader = &mut project["accessProfiles"]["task-reviewer"]["permissions"]["records"][0];
+    reader["operations"] = json!(["get", "list", "revisions"]);
+    reader["revisionAccess"] = json!(true);
+    project
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_never_names_the_proposal_to_a_task_grant_caller() {
+    let status = Arc::new(Status {
+        active: AtomicBool::new(true),
+        calls: AtomicUsize::new(0),
+    });
+    let checker = status.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(task_grant_link_source()),
+        clerk(),
+        move |service| service.with_task_status(checker),
+    )
+    .await;
+    let (_, target, id) = linked_history(&fixture).await;
+    assert_link(&fixture.http, &target, "clerk", &id).await;
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&fixture.registry, &idp).await;
+    let agent = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(token(
+                9,
+                json!([
+                    {"collection":format!("proposal:{id}"),"operations":["get"]},
+                    {"collection":"targets","operations":["get","list","revisions"]}
+                ]),
+            )))
+            .await
+            .unwrap(),
+        )
+        .await;
+    let (code, proposal, _) = send(
+        &agent,
+        Method::GET,
+        &format!("/v1/proposals/{id}?accessProfile=task-reviewer"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        code,
+        StatusCode::OK,
+        "the task grant reads the Proposal itself: {proposal}"
+    );
+    let list = history(&agent, "targets", &target, "task-reviewer").await;
+    assert_eq!(list["items"].as_array().unwrap().len(), 2, "{list}");
+    assert_no_link(&agent, &target, "task-reviewer").await;
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_reads_the_link_while_another_session_locks_the_proposal_row() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let (_, target, id) = linked_history(&fixture).await;
+    let (holder, holder_task) = fixture.database.connect_admin().await;
+    holder.batch_execute("BEGIN").await.unwrap();
+    holder
+        .query_one(
+            "SELECT proposal_id FROM registry_internal.registry_proposal_state
+              WHERE proposal_id=$1 FOR UPDATE",
+            &[&uuid::Uuid::parse_str(&id).unwrap()],
+        )
+        .await
+        .unwrap();
+    assert_link(&fixture.http, &target, "clerk", &id).await;
+    holder.batch_execute("ROLLBACK").await.unwrap();
+    drop(holder);
+    holder_task.await.unwrap();
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_is_unavailable_when_the_proposal_link_check_fails() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let (_, target, id) = linked_history(&fixture).await;
+    let (holder, holder_task) = fixture.database.connect_admin().await;
+    holder
+        .batch_execute(
+            "BEGIN; LOCK TABLE registry_internal.registry_proposal_state IN ACCESS EXCLUSIVE MODE",
+        )
+        .await
+        .unwrap();
+    for path in linked_paths(&target, "clerk") {
+        let (code, value, _) =
+            send(&fixture.http, Method::GET, &path, Value::Null, None, None).await;
+        assert_eq!(
+            code,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{path}: a failed link check fails the read instead of hiding the link: {value}"
+        );
+        assert!(!value.to_string().contains("After"), "{path}: {value}");
+    }
+    // A caller with no Proposal link access never reaches the locked table.
+    assert_no_link(&fixture.http, &target, "history-only").await;
+    holder.batch_execute("ROLLBACK").await.unwrap();
+    drop(holder);
+    holder_task.await.unwrap();
+    assert_link(&fixture.http, &target, "clerk", &id).await;
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_discovery_declares_the_proposal_link_only_to_a_caller_who_can_receive_it() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let revision_operations = |profile: &'static str| {
+        let http = &fixture.http;
+        async move {
+            let (code, document, _) = send(
+                http,
+                Method::GET,
+                &format!("/openapi.json?accessProfile={profile}"),
+                Value::Null,
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(code, StatusCode::OK, "{profile}: {document}");
+            let operations = document["paths"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(path, _)| path.starts_with("/v1/records/targets/"))
+                .filter(|(path, _)| path.contains("/revisions"))
+                .map(|(path, item)| (path.clone(), item["get"].to_string()))
+                .collect::<Vec<_>>();
+            assert_eq!(operations.len(), 2, "{profile}: {document}");
+            operations
+        }
+    };
+    for (path, operation) in revision_operations("clerk").await {
+        assert!(
+            operation.contains("\"proposal\":"),
+            "{path}: a caller who receives the link sees it declared: {operation}"
+        );
+    }
+    for (path, operation) in revision_operations("history-only").await {
+        assert!(
+            !operation.contains("\"proposal\":"),
+            "{path}: a caller without Proposal link access never sees it declared: {operation}"
+        );
+    }
     fixture.finish().await;
 }
 

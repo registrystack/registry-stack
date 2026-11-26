@@ -201,6 +201,9 @@ pub(crate) async fn install(
                  REFERENCES registry_internal.registry_revisions
                      (entity_id, record_id, record_revision)
          );
+         CREATE INDEX IF NOT EXISTS registry_proposal_results_by_target
+             ON registry_internal.registry_proposal_results
+                 (target_entity_id, target_record_id, target_revision);
          CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_idempotency_links (
              key_reference text NOT NULL,
              action_revision text NOT NULL CHECK (action_revision ~ '^sha256:[0-9a-f]{64}$'),
