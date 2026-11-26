@@ -347,7 +347,8 @@ Who can download the promoted file is then decided by the record grants' `readab
 Promotions are part of the Action's definition revision, so changing one changes the Action.
 So are the request-file bindings of an immediate Action.
 Apply rebuilds the Proposal's file manifest and refuses a file that verification has not approved.
-Inside the apply transaction it checks the frozen file against the record slot again.
+Inside the apply transaction it checks the frozen file again, under the lock that deletion takes.
+A file whose verdict turns to rejected after the manifest check is still refused.
 It then adds the reference beside the record revision the effect wrote.
 An unapproved file answers `412 precondition.failed`.
 A filled slot answers `409 attachment.slot-write-once`.
@@ -373,7 +374,8 @@ Erasing the Proposal keeps the promoted bytes and removes files that nothing pro
     an_immediate_action_revision_covers_its_request_file_bindings;
     crates/registry-breg/src/mutation/proposal.rs, promote_proposal_attachments;
     crates/registry-breg/tests/postgres_proposal_s3.rs,
-    promotion_references_the_verified_s3_object_and_refuses_unverified_bytes;
+    promotion_references_the_verified_s3_object_and_refuses_unverified_bytes,
+    promotion_rechecks_a_verdict_rejected_after_the_manifest_check;
     products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-218 to BREG-SEC-223. */}
 
 ## Operator obligations
