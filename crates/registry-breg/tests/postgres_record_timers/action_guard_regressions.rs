@@ -80,6 +80,49 @@ async fn create_only_timer_executes_when_the_anchor_guard_allows_it() {
     harness.database.cleanup().await;
 }
 
+/// A timer has no request to carry files, so `bregctl check` refuses a timer
+/// Action that fills a record slot. A compiled registry that binds a file to
+/// one anyway must not commit the record without it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_create_whose_declared_file_never_arrived_commits_nothing() {
+    let mut source = create_only_guard_source("status", "scheduled");
+    source["recordTypes"]["activation-log"]["attachments"] = json!([{"id":"evidence",
+        "maximumBytes":64,"contentTypes":["text/plain"],"classification":"internal",
+        "writeOnce":true}]);
+    let mut wire = serde_json::to_value(compile_registry(source)).unwrap();
+    let action = wire["actionInventory"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|action| action["id"] == "activate-service")
+        .expect("the timer Action is compiled");
+    action["attachments"] = json!({"evidence":{"effectId":"activation-log",
+        "recordType":"activation-log","slotId":"evidence","maximumBytes":64,
+        "contentTypes":["text/plain"]}});
+    let registry: registry_breg::CompiledRegistry = serde_json::from_value(wire).unwrap();
+    let harness = timer_outcome_harness(registry, "record-timer-undelivered-file", 0x6e).await;
+    let created = create_outcome_service(
+        &harness,
+        "undelivered-file",
+        "scheduled",
+        Utc::now() - chrono::Duration::seconds(1),
+        None,
+        None,
+    )
+    .await;
+    let record_id = response_id(&created);
+    timer_occurrence(&harness.database, &record_id).await;
+    let before = create_only_effect_counts(&harness).await;
+
+    let ran = harness.worker(Duration::from_secs(2)).run_once().await;
+    assert_eq!(
+        create_only_effect_counts(&harness).await,
+        before,
+        "a create whose declared file never arrived commits nothing: {ran:?}"
+    );
+    harness.database.cleanup().await;
+}
+
 fn create_only_guard_source(field: &str, expected: &str) -> Value {
     let mut source = timer_project_source();
     source["datasets"]
