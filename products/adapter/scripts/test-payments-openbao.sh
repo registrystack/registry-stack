@@ -141,9 +141,10 @@ api_proxy {
   use_auto_auth_token = "force"
 }
 
+# Adapter's Transit client uses HTTP over this private Unix socket.
 listener "unix" {
   address                = "/fixtures/transit.sock"
-  socket_mode            = "0600"
+  tls_disable            = true
   require_request_header = true
 }
 
@@ -185,6 +186,13 @@ proxy_tcp_read() {
 		"http://127.0.0.1:8300/v1/transit/keys/$1"
 }
 
+proxy_unix_read() {
+	curl --disable --fail --silent --show-error --noproxy '*' --max-time 5 \
+		--unix-socket "$scratch/transit.sock" \
+		--header 'X-Vault-Request: true' \
+		"http://localhost/v1/transit/keys/$1"
+}
+
 ready=false
 for _ in {1..50}; do
 	if request_metadata="$(proxy_tcp_read mifos-request 2>/dev/null)"; then
@@ -201,26 +209,25 @@ if [[ ! -S "$scratch/transit.sock" ]]; then
 	printf 'OpenBao Proxy did not create its Unix socket\n' >&2
 	exit 1
 fi
+chmod 0600 "$scratch/transit.sock"
 
 host_unix_socket=true
-if unix_request_metadata="$(curl --fail --silent \
-	--unix-socket "$scratch/transit.sock" \
-	--header 'X-Vault-Request: true' \
-	http://localhost/v1/transit/keys/mifos-request 2>/dev/null)"; then
+if unix_request_metadata="$(proxy_unix_read mifos-request 2>"$scratch/unix-read-error")"; then
 	request_metadata="$unix_request_metadata"
-	if ! response_metadata="$(curl --fail --silent \
-		--unix-socket "$scratch/transit.sock" \
-		--header 'X-Vault-Request: true' \
-		http://localhost/v1/transit/keys/mifos-response 2>/dev/null)"; then
+	if ! response_metadata="$(proxy_unix_read mifos-response)"; then
 		printf 'OpenBao Proxy Unix listener did not serve response-key metadata\n' >&2
 		exit 1
 	fi
-else
+elif [[ "${OPENBAO_PREFLIGHT_ONLY:-false}" == true ]]; then
 	host_unix_socket=false
 	if ! response_metadata="$(proxy_tcp_read mifos-response 2>/dev/null)"; then
 		printf 'OpenBao Proxy did not serve response-key metadata\n' >&2
 		exit 1
 	fi
+else
+	printf 'OpenBao Proxy Unix listener did not serve request-key metadata\n%s\n' \
+		"$(<"$scratch/unix-read-error")" >&2
+	exit 1
 fi
 jq -e '.data.imported_key == false
   and .data.derived == false
@@ -243,13 +250,9 @@ if [[ "${OPENBAO_PREFLIGHT_ONLY:-false}" == true ]]; then
 	if [[ "$host_unix_socket" == true ]]; then
 		printf 'real OpenBao Transit and Unix Proxy preflight passed\n'
 	else
-		printf 'real OpenBao Transit and Proxy preflight passed; host Unix sockets require Linux\n'
+		printf 'real OpenBao Transit and TCP Proxy preflight passed (host Unix listener unverified)\n'
 	fi
 	exit 0
-fi
-if [[ "$host_unix_socket" != true ]]; then
-	printf 'the Rust integration test requires Linux for a bind-mounted container Unix socket\n' >&2
-	exit 1
 fi
 
 REGISTRY_PAYMENTS_OPENBAO_SOCKET="$scratch/transit.sock" \
