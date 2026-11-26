@@ -242,6 +242,9 @@ traceability:
   # Failed check answers 503: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_is_unavailable_when_the_proposal_link_check_fails
   # Caller-filtered OpenAPI: crates/registry-breg/tests/postgres_proposal_security.rs::record_discovery_declares_the_proposal_link_only_to_a_caller_who_can_receive_it
   - {"id": "BREG-SEC-217", "state": "enforced", "negativeId": "BREG-NEG-217", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_security.rs", "name": "record_history_omits_the_proposal_when_ownership_does_not_match"}}
+  # Early refusal audit identity and value minimization: crates/registry-breg/tests/postgres_record_attachments.rs::early_download_refusals_audit_the_attachment_operation_without_caller_values
+  # Lifecycle visibility: crates/registry-breg/tests/postgres_record_attachments.rs::a_tombstoned_record_and_its_file_have_the_same_concealed_read
+  # Record disclosure visibility: crates/registry-breg/tests/postgres_record_attachments.rs::a_record_disclosure_condition_conceals_its_file_under_the_same_get_relation
   - {"id": "BREG-SEC-218", "state": "enforced", "negativeId": "BREG-NEG-218", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "profiles_without_the_grant_or_outside_the_row_boundary_cannot_read"}}
   # Completed verdict admission: crates/registry-breg/tests/postgres_record_attachments.rs::immediate_action_refuses_a_completed_rejected_verdict_and_keeps_approved_and_unseen_files
   - {"id": "BREG-SEC-219", "state": "enforced", "negativeId": "BREG-NEG-219", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "a_write_once_slot_refuses_a_second_file_even_after_erasure"}}

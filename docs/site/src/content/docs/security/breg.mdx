@@ -348,6 +348,8 @@ A download is recorded in BReg's read audit and, when the Record type has `acces
 subject access log.
 Both name the operation after the record's `get` operation and the slot, such as
 `records.application.get:attachment:evidence`.
+A refusal before byte access names the declared slot too.
+An undeclared slot uses only the `:attachment` suffix, so caller-supplied names do not enter the audit.
 A download that fails after it starts is audited as refused and is not logged for the subject.
 
 History erasure keeps current files, including files a Proposal promoted.
@@ -387,6 +389,9 @@ Erasing the Proposal keeps the promoted bytes and removes files that nothing pro
     erase_record_attachments and retire_unreferenced;
     crates/registry-breg/tests/postgres_record_attachments.rs,
     profiles_without_the_grant_or_outside_the_row_boundary_cannot_read,
+    early_download_refusals_audit_the_attachment_operation_without_caller_values,
+    a_tombstoned_record_and_its_file_have_the_same_concealed_read,
+    a_record_disclosure_condition_conceals_its_file_under_the_same_get_relation,
     a_file_waiting_for_or_refused_by_verification_is_concealed,
     a_write_once_slot_refuses_a_second_file_even_after_erasure,
     a_failed_commit_leaves_neither_the_record_nor_the_file,

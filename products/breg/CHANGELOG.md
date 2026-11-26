@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refused Record file downloads use the same attachment audit operation as
+  served downloads, including refusals before database access. The slot suffix
+  names only a declared slot. Caller-supplied undeclared names stay out of audit.
 - A Record type can keep files. It declares write-once slots under
   `attachments`, each with `maximumBytes`, `contentTypes`, `classification`
   and `writeOnce: true`. The create effect of an immediate Action fills a slot

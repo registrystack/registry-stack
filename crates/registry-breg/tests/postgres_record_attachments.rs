@@ -606,7 +606,7 @@ async fn blob_hashes(fixture: &client_http::ClientFixture) -> BTreeSet<String> {
         .database
         .admin
         .query(
-            "SELECT sha256 FROM registry_internal.registry_attachment_blobs WHERE state='live'",
+            "SELECT sha256 FROM registry_internal.registry_attachment_blobs",
             &[],
         )
         .await
@@ -1012,6 +1012,222 @@ async fn profiles_without_the_grant_or_outside_the_row_boundary_cannot_read() {
         assert!(!refusal.body.windows(EVIDENCE.len()).any(|w| w == EVIDENCE));
         assert!(refusal.headers.get("repr-digest").is_none());
     }
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn early_download_refusals_audit_the_attachment_operation_without_caller_values() {
+    let mut source = record_source();
+    source["accessProfiles"]["auditor"]["requireAccessReason"] = json!(true);
+    let fixture =
+        client_http::ClientFixture::start(compile(source).unwrap(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let record = register(&fixture, programme, "early-download-refusals", EVIDENCE).await;
+    let actor = || claims("attachment-audit-actor", "zone-a", "application:manage");
+    let mut observed = Vec::new();
+    let cases = [
+        (
+            claims("viewer", "zone-a", "application:view"),
+            record.to_string(),
+            "evidence",
+            "?accessProfile=viewer",
+            StatusCode::NOT_FOUND,
+            DOWNLOAD_OPERATION,
+        ),
+        (
+            actor(),
+            "invalid-record-canary".to_owned(),
+            "evidence",
+            "",
+            StatusCode::NOT_FOUND,
+            DOWNLOAD_OPERATION,
+        ),
+        (
+            claims("ungranted", "zone-a", "ungranted:scope"),
+            record.to_string(),
+            "evidence",
+            "",
+            StatusCode::NOT_FOUND,
+            DOWNLOAD_OPERATION,
+        ),
+        (
+            actor(),
+            record.to_string(),
+            "evidence",
+            "?unexpected=query-canary",
+            StatusCode::BAD_REQUEST,
+            DOWNLOAD_OPERATION,
+        ),
+        (
+            claims("auditor", "zone-a", "application:audit"),
+            record.to_string(),
+            "evidence",
+            "?accessProfile=auditor",
+            StatusCode::BAD_REQUEST,
+            DOWNLOAD_OPERATION,
+        ),
+        (
+            actor(),
+            record.to_string(),
+            "slot-name-canary",
+            "",
+            StatusCode::NOT_FOUND,
+            "records.application.get:attachment",
+        ),
+    ];
+    for (claims, record, slot, query, expected_status, operation) in cases {
+        let before = fixture.audit_capture.entries().len();
+        let response = send(
+            &fixture,
+            claims,
+            Request::builder()
+                .uri(format!(
+                    "/v1/records/applications/{record}/attachments/{slot}{query}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status, expected_status);
+        assert!(response.headers.get("repr-digest").is_none());
+        observed.push((audited_since(&fixture, before), operation));
+    }
+    let audit = serde_json::to_string(&fixture.audit_capture.entries()).unwrap();
+    fixture.finish().await;
+    for canary in [
+        "attachment-audit-actor",
+        "invalid-record-canary",
+        "query-canary",
+        "slot-name-canary",
+        &record.to_string(),
+    ] {
+        assert!(!audit.contains(canary));
+    }
+    for (entries, operation) in observed {
+        assert_eq!(
+            entries,
+            [("refusal".to_owned(), String::new(), operation.to_owned())]
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tombstoned_record_and_its_file_have_the_same_concealed_read() {
+    let mut source = record_source();
+    source["recordTypes"]["application"]["tombstone"] = json!(true);
+    let fixture =
+        client_http::ClientFixture::start(compile(source).unwrap(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let record = register(&fixture, programme, "lifecycle-file", EVIDENCE).await;
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
+    let entity = &fixture.registry.entities()["application"];
+    fixture.database.admin.execute(&format!(
+        "UPDATE registry_data.\"{}\" SET record_lifecycle='tombstoned', record_revision=record_revision+1 WHERE record_id=$1",
+        entity.physical_table), &[&record]).await.unwrap();
+    let (status, body) = get_json(
+        &fixture,
+        clerk("zone-a"),
+        &format!("/v1/records/applications/{record}"),
+    )
+    .await;
+    let file = download(
+        &fixture,
+        clerk("zone-a"),
+        &record.to_string(),
+        "evidence",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(file.status, status);
+    assert_eq!(file.json()["code"], body["code"]);
+    assert!(file.headers.get("repr-digest").is_none());
+    assert!(!file
+        .body
+        .windows(EVIDENCE.len())
+        .any(|bytes| bytes == EVIDENCE));
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_record_disclosure_condition_conceals_its_file_under_the_same_get_relation() {
+    let mut source = record_source();
+    source["recordTypes"]["application"]
+        .as_object_mut()
+        .unwrap()
+        .remove("hooks");
+    source["recordTypes"]["application"]["disclosureConditions"] = json!({
+        "withhold-application":{"when":[{"type":"field-in","field":"name","values":["Withheld applicant"]}],
+            "withhold":"record","exemptProfiles":["clerk"]}});
+    let fixture =
+        client_http::ClientFixture::start(compile(source).unwrap(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let record = register(&fixture, programme, "disclosure-file", EVIDENCE).await;
+    let reader = || claims("auditor", "zone-a", "application:audit");
+    let uri = format!("/v1/records/applications/{record}?accessProfile=auditor");
+    assert_eq!(get_json(&fixture, reader(), &uri).await.0, StatusCode::OK);
+    assert_file(
+        &download(
+            &fixture,
+            reader(),
+            &record.to_string(),
+            "evidence",
+            Some("auditor"),
+        )
+        .await,
+        EVIDENCE,
+    );
+    let entity = &fixture.registry.entities()["application"];
+    fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.\"{}\" SET \"{}\"='Withheld applicant' WHERE record_id=$1",
+                entity.physical_table, entity.fields["name"].physical_name
+            ),
+            &[&record],
+        )
+        .await
+        .unwrap();
+    let (status, body) = get_json(&fixture, reader(), &uri).await;
+    let file = download(
+        &fixture,
+        reader(),
+        &record.to_string(),
+        "evidence",
+        Some("auditor"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(file.status, status);
+    assert_eq!(file.json()["code"], body["code"]);
+    assert!(file.headers.get("repr-digest").is_none());
+    assert!(!file
+        .body
+        .windows(EVIDENCE.len())
+        .any(|bytes| bytes == EVIDENCE));
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
     fixture.finish().await;
 }
 
