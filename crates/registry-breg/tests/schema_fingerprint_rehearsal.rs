@@ -33,10 +33,11 @@ const SOURCE_REVISION: &str = "rehearsal-source-revision";
 // the always-present Record timer ledger, retention function, bounded state/block
 // observation index, partial activation-preview index, the hand-off
 // refusal code column, and the subject access log access-reason and
-// access-kind columns. The migration ledger bounds statement checksums at
-// 4,096 entries.
+// access-kind columns, the index of Proposal results by target revision, and
+// the record attachment live-reference index. The migration ledger bounds
+// statement checksums at 4,096 entries.
 const PORTABLE_SCHEMA_FINGERPRINT: &str =
-    "sha256:f982a1bdde2a0532f7b9c2e43f05d1ac7261cda6e6c7907cb16bb946b8ca2c79";
+    "sha256:26a0ca6340e1d5dfba9eed98657d37790f6612a6e52ee1cff2a78d64a90437a9";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []

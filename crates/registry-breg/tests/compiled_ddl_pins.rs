@@ -78,6 +78,10 @@
 //! admitted profile requires a filter. A registry with no disclosure
 //! condition, required filter or access reason keeps its exact SQL and Action
 //! fingerprints.
+//! The record attachment Problems `attachment.too-large`,
+//! `attachment.content-type`, `attachment.digest-mismatch` and
+//! `attachment.slot-write-once` in the generated Problem schema likewise move
+//! artifact revisions only. SQL and Action fingerprints stay fixed.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -100,7 +104,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "6d6431e3e4fb3eb254ef8f3b2e895aed2c09ed4ee7ca506627e1d063359f4578",
-        revision: "sha256:f620ea3ea326561996e718c17523fc1fb86f2694788f9ace923f28a494efa356",
+        revision: "sha256:08f60d4a781ad80f957579927f703668a9a60fd75ff66533ba11e0137e157ea1",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -111,7 +115,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "43acdae956eb2f932fb22a2cccc5cee5ed19cf806f2f28bbc677eff219d00b99",
-        revision: "sha256:45cab0f3b9e7a03c682e58a529a3931a1f4a98c5809c6d2b1c06e4e8ad0c442f",
+        revision: "sha256:49ca49a8d3c42e51d6e87e6c2a4cf3b48912ba643182e2333f948bdbb6330d52",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -122,7 +126,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "6439a877ee6508b999a77242542695d8ccddc6d80518699d90eddc32b305780b",
-        revision: "sha256:630c864d8a830f0365ea16b97c4b7c86b2c93adb4c4016717eae1d27a3b3a3d9",
+        revision: "sha256:b2b2a04f66dc65e9144b4b77099953572e3e16d8e94446dbfcb47954c31f7667",
     },
     Fixture {
         name: "household-contact-actions",
@@ -133,7 +137,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "f82f2f8376df97fb184c04d31c8e42c291f7a03dbd909828e1bf61612106de35",
-        revision: "sha256:ab7cb164756c143fc50889dcfecdd89b2786826771f990d954dbc5c8a279b400",
+        revision: "sha256:80a558305edc78b5db62bac2eb75c078994aad4a518b1f6f8eed1d235a226717",
     },
 ];
 
