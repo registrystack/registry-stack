@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The model explanation schema now declares `derivation` on a derived field:
+  a non-empty string naming the derived relation the registry uses to work the
+  field out when the record is read. `bregctl explain model` already emitted
+  it. Stored fields still omit it.
 - `bregctl generate evidence-source --public-check` exports the Source of an
   Evidence public check. Evidence compares the check code only after the
   Source returns a record, so this export states each fact's scalar type and

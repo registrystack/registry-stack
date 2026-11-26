@@ -127,6 +127,8 @@ The local development runner (`rstack dev`) reads Model `requiresPostgis` and Ac
     distinguish multiline `text` from a bounded `string` and discover a reference's target. Its
     internal shape follows the engine field type contract; the JSON value `schema` remains the
     validation contract for field values.
+  - A derived field also carries `derivation`, a non-empty string naming the derived relation the
+    registry uses to work the field out when the record is read. Stored fields omit it.
 
 ### Access
 

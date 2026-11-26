@@ -396,6 +396,33 @@ fn model_source_bindings_cover_proposal_hooks_and_project_inventories() {
 }
 
 #[test]
+fn model_declares_derivation_on_derived_fields_only() {
+    let facility = explain("model", &fixture_path("products/breg/acceptance/facility"));
+    let permit_index = item_index(&facility["recordTypes"], "permit");
+    let permit = &facility["recordTypes"][permit_index];
+    let derived_index = item_index(&permit["fields"], "expiring-soon");
+    let derivation = permit["fields"][derived_index]["derivation"]
+        .as_str()
+        .expect("a derived field names its derivation");
+    assert!(!derivation.is_empty());
+    let stored = permit["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field.get("derivation").is_none())
+        .expect("a stored field carries no derivation");
+    assert!(stored["id"].is_string());
+
+    let schema = load_schema("ModelExplanation");
+    assert!(schema.is_valid(&facility));
+    for invalid in [json!(""), json!(7), Value::Null] {
+        let mut changed = facility.clone();
+        changed["recordTypes"][permit_index]["fields"][derived_index]["derivation"] = invalid;
+        assert!(!schema.is_valid(&changed));
+    }
+}
+
+#[test]
 fn model_field_types_describe_unprojected_text_without_a_query_join() {
     let project = tempfile::tempdir().unwrap();
     let source = std::fs::read_to_string(
