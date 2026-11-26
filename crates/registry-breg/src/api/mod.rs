@@ -1326,6 +1326,44 @@ async fn lookup_dispatch(
     }
 }
 
+/// The Proposal read authority this caller holds under the selected access
+/// profile, for each Proposal Action. A task-grant caller is left out: a
+/// revision never names a Proposal to a caller whose Proposal authority is a
+/// bounded task grant.
+fn proposal_link_access(
+    service: &HttpService,
+    claims: &VerifiedRequestClaims,
+    selected: &str,
+) -> Option<service::ProposalLinkAccess> {
+    let mutations = service.mutations.as_ref()?;
+    let authorities = service
+        .registry
+        .actions()
+        .actions
+        .iter()
+        .filter_map(|action| {
+            let authority = proposals::authorize(
+                &service.registry,
+                action,
+                claims,
+                Some(selected),
+                crate::postgres::ProposalAuthorityOperation::Lifecycle(
+                    crate::model::ProposalOperation::Get,
+                ),
+                None,
+            )?;
+            authority
+                .task_grant
+                .is_none()
+                .then(|| (action.id.clone(), authority))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    (!authorities.is_empty()).then(|| service::ProposalLinkAccess {
+        mutations: Arc::clone(mutations),
+        authorities,
+    })
+}
+
 async fn revision_dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<CompiledRoute>,
@@ -1447,6 +1485,8 @@ async fn revision_dispatch(
     {
         return unavailable();
     }
+    let proposal_links =
+        proposal_link_access(&service, &claims, surface.context.selected_profile());
     let request = RevisionReadRequest {
         entity_id: route.entity_id.clone(),
         operation_id: route.id.clone(),
@@ -1458,6 +1498,7 @@ async fn revision_dispatch(
         representation: negotiated_json_representation(&headers),
         maximum_records,
         correlation: correlation.clone(),
+        proposal_links,
     };
     match route.revision_kind {
         Some(CompiledRevisionKind::List) => match revisions.list(request).await {

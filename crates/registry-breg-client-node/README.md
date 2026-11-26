@@ -153,7 +153,10 @@ temporal parameters and continuations distinct. Snapshot continuations bind
 the returned snapshot and optional `validAt` identity. Relationship lists
 bind the root record and relationship path. `getRecordRevision` returns one
 validated retained record as inert bytes, while `recordRevisions` returns the
-bounded revision collection. Every specialized object read has an exact `...Json`
+bounded revision collection. A revision written by an applied Proposal may
+carry an optional `proposal` member (`actionId`, `proposalId`,
+`submissionVersion`), present only when the profile can read that Proposal.
+The bytes pass through unchanged. Every specialized object read has an exact `...Json`
 variant when record or GeoJSON values may cross JavaScript's integer boundary.
 
 Standalone Proposals use `getProposal` or one explicit `listProposals` page.

@@ -3932,6 +3932,7 @@ fn revision_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Va
     if let Some(change_context) = revision_change_context_schema(spec) {
         properties.insert("changeContext".to_owned(), change_context);
     }
+    properties.insert("proposal".to_owned(), revision_proposal_schema());
     let item = json!({
         "type": "object",
         "additionalProperties": false,
@@ -3958,6 +3959,21 @@ fn revision_response_schema(spec: OpenApiOperationSpec<'_>, json_ld: bool) -> Va
             json!(crate::model::MAX_REVISION_HISTORY_RECORDS);
         collection
     }
+}
+
+/// The Proposal submission that wrote a revision. Present only for a revision
+/// a Proposal wrote, and only when the caller could read that Proposal.
+fn revision_proposal_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actionId", "proposalId", "submissionVersion"],
+        "properties": {
+            "actionId": {"type": "string"},
+            "proposalId": {"type": "string", "format": "uuid"},
+            "submissionVersion": {"type": "integer", "format": "int64", "minimum": 1}
+        }
+    })
 }
 
 fn revision_change_context_schema(spec: OpenApiOperationSpec<'_>) -> Option<Value> {

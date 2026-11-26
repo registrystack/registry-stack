@@ -613,6 +613,18 @@ pub struct RevisionReadRequest {
     pub representation: CursorRepresentation,
     pub maximum_records: usize,
     pub correlation: RequestCorrelation,
+    /// What decides whether a revision may name the Proposal that produced it.
+    /// Absent when the deployment serves no Proposal Actions.
+    pub(crate) proposal_links: Option<ProposalLinkAccess>,
+}
+
+/// The Proposal read authority of one revision read, per Action, and the
+/// service that applies it. A revision names a Proposal only when the same
+/// check a Proposal read applies admits the caller.
+#[derive(Clone)]
+pub(crate) struct ProposalLinkAccess {
+    pub(crate) mutations: Arc<PostgresRecordMutationService>,
+    pub(crate) authorities: BTreeMap<String, crate::postgres::ProposalAuthority>,
 }
 
 /// Authorized stored-record history query. The plan's snapshot scope carries

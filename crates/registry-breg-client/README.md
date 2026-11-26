@@ -145,6 +145,10 @@ context. Batch responses have a dedicated snapshot/results type. Tombstone
 returns a native revision envelope and removes the record from live lists while
 permitted retained history remains readable.
 
+Revision reads return the server bytes unchanged. A revision written by an
+applied Proposal may carry an optional `proposal` member (`actionId`,
+`proposalId`, `submissionVersion`) when the profile can read that Proposal.
+
 An immediate Action with reference inputs may advertise an optional
 `routes.availability` contract. Build `BRegActionAvailabilityRequest` from the
 selected opaque Action binding, one reference input's API name, and any supplied

@@ -2542,3 +2542,244 @@ async fn frozen_changes_inspection_covers_patch_and_create_without_applying_or_r
     assert!(!concealed.to_string().contains("Computed frozen"));
     fixture.finish().await;
 }
+
+fn caller(subject: &str) -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        subject,
+        BTreeSet::from(["proposal:manage".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::from([(
+            "jurisdiction".into(),
+            VerifiedClaimValue::direct_string("zone-a").unwrap(),
+        )]),
+    )
+    .unwrap()
+}
+
+/// The Proposal source plus record history, an immediate Action and a profile
+/// that reads history but holds no Proposal grant.
+fn link_source() -> Value {
+    let boundary = json!([{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]);
+    let mut project = source(false);
+    let clerk = &mut project["accessProfiles"]["clerk"]["permissions"];
+    clerk["records"][0]["operations"] = json!(["create", "get", "revisions"]);
+    clerk["records"][0]["revisionAccess"] = json!(true);
+    clerk["records"][2]["operations"] = json!(["create", "get", "revisions"]);
+    clerk["records"][2]["revisionAccess"] = json!(true);
+    clerk["actions"].as_array_mut().unwrap().push(
+        json!({"action":"rename-organization","operations":["invoke"],
+            "targets":[{"recordType":"organization","rowBoundaries":"unrestricted"}]}),
+    );
+    clerk["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("apply"));
+    project["actions"]["rename-organization"] = json!({"execution":{"mode":"immediate"},
+        "inputs":[{"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"},
+            {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
+        "plan":{"type":"fixed","effects":[{"id":"rename","target":{"fromInput":"organization"},
+            "operation":"patch","set":{"name":{"fromInput":"value"}}}]}});
+    project["accessProfiles"]["history-only"] = json!({"principalClaim":"registry_principal",
+        "requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],
+        "permissions":{"records":[
+            {"recordType":"target","operations":["revisions"],"revisionAccess":true,
+                "readableFields":["name","jurisdiction","organization"],"rowBoundaries":boundary}]}});
+    project
+}
+
+/// One organization renamed by an immediate Action, and one target whose
+/// name changed through an applied Proposal. Returns (organization, target,
+/// Proposal id).
+async fn linked_history(fixture: &client_http::ClientFixture) -> (String, String, String) {
+    let (organization, target) = seed(fixture).await;
+    let (code, condition, _) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/rename-organization/target-conditions?accessProfile=clerk",
+        json!({"input":{"organization":organization}}),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{condition}");
+    let (code, renamed, _) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/rename-organization?accessProfile=clerk",
+        json!({"input":{"organization":organization,"value":"Renamed"},
+            "preconditions":condition["preconditions"]}),
+        Some("rename-organization"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{renamed}");
+    let (code, draft, etag) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/correct-name/proposals?accessProfile=clerk",
+        json!({"input":{"target":target,"value":"After"}}),
+        Some("link-start"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{draft}");
+    let id = draft["id"].as_str().unwrap().to_owned();
+    let (code, submitted, etag) = send(
+        &fixture.http,
+        Method::POST,
+        &format!("/v1/proposals/{id}/submit?accessProfile=clerk"),
+        json!({}),
+        Some("link-submit"),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{submitted}");
+    let (code, applied, _) = send(
+        &fixture.http,
+        Method::POST,
+        &format!("/v1/proposals/{id}/apply?accessProfile=clerk"),
+        json!({"submissionVersion":submitted["submissionVersion"],
+            "effectDigest":submitted["effectDigest"]}),
+        Some("link-apply"),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{applied}");
+    (organization, target, id)
+}
+
+async fn history(
+    http: &client_http::ClientHttp,
+    route: &str,
+    record: &str,
+    profile: &str,
+) -> Value {
+    let (code, value, _) = send(
+        http,
+        Method::GET,
+        &format!("/v1/records/{route}/{record}/revisions?accessProfile={profile}"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{value}");
+    value
+}
+
+fn proposal_member(id: &str) -> Value {
+    json!({"actionId":"correct-name","proposalId":id,"submissionVersion":1})
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_names_the_proposal_for_a_caller_who_can_read_it() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let (_, target, id) = linked_history(&fixture).await;
+    let list = history(&fixture.http, "targets", &target, "clerk").await;
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{list}");
+    assert_eq!(items[0]["revisionIdentifier"], "2");
+    assert_eq!(items[0]["proposal"], proposal_member(&id), "{list}");
+    assert!(items[1].get("proposal").is_none(), "{list}");
+    let (code, detail, _) = send(
+        &fixture.http,
+        Method::GET,
+        &format!("/v1/records/targets/{target}/revisions/2?accessProfile=clerk"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{detail}");
+    assert_eq!(detail["data"]["proposal"], proposal_member(&id), "{detail}");
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_omits_the_proposal_from_a_profile_without_a_proposal_grant() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let (_, target, _) = linked_history(&fixture).await;
+    let with_link = history(&fixture.http, "targets", &target, "clerk").await;
+    let without = history(&fixture.http, "targets", &target, "history-only").await;
+    let mut expected = with_link["items"].clone();
+    for item in expected.as_array_mut().unwrap() {
+        item.as_object_mut().unwrap().remove("proposal");
+    }
+    assert_eq!(
+        without["items"], expected,
+        "a profile that cannot read the Proposal sees exactly the unlinked history"
+    );
+    assert!(!without.to_string().contains("\"proposal\":"), "{without}");
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_omits_the_proposal_when_ownership_does_not_match() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let (_, target, _) = linked_history(&fixture).await;
+    let other = fixture.client_for(caller("another-clerk")).await;
+    let list = history(&other, "targets", &target, "clerk").await;
+    assert_eq!(list["items"].as_array().unwrap().len(), 2, "{list}");
+    assert!(!list.to_string().contains("\"proposal\":"), "{list}");
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_has_no_proposal_on_immediate_action_revisions() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let (organization, _, _) = linked_history(&fixture).await;
+    let list = history(&fixture.http, "organizations", &organization, "clerk").await;
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{list}");
+    assert_eq!(items[0]["domainData"]["name"], "Renamed", "{list}");
+    assert!(!list.to_string().contains("\"proposal\":"), "{list}");
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_keeps_the_proposal_after_operator_erasure() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let (_, target, id) = linked_history(&fixture).await;
+    use registry_breg::postgres::{ExpectedManagedCatalog, RegistryLockKey};
+    registry_breg::proposal_retention::ProposalRetentionOperatorService::new_for_test(
+        (*fixture.registry).clone(),
+        fixture.identity.clone(),
+        ExpectedManagedCatalog::compiled(&fixture.registry),
+        RegistryLockKey::derive(fixture.registry.registry_id()).unwrap(),
+        fixture.database.migration_config.clone(),
+        fixture.database.migration_role.clone(),
+        fixture.database.runtime_role.clone(),
+        fixture.database.activation_audit(),
+    )
+    .with_attachment_storage_for_test(
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+    )
+    .erase(
+        registry_breg::proposal_retention::ProposalDetailErasureScope {
+            action_id: "correct-name",
+            proposal_id: uuid::Uuid::parse_str(&id).unwrap(),
+            submission_version: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let list = history(&fixture.http, "targets", &target, "clerk").await;
+    assert_eq!(
+        list["items"][0]["proposal"],
+        proposal_member(&id),
+        "the identifier and link survive erasure of the Proposal detail: {list}"
+    );
+    let (code, proposal, _) = send(
+        &fixture.http,
+        Method::GET,
+        &format!("/v1/proposals/{id}?accessProfile=clerk"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{proposal}");
+    assert_eq!(proposal["state"], "applied", "{proposal}");
+    fixture.finish().await;
+}

@@ -498,6 +498,17 @@ a batch appears only when the `revisions` grant lists `provenanceFields` (from `
 `reasonCode`, `reasonText`, `sourceReferences`) and every revision that batch produced is visible
 to the caller.
 
+A revision written by applying a Proposal carries an optional `proposal` member,
+`{"actionId", "proposalId", "submissionVersion"}`, on list items and on revision detail. It names the
+Proposal submission that produced the revision. The member appears only when the access profile
+that reads the history could also read that Proposal: it needs a `proposals` grant with `get` for
+the Action, the same ownership and row boundaries a Proposal read applies, and a plain (not task)
+grant. Otherwise the member is absent and the response is the same as one for a revision no
+Proposal produced. A revision written by an immediate Action, a direct write, a batch or an import
+never carries it. Operator erasure of a Proposal's detail (`bregctl proposal-retention erase`) keeps
+the link: the identifier and state survive, and the Proposal read reports that its detail was
+erased.
+
 A temporal Record type, one with `temporal.startField` and `temporal.endField`, gains `:current`,
 the records whose interval contains now, and `:as-of`, the records whose interval contains `asOf`.
 Intervals include the start and exclude the end; a null end is open. A `date` interval whose
@@ -544,6 +555,8 @@ whose two-second database budget runs out answers `503 source.unavailable`.
     crates/registry-breg/src/query.rs, ParsedSnapshotQuery;
     crates/registry-breg/src/postgres/history_read.rs;
     crates/registry-breg/src/postgres/revision_read.rs;
+    crates/registry-breg/src/postgres/proposal.rs, proposal_link_readable;
+    crates/registry-breg/tests/postgres_proposal_security.rs, record_history_names_the_proposal_for_a_caller_who_can_read_it;
     crates/registry-breg/src/history_erasure.rs;
     crates/registry-breg/tests/postgres_historical.rs. */}
 
