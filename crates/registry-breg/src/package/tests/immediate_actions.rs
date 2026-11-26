@@ -38,6 +38,110 @@ fn source_without_actions() -> Value {
     value
 }
 
+fn source_with_record_attachment() -> Value {
+    let mut value = source();
+    value["recordTypes"]["item"]["attachments"] = json!([{
+        "id": "evidence",
+        "maximumBytes": 4096,
+        "contentTypes": ["application/pdf"],
+        "classification": "restricted",
+        "writeOnce": true
+    }]);
+    value
+}
+
+#[test]
+fn record_attachment_successors_allow_additions_and_refuse_existing_slot_changes() {
+    let before = compile(&source_with_record_attachment());
+
+    let mut added_source = source_with_record_attachment();
+    added_source["recordTypes"]["item"]["attachments"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "certificate",
+            "maximumBytes": 4096,
+            "contentTypes": ["application/pdf"],
+            "classification": "restricted",
+            "writeOnce": true
+        }));
+    let added = compiled_registry_change_set(&before, &compile(&added_source), "prior-package");
+    assert!(added.changes.iter().any(|change| {
+        change.class == CompiledRegistryChangeClass::CompatibleAdditive
+            && change.code == CompiledRegistryChangeCode::RecordAttachmentSlotAdded
+            && change.target.kind == CompiledRegistryChangeTargetKind::RecordAttachmentSlot
+            && change.target.record_type_id.as_deref() == Some("item")
+            && change.target.member_id.as_deref() == Some("certificate")
+    }));
+    change_set_to_applicable_migration_plan(&added)
+        .expect("a new record attachment slot is a safe additive successor");
+
+    let mut removed_source = source_with_record_attachment();
+    removed_source["recordTypes"]["item"]["attachments"] = json!([]);
+    let removed_registry = compile(&removed_source);
+    let removed = compiled_registry_change_set(&before, &removed_registry, "prior-package");
+    assert!(removed.changes.iter().any(|change| {
+        change.class == CompiledRegistryChangeClass::Unsupported
+            && change.code == CompiledRegistryChangeCode::RecordAttachmentSlotRemoved
+            && change.target.kind == CompiledRegistryChangeTargetKind::RecordAttachmentSlot
+            && change.target.record_type_id.as_deref() == Some("item")
+            && change.target.member_id.as_deref() == Some("evidence")
+    }));
+    assert_eq!(
+        change_set_to_applicable_migration_plan(&removed).err(),
+        Some(PackageError::MigrationPlan),
+        "a successor cannot strand retained bytes under a removed slot id"
+    );
+    let baseline = CompiledRegistryMigrationBaseline::from_compiled("prior-package", &before);
+    assert_eq!(
+        reviewed_successor_migration_plan(
+            &baseline,
+            &removed_registry,
+            &removed,
+            vec!["modules/core/migrations/attachment-slot/descriptor.json".to_owned()],
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+        )
+        .err(),
+        Some(PackageError::MigrationPlan),
+        "reviewed SQL cannot override the retained slot-id invariant"
+    );
+
+    let mut renamed_source = source_with_record_attachment();
+    renamed_source["recordTypes"]["item"]["attachments"][0]["id"] = json!("certificate");
+    let renamed = compiled_registry_change_set(&before, &compile(&renamed_source), "prior-package");
+    assert!(renamed.changes.iter().any(|change| {
+        change.class == CompiledRegistryChangeClass::Unsupported
+            && change.code == CompiledRegistryChangeCode::RecordAttachmentSlotRemoved
+            && change.target.member_id.as_deref() == Some("evidence")
+    }));
+    assert!(renamed.changes.iter().any(|change| {
+        change.class == CompiledRegistryChangeClass::CompatibleAdditive
+            && change.code == CompiledRegistryChangeCode::RecordAttachmentSlotAdded
+            && change.target.member_id.as_deref() == Some("certificate")
+    }));
+    assert_eq!(
+        change_set_to_applicable_migration_plan(&renamed).err(),
+        Some(PackageError::MigrationPlan),
+        "renaming is a refused removal plus a safe addition"
+    );
+
+    let mut changed_source = source_with_record_attachment();
+    changed_source["recordTypes"]["item"]["attachments"][0]["maximumBytes"] = json!(8192);
+    let changed = compiled_registry_change_set(&before, &compile(&changed_source), "prior-package");
+    assert!(changed.changes.iter().any(|change| {
+        change.class == CompiledRegistryChangeClass::Unsupported
+            && change.code == CompiledRegistryChangeCode::RecordAttachmentSlotChanged
+            && change.target.kind == CompiledRegistryChangeTargetKind::RecordAttachmentSlot
+            && change.target.record_type_id.as_deref() == Some("item")
+            && change.target.member_id.as_deref() == Some("evidence")
+    }));
+    assert_eq!(
+        change_set_to_applicable_migration_plan(&changed).err(),
+        Some(PackageError::MigrationPlan),
+        "a successor cannot reinterpret a retained slot id"
+    );
+}
+
 fn ordinary_policy_source(auditor_operations: Option<&[&str]>) -> Value {
     let mut source = json!({
         "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",

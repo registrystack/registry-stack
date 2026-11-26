@@ -247,6 +247,7 @@ traceability:
   # Record disclosure visibility: crates/registry-breg/tests/postgres_record_attachments.rs::a_record_disclosure_condition_conceals_its_file_under_the_same_get_relation
   - {"id": "BREG-SEC-218", "state": "enforced", "negativeId": "BREG-NEG-218", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "profiles_without_the_grant_or_outside_the_row_boundary_cannot_read"}}
   # Completed verdict admission: crates/registry-breg/tests/postgres_record_attachments.rs::immediate_action_refuses_a_completed_rejected_verdict_and_keeps_approved_and_unseen_files
+  # External immediate-Action rollback, retry and replay: crates/registry-breg/tests/postgres_proposal_s3.rs::immediate_action_s3_rollback_retry_and_exact_replay_converge
   - {"id": "BREG-SEC-219", "state": "enforced", "negativeId": "BREG-NEG-219", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "a_write_once_slot_refuses_a_second_file_even_after_erasure"}}
   # Proposal erasure keeps bytes a Record refers to: crates/registry-breg/tests/postgres_record_attachments.rs::proposal_erasure_never_removes_bytes_a_record_refers_to
   # History erasure keeps a promoted file and removes the Proposal link to the erased revision: crates/registry-breg/tests/postgres_record_attachments.rs::history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision
@@ -257,6 +258,7 @@ traceability:
   # Later explicit erasure and no-op refusal: crates/registry-breg/tests/postgres_record_attachments.rs::a_retained_file_can_be_erased_after_its_history_is_gone
   # Promoted files and counted links: crates/registry-breg/tests/postgres_record_attachments.rs::history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision
   # Proposal markers: crates/registry-breg/tests/postgres_record_attachments.rs::proposal_erasure_never_removes_bytes_a_record_refers_to
+  # Successor slot stability: crates/registry-breg/src/package/tests/immediate_actions.rs::record_attachment_successors_allow_additions_and_refuse_existing_slot_changes
   - {"id": "BREG-SEC-220", "state": "enforced", "negativeId": "BREG-NEG-220", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers_to"}}
   # Unknown Proposal slot: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_must_name_a_declared_proposal_slot
   # Record slot not on the target type: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_must_name_a_slot_of_the_effect_target_record_type
