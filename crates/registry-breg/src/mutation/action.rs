@@ -722,6 +722,12 @@ impl MutationTransaction {
         results: &[ActionEffectResult],
         attachments: &[ActionRequestAttachment],
     ) -> Result<(), MutationError> {
+        // A request's files were checked against the declared names, and only
+        // a request can carry them. Any other path that reaches an Action
+        // declaring files would commit the record without them.
+        if attachments.len() != action.attachments.len() {
+            return Err(MutationError::Unavailable);
+        }
         if attachments.is_empty() {
             return Ok(());
         }
