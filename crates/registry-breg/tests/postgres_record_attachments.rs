@@ -650,6 +650,56 @@ async fn access_log_operations(fixture: &client_http::ClientFixture, record: Uui
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_action_with_attachments_can_check_its_target_before_invocation() {
+    let mut source = record_source();
+    source["actions"]["register"]["commitGuards"]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"input":"programme","revision":"unchanged"}));
+    let fixture =
+        client_http::ClientFixture::start(compile(source).unwrap(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let request = |path, body: Value| {
+        Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let availability = send(
+        &fixture,
+        clerk("zone-a"),
+        request(
+            "/v1/actions/register/availability",
+            json!({"targetInput":"programme","input":{"programme":programme.to_string()}}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        availability.status,
+        StatusCode::OK,
+        "{}",
+        availability.json()
+    );
+    assert_eq!(availability.json()["availability"]["available"], true);
+
+    let conditions = send(
+        &fixture,
+        clerk("zone-a"),
+        request(
+            "/v1/actions/register/target-conditions",
+            json!({"input":{"programme":programme.to_string()}}),
+        ),
+    )
+    .await;
+    assert_eq!(conditions.status, StatusCode::OK, "{}", conditions.json());
+    assert!(conditions.json()["preconditions"]["programme"]["ifMatch"].is_string());
+    assert_eq!(counts(&fixture).await.applications, 0);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_and_file_commit_together_and_every_granted_profile_reads_the_same_bytes() {
     // The subject access log is on, so every released file is logged.
     let mut source = record_source();
