@@ -68,6 +68,9 @@ pub(crate) struct HistoryErasureLifecycleOutcome {
     pub scrubbed_proposal_target_count: u64,
     pub scrubbed_proposal_submission_count: u64,
     pub removed_descriptor_count: u64,
+    pub erased_file_reference_count: u64,
+    pub kept_file_reference_count: u64,
+    pub removed_proposal_link_count: u64,
 }
 
 pub(crate) fn run(
@@ -84,6 +87,13 @@ pub(crate) fn run(
     let package = config
         .load_active_package()
         .map_err(HistoryErasureLifecycleError::Package)?;
+    let target = RecordHistoryErasureTarget::new(
+        &erasure.entity_id,
+        record_id,
+        erasure.erase_through_revision,
+    )
+    .with_erase_files(package.registry(), &erasure.erase_files)
+    .map_err(HistoryErasureLifecycleError::Erasure)?;
     let migration_connection = config
         .migration_database_connection_config()
         .map_err(|_| HistoryErasureLifecycleError::DatabaseConfiguration)?;
@@ -117,11 +127,7 @@ pub(crate) fn run(
                 audit: &audit,
                 operator_reference: &erasure.operator_reference,
                 reason: &erasure.reason,
-                target: RecordHistoryErasureTarget::new(
-                    &erasure.entity_id,
-                    record_id,
-                    erasure.erase_through_revision,
-                ),
+                target,
             },
         ))
         .map_err(HistoryErasureLifecycleError::Erasure)?;
@@ -146,6 +152,9 @@ fn outcome_report(
         scrubbed_proposal_target_count: outcome.scrubbed_proposal_target_count,
         scrubbed_proposal_submission_count: outcome.scrubbed_proposal_submission_count,
         removed_descriptor_count: outcome.removed_descriptor_count,
+        erased_file_reference_count: outcome.erased_file_reference_count,
+        kept_file_reference_count: outcome.kept_file_reference_count,
+        removed_proposal_link_count: outcome.removed_proposal_link_count,
     }
 }
 
@@ -163,6 +172,8 @@ struct RawHistoryErasureRequest {
     entity_id: String,
     record_id: String,
     erase_through_revision: i64,
+    #[serde(default)]
+    erase_files: Vec<String>,
     operator_reference: String,
     reason: String,
 }
@@ -251,6 +262,9 @@ mod tests {
                 scrubbed_proposal_target_count: 2,
                 scrubbed_proposal_submission_count: 1,
                 removed_descriptor_count: 0,
+                erased_file_reference_count: 1,
+                kept_file_reference_count: 2,
+                removed_proposal_link_count: 3,
             },
         );
         assert_eq!(report.package_revision, "pkg-1");
@@ -262,6 +276,9 @@ mod tests {
         assert_eq!(report.scrubbed_ingestion_receipt_count, 1);
         assert_eq!(report.scrubbed_proposal_target_count, 2);
         assert_eq!(report.scrubbed_proposal_submission_count, 1);
+        assert_eq!(report.erased_file_reference_count, 1);
+        assert_eq!(report.kept_file_reference_count, 2);
+        assert_eq!(report.removed_proposal_link_count, 3);
     }
 
     #[test]
@@ -278,6 +295,17 @@ mod tests {
         .expect("complete request parses");
         assert_eq!(parsed.entity_id, "membership");
         assert_eq!(parsed.erase_through_revision, 1);
+        assert!(parsed.erase_files.is_empty());
+        let selected = parse_erasure_request_bytes(
+            br#"{
+            "recordType":"membership",
+            "recordId":"018feaa0-68f9-4a45-b9e3-58436df07af7",
+            "eraseThroughRevision":1, "eraseFiles":["evidence"],
+            "operatorReference":"ops-ticket-1", "reason":"retention request"
+        }"#,
+        )
+        .expect("explicit file selection parses");
+        assert_eq!(selected.erase_files, ["evidence"]);
 
         let valid = serde_json::json!({
             "recordType": "membership",
@@ -287,6 +315,9 @@ mod tests {
             "reason": "retention request"
         });
         for mutate in [
+            |request: &mut serde_json::Value| request["eraseFiles"] = serde_json::Value::Null,
+            |request: &mut serde_json::Value| request["eraseFiles"] = serde_json::json!("evidence"),
+            |request: &mut serde_json::Value| request["eraseFiles"] = serde_json::json!([1]),
             |request: &mut serde_json::Value| request["extra"] = serde_json::json!("refused"),
             |request: &mut serde_json::Value| request["recordType"] = serde_json::json!(""),
             |request: &mut serde_json::Value| request["recordType"] = serde_json::Value::Null,

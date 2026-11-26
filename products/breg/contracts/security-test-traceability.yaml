@@ -246,9 +246,14 @@ traceability:
   # Completed verdict admission: crates/registry-breg/tests/postgres_record_attachments.rs::immediate_action_refuses_a_completed_rejected_verdict_and_keeps_approved_and_unseen_files
   - {"id": "BREG-SEC-219", "state": "enforced", "negativeId": "BREG-NEG-219", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "a_write_once_slot_refuses_a_second_file_even_after_erasure"}}
   # Proposal erasure keeps bytes a Record refers to: crates/registry-breg/tests/postgres_record_attachments.rs::proposal_erasure_never_removes_bytes_a_record_refers_to
-  # History erasure removes a promoted file and the Proposal link to the erased revision: crates/registry-breg/tests/postgres_record_attachments.rs::history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision
+  # History erasure keeps a promoted file and removes the Proposal link to the erased revision: crates/registry-breg/tests/postgres_record_attachments.rs::history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision
   # A removed Proposal link keeps the Proposal read bounded: crates/registry-breg/tests/postgres_record_attachments.rs::an_applied_proposal_stays_bounded_by_a_record_whose_revision_was_erased
   # Erase-and-rebaseline over a Proposal-written revision: crates/registry-breg/tests/postgres_record_attachments.rs::erase_and_rebaseline_erases_a_revision_a_proposal_wrote
+  # Current files and attribution: crates/registry-breg/tests/postgres_record_attachments.rs::history_erasure_keeps_current_files_and_clears_their_attribution
+  # Slot admission: crates/registry-breg/tests/postgres_record_attachments.rs::history_erasure_refuses_an_undeclared_file_slot_before_any_erasure
+  # Later explicit erasure and no-op refusal: crates/registry-breg/tests/postgres_record_attachments.rs::a_retained_file_can_be_erased_after_its_history_is_gone
+  # Promoted files and counted links: crates/registry-breg/tests/postgres_record_attachments.rs::history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision
+  # Proposal markers: crates/registry-breg/tests/postgres_record_attachments.rs::proposal_erasure_never_removes_bytes_a_record_refers_to
   - {"id": "BREG-SEC-220", "state": "enforced", "negativeId": "BREG-NEG-220", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers_to"}}
   # Unknown Proposal slot: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_must_name_a_declared_proposal_slot
   # Record slot not on the target type: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_must_name_a_slot_of_the_effect_target_record_type

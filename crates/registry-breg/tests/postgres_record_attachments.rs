@@ -20,7 +20,8 @@ use registry_breg::field_encryption_backfill::{
     erase_field_encryption_history, FieldEncryptionHistoryErasureRequest,
 };
 use registry_breg::history_erasure::{
-    erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
+    erase_record_history, HistoryErasureError, HistoryErasureOutcome, HistoryErasureRequest,
+    HistoryErasureTimeouts, RecordHistoryErasureTarget,
 };
 use registry_breg::mutation::{MutationError, MutationFaultPoint};
 use registry_breg::postgres::RegistryLockKey;
@@ -373,13 +374,42 @@ async fn counts(fixture: &client_http::ClientFixture) -> Counts {
     }
 }
 
-async fn erase_history(fixture: &client_http::ClientFixture, record: Uuid) {
-    erase_history_through(fixture, record, 1).await;
+async fn erase_history(
+    fixture: &client_http::ClientFixture,
+    record: Uuid,
+) -> HistoryErasureOutcome {
+    erase_history_through(fixture, record, 1).await
 }
 
-async fn erase_history_through(fixture: &client_http::ClientFixture, record: Uuid, revision: i64) {
+async fn erase_history_through(
+    fixture: &client_http::ClientFixture,
+    record: Uuid,
+    revision: i64,
+) -> HistoryErasureOutcome {
+    try_erase_history(fixture, record, revision, &[])
+        .await
+        .expect("history erasure succeeds")
+}
+
+async fn erase_history_and_files(
+    fixture: &client_http::ClientFixture,
+    record: Uuid,
+) -> HistoryErasureOutcome {
+    try_erase_history(fixture, record, 1, &["evidence".to_owned()])
+        .await
+        .expect("named file erasure succeeds")
+}
+
+async fn try_erase_history(
+    fixture: &client_http::ClientFixture,
+    record: Uuid,
+    revision: i64,
+    slots: &[String],
+) -> Result<HistoryErasureOutcome, HistoryErasureError> {
+    let target = RecordHistoryErasureTarget::new("application", record, revision)
+        .with_erase_files(&fixture.registry, slots)?;
     let (mut migration, task) = fixture.database.connect_migration().await;
-    erase_record_history(
+    let result = erase_record_history(
         &mut migration,
         HistoryErasureRequest {
             expected: &fixture.identity,
@@ -392,13 +422,37 @@ async fn erase_history_through(fixture: &client_http::ClientFixture, record: Uui
                 .audit(AuditProfile::production_from_secret_bytes(vec![0x71; 32].into()).unwrap()),
             operator_reference: "operator-reference",
             reason: "retention-request",
-            target: RecordHistoryErasureTarget::new("application", record, revision),
+            target,
         },
     )
-    .await
-    .expect("history erasure succeeds");
+    .await;
     drop(migration);
     task.abort();
+    result
+}
+
+fn assert_erasure_audit(fixture: &client_http::ClientFixture, outcome: &HistoryErasureOutcome) {
+    let entries = fixture.database.audit_entries();
+    let terminal = entries
+        .iter()
+        .rev()
+        .find(|entry| {
+            entry["schema"] == registry_breg::history_erasure::HISTORY_ERASURE_AUDIT_SCHEMA
+                && entry["record"]["outcome"] == "committed"
+        })
+        .expect("the erasure has a committed audit entry");
+    assert_eq!(
+        terminal["record"]["erasedFileReferenceCount"],
+        outcome.erased_file_reference_count
+    );
+    assert_eq!(
+        terminal["record"]["keptFileReferenceCount"],
+        outcome.kept_file_reference_count
+    );
+    assert_eq!(
+        terminal["record"]["removedProposalLinkCount"],
+        outcome.removed_proposal_link_count
+    );
 }
 
 fn assert_file(response: &Exchange, bytes: &[u8]) {
@@ -1339,7 +1393,9 @@ async fn a_write_once_slot_refuses_a_second_file_even_after_erasure() {
         second(EVIDENCE).await,
         Err(MutationError::AttachmentSlotWriteOnce)
     ));
-    erase_history(&fixture, record).await;
+    let outcome = erase_history_and_files(&fixture, record).await;
+    assert_eq!(outcome.erased_file_reference_count, 1);
+    assert_eq!(outcome.kept_file_reference_count, 0);
     assert!(matches!(
         second(b"replacement").await,
         Err(MutationError::AttachmentSlotWriteOnce)
@@ -1352,6 +1408,55 @@ async fn a_write_once_slot_refuses_a_second_file_even_after_erasure() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn history_erasure_keeps_current_files_and_clears_their_attribution() {
+    let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let record = register(&fixture, programme, "keep-history-file", EVIDENCE).await;
+    let rename = submit_proposal(
+        &fixture,
+        "rename",
+        json!({"target":record.to_string(),"value":"Renamed applicant"}),
+        &[],
+        "keep-history-rename",
+    )
+    .await;
+    apply_proposal(&fixture, &rename, "keep-history-rename")
+        .await
+        .unwrap();
+    let outcome = erase_history_through(&fixture, record, 1).await;
+    assert_eq!(outcome.erased_file_reference_count, 0);
+    assert_eq!(outcome.kept_file_reference_count, 1);
+    assert_eq!(outcome.removed_proposal_link_count, 0);
+    assert_erasure_audit(&fixture, &outcome);
+    let response = download(
+        &fixture,
+        clerk("zone-a"),
+        &record.to_string(),
+        "evidence",
+        None,
+    )
+    .await;
+    let metadata = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT erased_at IS NULL, attached_at IS NULL, attached_by IS NULL
+           FROM registry_internal.registry_record_attachments WHERE record_id=$1",
+            &[&record],
+        )
+        .await
+        .unwrap();
+    let state = (
+        metadata.get::<_, bool>(0),
+        metadata.get::<_, bool>(1),
+        metadata.get::<_, bool>(2),
+    );
+    fixture.finish().await;
+    assert_file(&response, EVIDENCE);
+    assert_eq!(state, (true, true, true));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers_to() {
     let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
     let programme = insert_programme(&fixture, true, "zone-a").await;
@@ -1361,7 +1466,10 @@ async fn record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers
     assert_eq!(shared.references, 2);
     assert_eq!(shared.blobs, 1, "equal bytes are stored once");
 
-    erase_history(&fixture, first).await;
+    let outcome = erase_history_and_files(&fixture, first).await;
+    assert_eq!(outcome.erased_file_reference_count, 1);
+    assert_eq!(outcome.kept_file_reference_count, 0);
+    assert_erasure_audit(&fixture, &outcome);
     let after_first = counts(&fixture).await;
     assert_eq!(after_first.live_references, 1);
     assert_eq!(
@@ -1395,7 +1503,9 @@ async fn record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers
         .database
         .admin
         .query_one(
-            "SELECT erased_at IS NOT NULL, attached_by IS NULL, attached_at IS NULL
+            "SELECT erased_at IS NOT NULL, attached_by IS NULL, attached_at IS NULL,
+                    sha256 IS NULL AND content_type IS NULL AND byte_size IS NULL
+                    AND attached_revision IS NULL
                FROM registry_internal.registry_record_attachments WHERE record_id = $1",
             &[&first],
         )
@@ -1404,11 +1514,140 @@ async fn record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers
     assert!(erased.get::<_, bool>(0));
     assert!(erased.get::<_, bool>(1));
     assert!(erased.get::<_, bool>(2));
+    let marker_is_scrubbed = erased.get::<_, bool>(3);
 
-    erase_history(&fixture, second).await;
+    erase_history_and_files(&fixture, second).await;
     let after_second = counts(&fixture).await;
     assert_eq!(after_second.live_references, 0);
     assert_eq!(after_second.blobs, 0, "unreferenced bytes are removed");
+    let digest = sha256_hex(EVIDENCE);
+    for entries in [
+        fixture.database.audit_entries(),
+        fixture.audit_capture.entries(),
+    ] {
+        assert!(
+            !serde_json::to_string(&entries).unwrap().contains(&digest),
+            "the audit holds no file digest"
+        );
+    }
+    let retained: i64 = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT (SELECT count(*) FROM registry_internal.registry_outbox
+                  WHERE position($1::text in payload::text)>0)
+              + (SELECT count(*) FROM registry_internal.registry_idempotency
+                  WHERE position($1::text in convert_from(response_body, 'UTF8'))>0)",
+            &[&digest],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        retained, 0,
+        "outbox and held responses retain no file digest"
+    );
+    let invalid_live = fixture.database.admin.execute(
+        "UPDATE registry_internal.registry_record_attachments SET erased_at=NULL WHERE record_id=$1",
+        &[&first],
+    ).await.expect_err("a live reference requires file metadata");
+    assert_eq!(
+        invalid_live.code(),
+        Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
+    );
+    fixture.finish().await;
+    assert!(
+        marker_is_scrubbed,
+        "an erased slot retains only its key and erasure time"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retained_file_can_be_erased_after_its_history_is_gone() {
+    let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let record = register(&fixture, programme, "erase-file-later", EVIDENCE).await;
+    let first = erase_history(&fixture, record).await;
+    assert!(first.coverage_ready);
+    assert_eq!(first.kept_file_reference_count, 1);
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
+    let second = try_erase_history(&fixture, record, 1, &["evidence".to_owned()]).await;
+    if let Ok(outcome) = &second {
+        assert_eq!(outcome.erased_revision_count, 0);
+        assert_eq!(outcome.erased_file_reference_count, 1);
+        assert_eq!(outcome.kept_file_reference_count, 0);
+        assert_eq!(outcome.removed_proposal_link_count, 0);
+        assert_eq!(outcome.coverage_ready, first.coverage_ready);
+        assert_eq!(
+            outcome.unavailable_after_position,
+            first.unavailable_after_position
+        );
+        assert_erasure_audit(&fixture, outcome);
+        assert_eq!(
+            download(
+                &fixture,
+                clerk("zone-a"),
+                &record.to_string(),
+                "evidence",
+                None
+            )
+            .await
+            .status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            try_erase_history(&fixture, record, 1, &["evidence".to_owned()]).await,
+            Err(HistoryErasureError::TargetUnavailable),
+            "a repeated file-only no-op stays refused"
+        );
+        assert_eq!(
+            try_erase_history(&fixture, record, 1, &[]).await,
+            Err(HistoryErasureError::TargetUnavailable),
+            "empty history without a selected file stays refused"
+        );
+    }
+    fixture.finish().await;
+    second.expect("the same acknowledged operation can erase a named current file later");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn history_erasure_refuses_an_undeclared_file_slot_before_any_erasure() {
+    let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let record = register(&fixture, programme, "unknown-erase-slot", EVIDENCE).await;
+    let before = revisions(&fixture).await;
+    let audit_before = fixture.database.audit_entries().len();
+    for slots in [
+        vec!["undeclared".to_owned()],
+        vec!["evidence".to_owned(), "evidence".to_owned()],
+    ] {
+        let result = try_erase_history(&fixture, record, 1, &slots).await;
+        assert_eq!(result, Err(HistoryErasureError::InvalidInput));
+    }
+    assert_eq!(revisions(&fixture).await, before);
+    assert_eq!(fixture.database.audit_entries().len(), audit_before);
+    assert_eq!(counts(&fixture).await.live_references, 1);
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
     fixture.finish().await;
 }
 
@@ -1478,6 +1717,18 @@ async fn proposal_erasure_never_removes_bytes_a_record_refers_to() {
     assert_eq!(erasure.attachment_references, 1);
     drop(migration);
     task.abort();
+    let scrubbed: bool = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT erased_at IS NOT NULL AND sha256 IS NULL AND content_type IS NULL
+                AND byte_size IS NULL AND uploaded_at IS NULL AND uploaded_by IS NULL
+           FROM registry_internal.registry_proposal_attachments WHERE proposal_id=$1",
+            &[&Uuid::parse_str(applied.id()).unwrap()],
+        )
+        .await
+        .unwrap()
+        .get(0);
     let state = fixture
         .database
         .admin
@@ -1500,6 +1751,10 @@ async fn proposal_erasure_never_removes_bytes_a_record_refers_to() {
         EVIDENCE,
     );
     fixture.finish().await;
+    assert!(
+        scrubbed,
+        "an erased Proposal file retains only its slot identity and erasure time"
+    );
 }
 
 /// The built-in executor applies `enrol`. Its create effect promotes the
@@ -1617,13 +1872,13 @@ async fn history_links(fixture: &client_http::ClientFixture, record: Uuid) -> Ve
 
 /// `enrol` creates a record and promotes its file at revision 1, and a
 /// `rename` Proposal writes revision 2. History erasure through revision 1
-/// erases the promoted file and the link to the Proposal that wrote that
-/// revision. Each Proposal still reads, only `rename` names a revision, and
-/// `enrol` keeps its own file until its detail is erased. After history
+/// keeps the promoted file and removes the link to the Proposal that wrote
+/// that revision. Each Proposal still reads, only `rename` names a revision,
+/// and the Record keeps the file after `enrol` detail is erased. After history
 /// erasure through revision 2, a current read of `rename` names no revision,
 /// while a retry of its apply returns the receipt as first issued.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision() {
+async fn history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision() {
     let fixture =
         client_http::ClientFixture::start(compile(history_source()).unwrap(), clerk("zone-a"))
             .await;
@@ -1662,23 +1917,26 @@ async fn history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revi
         "each Proposal-written revision links its Proposal before erasure"
     );
 
-    erase_history(&fixture, record).await;
+    let outcome = erase_history(&fixture, record).await;
+    assert_eq!(outcome.erased_file_reference_count, 0);
+    assert_eq!(outcome.kept_file_reference_count, 1);
+    assert_eq!(outcome.removed_proposal_link_count, 1);
+    assert_erasure_audit(&fixture, &outcome);
 
     assert!(
-        record_references(&fixture).await.is_empty(),
-        "the file promoted at revision 1 is erased with it"
+        !record_references(&fixture).await.is_empty(),
+        "the promoted file is current state of the Record"
     );
-    assert_eq!(
-        download(
+    assert_file(
+        &download(
             &fixture,
             clerk("zone-a"),
             &record.to_string(),
             "evidence",
-            None
+            None,
         )
-        .await
-        .status,
-        StatusCode::NOT_FOUND
+        .await,
+        EVIDENCE,
     );
     assert_eq!(
         blob_hashes(&fixture).await,
@@ -1741,9 +1999,10 @@ async fn history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revi
         .await
         .expect_err("erasing the Proposal's detail ends the file download");
     assert_eq!(error.status(), Some(404));
-    assert!(
-        blob_hashes(&fixture).await.is_empty(),
-        "bytes no reference holds are removed"
+    assert_eq!(
+        blob_hashes(&fixture).await,
+        BTreeSet::from([sha256_hex(EVIDENCE)]),
+        "the Record keeps the bytes after the Proposal is erased"
     );
     let (status, enrolled) = get_json(
         &fixture,
@@ -1754,7 +2013,21 @@ async fn history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revi
     assert_eq!(status, StatusCode::OK, "{enrolled}");
     assert_eq!(enrolled["state"], "applied", "{enrolled}");
 
-    erase_history_through(&fixture, record, 2).await;
+    let outcome = erase_history_through(&fixture, record, 2).await;
+    assert_eq!(outcome.kept_file_reference_count, 1);
+    assert_eq!(outcome.removed_proposal_link_count, 1);
+    assert_erasure_audit(&fixture, &outcome);
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
 
     let (status, current) = get_json(
         &fixture,

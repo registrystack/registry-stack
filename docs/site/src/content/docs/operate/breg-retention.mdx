@@ -34,7 +34,7 @@ The examples use the record types and Actions of the facility template.
 
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
-| `history erase` | The retained revisions of one record up to a revision number, the correction context and outbox payloads that referenced them, the held responses that could replay them, the links from applied Proposals to those revisions, and the record's file references from those revisions. | The current record, every later revision, each applied Proposal, the audit journal, each spent idempotency key, and file bytes another reference still needs. |
+| `history erase` | Retained revisions through the boundary, their correction context and outbox payloads, held record responses, Proposal links to erased revisions, and files explicitly named in `eraseFiles`. | The current record, unnamed files, later revisions, applied Proposals and their apply receipts, the audit journal, spent keys, and bytes another reference needs. |
 | `proposal-retention erase` | The payload detail of one Proposal submission version: frozen snapshots, draft input, application reasons, Review payloads, held responses, and attachment references. | The Proposal's value-free state history, record history, and each spent idempotency key. |
 | `proposal-retention cleanup-attachments` | Unreferenced attachment bytes in external storage that are waiting for deletion, from Proposals and from records. | Live attachment references, Proposal detail, and deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context an Action kept, once their 24-hour window has closed. | Assertions still inside their window, and the receipts of the Actions that used them. |
@@ -89,21 +89,7 @@ bregctl history erase \
   --acknowledge-irreversible
 ```
 
-```text
-Erased the requested history. 1 commit affected.
-  package revision               sha256:1d38a738597da4a8254a53f3cb5ad6889243374134eb9c0c4dda1768fd78750b
-  coverage ready                 true
-  unavailable after position     0
-  affected commits               1
-  erased revisions               1
-  erased commit members          1
-  scrubbed change contexts       0
-  scrubbed outbox payloads       0
-  scrubbed cached responses      1
-  scrubbed Proposal targets      0
-  scrubbed Proposal submissions  0
-  removed descriptors            0
-```
+The report and audit entry count erased file references, kept file references and removed Proposal links.
 
 One run erases at most 10,000 revisions in one transaction. It replaces each held record or batch
 response that could replay an erased revision with a refusal, so a retry of that key answers
@@ -123,6 +109,9 @@ The Proposal also still holds the values it froze and any file it carried. You c
 the held receipt when your retention decision calls for it and the Action's retention mode allows
 it. Follow [erase Proposal detail](#erase-proposal-detail) for that Proposal. Run
 `bregctl proposal-retention dry-run` first, then `bregctl proposal-retention erase`.
+Erasing a Record slot does not erase a Proposal that still holds the same file.
+That Proposal's detail and held responses can still contain its digest.
+Erase its detail separately when your retention decision requires both scopes.
 
 Snapshot references at or after the earliest erased commit become unavailable, and erasing a
 record's baseline data makes all snapshot coverage unavailable. The next package still activates
@@ -140,22 +129,34 @@ package again afterwards.
     crates/registry-breg/src/proposal_retention.rs;
     crates/registry-breg/tests/postgres_history_erasure.rs;
     crates/registry-breg/tests/postgres_record_attachments.rs,
-    history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision. */}
+    history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision. */}
 
 ### Files kept with the record
 
-A Record type's file slot belongs to the revision that filled it.
-Erasing through that revision removes the record's file reference in the same transaction.
-The download then answers 404, as for an empty slot.
-The slot keeps a marker, so it is never filled again.
-The marker keeps the file's SHA-256 digest, media type and size and the revision that filled the slot.
-It drops who filled the slot and when.
+A file belongs to the current record.
+History erasure keeps its reference and bytes, so the download still works.
+When the boundary reaches the revision that filled the slot, BReg clears who attached the file and when.
+
+To erase a file, add `eraseFiles` to the same request file and name its declared slot:
+
+```json
+{"eraseFiles": ["evidence"]}
+```
+
+BReg checks every name against the verified active Record type before erasing anything.
+An undeclared or repeated name is refused.
+Omitting `eraseFiles` keeps every file.
+You can name a file after its history is gone while history coverage remains ready.
+That run reports zero erased revisions.
+Without retained history or a live selected file, BReg refuses the request.
 
 :::caution[Erasing a live record's file is permanent]
-Erasing history through the current revision removes a live record's file for good.
-The record stays, but its slot cannot be filled again.
+A named slot loses its file reference in the erasure transaction.
+Its download answers 404 and the slot cannot be filled again.
 :::
 
+The erased slot keeps only its Record type, record ID, slot ID and erasure timestamp.
+It keeps no digest, media type, size, attachment revision or attaching actor.
 Bytes go once no other record and no Proposal refers to them.
 The Proposal that promoted a file still refers to it, so those bytes stay until you erase the
 Proposal's detail.
@@ -167,7 +168,11 @@ An `erase-and-rebaseline` field-encryption migration keeps the record's files.
     retire_unreferenced;
     crates/registry-breg/src/history_erasure.rs;
     crates/registry-breg/tests/postgres_record_attachments.rs,
-    history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision,
+    history_erasure_keeps_current_files_and_clears_their_attribution,
+    history_erasure_refuses_an_undeclared_file_slot_before_any_erasure,
+    a_retained_file_can_be_erased_after_its_history_is_gone,
+    record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers_to,
+    history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision,
     erase_and_rebaseline_erases_a_revision_a_proposal_wrote. */}
 
 ## Restore snapshot coverage after an erasure
@@ -294,6 +299,7 @@ refused and left intact: finish the Proposal under its ordinary authority first.
 attachment bytes stay while another retained reference needs them, including a record's file. So a file that the
 applied Proposal promoted to a record stays readable through the record. A Review still waiting on remote recovery keeps
 the exact request and acceptance that recovery needs.
+Erased Proposal file references keep their slot identity and erasure timestamp, but no digest, media type, size or uploader metadata.
 
 {/* Evidence: crates/registry-breg/src/proposal_retention.rs, detail_is_pinned (draft, submitted),
     the cancelled/applied/rejected draft-input rule, RetainMode, and ActiveDetailPinned;
