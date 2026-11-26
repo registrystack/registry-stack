@@ -328,6 +328,9 @@ A profile without the grant gets `404 resource.not_found`, with no digest.
 So do a record outside the boundary, an empty slot and a file that verification has not approved.
 A download is recorded in BReg's read audit and, when the Record type has `accessLog`, in the
 subject access log.
+Both name the operation after the record's `get` operation and the slot, such as
+`records.application.get:attachment:evidence`.
+A download that fails after it starts is audited as refused and is not logged for the subject.
 
 History erasure removes a record's file references with the revisions that added them.
 BReg deletes the bytes only when no other record and no Proposal refers to them.

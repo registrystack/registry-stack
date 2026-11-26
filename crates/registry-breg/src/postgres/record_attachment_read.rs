@@ -43,7 +43,9 @@ impl PostgresRecordReadService {
         }
         // A distinct operation identity keeps the operational audit truthful:
         // this endpoint releases file bytes and does not read the record body.
-        request.operation_id.push_str(":attachment");
+        // The slot is configuration, not a value, so the identity names it.
+        request.operation_id.push_str(":attachment:");
+        request.operation_id.push_str(&slot_id);
         let _attempt = begin_pre_io_audit(
             &self.audit,
             &self.expected,
@@ -151,7 +153,11 @@ impl PostgresRecordReadService {
         }
         .await;
         session.disarm();
-        let Some(held) = read? else {
+        let read = match read {
+            Ok(read) => read,
+            Err(error) => return Err(self.refused_read(&request, &claims, &plan, error).await),
+        };
+        let Some(held) = read else {
             self.record_read_terminal_audit(
                 &request,
                 self.terminal(

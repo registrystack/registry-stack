@@ -594,9 +594,59 @@ async fn erase_proposal(
     erasure.attachment_references
 }
 
+/// The operation a record slot download audits and logs under.
+const DOWNLOAD_OPERATION: &str = "records.application.get:attachment:evidence";
+
+/// The phase, outcome and operation of each audit entry since `before`.
+fn audited_since(
+    fixture: &client_http::ClientFixture,
+    before: usize,
+) -> Vec<(String, String, String)> {
+    fixture.audit_capture.entries()[before..]
+        .iter()
+        .map(|entry| {
+            let field = |name: &str| {
+                entry["record"][name]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            (field("phase"), field("outcome"), field("operationId"))
+        })
+        .collect()
+}
+
+fn audited(phase: &str, outcome: &str) -> (String, String, String) {
+    (
+        phase.to_owned(),
+        outcome.to_owned(),
+        DOWNLOAD_OPERATION.to_owned(),
+    )
+}
+
+async fn access_log_operations(fixture: &client_http::ClientFixture, record: Uuid) -> Vec<String> {
+    fixture
+        .database
+        .admin
+        .query(
+            "SELECT operation_id FROM registry_internal.registry_subject_access_log
+              WHERE entity_id = 'application' AND record_id = $1 ORDER BY accessed_at, event_id",
+            &[&record],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_and_file_commit_together_and_every_granted_profile_reads_the_same_bytes() {
-    let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
+    // The subject access log is on, so every released file is logged.
+    let mut source = record_source();
+    source["recordTypes"]["application"]["accessLog"] = json!({"subjectField":"name"});
+    let registry = compile(source).expect("record attachment fixture with an access log compiles");
+    let fixture = client_http::ClientFixture::start(registry, clerk("zone-a")).await;
     let programme = insert_programme(&fixture, true, "zone-a").await;
     let before = counts(&fixture).await;
     let record = register(&fixture, programme, "register-first", FILE_CANARY).await;
@@ -655,6 +705,51 @@ async fn record_and_file_commit_together_and_every_granted_profile_reads_the_sam
         StatusCode::CONFLICT,
         "a different file is a different request"
     );
+
+    // A download is audited as an attempt and a Returned terminal under the
+    // slot's own operation, and the subject access log records it once.
+    let audit_before = fixture.audit_capture.entries().len();
+    let logged = access_log_operations(&fixture, record).await;
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        FILE_CANARY,
+    );
+    assert_eq!(
+        audited_since(&fixture, audit_before),
+        [audited("attempt", ""), audited("terminal", "returned")]
+    );
+    assert_eq!(
+        access_log_operations(&fixture, record).await,
+        [logged.clone(), vec![DOWNLOAD_OPERATION.to_owned()]].concat()
+    );
+    // The concealed 404 of a record the caller cannot see is audited as a
+    // Refused terminal and logs nothing.
+    let audit_before = fixture.audit_capture.entries().len();
+    let absent = Uuid::new_v4();
+    assert_eq!(
+        download(
+            &fixture,
+            clerk("zone-a"),
+            &absent.to_string(),
+            "evidence",
+            None
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        audited_since(&fixture, audit_before),
+        [audited("attempt", ""), audited("terminal", "refused")]
+    );
+    assert!(access_log_operations(&fixture, absent).await.is_empty());
 
     for _ in 0..2 {
         assert_file(
@@ -728,6 +823,8 @@ async fn record_and_file_commit_together_and_every_granted_profile_reads_the_sam
         )
         .await
         .unwrap();
+    let audit_before = fixture.audit_capture.entries().len();
+    let logged = access_log_operations(&fixture, record).await;
     assert_eq!(
         download(
             &fixture,
@@ -741,6 +838,13 @@ async fn record_and_file_commit_together_and_every_granted_profile_reads_the_sam
         StatusCode::SERVICE_UNAVAILABLE,
         "stored bytes that no longer match their digest are never released"
     );
+    // A store failure after the attempt still ends in a Refused terminal,
+    // and a file that was not released is not logged.
+    assert_eq!(
+        audited_since(&fixture, audit_before),
+        [audited("attempt", ""), audited("terminal", "refused")]
+    );
+    assert_eq!(access_log_operations(&fixture, record).await, logged);
     fixture.finish().await;
 }
 
