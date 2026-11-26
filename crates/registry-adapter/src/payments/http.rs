@@ -43,6 +43,8 @@ use std::{
 };
 use uuid::Uuid;
 
+const MAX_PAYMENT_BODY_BYTES: usize = 4096;
+
 struct HttpState {
     authenticator: Authenticator,
     service: PaymentService,
@@ -402,7 +404,7 @@ pub async fn load_router(
             "/v1/payments/{connection}/disbursements/{disbursement}/record-provider-confirmation",
             post(record_provider_confirmation),
         )
-        .layer(DefaultBodyLimit::max(4096))
+        .layer(DefaultBodyLimit::max(MAX_PAYMENT_BODY_BYTES))
         .with_state(state))
 }
 
@@ -460,11 +462,23 @@ fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, Http
         _ => Err(HttpError(Error::InvalidRequest)),
     }
 }
-fn body<T: DeserializeOwned>(headers: &HeaderMap, uri: &Uri, body: &[u8]) -> Result<T, HttpError> {
-    if uri.query().is_some() || single_header(headers, "content-type")? != "application/json" {
+fn body<T: DeserializeOwned>(headers: &HeaderMap, uri: &Uri, bytes: &[u8]) -> Result<T, HttpError> {
+    if bytes.len() > MAX_PAYMENT_BODY_BYTES
+        || uri.query().is_some()
+        || single_header(headers, "content-type")? != "application/json"
+    {
         return Err(HttpError(Error::InvalidRequest));
     }
-    serde_json::from_slice(body).map_err(|_| HttpError(Error::InvalidRequest))
+    // The payment wire contract requires named fields in a JSON object.
+    if !bytes.trim_ascii_start().starts_with(b"{") {
+        return Err(HttpError(Error::InvalidRequest));
+    }
+    let mut decoder = serde_json::Deserializer::from_slice(bytes);
+    let request = T::deserialize(&mut decoder).map_err(|_| HttpError(Error::InvalidRequest))?;
+    decoder
+        .end()
+        .map_err(|_| HttpError(Error::InvalidRequest))?;
+    Ok(request)
 }
 fn collection(value: &str) -> Result<Uuid, HttpError> {
     Uuid::parse_str(value)
@@ -937,6 +951,50 @@ fn refused(message: &str) -> ServeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payment_body_requires_a_closed_json_object() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        let uri = Uri::from_static("/v1/payments/test/collections");
+        let bill_id = "018fab00-0000-7000-8000-000000000001";
+        let object = format!(r#"{{"billId":"{bill_id}","billVersion":9007199254740991}}"#);
+        assert_eq!(
+            body::<RequestCollection>(&headers, &uri, object.as_bytes()).ok(),
+            Some(RequestCollection {
+                bill_id: bill_id.parse().unwrap(),
+                bill_version: 9_007_199_254_740_991,
+            })
+        );
+        let padded = format!("\n \t{object}\r\n");
+        assert!(body::<RequestCollection>(&headers, &uri, padded.as_bytes()).is_ok());
+
+        for invalid in [
+            format!(r#"["{bill_id}",1]"#),
+            format!(r#"{{"billId":"{bill_id}","billVersion":1,"billVersion":2}}"#),
+            format!(r#"{{"billId":"{bill_id}","billVersion":1,"amount":1}}"#),
+            format!(r#"{{"billId":"{bill_id}","billVersion":"1"}}"#),
+            format!("{object} null"),
+            format!("\u{000c}{object}"),
+        ] {
+            assert!(
+                matches!(
+                    body::<RequestCollection>(&headers, &uri, invalid.as_bytes()),
+                    Err(HttpError(Error::InvalidRequest))
+                ),
+                "unexpected result for {invalid}"
+            );
+        }
+
+        let mut at_limit = object.into_bytes();
+        at_limit.resize(MAX_PAYMENT_BODY_BYTES, b' ');
+        assert!(body::<RequestCollection>(&headers, &uri, &at_limit).is_ok());
+        at_limit.push(b' ');
+        assert!(matches!(
+            body::<RequestCollection>(&headers, &uri, &at_limit),
+            Err(HttpError(Error::InvalidRequest))
+        ));
+    }
 
     #[test]
     fn a_released_acceptance_is_audited_under_its_attempt() {
