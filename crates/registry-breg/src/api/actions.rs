@@ -322,11 +322,6 @@ pub(super) async fn dispatch(
         Ok(parsed) => parsed,
         Err(error) => return refusal(invalid_action_request(error)).await,
     };
-    if let Err(error) =
-        crate::mutation::validate_action_attachments(surface.action, &parsed.attachments)
-    {
-        return refusal(mutation_problem(error)).await;
-    }
     match route.kind {
         ActionRouteKind::Availability => {
             match availability::observe(
@@ -354,6 +349,11 @@ pub(super) async fn dispatch(
             }
         }
         ActionRouteKind::Invoke => {
+            if let Err(error) =
+                crate::mutation::validate_action_attachments(surface.action, &parsed.attachments)
+            {
+                return refusal(mutation_problem(error)).await;
+            }
             // Retain the bounded validated inputs for a disclosure-safe re-read
             // only after a field guard has refused and the transaction rolled back.
             let observed_input = parsed.input.clone();
