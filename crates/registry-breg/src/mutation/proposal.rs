@@ -873,8 +873,13 @@ impl MutationTransaction {
             }
         }
         if document.header.state == "applied" {
-            let rows=tx.query("SELECT target_entity_id,target_record_id FROM registry_internal.registry_proposal_results
-                WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 ORDER BY target_entity_id,target_record_id",
+            // Every record the application wrote bounds the read. History
+            // erasure removes the result link to a revision it erases, so the
+            // frozen targets name the records whose link is gone.
+            let rows=tx.query("SELECT target_entity_id,target_record_id FROM registry_internal.registry_proposal_targets
+                WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
+                UNION SELECT target_entity_id,target_record_id FROM registry_internal.registry_proposal_results
+                WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 ORDER BY 1,2",
                 &[&document.action_id,&document.proposal_id,&document.header.submission_version])
                 .await.map_err(map_database_error)?;
             for row in rows {

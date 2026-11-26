@@ -388,7 +388,7 @@ impl ProposalWorkflow {
         if !proposal.effect_digest.matches(&application.effect_digest) {
             return Err(WorkflowError::DigestMismatch);
         }
-        proposal.verify_application_links(&application.result_links)
+        proposal.verify_restored_application_links(&application.result_links)
     }
 
     fn validate_restored_state(&self) -> Result<(), WorkflowError> {
@@ -1067,6 +1067,28 @@ impl ProposalSnapshot {
         }
         Ok(())
     }
+
+    /// An application links every target it wrote. History erasure removes
+    /// the link to a revision it erases, so a stored receipt links a subset
+    /// of the targets, possibly none.
+    fn verify_restored_application_links(
+        &self,
+        result_links: &[ApplicationResultLink],
+    ) -> Result<(), WorkflowError> {
+        let expected = self
+            .expected_targets()
+            .keys()
+            .map(TargetIdentity::record_key)
+            .collect::<BTreeSet<_>>();
+        if result_links
+            .iter()
+            .all(|link| expected.contains(&(link.entity_id.clone(), link.record_id.clone())))
+        {
+            Ok(())
+        } else {
+            Err(WorkflowError::ApplicationReceiptMismatch)
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -1595,9 +1617,8 @@ impl ApplicationReceipt {
         self.effect_digest.validate()?;
         self.applied_by.validate()?;
         self.applied_at.validate()?;
-        if self.result_links.is_empty() {
-            return Err(WorkflowError::ApplicationReceiptMismatch);
-        }
+        // An empty list is a receipt whose links history erasure removed.
+        // The apply itself requires a link for every target.
         let mut unique = BTreeSet::new();
         for link in &self.result_links {
             link.validate()?;
@@ -2772,6 +2793,70 @@ mod source_owned_review_tests {
             .expect("direct application")
             .into_workflow();
         assert_eq!(applied.state(), ProposalState::Applied);
+    }
+
+    #[test]
+    fn an_apply_links_every_target_and_a_stored_receipt_links_no_other_record() {
+        let submitted = workflow()
+            .submit(
+                context("submitter", "2026-09-19T00:00:00Z"),
+                proposal(no_review()),
+            )
+            .expect("submit")
+            .into_workflow();
+        let frozen = submitted.current_proposal().expect("frozen proposal");
+        let digest = frozen.effect_digest().clone();
+        let contract = frozen.contract_fingerprint().clone();
+        let elsewhere = || {
+            vec![ApplicationResultLink::new(
+                entity("asset-placement"),
+                record("placement-2"),
+                revision(4),
+            )]
+        };
+        let refused = submitted.clone().apply(
+            context("applier", "2026-09-19T00:02:00Z"),
+            SubmissionVersion::first(),
+            &digest,
+            &contract,
+            None,
+            observed_targets(),
+            PreparedApplication::new(ApplicationId::new("application-1").unwrap(), elsewhere())
+                .unwrap(),
+            None,
+        );
+        assert_eq!(
+            refused.expect_err("an apply links exactly the frozen targets"),
+            WorkflowError::ApplicationReceiptMismatch
+        );
+        let applied = submitted
+            .apply(
+                context("applier", "2026-09-19T00:02:00Z"),
+                SubmissionVersion::first(),
+                &digest,
+                &contract,
+                None,
+                observed_targets(),
+                application(),
+                None,
+            )
+            .expect("direct application")
+            .into_workflow();
+
+        let mut erased = applied.clone();
+        erased.application.as_mut().unwrap().result_links.clear();
+        erased
+            .validate_restored()
+            .expect("history erasure may remove every link");
+        let mut foreign = applied;
+        foreign.application.as_mut().unwrap().result_links = elsewhere();
+        assert!(
+            matches!(
+                foreign.validate_restored(),
+                Err(WorkflowError::ApplicationReceiptMismatch)
+            ),
+            "a stored link names only a frozen target"
+        );
     }
 
     #[test]
