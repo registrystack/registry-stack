@@ -2257,3 +2257,143 @@ async fn promotion_references_the_verified_s3_object_and_refuses_unverified_byte
     assert_eq!(read_record().await.as_bytes(), BYTES);
     fixture.finish().await;
 }
+
+/// Apply checks the verdict when it rebuilds the file manifest, then writes
+/// its effects, then promotes. A verdict that turns to rejected after the
+/// manifest check is still caught: the promotion rechecks the frozen file
+/// under the content-hash lock inside the apply transaction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotion_rechecks_a_verdict_rejected_after_the_manifest_check() {
+    use registry_breg_client::BRegProblemCode;
+    const BYTES: &[u8] = b"promoted-recheck-bytes";
+    const PAUSE: i64 = 732_995_221;
+    let s3 = S3Fixture::new().await;
+    let verification = s3.config.activate_attachment_verification().unwrap();
+    let configured_verification = verification.clone();
+    let mut source = registry_source(false);
+    source["recordTypes"]["target"]["attachments"] = json!([{"id":"evidence","maximumBytes":4096,
+        "contentTypes":["text/plain"],"classification":"restricted","writeOnce":true}]);
+    source["accessProfiles"]["clerk"]["permissions"]["records"][0]["readableAttachments"] =
+        json!(["evidence"]);
+    source["actions"]["correct-name"]["plan"]["effects"][0]["attachments"] =
+        json!({"evidence":{"fromAttachment":"support"}});
+    let fixture = client_http::ClientFixture::start_with_attachment_storage(
+        compile(source),
+        claims("synthetic-author", "zone-a"),
+        s3.storage.clone(),
+        move |mutations| mutations.with_attachment_verification(configured_verification),
+    )
+    .await;
+    let (audit, _capture) =
+        registry_breg::audit::test_support::capturing(verification_audit_profile());
+    let worker = verification_worker(&fixture, &s3, &verification, &audit);
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "After", "recheck-start").await;
+    let uploaded = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            BYTES,
+            &key("recheck-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(worker.run_once().await.unwrap());
+    let uploaded = client.read_proposal(&uploaded).await.unwrap().value;
+    let submit = client
+        .prepare_proposal(&uploaded, "submit", json!({}), &key("recheck-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let revisions = || async {
+        fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_revisions",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+    };
+    let revisions_before = revisions().await;
+
+    // The patch effect waits on an advisory lock this test holds, after the
+    // manifest check has passed and before the promotion runs.
+    let table = &fixture.registry.entities()["target"].physical_table;
+    fixture
+        .database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION registry_data.pause_promotion_effect() RETURNS trigger
+                LANGUAGE plpgsql AS $body$
+             BEGIN
+                 PERFORM set_config('lock_timeout','10s',true);
+                 PERFORM pg_advisory_xact_lock({PAUSE});
+                 RETURN NEW;
+             END $body$;
+             CREATE TRIGGER pause_promotion_effect BEFORE UPDATE ON registry_data.\"{table}\"
+             FOR EACH ROW EXECUTE FUNCTION registry_data.pause_promotion_effect()"
+        ))
+        .await
+        .unwrap();
+    let (barrier, barrier_task) = fixture.database.connect_migration().await;
+    barrier
+        .execute("SELECT pg_advisory_lock($1)", &[&PAUSE])
+        .await
+        .unwrap();
+    let apply = client
+        .prepare_proposal(
+            &submitted,
+            "apply",
+            json!({"submissionVersion":1,"effectDigest":submitted.effect_digest().unwrap(),
+                "reason":"promotion-reason"}),
+            &key("recheck-apply"),
+        )
+        .unwrap();
+    let reject_while_paused = async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: i64 = fixture
+                    .database
+                    .admin
+                    .query_one(
+                        "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted
+                           AND database=(SELECT oid FROM pg_database WHERE datname=current_database())",
+                        &[],
+                    )
+                    .await
+                    .unwrap()
+                    .get(0);
+                if waiting != 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Apply reached the effect after its manifest check");
+        set_verdict(&fixture, BYTES, "rejected").await;
+        barrier
+            .execute("SELECT pg_advisory_unlock($1)", &[&PAUSE])
+            .await
+            .unwrap();
+    };
+    let (refused, ()) = tokio::join!(client.execute_proposal(&apply), reject_while_paused);
+    barrier_task.abort();
+    let refused = refused.expect_err("a file rejected during apply is not promoted");
+    assert_eq!(refused.status(), Some(412));
+    assert_eq!(
+        refused.problem_code(),
+        Some(BRegProblemCode::PreconditionFailed)
+    );
+    assert!(promoted_references(&fixture).await.is_empty());
+    assert_eq!(
+        revisions().await,
+        revisions_before,
+        "the refused promotion rolls back the effect"
+    );
+    fixture.finish().await;
+}

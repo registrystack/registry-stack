@@ -252,6 +252,7 @@ traceability:
   # Size the record slot refuses: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_refuses_a_size_the_record_slot_does_not_accept
   # Record slot less restricted than the Proposal slot: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_refuses_a_record_slot_less_restricted_than_the_proposal_slot
   # Two promotions into one slot: crates/registry-breg/tests/attachment_promotion_compiler.rs::two_effects_cannot_promote_into_one_record_slot_of_one_record
+  # Verdict rejected after the manifest check: crates/registry-breg/tests/postgres_proposal_s3.rs::promotion_rechecks_a_verdict_rejected_after_the_manifest_check
   - {"id": "BREG-SEC-221", "state": "enforced", "negativeId": "BREG-NEG-221", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_s3.rs", "name": "promotion_references_the_verified_s3_object_and_refuses_unverified_bytes"}}
   # Empty optional source leaves the slot empty: crates/registry-breg/tests/postgres_record_attachments.rs::an_empty_optional_source_leaves_the_record_slot_empty
   # Create and patch reference one stored copy: crates/registry-breg/tests/postgres_record_attachments.rs::create_and_patch_effects_reference_one_stored_copy
