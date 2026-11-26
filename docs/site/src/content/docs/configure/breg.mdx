@@ -237,6 +237,7 @@ A profile without the grant gets 404.
 So do a record outside the profile's row boundaries, an empty slot and a file that verification has not approved.
 When the Record type keeps an [access log](../../operate/breg-access-log/), each download is recorded in it.
 History erasure removes the file reference, as [Erase retained history](../../operate/breg-retention/#erase-retained-history) explains.
+That includes a file a Proposal promoted: erasing the revision the Proposal wrote also removes the Proposal's link to it.
 
 {/* Evidence: crates/registry-breg/src/contract.rs (RecordAttachmentSlotSource, EffectAttachmentSource);
     crates/registry-breg/src/compiler/attachments.rs validate_record_slots();

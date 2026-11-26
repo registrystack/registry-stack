@@ -34,7 +34,7 @@ The examples use the record types and Actions of the facility template.
 
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
-| `history erase` | The retained revisions of one record up to a revision number, the correction context and outbox payloads that referenced them, the held responses that could replay them, and the record's file references from those revisions. | The current record, every later revision, the audit journal, each spent idempotency key, and file bytes another reference still needs. |
+| `history erase` | The retained revisions of one record up to a revision number, the correction context and outbox payloads that referenced them, the held responses that could replay them, the links from applied Proposals to those revisions, and the record's file references from those revisions. | The current record, every later revision, each applied Proposal, the audit journal, each spent idempotency key, and file bytes another reference still needs. |
 | `proposal-retention erase` | The payload detail of one Proposal submission version: frozen snapshots, draft input, application reasons, Review payloads, held responses, and attachment references. | The Proposal's value-free state history, record history, and each spent idempotency key. |
 | `proposal-retention cleanup-attachments` | Unreferenced attachment bytes in external storage that are waiting for deletion, from Proposals and from records. | Live attachment references, Proposal detail, and deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context an Action kept, once their 24-hour window has closed. | Assertions still inside their window, and the receipts of the Actions that used them. |
@@ -110,6 +110,11 @@ could replay an erased revision with a refusal, so a retry of that key answers
 `409 idempotency.key-reused` instead of returning the erased body. A request file that is not
 owner-only is refused before any connection opens. Live reads and writes continue.
 
+A revision that an applied Proposal wrote is erased like any other revision. The Proposal keeps
+its state and application, but its `resultLinks` stop naming the erased revision, and record
+history shows no Proposal link for it. The Proposal's detail has
+[its own retention](#erase-proposal-detail).
+
 Snapshot references at or after the earliest erased commit become unavailable, and erasing a
 record's baseline data makes all snapshot coverage unavailable. The next package still activates
 when the only gap is an erasure the database recorded as committed. Any other gap refuses a
@@ -119,7 +124,8 @@ package again afterwards.
 {/* Evidence: crates/registry-bregctl/src/history_erasure_lifecycle.rs, RawHistoryErasureRequest
     (recordType) and load_erasure_request;
     crates/registry-bregctl/src/lib.rs, HistoryEraseArgs;
-    crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
+    crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS and
+    delete_proposal_result_links;
     crates/registry-breg/src/postgres/interlock.rs, history_coverage_admits_successor;
     crates/registry-breg/tests/postgres_history_erasure.rs. */}
 
@@ -138,6 +144,8 @@ The record stays, but its slot cannot be filled again.
 :::
 
 Bytes go once no other record and no Proposal refers to them.
+The Proposal that promoted a file still refers to it, so those bytes stay until you erase the
+Proposal's detail.
 Database bytes go at once.
 External bytes wait for [external attachment cleanup](#retry-external-attachment-cleanup).
 An `erase-and-rebaseline` field-encryption migration keeps the record's files.
@@ -145,7 +153,8 @@ An `erase-and-rebaseline` field-encryption migration keeps the record's files.
 {/* Evidence: crates/registry-breg/src/attachment_store.rs, erase_record_attachments and
     retire_unreferenced;
     crates/registry-breg/src/history_erasure.rs;
-    crates/registry-breg/tests/postgres_record_attachments.rs. */}
+    crates/registry-breg/tests/postgres_record_attachments.rs,
+    history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision. */}
 
 ## Restore snapshot coverage after an erasure
 
