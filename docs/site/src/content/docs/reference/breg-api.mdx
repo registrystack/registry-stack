@@ -621,6 +621,14 @@ When `requiredConditionKeys` is empty, the descriptor advertises no target-condi
 the Invoke schema and runtime allow `preconditions` to be omitted or supplied as an empty object.
 Prefer to omit the member for such an Action.
 
+Send `Content-Type: application/json`.
+When the Action declares files, include every declared file in an `attachments` object beside `input`.
+Each file has `contentType`, a lowercase hexadecimal `sha256` digest and base64 `content`.
+The [record slot configuration](../../configure/breg/#keep-a-file-with-a-record) shows the request format.
+Availability and target-condition requests refuse an `attachments` member.
+An Invoke refuses a file whose stored verification verdict is already rejected with `412 precondition.failed`.
+An unseen or pending file can commit, but downloads stay concealed until verification approves it.
+
 Effects, revisions, audit, receipt, and outbox commit together or not at all; resend the original
 request with its original key when the outcome is uncertain. See
 [Actions and Proposals](../../configure/breg-actions/) for the model.

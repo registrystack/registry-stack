@@ -228,8 +228,9 @@ is read, and stores the reason on the subject access log entry of a Record type 
 The compiler refuses the key on a profile that grants an operation that does not check the header.
 BReg writes no subject-log entry for a Proposal attachment download or a Proposal review read, even
 when the review shows fields of a Record type with `accessLog`.
-A Record attachment download writes one when its Record type has `accessLog`.
 Those reads are recorded only in BReg's [audit records](../../operate/breg-monitor/#read-audit-records).
+A Record attachment download records a returned read in the subject access log when its Record type has `accessLog`.
+It also writes a read audit record.
 See obligation 22 and `BREG-RES-27` for what remains.
 
 {/* Evidence: crates/registry-breg/src/disclosure.rs, plan, record_guard_sql, refuses_write;
@@ -327,10 +328,10 @@ The marker keeps the file's SHA-256 digest, media type and size and the revision
 It drops who filled the slot and when.
 The runtime role can only add and read references, so it cannot replace or remove one.
 Hook events never carry file bytes.
-When file verification is configured, an immediate Action's file commits before the verification
-worker checks it.
+When file verification is configured, BReg refuses an immediate Action's file if its stored verdict is already rejected.
+An unseen or pending file commits before the verification worker checks it.
 Until the worker approves the file, it cannot be downloaded.
-A rejected file leaves the slot unreadable, and the slot cannot be filled again.
+A later rejection leaves the slot unreadable, and the slot cannot be filled again.
 Field disclosure conditions and field encryption do not cover file slots.
 BReg stores file bytes unencrypted, in PostgreSQL or in external storage.
 

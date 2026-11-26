@@ -243,6 +243,7 @@ traceability:
   # Caller-filtered OpenAPI: crates/registry-breg/tests/postgres_proposal_security.rs::record_discovery_declares_the_proposal_link_only_to_a_caller_who_can_receive_it
   - {"id": "BREG-SEC-217", "state": "enforced", "negativeId": "BREG-NEG-217", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_security.rs", "name": "record_history_omits_the_proposal_when_ownership_does_not_match"}}
   - {"id": "BREG-SEC-218", "state": "enforced", "negativeId": "BREG-NEG-218", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "profiles_without_the_grant_or_outside_the_row_boundary_cannot_read"}}
+  # Completed verdict admission: crates/registry-breg/tests/postgres_record_attachments.rs::immediate_action_refuses_a_completed_rejected_verdict_and_keeps_approved_and_unseen_files
   - {"id": "BREG-SEC-219", "state": "enforced", "negativeId": "BREG-NEG-219", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "a_write_once_slot_refuses_a_second_file_even_after_erasure"}}
   # Proposal erasure keeps bytes a Record refers to: crates/registry-breg/tests/postgres_record_attachments.rs::proposal_erasure_never_removes_bytes_a_record_refers_to
   # History erasure removes a promoted file and the Proposal link to the erased revision: crates/registry-breg/tests/postgres_record_attachments.rs::history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision

@@ -744,8 +744,8 @@ pub(crate) struct RecordAttachmentReference<'a> {
 ///
 /// [`MutationError::AttachmentSlotWriteOnce`] when the slot already holds a
 /// reference, live or erased. [`MutationError::PreconditionFailed`] when the
-/// bytes are not live under this size. [`MutationError::Conflict`] when the
-/// pinned storage binding differs.
+/// bytes are not live under this size or verification already rejected them.
+/// [`MutationError::Conflict`] when the pinned storage binding differs.
 pub(crate) async fn attach_record_reference(
     client: &Transaction<'_>,
     reference: &RecordAttachmentReference<'_>,
@@ -764,6 +764,11 @@ pub(crate) async fn attach_record_reference(
         .await
         .map_err(unavailable)?;
     if live.is_none() {
+        return Err(MutationError::PreconditionFailed);
+    }
+    if verification_status(client, reference.sha256, reference.content_type).await?
+        == AttachmentVerificationStatus::Rejected
+    {
         return Err(MutationError::PreconditionFailed);
     }
     let inserted = client
