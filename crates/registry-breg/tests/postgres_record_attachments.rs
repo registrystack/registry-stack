@@ -16,12 +16,17 @@ use base64::Engine as _;
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
+use registry_breg::field_encryption_backfill::{
+    erase_field_encryption_history, FieldEncryptionHistoryErasureRequest,
+};
 use registry_breg::history_erasure::{
     erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
 };
 use registry_breg::mutation::{MutationError, MutationFaultPoint};
 use registry_breg::postgres::RegistryLockKey;
-use registry_breg_client::{BRegIdempotencyKey, BRegProposalState};
+use registry_breg_client::{
+    BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegProposalState, BRegRecordFormat,
+};
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
 use sha2::Digest as _;
@@ -369,6 +374,10 @@ async fn counts(fixture: &client_http::ClientFixture) -> Counts {
 }
 
 async fn erase_history(fixture: &client_http::ClientFixture, record: Uuid) {
+    erase_history_through(fixture, record, 1).await;
+}
+
+async fn erase_history_through(fixture: &client_http::ClientFixture, record: Uuid, revision: i64) {
     let (mut migration, task) = fixture.database.connect_migration().await;
     erase_record_history(
         &mut migration,
@@ -383,7 +392,7 @@ async fn erase_history(fixture: &client_http::ClientFixture, record: Uuid) {
                 .audit(AuditProfile::production_from_secret_bytes(vec![0x71; 32].into()).unwrap()),
             operator_reference: "operator-reference",
             reason: "retention-request",
-            target: RecordHistoryErasureTarget::new("application", record, 1),
+            target: RecordHistoryErasureTarget::new("application", record, revision),
         },
     )
     .await
@@ -1407,7 +1416,10 @@ async fn history_links(fixture: &client_http::ClientFixture, record: Uuid) -> Ve
 /// `enrol` creates a record and promotes its file at revision 1, and a
 /// `rename` Proposal writes revision 2. History erasure through revision 1
 /// erases the promoted file and the link to the Proposal that wrote that
-/// revision. Each Proposal still reads, and only `rename` names a revision.
+/// revision. Each Proposal still reads, only `rename` names a revision, and
+/// `enrol` keeps its own file until its detail is erased. After history
+/// erasure through revision 2, a current read of `rename` names no revision,
+/// while a retry of its apply returns the receipt as first issued.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision() {
     let fixture =
@@ -1496,20 +1508,37 @@ async fn history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revi
         json!([]),
         "the Proposal names no erased revision"
     );
-    let (status, renamed) = get_json(
+    let (status, current) = get_json(
         &fixture,
         clerk("zone-a"),
         &format!("/v1/proposals/{}", rename.id()),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(status, StatusCode::OK, "{current}");
     assert_eq!(
-        renamed["application"]["resultLinks"],
+        current["application"]["resultLinks"],
         json!([{"recordType":"application","recordId":record.to_string(),"revision":2}]),
-        "{renamed}"
+        "{current}"
+    );
+    let client = &fixture.http.client;
+    let retained = client.read_proposal(&enrol).await.unwrap().value;
+    assert_eq!(
+        client
+            .download_proposal_attachment(&retained, "document")
+            .await
+            .expect("the Proposal keeps its own file")
+            .value
+            .as_bytes(),
+        EVIDENCE
     );
 
     assert_eq!(erase_proposal(&fixture, "enrol", &enrol).await, 1);
+    // `retained` still carries the download link read before this erasure.
+    let error = client
+        .download_proposal_attachment(&retained, "document")
+        .await
+        .expect_err("erasing the Proposal's detail ends the file download");
+    assert_eq!(error.status(), Some(404));
     assert!(
         blob_hashes(&fixture).await.is_empty(),
         "bytes no reference holds are removed"
@@ -1522,6 +1551,201 @@ async fn history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revi
     .await;
     assert_eq!(status, StatusCode::OK, "{enrolled}");
     assert_eq!(enrolled["state"], "applied", "{enrolled}");
+
+    erase_history_through(&fixture, record, 2).await;
+
+    let (status, current) = get_json(
+        &fixture,
+        clerk("zone-a"),
+        &format!("/v1/proposals/{}", rename.id()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{current}");
+    assert_eq!(
+        current["application"]["resultLinks"],
+        json!([]),
+        "{current}"
+    );
+    let replayed = apply_proposal(&fixture, &rename, "erase-rename")
+        .await
+        .expect("the same caller retries the apply with its key");
+    assert_eq!(
+        serde_json::to_value(replayed.application()).unwrap(),
+        serde_json::to_value(renamed.application()).unwrap(),
+        "the receipt answers as first issued"
+    );
+    fixture.finish().await;
+}
+
+async fn create_programme(fixture: &client_http::ClientFixture) -> Uuid {
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.programme.create", "clerk")
+        .unwrap()
+    else {
+        panic!("records.programme.create is a create binding")
+    };
+    let Value::Object(data) = json!({"open":true,"jurisdiction":"zone-a"}) else {
+        unreachable!("create payload is an object")
+    };
+    let created = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(data).unwrap(),
+            &key("rebaseline-programme"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    created.value.data.record_identifier.parse().unwrap()
+}
+
+/// Records that `application.name` was flipped with `erase-and-rebaseline`
+/// by a later activation, so the revisions written so far are the pre-flip
+/// ones. It writes the two ledger rows the lifecycle reads and encrypts nothing.
+async fn record_erase_and_rebaseline_flip(
+    fixture: &client_http::ClientFixture,
+    migration: &tokio_postgres::Client,
+) {
+    let boundary = Uuid::from_u128(0xF11F).to_string();
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_migrations
+                 (activation_id, apply_order, package_digest, predecessor_package_digest,
+                  registry_revision, plan_kind, migration_kind, statement_checksums,
+                  artifact_paths, artifact_checksums, outcome, completed_at, applied_at,
+                  role_mode, runtime_role)
+             SELECT $1::text::uuid, apply_order + 1, $2, package_digest, registry_revision,
+                    'successor', 'metadata-only', ARRAY[]::text[], ARRAY[]::text[],
+                    ARRAY[]::text[], 'applied', transaction_timestamp(),
+                    transaction_timestamp(), role_mode, runtime_role
+               FROM registry_internal.registry_migrations
+              WHERE activation_id::text = $3",
+            &[
+                &boundary,
+                &format!("sha256:{}", sha256_hex(boundary.as_bytes())),
+                &fixture.identity.activation_id,
+            ],
+        )
+        .await
+        .expect("the boundary activation inserts");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_field_encryption_flips
+                 (entity_id, field_id, boundary_package_revision, history_choice,
+                  history_commit_position, sealed_row_count, sealed_journal_row_count,
+                  accepted_plaintext_journal_row_count,
+                  accepted_proposal_target_row_count,
+                  accepted_proposal_submission_row_count,
+                  accepted_idempotency_row_count, accepted_outbox_row_count)
+             SELECT 'application', 'name', $1, 'erase-and-rebaseline', latest_position + 1,
+                    0, 0, 0, 0, 0, 0, 0
+               FROM registry_internal.registry_commit_head WHERE singleton",
+            &[&boundary],
+        )
+        .await
+        .expect("the flip inserts");
+}
+
+/// The `erase-and-rebaseline` lifecycle erases the pre-flip revision an
+/// applied Proposal wrote and completes. That Proposal stays applied and names
+/// no erased revision, and the record keeps its file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn erase_and_rebaseline_erases_a_revision_a_proposal_wrote() {
+    // The rebaseline checks each live row against its journal, so the
+    // programme is created through the API instead of by `insert_programme`.
+    let mut source = history_source();
+    let grant = &mut source["accessProfiles"]["clerk"]["permissions"]["records"][1];
+    grant["operations"] = json!(["create", "get", "list"]);
+    grant["writableFields"] = json!(["open", "jurisdiction"]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source).unwrap(), clerk("zone-a")).await;
+    let programme = create_programme(&fixture).await;
+    let enrol = submit_proposal(
+        &fixture,
+        "enrol",
+        enrol_input(programme, "Rebaselined applicant"),
+        &[("document", EVIDENCE)],
+        "rebaseline-enrol",
+    )
+    .await;
+    assert_eq!(
+        run_automatic(&fixture, &enrol).await,
+        ("applied".to_owned(), None)
+    );
+    let record = *application_ids(&fixture, "Rebaselined applicant")
+        .await
+        .first()
+        .expect("the applied Proposal created the record");
+
+    let (mut migration, task) = fixture.database.connect_migration().await;
+    record_erase_and_rebaseline_flip(&fixture, &migration).await;
+    // The rebaseline keeps the live record's newest revision, so `rename`
+    // writes one past the flip, as sealing the live values does.
+    let rename = submit_proposal(
+        &fixture,
+        "rename",
+        json!({"target":record.to_string(),"value":"Renamed applicant"}),
+        &[],
+        "rebaseline-rename",
+    )
+    .await;
+    apply_proposal(&fixture, &rename, "rebaseline-rename")
+        .await
+        .unwrap();
+    let outcome = erase_field_encryption_history(
+        &mut migration,
+        FieldEncryptionHistoryErasureRequest {
+            expected: &fixture.identity,
+            migration_role: &fixture.database.migration_role,
+            lock_key: RegistryLockKey::derive(fixture.registry.registry_id()).unwrap(),
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &fixture
+                .database
+                .audit(AuditProfile::production_from_secret_bytes(vec![0x71; 32].into()).unwrap()),
+            operator_reference: "operator-reference",
+            reason: "retention-request",
+            registry: &fixture.registry,
+        },
+    )
+    .await
+    .expect("the lifecycle completes");
+    drop(migration);
+    task.abort();
+    assert_eq!(outcome.erased_record_count, 1);
+    assert_eq!(outcome.erased_revision_count, 1);
+
+    assert_eq!(
+        history_links(&fixture, record).await,
+        vec![json!(rename.id())]
+    );
+    let (status, enrolled) = get_json(
+        &fixture,
+        clerk("zone-a"),
+        &format!("/v1/proposals/{}", enrol.id()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enrolled}");
+    assert_eq!(enrolled["state"], "applied", "{enrolled}");
+    assert_eq!(
+        enrolled["application"]["resultLinks"],
+        json!([]),
+        "{enrolled}"
+    );
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
     fixture.finish().await;
 }
 
