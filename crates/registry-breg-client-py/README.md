@@ -294,11 +294,15 @@ The server rechecks the full context's current disclosure before releasing bytes
 
 ## Record attachments
 
-An applied Proposal can promote its file into a record attachment slot. Read
-that file with
+A record attachment slot holds a file that an immediate Action wrote or an
+applied Proposal promoted. Read that file with
 `download_record_attachment(record_route, record_identifier, slot, access_profile=None)`.
 The method checks the route, record identifier and slot before I/O. It returns
-the bytes only when they match the service's `Repr-Digest`.
+the bytes only when they match the service's `Repr-Digest`. A slot can hold up
+to 16 MiB, but the client reads at most 8 MiB by default, so raise
+`maximum_response_bytes` to download larger files. The client cannot yet send
+request files, so an immediate Action that declares attachments is not
+invocable from it.
 
 ```python
 stored = client.download_record_attachment("applications", record_id, "evidence", "auditor")

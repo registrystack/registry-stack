@@ -42,6 +42,17 @@ REVISION = {
 }
 
 
+TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
+NOT_FOUND = {
+    "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
+    "title": "Not Found",
+    "status": 404,
+    "detail": "The requested resource was not found.",
+    "code": "resource.not_found",
+    "traceId": TRACE_ID,
+}
+
+
 def digest(body: bytes) -> str:
     return "sha-256=:" + base64.b64encode(hashlib.sha256(body).digest()).decode() + ":"
 
@@ -50,6 +61,7 @@ class RecordAttachmentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.requests = []
         self.digest_header = digest(CONTENT)
+        self.concealed = False
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -57,6 +69,16 @@ class RecordAttachmentTests(unittest.TestCase):
                 owner.requests.append((self.path, self.headers.get("accept")))
                 path = self.path.split("?")[0]
                 attachment = "/attachments/" in path
+                if attachment and owner.concealed:
+                    problem = json.dumps(NOT_FOUND).encode()
+                    self.send_response(404)
+                    self.send_header("traceparent", TRACEPARENT)
+                    self.send_header("cache-control", "no-store")
+                    self.send_header("content-type", "application/problem+json")
+                    self.send_header("content-length", str(len(problem)))
+                    self.end_headers()
+                    self.wfile.write(problem)
+                    return
                 if attachment:
                     payload = CONTENT
                 elif path.endswith("/revisions"):
@@ -119,6 +141,25 @@ class RecordAttachmentTests(unittest.TestCase):
                         "applications", RECORD_ID, SLOT
                     )
                 self.assertEqual(refused.exception.kind, "protocol")
+
+    def test_a_concealed_file_surfaces_the_service_problem(self) -> None:
+        self.concealed = True
+        with self.assertRaises(BaseRegistryClientError) as refused:
+            self.client.download_record_attachment("applications", RECORD_ID, SLOT)
+        self.assertEqual(refused.exception.kind, "not-found")
+        self.assertEqual(refused.exception.status, 404)
+        self.assertEqual(refused.exception.code, "resource.not_found")
+        self.assertEqual(refused.exception.trace_id, TRACE_ID)
+
+    def test_a_file_larger_than_the_response_bound_is_refused_unread(self) -> None:
+        client = BaseRegistryClient(
+            f"http://127.0.0.1:{self.server.server_port}",
+            maximum_response_bytes=len(CONTENT) - 1,
+        )
+        with self.assertRaises(BaseRegistryClientError) as refused:
+            client.download_record_attachment("applications", RECORD_ID, SLOT)
+        self.assertEqual(refused.exception.kind, "transport")
+        self.assertEqual(refused.exception.transport_kind, "response-too-large")
 
     def test_invalid_selectors_never_reach_http(self) -> None:
         for route, record, slot in (

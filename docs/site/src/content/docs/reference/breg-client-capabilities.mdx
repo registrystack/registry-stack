@@ -203,9 +203,12 @@ whose mode is Proposal Start. Then:
 - `uploadProposalAttachment`, `downloadProposalAttachment`, and `deleteProposalAttachment` work on
   one declared slot. Submitting freezes the attachment digests, so changed bytes cannot inherit an
   earlier approval.
-- `downloadRecordAttachment(recordRoute, recordIdentifier, slot, accessProfile)` reads a file that
-  an applied Proposal promoted into a record slot. The bytes are returned only when they match the
-  service's `Repr-Digest`.
+- `downloadRecordAttachment(recordRoute, recordIdentifier, slot, accessProfile)` reads the file in a
+  record slot, whether an immediate Action wrote it or an applied Proposal promoted it. The bytes are
+  returned only when they match the service's `Repr-Digest`. A slot holds up to 16 MiB, and the
+  clients read 8 MiB by default, so raise the maximum response size to download larger files.
+- The clients cannot yet send request files, so an immediate Action that declares attachments is
+  not invocable from them.
 
 To show the applicant's current review stage, call
 `readProposalReviewStatusWithProgress(proposal)` in Node or

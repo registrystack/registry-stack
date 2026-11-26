@@ -66,6 +66,52 @@ test('a record attachment whose bytes miss the stated digest is a protocol refus
   }
 });
 
+async function serveDownload(t, answer, options = {}) {
+  const server = http.createServer((request, response) => {
+    response.setHeader('traceparent', traceparent);
+    response.setHeader('cache-control', 'no-store');
+    answer(response);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return new BaseRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, ...options });
+}
+
+test('a concealed record attachment surfaces the service Problem', async t => {
+  const client = await serveDownload(t, response => {
+    response.statusCode = 404;
+    response.setHeader('content-type', 'application/problem+json');
+    response.end(JSON.stringify({
+      type: 'https://id.registrystack.org/problems/registry-breg/resource/not_found',
+      title: 'Not Found',
+      status: 404,
+      detail: 'The requested resource was not found.',
+      code: 'resource.not_found',
+      traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+    }));
+  });
+  await assert.rejects(
+    client.downloadRecordAttachment('applications', id, slot),
+    error => error.kind === 'not-found' && error.status === 404
+      && error.code === 'resource.not_found' && error.traceId === '4bf92f3577b34da6a3ce929d0e0e4736',
+  );
+});
+
+test('a record attachment larger than the response bound is refused unread', async t => {
+  const client = await serveDownload(t, response => {
+    response.setHeader('content-type', 'application/pdf');
+    response.setHeader('content-disposition', 'attachment');
+    response.setHeader('x-content-type-options', 'nosniff');
+    response.setHeader('vary', 'authorization');
+    response.setHeader('repr-digest', digest(bytes));
+    response.end(bytes);
+  }, { maximumResponseBytes: bytes.length - 1 });
+  await assert.rejects(
+    client.downloadRecordAttachment('applications', id, slot),
+    error => error.kind === 'transport' && error.transportKind === 'response-too-large',
+  );
+});
+
 test('invalid record attachment selectors never reach HTTP', async t => {
   const { client, requests } = await serve(t, digest(bytes));
   for (const [route, record, name] of [

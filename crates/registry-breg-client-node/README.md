@@ -295,11 +295,15 @@ substitute a Registry Record ETag or construct an attachment route.
 
 ## Record attachments
 
-An applied Proposal can promote its file into a record attachment slot. Read
-that file with
+A record attachment slot holds a file that an immediate Action wrote or an
+applied Proposal promoted. Read that file with
 `downloadRecordAttachment(recordRoute, recordIdentifier, slot, accessProfile?)`.
 The method checks the route, record identifier and slot before I/O. It returns
-the bytes only when they match the service's `Repr-Digest`.
+the bytes only when they match the service's `Repr-Digest`. A slot can hold up
+to 16 MiB, but the client reads at most 8 MiB by default, so raise
+`maximumResponseBytes` to download larger files. The client cannot yet send
+request files, so an immediate Action that declares attachments is not
+invocable from it.
 
 ```js
 const file = await client.downloadRecordAttachment('applications', recordId,

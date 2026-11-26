@@ -36,7 +36,10 @@
   Proposal refers to them. Proposal erasure keeps bytes a record refers to,
   including promoted files, and removes the rest. The Rust and Python
   clients gain `download_record_attachment`, and the Node.js client gains
-  `downloadRecordAttachment`.
+  `downloadRecordAttachment`. A download reads at most 8 MiB unless the
+  client's maximum response size is raised. The clients cannot yet send
+  request files, so an immediate Action that declares attachments is not
+  invocable from them.
 - BREAKING: record file references live in the
   `registry_internal.registry_record_attachments` table, and the managed
   schema fingerprint changes with it. The fingerprint also covers a new index
