@@ -35,10 +35,11 @@ const SOURCE_REVISION: &str = "rehearsal-source-revision";
 // refusal code column, and the subject access log access-reason and
 // access-kind columns, the index of Proposal results by target revision, the
 // registry_record_attachments table of record file references, and the
-// record attachment live-reference index. The migration ledger bounds
-// statement checksums at 4,096 entries.
+// record attachment live-reference index, and nullable file metadata with
+// live/erased shape constraints for stripped Record/Proposal attachment
+// erasure markers. The migration ledger bounds statement checksums at 4,096 entries.
 const PORTABLE_SCHEMA_FINGERPRINT: &str =
-    "sha256:26a0ca6340e1d5dfba9eed98657d37790f6612a6e52ee1cff2a78d64a90437a9";
+    "sha256:c58b5cd1466d9b41b9a9d71caac5076abc285cd4567861d15a048659d518bf1b";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []
