@@ -124,10 +124,10 @@
   `--payment-provider-pack`, and authenticate with `bearer` or, for Mifos
   Payment Hub EE, `mifos-legacy-signature`, which signs the exact Bulk request
   through a pinned Transit key and reads Operations status under a separate
-  bearer credential. Live Mifos signing through a real Transit engine is not
-  verified yet; do not let a live disbursement move real money until that
-  verification lands. A provider confirmation is not proof of beneficiary
-  credit or settlement.
+  bearer credential. Full Linux CI exercises the signature with OpenBao and
+  a synthetic provider. Verify your deployed provider pack and Mifos route
+  in a sandbox before moving money. Verify beneficiary credit and settlement
+  separately.
 - `adapterctl payments check` validates connections offline and
   `adapterctl payments contract` exports their typed HTTP contract. Generated
   schemas, a native Coordinator workflow, the restricted BReg fee fixture,

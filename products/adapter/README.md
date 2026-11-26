@@ -33,9 +33,9 @@ Operations completion does not authorize a paid fee-bill receipt.
 
 The Transit Unix socket must be an absolute local path protected by deployment
 ACLs and a trusted proxy policy. Adapter pins the mount, key name, version and
-SPKI SHA-256 digest for separate signing and response-verification keys. The
-repository's fake Transit regression checks the wire contract, but does not
-establish live OpenBao `/none` plus `prehashed` interoperability.
+SPKI SHA-256 digest for separate signing and response-verification keys.
+Full Linux CI exercises `/none` with `prehashed: true` through OpenBao Transit
+and its Unix proxy. The test uses a synthetic provider.
 
 For a provider pack upgrade, repeat `--payment-provider-pack` with the current
 pack and every retained pack still needed by an unfinished attempt. The host
