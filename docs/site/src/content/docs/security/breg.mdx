@@ -305,9 +305,17 @@ The file commits in the transaction that writes the record, its history, the ide
 any hook event.
 BReg checks the media type, the size and the SHA-256 digest before it writes anything.
 A slot that already holds a file refuses a second one with `409 attachment.slot-write-once`.
-Erasing the slot's reference leaves a value-free marker, so the slot is never filled again.
+Erasing the slot's reference leaves a marker, so the slot is never filled again.
+The marker keeps the file's SHA-256 digest, media type and size and the revision that filled the slot.
+It drops who filled the slot and when.
 The runtime role can only add and read references, so it cannot replace or remove one.
 Hook events never carry file bytes.
+When file verification is configured, an immediate Action's file commits before the verification
+worker checks it.
+Until the worker approves the file, it cannot be downloaded.
+A rejected file leaves the slot unreadable, and the slot cannot be filled again.
+Field disclosure conditions and field encryption do not cover file slots.
+BReg stores file bytes unencrypted, in PostgreSQL or in external storage.
 
 A download needs the slot in the selected profile's `readableAttachments`, and `bregctl check` accepts
 that grant only beside `get` on the Record type.
@@ -328,7 +336,10 @@ The verification worker also checks files that only a record holds.
 
 A promotion adds a record reference to the bytes that the frozen Proposal file already holds.
 `bregctl check` accepts it only when the record slot accepts every media type and size the Proposal slot accepts.
-The record slot must also be classified at least as restricted as the Proposal slot, so a promoted file never loses protection.
+The record slot must also be classified at least as restricted as the Proposal slot, so a promoted
+file's classification label never drops.
+The label is checked once, by `bregctl check`.
+Who can download the promoted file is then decided by the record grants' `readableAttachments`.
 Promotions are part of the Action's definition revision, so changing one changes the Action.
 So are the request-file bindings of an immediate Action.
 Apply rebuilds the Proposal's file manifest and refuses a file that verification has not approved.

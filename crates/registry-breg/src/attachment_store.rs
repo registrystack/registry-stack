@@ -719,7 +719,9 @@ pub(crate) async fn erase(
 
 /// One record slot's reference to deduplicated bytes. A record slot is
 /// write-once: its first reference fills it for good, and an erased
-/// reference stays as a value-free tombstone that keeps the slot filled.
+/// reference stays as a tombstone that keeps the slot filled. The tombstone
+/// keeps the digest, media type, size and filling revision, and drops who
+/// filled the slot and when.
 pub(crate) struct RecordAttachmentReference<'a> {
     pub entity_id: &'a str,
     pub record_id: Uuid,
@@ -925,8 +927,8 @@ pub(crate) async fn load_record_attachment(
 }
 
 /// Erase the references that a record's erased history introduced: every
-/// slot filled at or before `through_revision`. Each slot keeps a value-free
-/// tombstone, so a write-once slot is never filled again, and bytes nothing
+/// slot filled at or before `through_revision`. Each slot keeps a tombstone,
+/// so a write-once slot is never filled again, and bytes nothing
 /// else refers to become eligible for deletion.
 pub(crate) async fn erase_record_attachments(
     client: &impl GenericClient,
