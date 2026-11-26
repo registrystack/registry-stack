@@ -1526,6 +1526,130 @@ async fn promotion_into_a_filled_slot_answers_409_and_rolls_back_the_whole_apply
     fixture.finish().await;
 }
 
+/// The fixture plus `pair`, a Proposal Action whose two create effects each
+/// promote a different Proposal file, `left` from `first` and `right` from
+/// `second`.
+fn paired_promotion_source() -> Value {
+    let mut source = record_source();
+    let slot = |id: &str| {
+        json!({"id":id,"required":true,"maximumBytes":64,"contentTypes":["text/plain"],
+            "classification":"restricted"})
+    };
+    let create = |id: &str, from: &str| {
+        json!({"id":id,"target":{"recordType":"application"},"operation":"create",
+            "set":{"name":{"fromInput":"name"},"jurisdiction":{"fromInput":"jurisdiction"},
+                "programme":{"fromInput":"programme"}},
+            "attachments":{"evidence":{"fromAttachment":from}}})
+    };
+    source["actions"]["pair"] = json!({"execution":{"mode":"proposal","proposal":{
+            "review":{"type":"none"},"application":{"mode":"manual"},
+            "retention":{"mode":"operator-erase"},"attachments":[slot("first"), slot("second")]}},
+        "inputs":source["actions"]["enrol"]["inputs"].clone(),
+        "plan":{"type":"fixed","effects":[create("left", "first"), create("right", "second")]}});
+    let targets = json!([
+        {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
+        {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]);
+    let clerk = &mut source["accessProfiles"]["clerk"]["permissions"];
+    clerk["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"action":"pair","operations":["start"],"targets":targets.clone()}));
+    clerk["proposals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"action":"pair",
+        "operations":["get","list","edit","submit","apply"],"ownership":"caller",
+        "readableAttachments":["first","second"],"writableAttachments":["first","second"],
+        "targets":targets}));
+    source
+}
+
+/// Calls a session advisory lock `function` on the key the content-hash lock
+/// of `bytes` takes, and returns its answer.
+async fn hash_lock(client: &tokio_postgres::Client, function: &str, bytes: &[u8]) -> bool {
+    client
+        .query_one(
+            &format!("SELECT {function}(hashtextextended($1, 960))"),
+            &[&sha256_hex(bytes)],
+        )
+        .await
+        .unwrap()
+        .get(0)
+}
+
+/// Promotions lock content hashes in hash order, as the immediate path does,
+/// so two applies that share files cannot each hold the hash the other
+/// waits for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotions_lock_content_hashes_in_hash_order() {
+    let fixture = client_http::ClientFixture::start(
+        compile(paired_promotion_source()).unwrap(),
+        clerk("zone-a"),
+    )
+    .await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    // `left` runs first and promotes the higher hash, so effect order and
+    // hash order disagree.
+    let (high, low): (&[u8], &[u8]) = if sha256_hex(b"paired-one") > sha256_hex(b"paired-two") {
+        (b"paired-one", b"paired-two")
+    } else {
+        (b"paired-two", b"paired-one")
+    };
+    let submitted = submit_proposal(
+        &fixture,
+        "pair",
+        enrol_input(programme, "Paired"),
+        &[("first", high), ("second", low)],
+        "pair",
+    )
+    .await;
+    // Another apply holds the lower hash.
+    let (holder, holder_task) = fixture.database.connect_migration().await;
+    assert!(hash_lock(&holder, "pg_try_advisory_lock", low).await);
+    let probe = async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: i64 = fixture
+                    .database
+                    .admin
+                    .query_one(
+                        "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted
+                           AND database=(SELECT oid FROM pg_database WHERE datname=current_database())",
+                        &[],
+                    )
+                    .await
+                    .unwrap()
+                    .get(0);
+                if waiting != 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the apply waits for the lower hash");
+        // While it waits, the apply must not hold the higher hash.
+        let (prober, prober_task) = fixture.database.connect_migration().await;
+        let free = hash_lock(&prober, "pg_try_advisory_lock", high).await;
+        if free {
+            assert!(hash_lock(&prober, "pg_advisory_unlock", high).await);
+        }
+        drop(prober);
+        prober_task.abort();
+        assert!(hash_lock(&holder, "pg_advisory_unlock", low).await);
+        free
+    };
+    let (applied, higher_free) = tokio::join!(apply_proposal(&fixture, &submitted, "pair"), probe);
+    holder_task.abort();
+    assert!(
+        higher_free,
+        "an apply waiting for the lower hash holds no higher hash"
+    );
+    applied.expect("the apply completes once the lower hash is free");
+    assert_eq!(counts(&fixture).await.references, 2);
+    fixture.finish().await;
+}
+
 #[test]
 fn declarations_grants_and_effects_are_validated() {
     let refused = |mutate: &dyn Fn(&mut Value), code: &str| {

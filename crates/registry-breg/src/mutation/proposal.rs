@@ -2805,10 +2805,27 @@ impl MutationTransaction {
         }
         let backend = self.attachment_storage.binding_digest();
         let verification = self.attachment_verification.binding_digest();
-        for promotion in &proposal.promotions {
-            let Some(file) = frozen.attachments().get(&promotion.from_attachment) else {
-                continue;
-            };
+        // Content-hash lock order, as the immediate path uses, so two applies
+        // sharing files cannot deadlock. An empty optional Proposal slot has
+        // no file and promotes nothing.
+        let mut promotions = proposal
+            .promotions
+            .iter()
+            .filter_map(|promotion| {
+                frozen
+                    .attachments()
+                    .get(&promotion.from_attachment)
+                    .map(|file| (promotion, file))
+            })
+            .collect::<Vec<_>>();
+        promotions.sort_by(|(left, left_file), (right, right_file)| {
+            left_file
+                .sha256
+                .cmp(&right_file.sha256)
+                .then_with(|| left.effect_id.cmp(&right.effect_id))
+                .then_with(|| left.slot_id.cmp(&right.slot_id))
+        });
+        for (promotion, file) in promotions {
             let (entity_id, record_id, revision) = applied
                 .get(&promotion.effect_id)
                 .ok_or(MutationError::PreconditionFailed)?;
