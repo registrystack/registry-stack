@@ -300,7 +300,7 @@ access_profile)` reads the file in a record slot, whether an immediate Action
 wrote it or an applied Proposal promoted it. It checks the route, record
 identifier and slot before I/O. It returns the bytes only when they match the
 service's `Repr-Digest`. A slot can hold up to 16 MiB, but the client reads at
-most 8 MiB by default, so raise the limit with `with_maximum_response_bytes` to
+most 8 MiB by default. Raise the limit with `with_maximum_response_bytes` to
 download larger files. The client cannot yet send request files, so an
 immediate Action that declares attachments is not invocable from it.
 
