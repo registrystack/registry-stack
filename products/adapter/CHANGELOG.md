@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- `adapter serve --payments-config` hosts typed synthetic payment collection
+  operations on the shared listener and PostgreSQL store, including without
+  a record project. Connections bind institution/service scope, admitted
+  callers, provider tenant/biller and separate BReg reporting credentials.
+  Retained attempts preserve their original binding and exact commands across
+  response loss and restart. Only a confirmed, correlated receipt can mark
+  the authoritative bill paid. One attempt is permitted per bill version,
+  including after definitive failure. Collections are simulation-only: a
+  collection binding other than the simulator with `simulation: true` is
+  refused with `adapter.payment.collection-simulation-only`. Live collection
+  providers, replacement attempts, refunds and settlement are outside this
+  slice.
+- The same host serves typed G2P disbursements: request a disbursement from an
+  approved BReg instruction, read its correlated provider observation, and
+  report verified provider confirmation through a restricted BReg Action. An
+  uncertain submission is never sent again. Disbursement connections pin a
+  provider pack, passed to `adapter serve` with a repeatable
+  `--payment-provider-pack`, and authenticate with `bearer` or, for Mifos
+  Payment Hub EE, `mifos-legacy-signature`, which signs the exact Bulk request
+  through a pinned Transit key and reads Operations status under a separate
+  bearer credential. Full Linux CI exercises the signature with OpenBao and
+  a synthetic provider. Verify your deployed provider pack and Mifos route
+  in a sandbox before moving money. Verify beneficiary credit and settlement
+  separately.
+- `adapterctl payments check` validates connections offline and
+  `adapterctl payments contract` exports their typed HTTP contract. Generated
+  schemas, a native Coordinator workflow, the restricted BReg fee fixture,
+  and a joined native acceptance runner accompany the payment host.
+
 ## 0.47.0 - 2026-11-21
 
 - Accept an optional `project.label` and `project.description` in the project
@@ -104,34 +133,6 @@
 - A reviewed projection operation serves BReg's read-only external views. See
   the BReg changelog and the
   [external projections pack](examples/external-projections/README.md).
-- `adapter serve --payments-config` hosts typed synthetic payment collection
-  operations on the shared listener and PostgreSQL store, including without
-  a record project. Connections bind institution/service scope, admitted
-  callers, provider tenant/biller and separate BReg reporting credentials.
-  Retained attempts preserve their original binding and exact commands across
-  response loss and restart. Only a confirmed, correlated receipt can mark
-  the authoritative bill paid. One attempt is permitted per bill version,
-  including after definitive failure. Collections are simulation-only: a
-  collection binding other than the simulator with `simulation: true` is
-  refused with `adapter.payment.collection-simulation-only`. Live collection
-  providers, replacement attempts, refunds and settlement are outside this
-  slice.
-- The same host serves typed G2P disbursements: request a disbursement from an
-  approved BReg instruction, read its correlated provider observation, and
-  report verified provider confirmation through a restricted BReg Action. An
-  uncertain submission is never sent again. Disbursement connections pin a
-  provider pack, passed to `adapter serve` with a repeatable
-  `--payment-provider-pack`, and authenticate with `bearer` or, for Mifos
-  Payment Hub EE, `mifos-legacy-signature`, which signs the exact Bulk request
-  through a pinned Transit key and reads Operations status under a separate
-  bearer credential. Full Linux CI exercises the signature with OpenBao and
-  a synthetic provider. Verify your deployed provider pack and Mifos route
-  in a sandbox before moving money. Verify beneficiary credit and settlement
-  separately.
-- `adapterctl payments check` validates connections offline and
-  `adapterctl payments contract` exports their typed HTTP contract. Generated
-  schemas, a native Coordinator workflow, the restricted BReg fee fixture,
-  and a joined native acceptance runner accompany the payment host.
 
 ## 0.46.0 - 2026-11-08
 
