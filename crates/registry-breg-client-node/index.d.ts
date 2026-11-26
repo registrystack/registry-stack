@@ -28,6 +28,11 @@ export declare class BaseRegistryClient {
   recordSchema(recordTypeIdentifier: string, accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>
   /** Retrieve one bounded first page of record revisions as inert JSON. */
   recordRevisions(recordRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>
+  /**
+   * Download the file in one record attachment slot. The bytes are
+   * returned only when they match the service's `Repr-Digest`.
+   */
+  downloadRecordAttachment(recordRoute: string, recordIdentifier: string, slot: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
   /** Retrieve one exact retained revision as validated inert record JSON. */
   getRecordRevision(recordRoute: string, recordIdentifier: string, revision: number, options?: any | undefined | null, cancellation?: ReadCancellation | undefined | null): Promise<RawOutcome>
   /**

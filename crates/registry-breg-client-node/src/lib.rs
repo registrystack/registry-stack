@@ -2969,6 +2969,28 @@ impl BaseRegistryClient {
         .await
     }
 
+    /// Download the file in one record attachment slot. The bytes are
+    /// returned only when they match the service's `Repr-Digest`.
+    #[napi]
+    pub async fn download_record_attachment(
+        &self,
+        record_route: String,
+        record_identifier: String,
+        slot: String,
+        access_profile: Option<String>,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .download_record_attachment(
+                &record_route,
+                &record_identifier,
+                &slot,
+                access_profile.as_deref(),
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
     /// Retrieve one exact retained revision as validated inert record JSON.
     #[napi]
     pub async fn get_record_revision(

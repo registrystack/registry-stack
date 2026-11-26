@@ -401,9 +401,9 @@
     },
     {
       "id": "attachments",
-      "rust": ["upload_proposal_attachment", "download_proposal_attachment", "delete_proposal_attachment"],
-      "node": ["uploadProposalAttachment", "downloadProposalAttachment", "deleteProposalAttachment"],
-      "python": ["upload_proposal_attachment", "download_proposal_attachment", "delete_proposal_attachment"]
+      "rust": ["upload_proposal_attachment", "download_proposal_attachment", "delete_proposal_attachment", "download_record_attachment"],
+      "node": ["uploadProposalAttachment", "downloadProposalAttachment", "deleteProposalAttachment", "downloadRecordAttachment"],
+      "python": ["upload_proposal_attachment", "download_proposal_attachment", "delete_proposal_attachment", "download_record_attachment"]
     },
     {
       "id": "create-recovery",

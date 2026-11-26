@@ -292,6 +292,18 @@ read with `read_proposal_review_by_id(binding, proposal_id)`, then call
 document field. This does not require or grant ordinary Proposal Get authority.
 The server rechecks the full context's current disclosure before releasing bytes.
 
+## Record attachments
+
+An applied Proposal can promote its file into a record attachment slot. Read
+that file with
+`download_record_attachment(record_route, record_identifier, slot, access_profile=None)`.
+The method checks the route, record identifier and slot before I/O. It returns
+the bytes only when they match the service's `Repr-Digest`.
+
+```python
+stored = client.download_record_attachment("applications", record_id, "evidence", "auditor")
+```
+
 ## Explicit OAuth token exchange
 
 For automatic context-bound authorization, construct `BaseRegistryClient` with
