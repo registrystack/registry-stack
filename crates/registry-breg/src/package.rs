@@ -353,6 +353,9 @@ pub enum CompiledRegistryChangeCode {
     EntityAccessLogChanged,
     EntityGeoJsonChanged,
     EntityTemporalChanged,
+    RecordAttachmentSlotAdded,
+    RecordAttachmentSlotRemoved,
+    RecordAttachmentSlotChanged,
     FieldAddedOptional,
     FieldAddedRequired,
     FieldRemoved,
@@ -425,6 +428,7 @@ pub struct CompiledRegistryChangeTarget {
 pub enum CompiledRegistryChangeTargetKind {
     Registry,
     RecordType,
+    RecordAttachmentSlot,
     Field,
     DerivedRelation,
     Constraint,
@@ -1243,6 +1247,9 @@ impl CompiledRegistryChangeCode {
             Self::FieldGenerationChanged => Some(
                 "enabling generation on a retained field needs a reviewed backfill of missing values; changing or removing an active generator is unsupported",
             ),
+            Self::RecordAttachmentSlotRemoved | Self::RecordAttachmentSlotChanged => Some(
+                "a record attachment slot id and its policy remain stable while retained record files can name it. Keep the existing slot unchanged and add a new slot id for a different policy",
+            ),
             _ => None,
         }
     }
@@ -1255,6 +1262,18 @@ fn compare_entities(
 ) {
     for (entity_id, previous_entity) in &previous.entities {
         let Some(candidate_entity) = candidate.entities.get(entity_id) else {
+            for slot_id in previous_entity.attachments.keys() {
+                push_change(
+                    changes,
+                    CompiledRegistryChangeClass::Unsupported,
+                    CompiledRegistryChangeCode::RecordAttachmentSlotRemoved,
+                    target(
+                        CompiledRegistryChangeTargetKind::RecordAttachmentSlot,
+                        Some(entity_id.as_str()),
+                        Some(slot_id.as_str()),
+                    ),
+                );
+            }
             for field_id in previous_entity
                 .fields
                 .iter()
@@ -1384,6 +1403,19 @@ fn compare_entities(
                 ),
             );
         }
+        compare_map(
+            entity_id,
+            &previous_entity.attachments,
+            &candidate_entity.attachments,
+            CompiledRegistryChangeTargetKind::RecordAttachmentSlot,
+            CompiledRegistryChangeCode::RecordAttachmentSlotAdded,
+            CompiledRegistryChangeCode::RecordAttachmentSlotRemoved,
+            CompiledRegistryChangeCode::RecordAttachmentSlotChanged,
+            CompiledRegistryChangeClass::CompatibleAdditive,
+            CompiledRegistryChangeClass::Unsupported,
+            CompiledRegistryChangeClass::Unsupported,
+            changes,
+        );
         compare_fields(entity_id, previous_entity, candidate_entity, changes);
         compare_derived_relations(entity_id, previous_entity, candidate_entity, changes);
         compare_map(

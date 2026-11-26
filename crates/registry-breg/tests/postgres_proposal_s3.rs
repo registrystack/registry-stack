@@ -15,6 +15,8 @@ use axum::{
     response::{IntoResponse, Response},
     Router,
 };
+use base64::Engine as _;
+use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::{
     api::{VerifiedClaimValue, VerifiedRequestClaims},
     attachment_storage::AttachmentStorage,
@@ -27,6 +29,7 @@ use registry_breg_client::{
     BRegRecordFormat,
 };
 use serde_json::{json, Map, Value};
+use sha2::Digest as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -85,10 +88,66 @@ fn registry_source(automatic: bool) -> Value {
 }
 fn compile(source: Value) -> registry_breg::CompiledRegistry {
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
-    compile_project(&project, &[], CompileProfile::Authoring).expect("standalone Proposal compiles")
+    compile_project(&project, &[], CompileProfile::Authoring).expect("standalone registry compiles")
 }
 fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
     compile(registry_source(automatic))
+}
+
+fn immediate_action_registry() -> registry_breg::CompiledRegistry {
+    compile(json!({
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+        "project":{"id":"proposal-test","version":"1","defaultLanguage":"en",
+            "canonicalBaseIri":"https://proposal.example.test"},
+        "datasets":{"directory": {}},
+        "recordTypes":{"application":{"primaryDataset":"directory","route":"applications",
+            "mutationMode":"mutable","fields":[
+                {"id":"name","type":"string","required":true,"maximumLength":64,
+                    "classification":"internal"}],
+            "attachments":[{"id":"evidence","maximumBytes":4096,
+                "contentTypes":["text/plain"],"classification":"restricted","writeOnce":true}]}},
+        "actions":{"register":{"execution":{"mode":"immediate"},"inputs":[
+            {"id":"name","type":"string","required":true,"maximumLength":64,
+                "classification":"internal"}],
+            "plan":{"type":"fixed","effects":[{"id":"application",
+                "target":{"recordType":"application"},"operation":"create",
+                "set":{"name":{"fromInput":"name"}},
+                "attachments":{"evidence":{"fromAttachment":"evidence"}}}]}}},
+        "accessProfiles":{"clerk":{"default":true,"principalClaim":"sub",
+            "requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],
+            "permissions":{"actions":[{"action":"register","operations":["invoke"],
+                "results":["application"],"targets":[{"recordType":"application",
+                    "rowBoundaries":"unrestricted"}]}]}}}
+    }))
+}
+
+fn immediate_action_body() -> Value {
+    let bytes = b"synthetic-immediate-action-file";
+    json!({
+        "input":{"name":"Example application"},
+        "attachments":{"evidence":{
+            "contentType":"text/plain",
+            "sha256":hex::encode(sha2::Sha256::digest(bytes)),
+            "content":base64::engine::general_purpose::STANDARD.encode(bytes)
+        }}
+    })
+}
+
+async fn invoke_immediate_action(
+    client: &client_http::ClientHttp,
+    idempotency_key: &str,
+) -> (StatusCode, Value) {
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/actions/register", client.base_url))
+        .header("content-type", "application/json")
+        .header("idempotency-key", idempotency_key)
+        .body(serde_json::to_vec(&immediate_action_body()).unwrap())
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.json().await.unwrap();
+    (status, body)
 }
 
 async fn start(
@@ -499,6 +558,82 @@ async fn s3_put_get_remove_and_exact_replay_without_storage_requests() {
     assert_eq!(result.external_deletion_tombstones, 1);
     assert_eq!(s3.state.deletes.load(Ordering::SeqCst), 1);
     assert!(s3.state.bytes.lock().await.is_empty());
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn immediate_action_s3_rollback_retry_and_exact_replay_converge() {
+    let s3 = S3Fixture::new().await;
+    let storage = s3.storage.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        immediate_action_registry(),
+        claims("synthetic-author", "zone-a"),
+        move |mutations| mutations.with_attachment_storage(storage),
+    )
+    .await;
+    let faulted = fixture
+        .client_with_mutations(
+            claims("synthetic-author", "zone-a"),
+            (*fixture.mutations)
+                .clone()
+                .with_fault_for_test(MutationFaultPoint::BeforeCommit),
+        )
+        .await;
+
+    let (status, _) = invoke_immediate_action(&faulted, "immediate-s3-recovery").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(s3.state.puts.load(Ordering::SeqCst), 1);
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT state,
+                    (SELECT count(*) FROM registry_internal.registry_record_attachments)
+               FROM registry_internal.registry_attachment_blobs",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "staged");
+    assert_eq!(row.get::<_, i64>(1), 0);
+    assert_eq!(s3.state.bytes.lock().await.len(), 1);
+
+    let (retry_status, retry) =
+        invoke_immediate_action(&fixture.http, "immediate-s3-recovery").await;
+    assert_eq!(retry_status, StatusCode::OK);
+    assert_eq!(s3.state.puts.load(Ordering::SeqCst), 2);
+    let application = &fixture.registry.entities()["application"];
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT state,
+                        (SELECT count(*) FROM registry_internal.registry_record_attachments
+                          WHERE erased_at IS NULL),
+                        (SELECT count(*) FROM registry_data.\"{}\")
+                   FROM registry_internal.registry_attachment_blobs",
+                application.physical_table
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "live");
+    assert_eq!(row.get::<_, i64>(1), 1);
+    assert_eq!(row.get::<_, i64>(2), 1);
+
+    let (replay_status, replay) =
+        invoke_immediate_action(&fixture.http, "immediate-s3-recovery").await;
+    assert_eq!(replay_status, StatusCode::OK);
+    assert_eq!(replay, retry, "the exact replay returns the first receipt");
+    assert_eq!(
+        s3.state.puts.load(Ordering::SeqCst),
+        2,
+        "the exact replay sends no second PUT after the committed retry"
+    );
+
+    drop(faulted);
     fixture.finish().await;
 }
 
