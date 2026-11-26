@@ -5395,11 +5395,11 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "d9bc331b223ade980f9b54ff2b29eecd285108d468ab86f23d73ff47d443aa20"
+        "sha256": "1bb41563fd58ad1544df962d17d94172fe76c027128020095da08b5ba63ae733"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
-        "sha256": "be3682d24686b500e6421946dc2de94dd5aea293f1dd42fa447098ac71740204",
+        "sha256": "69e53bda51ef36c2540769d13af80eaa09f6768b44d8379b79fe0886c7a53555",
         "mediaType": "application/schema+json"
       }
     },
@@ -5413,11 +5413,11 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "a0424a3812eb8fbe1398214ab6ee15f888f9a92da21143ea08e0a9f1df3d47d1"
+        "sha256": "b819cb03b63fd52ba179f2ed4062c2c26ec1da3dd57278abe3819db21d6898ad"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "8752417782957e2be39377ce0932c23b1b9b5027a69a81585752805a66e18bdf",
+        "sha256": "6597f692f6eec4c68b186613eaae85ca5d99d8d87985a2653dafa7613f8596c6",
         "mediaType": "application/schema+json"
       }
     },
