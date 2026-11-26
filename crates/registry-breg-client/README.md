@@ -296,9 +296,13 @@ successful write may omit value metadata. An omitted value does not independentl
 prove its stored content. An invalid receipt leaves the mutation outcome unknown;
 retain the original condition, bytes and key for same-command recovery.
 `download_record_attachment(record_route, record_identifier, slot,
-access_profile)` reads the file that an applied Proposal promoted into a record
-slot. It checks the route, record identifier and slot before I/O. It returns the
-bytes only when they match the service's `Repr-Digest`.
+access_profile)` reads the file in a record slot, whether an immediate Action
+wrote it or an applied Proposal promoted it. It checks the route, record
+identifier and slot before I/O. It returns the bytes only when they match the
+service's `Repr-Digest`. A slot can hold up to 16 MiB, but the client reads at
+most 8 MiB by default, so raise the limit with `with_maximum_response_bytes` to
+download larger files. The client cannot yet send request files, so an
+immediate Action that declares attachments is not invocable from it.
 
 ## Response security
 
