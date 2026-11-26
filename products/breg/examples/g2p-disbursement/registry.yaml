@@ -14,17 +14,17 @@ package:
   sourceRevision: g2p-disbursement-0.1.0
 
 datasets:
-  - id: g2p-disbursements
+  g2p-disbursements:
     display:
       label: G2P disbursements
       description: Authoritative instruction, payout binding, and provider-reported completion facts.
 
 vocabularies:
-  - id: disbursement-state
+  disbursement-state:
     values: [instruction-ready, attempt-bound, provider-confirmed]
 
 recordTypes:
-  - id: disbursement-instruction
+  disbursement-instruction:
     route: disbursement-instructions
     primaryDataset: g2p-disbursements
     mutationMode: mutable
@@ -78,7 +78,7 @@ recordTypes:
       - {id: provider-result-digest, apiName: providerResultDigest, type: string, required: false, minimumLength: 64, maximumLength: 64, pattern: '^[0-9a-f]{64}$', classification: internal}
 
 actions:
-  - id: create-disbursement-instruction
+  create-disbursement-instruction:
     display:
       label: Create disbursement instruction
       description: Freeze one authority-owned instruction before payment processing begins.
@@ -119,7 +119,7 @@ actions:
             currency-scale: {fromInput: currency-scale}
             disbursement-state: {value: instruction-ready}
 
-  - id: bind-payout-attempt
+  bind-payout-attempt:
     display:
       label: Bind payout attempt
       description: Bind exactly one Adapter attempt and provider configuration before dispatch.
@@ -168,7 +168,7 @@ actions:
             provider-binding-revision: {fromInput: provider-binding-revision}
             disbursement-state: {value: attempt-bound}
 
-  - id: record-provider-confirmation
+  record-provider-confirmation:
     display:
       label: Record provider confirmation
       description: Record the exact provider-reported completion for the one frozen payout attempt.
@@ -224,7 +224,7 @@ actions:
             disbursement-state: {value: provider-confirmed}
 
 accessProfiles:
-  - id: disbursement-authority
+  disbursement-authority:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [benefit-service]
@@ -243,7 +243,7 @@ accessProfiles:
             - {recordType: disbursement-instruction, rowBoundaries: unrestricted}
           results: [instruction]
 
-  - id: payment-adapter-binder
+  payment-adapter-binder:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [payment-adapter]
@@ -262,7 +262,7 @@ accessProfiles:
             - {recordType: disbursement-instruction, rowBoundaries: unrestricted}
           results: [instruction]
 
-  - id: payment-adapter-reporter
+  payment-adapter-reporter:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [payment-adapter]

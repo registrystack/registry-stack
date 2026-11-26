@@ -14,17 +14,17 @@ package:
   sourceRevision: payment-fee-issuance-0.1.0
 
 datasets:
-  - id: service-billing
+  service-billing:
     display:
       label: Service billing
       description: Authoritative service fee, collection binding, receipt, and single-use issuance facts.
 
 vocabularies:
-  - id: payment-state
+  payment-state:
     values: [due-unbound, attempt-bound, paid, issued]
 
 recordTypes:
-  - id: service-fee-bill
+  service-fee-bill:
     route: service-fee-bills
     primaryDataset: service-billing
     mutationMode: mutable
@@ -83,7 +83,7 @@ recordTypes:
       - {id: issuance-id, apiName: issuanceId, type: uuid, required: false, classification: internal}
 
 actions:
-  - id: create-fee-bill
+  create-fee-bill:
     display:
       label: Create service fee bill
       description: Create the one authoritative bill for a service request from the service-owned synthetic tariff.
@@ -119,7 +119,7 @@ actions:
             simulation: {fromInput: simulation}
             payment-state: {value: due-unbound}
 
-  - id: bind-payment-attempt
+  bind-payment-attempt:
     display:
       label: Bind payment collection attempt
       description: Freeze one Adapter collection and provider binding before provider dispatch.
@@ -170,7 +170,7 @@ actions:
             provider-binding-revision: {fromInput: provider-binding-revision}
             payment-state: {value: attempt-bound}
 
-  - id: record-payment-receipt
+  record-payment-receipt:
     display:
       label: Record exact payment receipt
       description: Record one receipt only when every bill, collection, provider, and money fact matches the frozen binding.
@@ -227,7 +227,7 @@ actions:
             receipt-digest: {fromInput: receipt-digest}
             payment-state: {value: paid}
 
-  - id: issue-paid-service
+  issue-paid-service:
     display:
       label: Issue paid service
       description: Mark the service request issued once, only for its exact paid bill and receipt.
@@ -262,7 +262,7 @@ actions:
             payment-state: {value: issued}
 
 accessProfiles:
-  - id: service-biller
+  service-biller:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [issuance-service]
@@ -276,7 +276,7 @@ accessProfiles:
             - {recordType: service-fee-bill, rowBoundaries: unrestricted}
           results: [bill]
 
-  - id: service-issuer
+  service-issuer:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [issuance-service]
@@ -295,7 +295,7 @@ accessProfiles:
             - {recordType: service-fee-bill, rowBoundaries: unrestricted}
           results: [bill]
 
-  - id: payment-adapter-binder
+  payment-adapter-binder:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [payment-adapter]
@@ -314,7 +314,7 @@ accessProfiles:
             - {recordType: service-fee-bill, rowBoundaries: unrestricted}
           results: [bill]
 
-  - id: payment-adapter-reporter
+  payment-adapter-reporter:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [payment-adapter]
@@ -333,7 +333,7 @@ accessProfiles:
             - {recordType: service-fee-bill, rowBoundaries: unrestricted}
           results: [bill]
 
-  - id: coordinator-bill-reader
+  coordinator-bill-reader:
     actorKind: service
     principalClaim: registry_principal
     requesterClients: [service-coordinator]

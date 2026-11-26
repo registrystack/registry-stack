@@ -212,7 +212,7 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
   await privateFile(paymentsPath, configuration);
   await privateFile(runtimePath, { apiVersion: 'id.registrystack.org/formats/adapter/runtime/v1alpha1', kind: 'AdapterRuntimeConfig', id: `payment-native-${suffix}`,
     endpoints: [], listener: { bind: `127.0.0.1:${adapterPort}` }, secretProviders: { file: { root: secrets } },
-    database: { runtimeUrlRef: 'secret:file/adapter-runtime', migrationUrlRef: 'secret:file/adapter-migration', trustedRootCertificateRef: 'secret:file/postgres-ca' },
+    database: { runtimeUrlRef: 'secret:file/adapter-runtime', migrationUrlRef: 'secret:file/adapter-migration', caBundleRef: 'secret:file/postgres-ca' },
     oidc: { issuer: issuer.issuer, audience: 'urn:registry:payment-adapter', jwksSource: { type: 'static', documentRef: 'secret:file/jwks' } },
     allowedClients: ['coordinator-payments'], allowedPrivateCidrs: ['127.0.0.0/8'], audit: { retentionDays: 90 } });
   await preflightAndGrant(adapterDb, runtimePath, paymentsPath, 'adapter');
@@ -277,7 +277,7 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
   const packaged = ctl(['package', '--project', join(repository, 'products/coordinator/examples/payment-collections'), '--output', packagePath]);
   const coordinatorRuntime = join(root, 'coordinator-runtime.yaml');
   await privateFile(coordinatorRuntime, { apiVersion: 'id.registrystack.org/formats/coordinator/runtime/v1alpha1', kind: 'CoordinatorRuntimeConfig',
-    secretProviders: { file: { root: secrets } }, database: { runtimeUrlRef: 'secret:file/coordinator-runtime', migrationUrlRef: 'secret:file/coordinator-migration', trustedRootCertificateRef: 'secret:file/postgres-ca' },
+    secretProviders: { file: { root: secrets } }, database: { runtimeUrlRef: 'secret:file/coordinator-runtime', migrationUrlRef: 'secret:file/coordinator-migration', caBundleRef: 'secret:file/postgres-ca' },
     namespace: 'coordinator_payment_native', connections: { 'licence-fees': { type: 'payments', baseUrl: coordinatorProxy.url, paymentConnection: 'licence-fees', resultCheckSeconds: 60,
       authorization: { tokenEndpoint: `${issuer.origin}/token`, clientAssertionAudience: issuer.issuer, clientId: 'coordinator-payments', signingKeyRef: 'secret:file/coordinator-payments-jwk', resource: 'urn:registry:payment-adapter', scopes: ['payments:collect'] } } },
     deployment: { databaseId: `coordinator-payment-${suffix}`, runtimeRole: coordinatorDb.runtime,
