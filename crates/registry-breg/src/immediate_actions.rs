@@ -1541,8 +1541,8 @@ fn compile_attachment_promotions(
                 ));
                 continue;
             }
-            // Classifications are ordered, so a promoted file keeps at least
-            // the protection its Proposal slot gave it.
+            // Classifications are ordered, so a promoted file's label never
+            // drops. Who reads it is decided by the record grants.
             if slot.classification < from.classification {
                 errors.push(Diagnostic::error(
                     "breg.action.attachment-invalid",

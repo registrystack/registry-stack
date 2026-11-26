@@ -128,7 +128,15 @@ package again afterwards.
 A Record type's file slot belongs to the revision that filled it.
 Erasing through that revision removes the record's file reference in the same transaction.
 The download then answers 404, as for an empty slot.
-The slot keeps a value-free marker, so it is never filled again.
+The slot keeps a marker, so it is never filled again.
+The marker keeps the file's SHA-256 digest, media type and size and the revision that filled the slot.
+It drops who filled the slot and when.
+
+:::caution[Erasing a live record's file is permanent]
+Erasing history through the current revision removes a live record's file for good.
+The record stays, but its slot cannot be filled again.
+:::
+
 Bytes go once no other record and no Proposal refers to them.
 Database bytes go at once.
 External bytes wait for [external attachment cleanup](#retry-external-attachment-cleanup).
