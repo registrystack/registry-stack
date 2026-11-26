@@ -66,8 +66,14 @@
 - History erasure can erase a revision that an applied Proposal wrote. Before,
   the Proposal's result row still named the revision and the erasure rolled
   back. The erasure now removes that result row in the same transaction. The
-  Proposal keeps its state and application, its `resultLinks` no longer name
-  the erased revision, and record history shows no Proposal link for it. A
+  Proposal keeps its state and application, a current Proposal read leaves
+  the erased revision out of `resultLinks`, and record history shows no
+  Proposal link for it. A retry of the original apply by the same authorized
+  caller with the same idempotency key still returns the receipt as first
+  issued while the registry holds it. That receipt names the record and the
+  revision number and carries no field values. `bregctl proposal-retention
+  erase` removes it with the rest of the Proposal's detail, where the
+  Action's retention mode allows it. A
   file the Proposal promoted at that revision is erased like any other record
   file. A Proposal read still requires the caller's row boundaries to hold
   every record the Proposal wrote.

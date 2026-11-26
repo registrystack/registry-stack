@@ -105,15 +105,24 @@ Erased the requested history. 1 commit affected.
   removed descriptors            0
 ```
 
-One run erases at most 10,000 revisions in one transaction. It replaces each held response that
-could replay an erased revision with a refusal, so a retry of that key answers
+One run erases at most 10,000 revisions in one transaction. It replaces each held record or batch
+response that could replay an erased revision with a refusal, so a retry of that key answers
 `409 idempotency.key-reused` instead of returning the erased body. A request file that is not
 owner-only is refused before any connection opens. Live reads and writes continue.
 
 A revision that an applied Proposal wrote is erased like any other revision. The Proposal keeps
-its state and application, but its `resultLinks` stop naming the erased revision, and record
-history shows no Proposal link for it. The Proposal's detail has
-[its own retention](#erase-proposal-detail).
+its state and application. A current read of the Proposal leaves the erased revision out of
+`resultLinks`, and record history shows no Proposal link for it.
+
+History erasure keeps the receipt of the original apply, which is a separate held response. The
+same authorised caller can retry that apply with the same idempotency key. While the registry
+[holds the response](#drop-expired-idempotency-responses), the retry returns the receipt as first
+issued. Its `resultLinks` still name the record and the revision number. They carry no field values.
+
+The Proposal also still holds the values it froze and any file it carried. You can remove those and
+the held receipt when your retention decision calls for it and the Action's retention mode allows
+it. Follow [erase Proposal detail](#erase-proposal-detail) for that Proposal. Run
+`bregctl proposal-retention dry-run` first, then `bregctl proposal-retention erase`.
 
 Snapshot references at or after the earliest erased commit become unavailable, and erasing a
 record's baseline data makes all snapshot coverage unavailable. The next package still activates
@@ -127,7 +136,11 @@ package again afterwards.
     crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS and
     delete_proposal_result_links;
     crates/registry-breg/src/postgres/interlock.rs, history_coverage_admits_successor;
-    crates/registry-breg/tests/postgres_history_erasure.rs. */}
+    crates/registry-breg/src/mutation/proposal.rs, preflight_proposal_apply;
+    crates/registry-breg/src/proposal_retention.rs;
+    crates/registry-breg/tests/postgres_history_erasure.rs;
+    crates/registry-breg/tests/postgres_record_attachments.rs,
+    history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision. */}
 
 ### Files kept with the record
 
@@ -154,7 +167,8 @@ An `erase-and-rebaseline` field-encryption migration keeps the record's files.
     retire_unreferenced;
     crates/registry-breg/src/history_erasure.rs;
     crates/registry-breg/tests/postgres_record_attachments.rs,
-    history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision. */}
+    history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision,
+    erase_and_rebaseline_erases_a_revision_a_proposal_wrote. */}
 
 ## Restore snapshot coverage after an erasure
 
