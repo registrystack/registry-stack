@@ -28,10 +28,13 @@ use registry_payment_mifos_connector::{legacy_signature_digest, LegacySignatureH
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_yaml::SecretReference;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
+    io::Write,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -248,6 +251,127 @@ async fn bearer_http_host_preserves_one_send_and_validates_wire_observations() {
 struct LegacyHttpState {
     fixture: Arc<Value>,
     seen: Arc<Mutex<Vec<SeenRequest>>>,
+}
+
+#[derive(Clone)]
+struct OpenBaoProviderState {
+    fixture: Arc<Value>,
+    request_public_key: PathBuf,
+    response_private_key: PathBuf,
+    seen: Arc<Mutex<Vec<SeenRequest>>>,
+}
+
+#[tokio::test]
+#[ignore = "requires products/adapter/scripts/test-payments-openbao.sh"]
+async fn real_openbao_transit_signs_requests_and_refuses_a_changed_response() {
+    let socket_path = required_openbao_path("REGISTRY_PAYMENTS_OPENBAO_SOCKET");
+    let request_public_key = required_openbao_path("REGISTRY_PAYMENTS_OPENBAO_REQUEST_PUBLIC_KEY");
+    let response_private_key =
+        required_openbao_path("REGISTRY_PAYMENTS_OPENBAO_RESPONSE_PRIVATE_KEY");
+    let response_public_key =
+        required_openbao_path("REGISTRY_PAYMENTS_OPENBAO_RESPONSE_PUBLIC_KEY");
+    let fixture = Arc::new(legacy_fixture());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let router = Router::new()
+        .route("/openbao/submit", post(openbao_valid))
+        .route("/openbao/changed", post(openbao_changed_body))
+        .with_state(OpenBaoProviderState {
+            fixture: fixture.clone(),
+            request_public_key: request_public_key.clone(),
+            response_private_key,
+            seen: seen.clone(),
+        });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}/", listener.local_addr().unwrap());
+    let http_server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+
+    let secret_directory = tempfile::tempdir().unwrap();
+    write_secret(
+        secret_directory.path().join("operations-token"),
+        b"test-only-operations-bearer",
+    );
+    let resolver =
+        Arc::new(SecretResolver::new([SecretProvider::File], secret_directory.path()).unwrap());
+    let provider_binding = binding(
+        &origin,
+        G2pHttpAuth::MifosLegacySignature {
+            tenant: fixture_text(&fixture, "tenant").to_owned(),
+            signing_key_identity: "transit:mifos-request:v1".to_owned(),
+            signing_key: Box::new(openbao_transit_key(
+                &socket_path,
+                "mifos-request",
+                &request_public_key,
+            )),
+            response_key_identity: "transit:mifos-response:v1".to_owned(),
+            response_key: Box::new(openbao_transit_key(
+                &socket_path,
+                "mifos-response",
+                &response_public_key,
+            )),
+            operations_credential_identity: "mifos-operations-client".to_owned(),
+            operations_credential_ref: SecretReference::new("secret:file/operations-token")
+                .unwrap(),
+        },
+    );
+    let provider = HttpG2pProvider::initialize(resolver, std::slice::from_ref(&provider_binding))
+        .await
+        .expect("real OpenBao Transit keys satisfy the pinned custody contract");
+    let pack = pin();
+    let intent = snapshot(provider_binding.clone(), pack.clone())
+        .provider_intent(&instruction())
+        .unwrap();
+    let exact_body = registry_platform_canonical_json::canonicalize_json(&json!({
+        "requestId": "batch-request-1",
+        "correlationId": intent.correlation_id,
+        "amount": "1000.00"
+    }))
+    .unwrap();
+
+    let valid = legacy_request(
+        pack.clone(),
+        PaymentEndpointRole::DisbursementSubmit,
+        PaymentHttpMethod::Post,
+        "/openbao/submit",
+        Some(exact_body.clone()),
+    );
+    let response = provider
+        .preflight_submit(&provider_binding, &intent, &valid)
+        .await
+        .unwrap()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status, StatusCode::ACCEPTED.as_u16());
+    assert_eq!(response.body, fixture_text(&fixture, "body").as_bytes());
+
+    let changed = legacy_request(
+        pack,
+        PaymentEndpointRole::DisbursementSubmit,
+        PaymentHttpMethod::Post,
+        "/openbao/changed",
+        Some(exact_body),
+    );
+    let prepared = provider
+        .preflight_submit(&provider_binding, &intent, &changed)
+        .await
+        .unwrap();
+    assert!(matches!(
+        prepared.send().await,
+        Err(G2pProviderError::OutcomeUnknown)
+    ));
+
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request.tenant.as_deref() == Some("pilot")
+            && request.correlation_id.as_deref() == Some(intent.correlation_id.as_str())
+            && request.signature.is_some()
+            && request.authorization.is_none()
+    }));
+    drop(requests);
+    http_server.abort();
 }
 
 #[tokio::test]
@@ -522,6 +646,124 @@ async fn capture_uncertain(
     vec![b'x'; 131_073]
 }
 
+async fn openbao_valid(
+    State(state): State<OpenBaoProviderState>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    openbao_response(state, uri, headers, body, false)
+}
+
+async fn openbao_changed_body(
+    State(state): State<OpenBaoProviderState>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    openbao_response(state, uri, headers, body, true)
+}
+
+fn openbao_response(
+    state: OpenBaoProviderState,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+    change_body_after_signing: bool,
+) -> Response {
+    verify_openbao_request(&state.request_public_key, &headers, &body);
+    capture(&state.seen, "POST", uri, headers, body);
+
+    let signed_body = fixture_text(&state.fixture, "body");
+    let digest = legacy_signature_digest(LegacySignatureHeaders::empty(), signed_body.as_bytes())
+        .expect("synthetic response digest");
+    let signature = openssl_raw_rsa_sign(&state.response_private_key, digest.as_bytes());
+    let response_body = if change_body_after_signing {
+        fixture_text(&state.fixture, "changedBody")
+    } else {
+        signed_body
+    };
+    let encoded_signature = STANDARD.encode(signature);
+    legacy_response(
+        StatusCode::ACCEPTED,
+        response_body,
+        &[fixture_text(&state.fixture, "tenant")],
+        &[encoded_signature.as_str()],
+    )
+}
+
+fn verify_openbao_request(public_key: &Path, headers: &HeaderMap, body: &[u8]) {
+    let correlation_id = headers
+        .get("X-CorrelationID")
+        .and_then(|value| value.to_str().ok())
+        .expect("signed request correlation ID");
+    let tenant = headers
+        .get("Platform-TenantId")
+        .and_then(|value| value.to_str().ok())
+        .expect("signed request tenant");
+    let signature = headers
+        .get("X-SIGNATURE")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| STANDARD.decode(value).ok())
+        .expect("canonical base64 request signature");
+    let digest = legacy_signature_digest(
+        LegacySignatureHeaders::bulk_request(correlation_id, tenant),
+        body,
+    )
+    .expect("synthetic request digest");
+    assert_eq!(
+        openssl_raw_rsa_recover(public_key, &signature),
+        digest.as_bytes(),
+        "the independent provider double must verify the exact Adapter request"
+    );
+}
+
+fn openssl_raw_rsa_sign(private_key: &Path, input: &[u8]) -> Vec<u8> {
+    openssl_pkeyutl(
+        &["-sign", "-inkey"],
+        private_key,
+        &["-pkeyopt", "rsa_padding_mode:pkcs1"],
+        input,
+    )
+}
+
+fn openssl_raw_rsa_recover(public_key: &Path, signature: &[u8]) -> Vec<u8> {
+    openssl_pkeyutl(
+        &["-verifyrecover", "-pubin", "-inkey"],
+        public_key,
+        &["-pkeyopt", "rsa_padding_mode:pkcs1"],
+        signature,
+    )
+}
+
+fn openssl_pkeyutl(before_key: &[&str], key: &Path, after_key: &[&str], input: &[u8]) -> Vec<u8> {
+    let mut command = Command::new("openssl");
+    command
+        .arg("pkeyutl")
+        .args(before_key)
+        .arg(key)
+        .args(after_key);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("openssl pkeyutl is installed");
+    child
+        .stdin
+        .take()
+        .expect("openssl stdin")
+        .write_all(input)
+        .expect("write bounded synthetic signing input");
+    let output = child.wait_with_output().expect("wait for openssl pkeyutl");
+    assert!(
+        output.status.success(),
+        "openssl pkeyutl failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
 async fn legacy_valid(
     State(state): State<LegacyHttpState>,
     uri: Uri,
@@ -754,6 +996,44 @@ fn released_transit_key(
         "version": 7,
         "publicKeyDigest": format!("sha256:{}", fixture_text(fixture, "publicKeySpkiSha256")),
         "attemptTimeoutMilliseconds": 2000
+    }))
+    .unwrap()
+}
+
+fn required_openbao_path(name: &str) -> PathBuf {
+    let path = std::env::var_os(name).unwrap_or_else(|| panic!("{name} must be set by the runner"));
+    let path = PathBuf::from(path);
+    assert!(path.is_absolute(), "{name} must be an absolute path");
+    path
+}
+
+fn openbao_transit_key(
+    socket_path: &Path,
+    key: &str,
+    public_key: &Path,
+) -> G2pTransitRsaNoOidKeyBinding {
+    let output = Command::new("openssl")
+        .args(["pkey", "-pubin", "-in"])
+        .arg(public_key)
+        .args(["-outform", "DER"])
+        .output()
+        .expect("openssl pkey is installed");
+    assert!(
+        output.status.success(),
+        "openssl pkey failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let digest = Sha256::digest(&output.stdout)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    serde_json::from_value(json!({
+        "socketPath": socket_path,
+        "mount": "transit",
+        "key": key,
+        "version": 1,
+        "publicKeyDigest": format!("sha256:{digest}"),
+        "attemptTimeoutMilliseconds": 5000
     }))
     .unwrap()
 }
