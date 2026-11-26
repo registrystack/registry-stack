@@ -37,12 +37,23 @@ async fn download(
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
     let record_id = path.get("record_id");
+    let declared_slot = path.get("slot_id").and_then(|slot| {
+        service
+            .registry
+            .entities()
+            .get(&route.entity_id)?
+            .attachments
+            .get_key_value(slot)
+            .map(|(id, _)| id.as_str())
+    });
+    let mut audit_route = route.clone();
+    audit_route.id = crate::attachment::record_attachment_operation_id(&route.id, declared_slot);
     let options = match parse_options(raw_query.as_deref()) {
         Ok(options) => options,
         Err(()) => {
             return audited_known_read_refusal(
                 &service,
-                &route,
+                &audit_route,
                 &claims,
                 record_id,
                 invalid_query(),
@@ -57,7 +68,7 @@ async fn download(
         Err(reason) => {
             return audited_read_concealment(
                 &service,
-                &route,
+                &audit_route,
                 &options,
                 &claims,
                 record_id,
@@ -73,7 +84,7 @@ async fn download(
     {
         return audited_read_refusal(
             &service,
-            &route,
+            &audit_route,
             &surface,
             record_id,
             access_binding_refusal(binding),
@@ -98,7 +109,7 @@ async fn download(
     {
         return audited_read_refusal(
             &service,
-            &route,
+            &audit_route,
             &surface,
             record_id,
             concealed(),
