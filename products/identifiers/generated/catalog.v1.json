@@ -4995,11 +4995,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "fc193894849e0308794ae49ad1e59562a0b35ed27041cf6ae1326c956e952930"
+        "sha256": "a07db73a872aae519163607a5e2018ec1806b2f867de721627dee717d6b81b98"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "fc193894849e0308794ae49ad1e59562a0b35ed27041cf6ae1326c956e952930",
+        "sha256": "a07db73a872aae519163607a5e2018ec1806b2f867de721627dee717d6b81b98",
         "mediaType": "application/schema+json"
       }
     },

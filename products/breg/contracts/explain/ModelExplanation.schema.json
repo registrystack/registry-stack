@@ -197,6 +197,11 @@
                 },
                 "display": {
                   "$ref": "#/$defs/Display"
+                },
+                "derivation": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Present on a derived field only: the id of the derived relation the registry uses to work the field out when the record is read."
                 }
               },
               "x-registry-passthrough": "Normalized logical field schema and effective classification; compiler-owned metadata."
