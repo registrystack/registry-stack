@@ -245,3 +245,14 @@ traceability:
   - {"id": "BREG-SEC-219", "state": "enforced", "negativeId": "BREG-NEG-219", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "a_write_once_slot_refuses_a_second_file_even_after_erasure"}}
   # Proposal erasure keeps bytes a Record refers to: crates/registry-breg/tests/postgres_record_attachments.rs::proposal_erasure_never_removes_bytes_a_record_refers_to
   - {"id": "BREG-SEC-220", "state": "enforced", "negativeId": "BREG-NEG-220", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers_to"}}
+  # Unknown Proposal slot: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_must_name_a_declared_proposal_slot
+  # Record slot not on the target type: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_must_name_a_slot_of_the_effect_target_record_type
+  # Content type the record slot refuses: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_refuses_a_content_type_the_record_slot_does_not_accept
+  # Size the record slot refuses: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_refuses_a_size_the_record_slot_does_not_accept
+  # Record slot less restricted than the Proposal slot: crates/registry-breg/tests/attachment_promotion_compiler.rs::a_promotion_refuses_a_record_slot_less_restricted_than_the_proposal_slot
+  # Two promotions into one slot: crates/registry-breg/tests/attachment_promotion_compiler.rs::two_effects_cannot_promote_into_one_record_slot_of_one_record
+  - {"id": "BREG-SEC-221", "state": "enforced", "negativeId": "BREG-NEG-221", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_s3.rs", "name": "promotion_references_the_verified_s3_object_and_refuses_unverified_bytes"}}
+  # Empty optional source leaves the slot empty: crates/registry-breg/tests/postgres_record_attachments.rs::an_empty_optional_source_leaves_the_record_slot_empty
+  # Create and patch reference one stored copy: crates/registry-breg/tests/postgres_record_attachments.rs::create_and_patch_effects_reference_one_stored_copy
+  - {"id": "BREG-SEC-222", "state": "enforced", "negativeId": "BREG-NEG-222", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "promotion_into_a_filled_slot_answers_409_and_rolls_back_the_whole_apply"}}
+  - {"id": "BREG-SEC-223", "state": "enforced", "negativeId": "BREG-NEG-223", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "an_applied_proposal_promotes_its_file_by_reference_and_erasure_keeps_it"}}

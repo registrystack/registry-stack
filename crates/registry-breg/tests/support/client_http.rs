@@ -93,12 +93,45 @@ impl ClientFixture {
         Self::start_with_pool(registry, claims, 8, configure).await
     }
 
+    /// The same services with record reads and writes bound to one
+    /// attachment storage, as startup binds them. `configure` adds the rest
+    /// of the mutation setup.
+    pub async fn start_with_attachment_storage(
+        registry: registry_breg::CompiledRegistry,
+        claims: VerifiedRequestClaims,
+        storage: registry_breg::attachment_storage::AttachmentStorage,
+        configure: impl FnOnce(PostgresRecordMutationService) -> PostgresRecordMutationService,
+    ) -> Self {
+        let mutation_storage = storage.clone();
+        Self::start_with_services(registry, claims, 8, storage, move |mutations| {
+            configure(mutations.with_attachment_storage(mutation_storage))
+        })
+        .await
+    }
+
     /// The same services over a runtime pool of `pool_size` connections, for
     /// proving that one request never holds two pooled connections at once.
     pub async fn start_with_pool(
         registry: registry_breg::CompiledRegistry,
         claims: VerifiedRequestClaims,
         pool_size: usize,
+        configure: impl FnOnce(PostgresRecordMutationService) -> PostgresRecordMutationService,
+    ) -> Self {
+        Self::start_with_services(
+            registry,
+            claims,
+            pool_size,
+            registry_breg::attachment_storage::AttachmentStorage::Database,
+            configure,
+        )
+        .await
+    }
+
+    async fn start_with_services(
+        registry: registry_breg::CompiledRegistry,
+        claims: VerifiedRequestClaims,
+        pool_size: usize,
+        read_storage: registry_breg::attachment_storage::AttachmentStorage,
         configure: impl FnOnce(PostgresRecordMutationService) -> PostgresRecordMutationService,
     ) -> Self {
         assert!(
@@ -148,7 +181,8 @@ impl ClientFixture {
             Duration::from_secs(2),
             audit.clone(),
             cursors.clone(),
-        );
+        )
+        .with_attachment_storage(read_storage);
         let mutations = Arc::new(configure(PostgresRecordMutationService::new(
             pool.clone(),
             registry.clone(),

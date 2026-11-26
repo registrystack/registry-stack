@@ -2312,9 +2312,9 @@ pub struct AttachmentSlotSource {
     pub classification: Classification,
 }
 
-/// One file slot on a record type. A file enters it only through an
-/// immediate Action create effect in the same request, and once written it
-/// never changes.
+/// One file slot on a record type. A file enters it through an immediate
+/// Action create effect in the same request, or when an applied Proposal
+/// promotes one of its files. Once written it never changes.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -2334,8 +2334,9 @@ pub struct RecordAttachmentSlotSource {
     pub write_once: bool,
 }
 
-/// Where a create effect takes one record slot's file from: the named file
-/// in the same Action request.
+/// Where an effect takes one record slot's file from. In an immediate
+/// Action it names a file in the same request. In a Proposal Action it names
+/// a Proposal attachment slot, and applying the Proposal promotes that file.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -2922,8 +2923,9 @@ pub struct ActionEffectSource {
     pub set: BTreeMap<String, ActionValueSource>,
     #[serde(default)]
     pub clear: UniqueSet<String>,
-    /// Record slots a create effect fills from files in the same request,
-    /// keyed by slot id.
+    /// Record slots the effect fills, keyed by slot id. An immediate create
+    /// effect takes files from the same request. A Proposal create or patch
+    /// effect promotes files from Proposal attachment slots on apply.
     #[serde(
         default,
         skip_serializing_if = "BTreeMap::is_empty",

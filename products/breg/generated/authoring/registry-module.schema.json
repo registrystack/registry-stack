@@ -123,7 +123,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/EffectAttachmentSource"
           },
-          "description": "Record slots a create effect fills from files in the same request,\nkeyed by slot id.",
+          "description": "Record slots the effect fills, keyed by slot id. An immediate create\neffect takes files from the same request. A Proposal create or patch\neffect promotes files from Proposal attachment slots on apply.",
           "propertyNames": {
             "$ref": "#/$defs/LocalId"
           },
@@ -2087,7 +2087,7 @@
     },
     "EffectAttachmentSource": {
       "additionalProperties": false,
-      "description": "Where a create effect takes one record slot's file from: the named file\nin the same Action request.",
+      "description": "Where an effect takes one record slot's file from. In an immediate\nAction it names a file in the same request. In a Proposal Action it names\na Proposal attachment slot, and applying the Proposal promotes that file.",
       "properties": {
         "fromAttachment": {
           "$ref": "#/$defs/LocalId"
@@ -3378,7 +3378,7 @@
     },
     "RecordAttachmentSlotSource": {
       "additionalProperties": false,
-      "description": "One file slot on a record type. A file enters it only through an\nimmediate Action create effect in the same request, and once written it\nnever changes.",
+      "description": "One file slot on a record type. A file enters it through an immediate\nAction create effect in the same request, or when an applied Proposal\npromotes one of its files. Once written it never changes.",
       "properties": {
         "classification": {
           "$ref": "#/$defs/Classification"

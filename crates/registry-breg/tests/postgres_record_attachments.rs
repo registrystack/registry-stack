@@ -101,7 +101,41 @@ fn record_source() -> Value {
                     {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
                 "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
                 "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch",
-                    "set":{"name":{"fromInput":"value"}}}]}}},
+                    "set":{"name":{"fromInput":"value"}}}]}},
+            // The built-in executor applies `enrol`, so its promotion runs on
+            // the automatic path. `note` is a Proposal file nothing promotes.
+            "enrol":{"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},
+                    "application":{"mode":"automatic","maximumAttempts":3},"retention":{"mode":"operator-erase"},
+                    "attachments":[{"id":"document","required":false,"maximumBytes":64,
+                            "contentTypes":["text/plain"],"classification":"restricted"},
+                        {"id":"note","required":false,"maximumBytes":64,
+                            "contentTypes":["text/plain"],"classification":"restricted"}]}},
+                "inputs":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
+                    {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"},
+                    {"id":"programme","type":"reference","target":"programme","required":true,"classification":"internal"}],
+                "plan":{"type":"fixed","effects":[{"id":"application","target":{"recordType":"application"},
+                    "operation":"create","set":{"name":{"fromInput":"name"},"jurisdiction":{"fromInput":"jurisdiction"},
+                        "programme":{"fromInput":"programme"}},
+                    "attachments":{"evidence":{"fromAttachment":"document"}}}]}},
+            // A caller applies `amend`. One file fills the slot of the record
+            // it creates and the slot of the record it updates.
+            "amend":{"execution":{"mode":"proposal","proposal":{"review":{"type":"none"},
+                    "application":{"mode":"manual"},"retention":{"mode":"operator-erase"},
+                    "attachments":[{"id":"document","required":true,"maximumBytes":64,
+                        "contentTypes":["text/plain"],"classification":"restricted"}]}},
+                "inputs":[{"id":"target","type":"reference","target":"application","required":true,"classification":"internal"},
+                    {"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"},
+                    {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,"classification":"internal"},
+                    {"id":"programme","type":"reference","target":"programme","required":true,"classification":"internal"}],
+                "commitGuards":{"targets":[{"input":"target","revision":"unchanged"}]},
+                "plan":{"type":"fixed","effects":[
+                    {"id":"copy","target":{"recordType":"application"},"operation":"create",
+                        "set":{"name":{"fromInput":"name"},"jurisdiction":{"fromInput":"jurisdiction"},
+                            "programme":{"fromInput":"programme"}},
+                        "attachments":{"evidence":{"fromAttachment":"document"}}},
+                    {"id":"original","target":{"fromInput":"target"},"operation":"patch",
+                        "set":{"name":{"fromInput":"name"}},
+                        "attachments":{"evidence":{"fromAttachment":"document"}}}]}}},
         "accessProfiles":{
             "clerk":{"default":true,"principalClaim":"sub","requiredScopes":["application:manage"],
                 "requiredPurposes":["registry-administration"],"permissions":{
@@ -114,10 +148,26 @@ fn record_source() -> Value {
                             {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
                             {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]},
                         {"action":"rename","operations":["start"],"targets":[
+                            {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]},
+                        {"action":"enrol","operations":["start"],"targets":[
+                            {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
+                            {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]},
+                        {"action":"amend","operations":["start"],"targets":[
+                            {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
                             {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]}],
                     "proposals":[{"action":"rename","operations":["get","list","edit","submit","apply"],
                         "ownership":"caller","readableAttachments":["support"],"writableAttachments":["support"],
-                        "targets":[{"recordType":"application","rowBoundaries":jurisdiction_boundary()}]}]}},
+                        "targets":[{"recordType":"application","rowBoundaries":jurisdiction_boundary()}]},
+                        {"action":"enrol","operations":["get","list","edit","submit"],
+                            "ownership":"caller","readableAttachments":["document","note"],
+                            "writableAttachments":["document","note"],"targets":[
+                                {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
+                                {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]},
+                        {"action":"amend","operations":["get","list","edit","submit","apply"],
+                            "ownership":"caller","readableAttachments":["document"],
+                            "writableAttachments":["document"],"targets":[
+                                {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
+                                {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]}]}},
             "auditor":{"principalClaim":"sub","requiredScopes":["application:audit"],
                 "requiredPurposes":["registry-administration"],"permissions":{
                     "records":[{"recordType":"application","operations":["get"],"readableFields":["name"],
@@ -353,6 +403,195 @@ fn assert_file(response: &Exchange, bytes: &[u8]) {
         .to_str()
         .unwrap()
         .starts_with("attachment"));
+}
+
+fn enrol_input(programme: Uuid, name: &str) -> Value {
+    json!({"name":name,"jurisdiction":"zone-a","programme":programme.to_string()})
+}
+
+fn amend_input(target: Uuid, programme: Uuid, name: &str) -> Value {
+    json!({"target":target.to_string(),"name":name,"jurisdiction":"zone-a",
+        "programme":programme.to_string()})
+}
+
+/// Starts a Proposal of `action_id`, uploads each `(slot, bytes)` file as
+/// text and submits it.
+async fn submit_proposal(
+    fixture: &client_http::ClientFixture,
+    action_id: &str,
+    input: Value,
+    files: &[(&str, &[u8])],
+    prefix: &str,
+) -> registry_breg_client::BRegProposal {
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let action = metadata.value.select_action(action_id, "clerk").unwrap();
+    let request = registry_breg_client::BRegActionInvocationRequest::new(
+        &action,
+        input.as_object().unwrap().clone(),
+        None,
+    )
+    .unwrap();
+    let mut proposal = client
+        .start_proposal(&action, &request, &key(&format!("{prefix}-start")))
+        .await
+        .unwrap()
+        .value;
+    for (slot, bytes) in files {
+        proposal = client
+            .upload_proposal_attachment(
+                &proposal,
+                slot,
+                "text/plain",
+                bytes,
+                &key(&format!("{prefix}-upload-{slot}")),
+            )
+            .await
+            .unwrap()
+            .value;
+    }
+    let submit = client
+        .prepare_proposal(
+            &proposal,
+            "submit",
+            json!({}),
+            &key(&format!("{prefix}-submit")),
+        )
+        .unwrap();
+    client.execute_proposal(&submit).await.unwrap().value
+}
+
+async fn apply_proposal(
+    fixture: &client_http::ClientFixture,
+    submitted: &registry_breg_client::BRegProposal,
+    prefix: &str,
+) -> Result<registry_breg_client::BRegProposal, registry_breg_client::BaseRegistryClientError> {
+    let client = &fixture.http.client;
+    let apply = client
+        .prepare_proposal(
+            submitted,
+            "apply",
+            json!({"submissionVersion":1,"effectDigest":submitted.effect_digest().unwrap(),
+                "reason":"promotion-reason"}),
+            &key(&format!("{prefix}-apply")),
+        )
+        .unwrap();
+    client
+        .execute_proposal(&apply)
+        .await
+        .map(|complete| complete.value)
+}
+
+/// Runs the built-in executor once and returns the job's state and last
+/// error code.
+async fn run_automatic(
+    fixture: &client_http::ClientFixture,
+    proposal: &registry_breg_client::BRegProposal,
+) -> (String, Option<String>) {
+    assert!(fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT state,last_error_code FROM registry_internal.registry_proposal_application_jobs
+             WHERE proposal_id=$1",
+            &[&Uuid::parse_str(proposal.id()).unwrap()],
+        )
+        .await
+        .unwrap();
+    (row.get(0), row.get(1))
+}
+
+async fn revisions(fixture: &client_http::ClientFixture) -> i64 {
+    fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_revisions",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0)
+}
+
+/// Live record references as `(record, slot, sha256, attached revision)`.
+async fn record_references(
+    fixture: &client_http::ClientFixture,
+) -> BTreeSet<(Uuid, String, String, i64)> {
+    fixture
+        .database
+        .admin
+        .query(
+            "SELECT record_id,slot_id,sha256,attached_revision
+               FROM registry_internal.registry_record_attachments WHERE erased_at IS NULL",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
+        .collect()
+}
+
+async fn blob_hashes(fixture: &client_http::ClientFixture) -> BTreeSet<String> {
+    fixture
+        .database
+        .admin
+        .query(
+            "SELECT sha256 FROM registry_internal.registry_attachment_blobs WHERE state='live'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+async fn application_ids(fixture: &client_http::ClientFixture, name: &str) -> BTreeSet<Uuid> {
+    let application = &fixture.registry.entities()["application"];
+    fixture
+        .database
+        .admin
+        .query(
+            &format!(
+                "SELECT record_id FROM registry_data.\"{}\" WHERE \"{}\"=$1",
+                application.physical_table, application.fields["name"].physical_name
+            ),
+            &[&name],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+async fn erase_proposal(
+    fixture: &client_http::ClientFixture,
+    action_id: &str,
+    proposal: &registry_breg_client::BRegProposal,
+) -> u64 {
+    let (mut migration, task) = fixture.database.connect_migration().await;
+    let erasure = registry_breg::proposal_retention::erase_proposal_detail(
+        &mut migration,
+        &fixture.registry,
+        registry_breg::proposal_retention::ProposalDetailErasureScope {
+            action_id,
+            proposal_id: Uuid::parse_str(proposal.id()).unwrap(),
+            submission_version: 1,
+        },
+    )
+    .await
+    .unwrap();
+    drop(migration);
+    task.abort();
+    erasure.attachment_references
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -939,6 +1178,241 @@ async fn proposal_erasure_never_removes_bytes_a_record_refers_to() {
     fixture.finish().await;
 }
 
+/// The built-in executor applies `enrol`. Its create effect promotes the
+/// `document` file by reference to the bytes the Proposal stored. Erasing
+/// the Proposal keeps those bytes and removes the `note` file nothing
+/// promoted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_applied_proposal_promotes_its_file_by_reference_and_erasure_keeps_it() {
+    let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let submitted = submit_proposal(
+        &fixture,
+        "enrol",
+        enrol_input(programme, "Enrolled applicant"),
+        &[("document", EVIDENCE), ("note", FILE_CANARY)],
+        "enrol-promote",
+    )
+    .await;
+    let before = counts(&fixture).await;
+    assert_eq!(before.blobs, 2);
+    assert_eq!(before.references, 0);
+
+    assert_eq!(
+        run_automatic(&fixture, &submitted).await,
+        ("applied".to_owned(), None)
+    );
+    let record = *application_ids(&fixture, "Enrolled applicant")
+        .await
+        .first()
+        .expect("the applied Proposal created the record");
+    let after = counts(&fixture).await;
+    assert_eq!(after.applications, before.applications + 1);
+    assert_eq!(after.blobs, before.blobs, "promotion copies no bytes");
+    assert_eq!(
+        record_references(&fixture).await,
+        BTreeSet::from([(record, "evidence".to_owned(), sha256_hex(EVIDENCE), 1)])
+    );
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
+
+    assert_eq!(erase_proposal(&fixture, "enrol", &submitted).await, 2);
+    assert_eq!(
+        blob_hashes(&fixture).await,
+        BTreeSet::from([sha256_hex(EVIDENCE)]),
+        "the promoted bytes stay and the unpromoted bytes are gone"
+    );
+    assert_eq!(counts(&fixture).await.blobs, 1);
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
+
+    fixture.finish().await;
+}
+
+/// An optional Proposal slot left empty leaves the record slot empty, and
+/// the apply succeeds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_empty_optional_source_leaves_the_record_slot_empty() {
+    let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let submitted = submit_proposal(
+        &fixture,
+        "enrol",
+        enrol_input(programme, "Applicant without file"),
+        &[],
+        "enrol-empty",
+    )
+    .await;
+    assert_eq!(
+        run_automatic(&fixture, &submitted).await,
+        ("applied".to_owned(), None)
+    );
+    let record = *application_ids(&fixture, "Applicant without file")
+        .await
+        .first()
+        .expect("the applied Proposal created the record");
+    assert!(record_references(&fixture).await.is_empty());
+    assert_eq!(counts(&fixture).await.blobs, 0);
+    assert_eq!(
+        download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    fixture.finish().await;
+}
+
+/// A caller applies `amend` over HTTP. Its create and patch effects both
+/// reference the one stored copy of the Proposal file, and the patch fills
+/// the empty slot at the record's new revision.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn create_and_patch_effects_reference_one_stored_copy() {
+    let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let enrolled = submit_proposal(
+        &fixture,
+        "enrol",
+        enrol_input(programme, "Applicant to amend"),
+        &[],
+        "amend-target",
+    )
+    .await;
+    assert_eq!(
+        run_automatic(&fixture, &enrolled).await,
+        ("applied".to_owned(), None)
+    );
+    let target = *application_ids(&fixture, "Applicant to amend")
+        .await
+        .first()
+        .unwrap();
+    let submitted = submit_proposal(
+        &fixture,
+        "amend",
+        amend_input(target, programme, "Amended applicant"),
+        &[("document", EVIDENCE)],
+        "amend-empty",
+    )
+    .await;
+    let before = counts(&fixture).await;
+    assert_eq!(before.blobs, 1);
+    let applied = apply_proposal(&fixture, &submitted, "amend-empty")
+        .await
+        .expect("both empty slots take the file");
+    assert_eq!(applied.state(), BRegProposalState::Applied);
+    let after = counts(&fixture).await;
+    assert_eq!(after.blobs, before.blobs, "promotion copies no bytes");
+    let records = application_ids(&fixture, "Amended applicant").await;
+    assert_eq!(records.len(), 2);
+    let copy = *records.iter().find(|record| **record != target).unwrap();
+    assert_eq!(
+        record_references(&fixture).await,
+        BTreeSet::from([
+            (copy, "evidence".to_owned(), sha256_hex(EVIDENCE), 1),
+            (target, "evidence".to_owned(), sha256_hex(EVIDENCE), 2),
+        ])
+    );
+    for record in [copy, target] {
+        assert_file(
+            &download(
+                &fixture,
+                clerk("zone-a"),
+                &record.to_string(),
+                "evidence",
+                None,
+            )
+            .await,
+            EVIDENCE,
+        );
+    }
+    fixture.finish().await;
+}
+
+/// A second file for a filled write-once slot answers 409
+/// `attachment.slot-write-once` over HTTP. The apply rolls back as a whole:
+/// the record its create effect wrote, that record's reference and every
+/// revision are gone, and the Proposal stays submitted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotion_into_a_filled_slot_answers_409_and_rolls_back_the_whole_apply() {
+    let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let target = register(&fixture, programme, "register-filled", EVIDENCE).await;
+    let submitted = submit_proposal(
+        &fixture,
+        "amend",
+        amend_input(target, programme, "Refused amendment"),
+        &[("document", FILE_CANARY)],
+        "amend-filled",
+    )
+    .await;
+    let before = counts(&fixture).await;
+    let before_revisions = revisions(&fixture).await;
+    let before_references = record_references(&fixture).await;
+
+    let error = apply_proposal(&fixture, &submitted, "amend-filled")
+        .await
+        .expect_err("the filled slot refuses the second file");
+    assert_eq!(error.status(), Some(409));
+    assert_eq!(
+        error.problem_code(),
+        Some(registry_breg_client::BRegProblemCode::AttachmentSlotWriteOnce)
+    );
+
+    let after = counts(&fixture).await;
+    assert_eq!(after.applications, before.applications);
+    assert_eq!(after.references, before.references);
+    assert_eq!(after.blobs, before.blobs);
+    assert_eq!(after.outbox, before.outbox);
+    assert_eq!(revisions(&fixture).await, before_revisions);
+    assert_eq!(record_references(&fixture).await, before_references);
+    assert!(application_ids(&fixture, "Refused amendment")
+        .await
+        .is_empty());
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &target.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        EVIDENCE,
+    );
+    let current = fixture
+        .http
+        .client
+        .read_proposal(&submitted)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(current.state(), BRegProposalState::Submitted);
+    fixture.finish().await;
+}
+
 #[test]
 fn declarations_grants_and_effects_are_validated() {
     let refused = |mutate: &dyn Fn(&mut Value), code: &str| {
@@ -990,6 +1464,8 @@ fn declarations_grants_and_effects_are_validated() {
         },
         "breg.action.attachment-invalid",
     );
+    // `rename` declares only the `support` Proposal slot, so there is no
+    // `evidence` file to promote.
     refused(
         &|source| {
             source["actions"]["rename"]["plan"]["effects"][0]["attachments"] =
@@ -997,6 +1473,8 @@ fn declarations_grants_and_effects_are_validated() {
         },
         "breg.action.attachment-invalid",
     );
+    // As a Proposal Action, `register` declares no Proposal slot, so its
+    // effect names a file nothing can promote.
     refused(
         &|source| {
             source["actions"]["register"]["execution"] = json!({"mode":"proposal","proposal":{"review":{"type":"none"},
