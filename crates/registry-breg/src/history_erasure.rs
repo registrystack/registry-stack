@@ -40,13 +40,14 @@ const MAX_REASON_BYTES: usize = 1024;
 pub(crate) const MAX_ERASURE_REVISIONS: i64 = 10_000;
 const AUDIT_OPERATION_ID: &str = "history-erasure-maintenance";
 /// The audit schema of the per-record history erasure entry.
-pub const HISTORY_ERASURE_AUDIT_SCHEMA: &str = "breg-history-erasure-audit/v3";
+pub const HISTORY_ERASURE_AUDIT_SCHEMA: &str = "breg-history-erasure-audit/v4";
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct RecordHistoryErasureTarget<'a> {
     entity_id: &'a str,
     record_id: Uuid,
     erase_through_revision: i64,
+    erase_files: Vec<String>,
 }
 
 impl fmt::Debug for RecordHistoryErasureTarget<'_> {
@@ -67,7 +68,38 @@ impl<'a> RecordHistoryErasureTarget<'a> {
             entity_id,
             record_id,
             erase_through_revision,
+            erase_files: Vec::new(),
         }
+    }
+
+    /// Select current file slots for explicit erasure. The caller supplies
+    /// the verified active package's registry, whose identity the maintenance
+    /// transaction checks before it writes anything.
+    ///
+    /// # Errors
+    /// Returns [`HistoryErasureError::InvalidInput`] for an undeclared or
+    /// repeated slot. An empty selection preserves every current file.
+    pub fn with_erase_files(
+        mut self,
+        registry: &crate::CompiledRegistry,
+        slots: &[String],
+    ) -> Result<Self, HistoryErasureError> {
+        if !slots.is_empty() {
+            let entity = registry
+                .entities()
+                .get(self.entity_id)
+                .ok_or(HistoryErasureError::InvalidInput)?;
+            let unique: std::collections::BTreeSet<_> = slots.iter().collect();
+            if unique.len() != slots.len()
+                || slots
+                    .iter()
+                    .any(|slot| !entity.attachments.contains_key(slot))
+            {
+                return Err(HistoryErasureError::InvalidInput);
+            }
+        }
+        self.erase_files = slots.to_vec();
+        Ok(self)
     }
 }
 
@@ -96,6 +128,9 @@ pub struct HistoryErasureOutcome {
     pub scrubbed_proposal_target_count: u64,
     pub scrubbed_proposal_submission_count: u64,
     pub removed_descriptor_count: u64,
+    pub erased_file_reference_count: u64,
+    pub kept_file_reference_count: u64,
+    pub removed_proposal_link_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -228,14 +263,30 @@ async fn erase_record_history_scoped(
     let head = lock_history_head(&transaction).await?;
     let summary = target_revision_summary(&transaction, &request.target).await?;
     let affected_positions = affected_commit_positions(&transaction, &request.target).await?;
-    let coverage_update = coverage_update_for_erasure(
-        head.coverage_ready,
-        head.coverage_baseline_position,
-        head.unavailable_after_position,
-        summary.has_unindexed_revisions,
-        affected_positions.first().copied(),
-        lifecycle_reference.is_some(),
-    )?;
+    let coverage_update = if summary.revision_count == 0 {
+        if lifecycle_reference.is_some()
+            || request.target.erase_files.is_empty()
+            || !head.coverage_ready
+        {
+            return Err(HistoryErasureError::TargetUnavailable);
+        }
+        // A named current file can outlive all of its history. Erasing it
+        // does not move the snapshot boundary. The write below must actually
+        // erase a live selected slot before this transaction may commit.
+        CoverageUpdate {
+            coverage_ready: head.coverage_ready,
+            unavailable_after_position: head.unavailable_after_position,
+        }
+    } else {
+        coverage_update_for_erasure(
+            head.coverage_ready,
+            head.coverage_baseline_position,
+            head.unavailable_after_position,
+            summary.has_unindexed_revisions,
+            affected_positions.first().copied(),
+            lifecycle_reference.is_some(),
+        )?
+    };
 
     let scrubbed_cached_response_count = tombstone_erased_cached_responses(
         &transaction,
@@ -264,23 +315,27 @@ async fn erase_record_history_scoped(
     let scrubbed_change_context_count =
         scrub_change_contexts(&transaction, &affected_positions).await?;
     let erased_commit_member_count = delete_commit_members(&transaction, &request.target).await?;
-    // A record slot's file belongs to the revision that attached it. Erasing
-    // that revision erases the reference, and bytes nothing else refers to
-    // become eligible for deletion. Field-encryption erase-and-rebaseline
-    // rewrites history for a record that keeps its files, so it keeps them.
-    if lifecycle_reference.is_none() {
-        crate::attachment_store::erase_record_attachments(
-            &transaction,
-            request.target.entity_id,
-            request.target.record_id,
-            request.target.erase_through_revision,
-        )
-        .await
-        .map_err(|_| HistoryErasureError::Unavailable)?;
+    // Files are current Record state. Ordinary history erasure clears the
+    // attribution carried by erased revisions and erases only named slots.
+    // Field-encryption erase-and-rebaseline keeps files and their attribution.
+    let files = crate::attachment_store::erase_record_attachments(
+        &transaction,
+        request.target.entity_id,
+        request.target.record_id,
+        lifecycle_reference
+            .is_none()
+            .then_some(request.target.erase_through_revision),
+        &request.target.erase_files,
+    )
+    .await
+    .map_err(|_| HistoryErasureError::Unavailable)?;
+    if summary.revision_count == 0 && files.erased == 0 {
+        return Err(HistoryErasureError::TargetUnavailable);
     }
     // An applied Proposal keeps its receipt, and its link to a revision this
     // erasure removes goes with that revision.
-    delete_proposal_result_links(&transaction, &request.target).await?;
+    let removed_proposal_link_count =
+        delete_proposal_result_links(&transaction, &request.target).await?;
     let erased_revision_count = delete_revisions(&transaction, &request.target).await?;
     let removed_descriptor_count =
         delete_unreferenced_history_descriptors(&transaction, request.expected).await?;
@@ -300,6 +355,9 @@ async fn erase_record_history_scoped(
         scrubbed_proposal_target_count,
         scrubbed_proposal_submission_count,
         removed_descriptor_count,
+        erased_file_reference_count: files.erased,
+        kept_file_reference_count: files.kept,
+        removed_proposal_link_count,
     };
     let entry = history_erasure_entry(&request, &outcome, lifecycle_reference)?;
     match lifecycle_reference {
@@ -379,9 +437,6 @@ async fn target_revision_summary(
         revision_count: row.get(0),
         has_unindexed_revisions: row.get(1),
     };
-    if summary.revision_count == 0 {
-        return Err(HistoryErasureError::TargetUnavailable);
-    }
     if summary.revision_count > MAX_ERASURE_REVISIONS {
         return Err(HistoryErasureError::InvalidInput);
     }
@@ -456,7 +511,7 @@ async fn delete_commit_members(
 async fn delete_proposal_result_links(
     transaction: &tokio_postgres::Transaction<'_>,
     target: &RecordHistoryErasureTarget<'_>,
-) -> Result<(), HistoryErasureError> {
+) -> Result<u64, HistoryErasureError> {
     transaction
         .execute(
             "DELETE FROM registry_internal.registry_proposal_results
@@ -470,8 +525,7 @@ async fn delete_proposal_result_links(
             ],
         )
         .await
-        .map_err(|_| HistoryErasureError::Unavailable)?;
-    Ok(())
+        .map_err(|_| HistoryErasureError::Unavailable)
 }
 
 async fn delete_revisions(
@@ -721,6 +775,7 @@ fn history_erasure_request_entry(
             "operatorReference": references.operator,
             "targetReference": references.target,
             "reasonReference": references.reason,
+            "eraseFileCount": request.target.erase_files.len(),
         }),
     ))
 }
@@ -757,6 +812,9 @@ fn history_erasure_entry(
         "scrubbedProposalTargetCount": outcome.scrubbed_proposal_target_count,
         "scrubbedProposalSubmissionCount": outcome.scrubbed_proposal_submission_count,
         "removedDescriptorCount": outcome.removed_descriptor_count,
+        "erasedFileReferenceCount": outcome.erased_file_reference_count,
+        "keptFileReferenceCount": outcome.kept_file_reference_count,
+        "removedProposalLinkCount": outcome.removed_proposal_link_count,
         "operatorResponsibility": "saved_exports_event_consumers_and_backups",
         "stubPolicy": "commit_position_and_minimized_origin_retained_context_removed",
     });

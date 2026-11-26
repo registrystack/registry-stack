@@ -345,7 +345,7 @@ Branch on the schema, because a historical schema version keeps its historical m
 These event classes use these schemas:
 
 - Requests, terminal responses, refusals, unfinished responses, and Review recovery: `breg-audit/v3`.
-- History erasure: `breg-history-erasure-audit/v3`.
+- History erasure: `breg-history-erasure-audit/v4`.
 - History rebaseline: `breg-history-rebaseline-audit/v3`.
 - Field encryption maintenance: `breg-field-encryption-audit/v3`.
 - Attachment verification: `breg-attachment-verification-audit/v3`.
@@ -359,7 +359,7 @@ These event classes use these schemas:
 {/* Evidence: crates/registry-breg/tests/fixtures/audit-identity-goldens.json;
     crates/registry-breg/tests/support/postgres_harness.rs;
     crates/registry-breg/src/audit.rs, breg-audit/v3 and breg-hook-audit/v1;
-    crates/registry-breg/src/history_erasure.rs, breg-history-erasure-audit/v3;
+    crates/registry-breg/src/history_erasure.rs, breg-history-erasure-audit/v4;
     crates/registry-breg/src/history_rebaseline.rs, breg-history-rebaseline-audit/v3;
     crates/registry-breg/src/field_encryption_backfill.rs, breg-field-encryption-audit/v3;
     crates/registry-breg/src/attachment_verification_worker.rs, breg-attachment-verification-audit/v3;

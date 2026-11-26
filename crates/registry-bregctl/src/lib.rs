@@ -14225,6 +14225,18 @@ fn write_history_erase_success(
                     report.outcome.erased_revision_count.to_string(),
                 ),
                 (
+                    "erased file references",
+                    report.outcome.erased_file_reference_count.to_string(),
+                ),
+                (
+                    "kept file references",
+                    report.outcome.kept_file_reference_count.to_string(),
+                ),
+                (
+                    "removed Proposal links",
+                    report.outcome.removed_proposal_link_count.to_string(),
+                ),
+                (
                     "erased commit members",
                     report.outcome.erased_commit_member_count.to_string(),
                 ),
@@ -17363,6 +17375,9 @@ mod tests {
                 scrubbed_proposal_target_count: 1,
                 scrubbed_proposal_submission_count: 0,
                 removed_descriptor_count: 0,
+                erased_file_reference_count: 1,
+                kept_file_reference_count: 2,
+                removed_proposal_link_count: 3,
             },
         };
         let mut stdout = Vec::new();
@@ -17376,9 +17391,27 @@ mod tests {
         assert!(rendered.contains("\"command\": \"history erase\""));
         assert!(rendered.contains("\"scrubbedCachedResponseCount\": 1"));
         assert!(rendered.contains("\"scrubbedIngestionReceiptCount\": 1"));
+        assert!(rendered.contains("\"erasedFileReferenceCount\": 1"));
+        assert!(rendered.contains("\"keptFileReferenceCount\": 2"));
+        assert!(rendered.contains("\"removedProposalLinkCount\": 3"));
         assert!(!rendered.contains("018feaa0-68f9-4a45-b9e3-58436df07af7"));
         assert!(!rendered.contains("operator"));
         assert!(!rendered.contains("reason"));
+        let mut human = Vec::new();
+        assert_eq!(
+            write_history_erase_success(&report, OutputFormat::Human, &mut human, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        let human = String::from_utf8(human).unwrap();
+        for (label, count) in [
+            ("erased file references", "1"),
+            ("kept file references", "2"),
+            ("removed Proposal links", "3"),
+        ] {
+            assert!(human
+                .lines()
+                .any(|line| line.contains(label) && line.trim_end().ends_with(count)));
+        }
     }
 
     #[test]

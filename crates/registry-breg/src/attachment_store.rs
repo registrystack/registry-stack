@@ -80,16 +80,18 @@ pub(crate) async fn install(
             proposal_id uuid NOT NULL,
             submission_version bigint NOT NULL CHECK (submission_version BETWEEN 1 AND 4294967295),
             slot_id text NOT NULL,
-            sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
-            content_type text NOT NULL,
-            byte_size bigint NOT NULL CHECK (byte_size BETWEEN 0 AND 16777216),
+            sha256 text CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+            content_type text,
+            byte_size bigint CHECK (byte_size BETWEEN 0 AND 16777216),
             uploaded_at timestamptz,
             uploaded_by text,
             erased_at timestamptz,
             PRIMARY KEY (action_id, proposal_id, submission_version, slot_id),
             FOREIGN KEY (action_id,proposal_id) REFERENCES registry_internal.registry_proposal_state,
-            CHECK ((erased_at IS NULL AND uploaded_at IS NOT NULL AND uploaded_by IS NOT NULL)
-                OR (erased_at IS NOT NULL AND uploaded_at IS NULL AND uploaded_by IS NULL))
+            CHECK ((erased_at IS NULL AND sha256 IS NOT NULL AND content_type IS NOT NULL
+                    AND byte_size IS NOT NULL AND uploaded_at IS NOT NULL AND uploaded_by IS NOT NULL)
+                OR (erased_at IS NOT NULL AND sha256 IS NULL AND content_type IS NULL
+                    AND byte_size IS NULL AND uploaded_at IS NULL AND uploaded_by IS NULL))
         );
         CREATE INDEX IF NOT EXISTS registry_attachment_live_references
             ON registry_internal.registry_proposal_attachments (sha256) WHERE erased_at IS NULL;
@@ -97,16 +99,21 @@ pub(crate) async fn install(
             entity_id text NOT NULL CHECK (entity_id <> ''),
             record_id uuid NOT NULL,
             slot_id text NOT NULL CHECK (slot_id <> ''),
-            sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
-            content_type text NOT NULL CHECK (content_type <> ''),
-            byte_size bigint NOT NULL CHECK (byte_size BETWEEN 1 AND 16777216),
-            attached_revision bigint NOT NULL CHECK (attached_revision > 0),
+            sha256 text CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+            content_type text CHECK (content_type <> ''),
+            byte_size bigint CHECK (byte_size BETWEEN 1 AND 16777216),
+            attached_revision bigint CHECK (attached_revision > 0),
             attached_at timestamptz,
             attached_by text,
             erased_at timestamptz,
             PRIMARY KEY (entity_id, record_id, slot_id),
-            CHECK ((erased_at IS NULL AND attached_at IS NOT NULL AND attached_by IS NOT NULL)
-                OR (erased_at IS NOT NULL AND attached_at IS NULL AND attached_by IS NULL))
+            CHECK ((erased_at IS NULL AND sha256 IS NOT NULL AND content_type IS NOT NULL
+                    AND byte_size IS NOT NULL AND attached_revision IS NOT NULL
+                    AND ((attached_at IS NOT NULL AND attached_by IS NOT NULL)
+                        OR (attached_at IS NULL AND attached_by IS NULL)))
+                OR (erased_at IS NOT NULL AND sha256 IS NULL AND content_type IS NULL
+                    AND byte_size IS NULL AND attached_revision IS NULL
+                    AND attached_at IS NULL AND attached_by IS NULL))
         );
         CREATE INDEX IF NOT EXISTS registry_record_attachment_live_references
             ON registry_internal.registry_record_attachments (sha256) WHERE erased_at IS NULL;"
@@ -705,6 +712,7 @@ pub(crate) async fn erase(
     let count = client
         .execute(
             "UPDATE registry_internal.registry_proposal_attachments SET
+             sha256=NULL,content_type=NULL,byte_size=NULL,
              uploaded_by=NULL,uploaded_at=NULL,erased_at=transaction_timestamp() WHERE
              action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND erased_at IS NULL",
             &[&entity, &id, &version],
@@ -931,22 +939,27 @@ pub(crate) async fn load_record_attachment(
     }))
 }
 
-/// Erase the references that a record's erased history introduced: every
-/// slot filled at or before `through_revision`. Each slot keeps a tombstone,
-/// so a write-once slot is never filled again, and bytes nothing
-/// else refers to become eligible for deletion.
+pub(crate) struct RecordAttachmentErasure {
+    pub erased: u64,
+    pub kept: u64,
+}
+
+/// Erase only explicitly selected current file slots. Clear attribution
+/// introduced by erased history when a revision boundary is supplied. Each
+/// erased slot keeps only its identity and erasure time, so it stays written.
 pub(crate) async fn erase_record_attachments(
     client: &impl GenericClient,
     entity_id: &str,
     record_id: Uuid,
-    through_revision: i64,
-) -> Result<u64, MutationError> {
+    through_revision: Option<i64>,
+    erase_files: &[String],
+) -> Result<RecordAttachmentErasure, MutationError> {
     let hashes = client
         .query(
             "SELECT DISTINCT sha256 FROM registry_internal.registry_record_attachments
-             WHERE entity_id=$1 AND record_id=$2 AND attached_revision<=$3 AND erased_at IS NULL
+             WHERE entity_id=$1 AND record_id=$2 AND slot_id=ANY($3) AND erased_at IS NULL
              ORDER BY sha256",
-            &[&entity_id, &record_id, &through_revision],
+            &[&entity_id, &record_id, &erase_files],
         )
         .await
         .map_err(unavailable)?;
@@ -956,16 +969,36 @@ pub(crate) async fn erase_record_attachments(
     let count = client
         .execute(
             "UPDATE registry_internal.registry_record_attachments SET
+             sha256=NULL,content_type=NULL,byte_size=NULL,attached_revision=NULL,
              attached_by=NULL,attached_at=NULL,erased_at=transaction_timestamp()
-             WHERE entity_id=$1 AND record_id=$2 AND attached_revision<=$3 AND erased_at IS NULL",
-            &[&entity_id, &record_id, &through_revision],
+             WHERE entity_id=$1 AND record_id=$2 AND slot_id=ANY($3) AND erased_at IS NULL",
+            &[&entity_id, &record_id, &erase_files],
         )
         .await
         .map_err(unavailable)?;
     for row in hashes {
         retire_unreferenced(client, &row.get::<_, String>(0)).await?;
     }
-    Ok(count)
+    if let Some(through_revision) = through_revision {
+        client.execute(
+            "UPDATE registry_internal.registry_record_attachments SET attached_by=NULL,attached_at=NULL
+             WHERE entity_id=$1 AND record_id=$2 AND attached_revision<=$3 AND erased_at IS NULL",
+            &[&entity_id, &record_id, &through_revision],
+        ).await.map_err(unavailable)?;
+    }
+    let kept: i64 = client
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_record_attachments
+         WHERE entity_id=$1 AND record_id=$2 AND erased_at IS NULL",
+            &[&entity_id, &record_id],
+        )
+        .await
+        .map_err(unavailable)?
+        .get(0);
+    Ok(RecordAttachmentErasure {
+        erased: count,
+        kept: u64::try_from(kept).map_err(|_| MutationError::Unavailable)?,
+    })
 }
 
 fn unavailable(_: tokio_postgres::Error) -> MutationError {
@@ -973,7 +1006,7 @@ fn unavailable(_: tokio_postgres::Error) -> MutationError {
 }
 
 /// Only selected fields are queried, including after operator erasure. Erased
-/// values carry no uploader identity or timestamp and never confer byte access.
+/// values carry no file metadata and never confer byte access.
 #[cfg(feature = "postgres-test")]
 pub(crate) async fn metadata_for_read(
     client: &impl GenericClient,
@@ -1000,8 +1033,10 @@ pub(crate) async fn metadata_for_read(
     }
     Ok(rows.into_iter().map(|row| {
         let slot:String=row.get(0);let erased:bool=row.get(3);
-        let mut value=serde_json::json!({"slotId":slot,"proposalVersion":version,"sha256":row.get::<_,String>(1),"byteSize":row.get::<_,i64>(2),"filled":true,"erased":erased});
+        let mut value=serde_json::json!({"slotId":slot,"proposalVersion":version,"filled":true,"erased":erased});
         if !erased {
+            value["sha256"]=serde_json::json!(row.get::<_,String>(1));
+            value["byteSize"]=serde_json::json!(row.get::<_,i64>(2));
             value["contentType"]=serde_json::json!(row.get::<_,String>(4));
             value["uploadedAt"]=serde_json::json!(row.get::<_,Option<String>>(5));
             value["uploadedBy"]=serde_json::json!(row.get::<_,Option<String>>(6));

@@ -31,8 +31,16 @@
   of the Action's definition revision. When the record slot already holds a
   file, apply answers `409 attachment.slot-write-once` and nothing commits.
   When the Proposal file's verification is pending or rejected, apply
-  answers `412 precondition.failed` and nothing commits. History erasure
-  removes a record's file references, and the bytes go once no record or
+  answers `412 precondition.failed` and nothing commits. Invoke also refuses
+  files whose stored verification verdict is already rejected. History erasure
+  keeps current record files and clears attribution from erased revisions.
+  The existing `history erase` request's `eraseFiles` member explicitly names
+  slots to erase, including after their history is gone while coverage is ready.
+  Undeclared or repeated slots are refused before any erasure.
+  The report and `breg-history-erasure-audit/v4` entry count erased and kept
+  file references and removed Proposal links. Erased Record and Proposal file
+  references keep only their slot identity and erasure timestamp, with no
+  file digest, media type or size. Bytes go once no record or
   Proposal refers to them. Proposal erasure keeps bytes a record refers to,
   including promoted files, and removes the rest. The Rust and Python
   clients gain `download_record_attachment`, and the Node.js client gains
