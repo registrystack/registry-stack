@@ -353,7 +353,7 @@ fn compile_action(
     let condition_route = (!action.is_proposal()
         && target_uses.iter().any(|use_| use_.condition_required))
     .then(|| format!("/v1/actions/{}/target-conditions", action.id));
-    let execution = compile_execution(
+    let mut execution = compile_execution(
         action,
         entities,
         profiles,
@@ -361,6 +361,15 @@ fn compile_action(
         &target_uses,
         errors,
     );
+    if let crate::model::CompiledActionExecution::Proposal { proposal } = &mut execution {
+        proposal.promotions = compile_attachment_promotions(
+            action,
+            &effects,
+            &proposal.attachments,
+            entities,
+            errors,
+        );
+    }
     let compiled = CompiledAction {
         api_name: action
             .api_name
@@ -1361,8 +1370,10 @@ fn compile_inputs(
 
 /// Binds each file an Action request carries to the record slot one create
 /// effect fills. Only an immediate fixed-plan Action without Evidence or a
-/// timer can carry files: every other path has no request to take them
-/// from, or commits outside the request's own transaction.
+/// timer can carry files: every other immediate path has no request to take
+/// them from, or commits outside the request's own transaction. A Proposal
+/// Action carries no request files. Its effects promote Proposal files
+/// instead, and `compile_attachment_promotions` checks them.
 fn compile_action_attachments(
     action: &ActionSource,
     inputs: &[CompiledActionInput],
@@ -1375,19 +1386,18 @@ fn compile_action_attachments(
         .effects()
         .iter()
         .any(|effect| !effect.attachments.is_empty());
-    if !declared {
+    if !declared || action.is_proposal() {
         return compiled;
     }
     let base = format!("actions[id={}].plan.effects", action.id);
-    if action.is_proposal()
-        || !action.evidence.is_empty()
+    if !action.evidence.is_empty()
         || !action.commit_guards.evidence.is_empty()
         || timer_actions.contains(&action.id)
     {
         errors.push(Diagnostic::error(
             "breg.action.attachment-invalid",
             &base,
-            "only an immediate Action without Evidence or a timer can attach files to records",
+            "only an immediate Action without Evidence or a timer can attach request files to records",
         ));
     }
     let input_names = inputs
@@ -1455,6 +1465,111 @@ fn compile_action_attachments(
         ));
     }
     compiled
+}
+
+/// Binds each Proposal file an effect promotes to the record slot it fills.
+/// The record slot must hold every file the Proposal slot can hold, so a
+/// promotion never narrows what the Proposal accepted. One record slot of one
+/// record takes at most one promotion.
+fn compile_attachment_promotions(
+    action: &ActionSource,
+    effects: &[CompiledPlanEffect],
+    proposal_slots: &BTreeMap<String, crate::model::CompiledAttachmentSlot>,
+    entities: &BTreeMap<String, CompiledEntity>,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<crate::model::CompiledAttachmentPromotion> {
+    let mut promotions = Vec::new();
+    let mut filled = BTreeSet::new();
+    let base = format!("actions[id={}].plan.effects", action.id);
+    for (index, effect) in action.effects().iter().enumerate() {
+        if effect.attachments.is_empty() {
+            continue;
+        }
+        let effect_id = effective_action_effect_id(effect, index);
+        let path = format!("{base}[id={effect_id}].attachments");
+        let compiled = effects.iter().find(|compiled| compiled.id == effect_id);
+        let entity = compiled
+            .filter(|compiled| matches!(compiled.operation, Operation::Create | Operation::Patch))
+            .and_then(|compiled| entities.get(&compiled.target.entity_id));
+        let (Some(compiled), Some(entity)) = (compiled, entity) else {
+            errors.push(Diagnostic::error(
+                "breg.action.attachment-invalid",
+                &path,
+                "only a create or patch effect on a declared record type can promote a Proposal file",
+            ));
+            continue;
+        };
+        let target = write_target_binding_key(&compiled.target, &effect_id);
+        for (slot_id, source) in &effect.attachments {
+            let slot_path = format!("{path}[slot={slot_id}]");
+            let from_path = format!("{slot_path}.fromAttachment");
+            let Some(slot) = entity.attachments.get(slot_id) else {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    &slot_path,
+                    "an effect attachment must name a slot the target record type declares",
+                ));
+                continue;
+            };
+            let Some(from) = proposal_slots.get(&source.from_attachment) else {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    &from_path,
+                    "a promotion must name a Proposal attachment slot the Action declares",
+                ));
+                continue;
+            };
+            if let Some(content_type) = from
+                .content_types
+                .iter()
+                .find(|content_type| !slot.content_types.contains(content_type))
+            {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    &from_path,
+                    &format!(
+                        "the record slot does not accept the content type {content_type} that the Proposal slot accepts"
+                    ),
+                ));
+                continue;
+            }
+            if from.maximum_bytes > slot.maximum_bytes {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    &from_path,
+                    "the Proposal slot accepts files larger than the record slot holds",
+                ));
+                continue;
+            }
+            // Classifications are ordered, so a promoted file keeps at least
+            // the protection its Proposal slot gave it.
+            if slot.classification < from.classification {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    &from_path,
+                    "the record slot is less restricted than the Proposal slot it takes the file from",
+                ));
+                continue;
+            }
+            if !filled.insert((target.clone(), slot.id.clone())) {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    &slot_path,
+                    "an Action cannot promote into one record slot of one record more than once",
+                ));
+                continue;
+            }
+            promotions.push(crate::model::CompiledAttachmentPromotion {
+                effect_id: effect_id.clone(),
+                entity_id: entity.id.clone(),
+                slot_id: slot.id.clone(),
+                from_attachment: from.id.clone(),
+                maximum_bytes: slot.maximum_bytes,
+                content_types: slot.content_types.clone(),
+            });
+        }
+    }
+    promotions
 }
 
 fn compile_effects(
@@ -3195,6 +3310,7 @@ fn compile_execution(
             },
             review_context: proposal.review_context.clone(),
             attachments,
+            promotions: Vec::new(),
             permissions,
         },
     }
@@ -3497,7 +3613,14 @@ pub(crate) fn definition_revision(
     let policy = match &action.execution {
         crate::model::CompiledActionExecution::Immediate => json!({"mode":"immediate"}),
         crate::model::CompiledActionExecution::Proposal { proposal } => {
-            json!({"mode":"proposal","review":proposal.review,"application":proposal.application,"retention":proposal.retention,"reviewContext":proposal.review_context,"attachments":proposal.attachments})
+            let mut policy = json!({"mode":"proposal","review":proposal.review,"application":proposal.application,"retention":proposal.retention,"reviewContext":proposal.review_context,"attachments":proposal.attachments});
+            // Promotions change what an approved Proposal writes, so they are
+            // part of the Action's identity. Omitting an empty list keeps the
+            // revision of every Action without promotions unchanged.
+            if !proposal.promotions.is_empty() {
+                policy["promotions"] = json!(proposal.promotions);
+            }
+            policy
         }
     };
     let inputs = action
@@ -3515,7 +3638,13 @@ pub(crate) fn definition_revision(
         value["refusals"] = json!(function.refusals.keys().collect::<Vec<_>>());
         value
     });
-    let payload = json!({"id":action.id,"apiName":action.api_name,"inputs":inputs,"plan":{"effects":action.effects,"function":function},"commitGuards":{"targets":action.requires,"evidence":action.commit_evidence},"planEvidence":action.evidence,"targets":targets,"execution":policy,"consentIssuer":action.consent_issuer});
+    let mut payload = json!({"id":action.id,"apiName":action.api_name,"inputs":inputs,"plan":{"effects":action.effects,"function":function},"commitGuards":{"targets":action.requires,"evidence":action.commit_evidence},"planEvidence":action.evidence,"targets":targets,"execution":policy,"consentIssuer":action.consent_issuer});
+    // Request-file bindings decide which request part fills which record
+    // slot, so they are part of the Action's identity. Omitting an empty map
+    // keeps the revision of every Action without request files unchanged.
+    if !action.attachments.is_empty() {
+        payload["attachments"] = json!(action.attachments);
+    }
     format!(
         "sha256:{}",
         hex_lower(&Sha256::digest(

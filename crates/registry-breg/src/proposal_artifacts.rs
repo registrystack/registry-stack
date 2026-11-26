@@ -15,6 +15,9 @@ pub(crate) fn append_proposal_openapi(
     // be refused when a profile it describes may apply a Proposal whose plan
     // can be refused as that profile.
     let mut apply_may_refuse_write = false;
+    // Every record slot is write-once, so applying a Proposal that promotes
+    // a file can meet a slot an earlier write already filled.
+    let mut apply_may_fill_written_slot = false;
     for action in &actions.actions {
         let CompiledActionExecution::Proposal { proposal } = &action.execution else {
             continue;
@@ -47,6 +50,8 @@ pub(crate) fn append_proposal_openapi(
             }
             apply_may_refuse_write |= permitted(ProposalOperation::Apply)
                 && action_may_refuse_write(action, entities, &grant.profile_id);
+            apply_may_fill_written_slot |=
+                permitted(ProposalOperation::Apply) && !proposal.promotions.is_empty();
             let document_fields = proposal
                 .review_context
                 .as_ref()
@@ -220,6 +225,9 @@ pub(crate) fn append_proposal_openapi(
         } else if method == "post" {
             if operation == ProposalOperation::Apply && apply_may_refuse_write {
                 document["responses"]["403"] = json!({"description":"The application writes outside what the selected access profile may write: a disclosure condition binds it on a record type the plan patches (`write.outside-boundary`)"});
+            }
+            if operation == ProposalOperation::Apply && apply_may_fill_written_slot {
+                document["responses"]["409"] = json!({"description":"The Proposal was rejected, the idempotency key was reused with a different request, or the plan promotes a file into a record slot that already holds one (`attachment.slot-write-once`)"});
             }
             let schema = match operation {
                 ProposalOperation::Apply => proposal_apply_input_schema(),

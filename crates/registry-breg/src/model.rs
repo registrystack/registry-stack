@@ -129,6 +129,21 @@ pub struct CompiledActionAttachment {
     pub content_types: Vec<String>,
 }
 
+/// One Proposal file that an applied effect references from a record slot.
+/// The bounds are the record slot's. Apply checks the frozen file against
+/// them again.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledAttachmentPromotion {
+    pub effect_id: String,
+    #[serde(rename = "recordType")]
+    pub entity_id: String,
+    pub slot_id: String,
+    pub from_attachment: String,
+    pub maximum_bytes: u32,
+    pub content_types: Vec<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledLogicalField {
@@ -503,6 +518,10 @@ pub struct CompiledProposalPolicy {
     pub retention: CompiledProposalRetentionMode,
     pub review_context: Option<crate::contract::ProposalReviewContextSource>,
     pub attachments: BTreeMap<String, CompiledAttachmentSlot>,
+    /// Proposal files that applied effects reference from record slots, in
+    /// effect order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promotions: Vec<CompiledAttachmentPromotion>,
     pub permissions: Vec<CompiledProposalPermission>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_apply_grant: Option<CompiledSystemApplyGrant>,

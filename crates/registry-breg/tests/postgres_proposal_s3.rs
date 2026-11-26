@@ -2066,3 +2066,194 @@ async fn a_pending_verdict_without_a_running_job_holds_back_worker_success() {
     assert!(pass.last_success().age().is_some());
     fixture.finish().await;
 }
+
+/// Sets the verdict on the verified `bytes` under the configured policy.
+async fn set_verdict(fixture: &client_http::ClientFixture, bytes: &[u8], verdict: &str) {
+    let changed = fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_verification SET verdict = $2
+              WHERE sha256 = encode(sha256($1::bytea), 'hex')",
+            &[&bytes, &verdict],
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed, 1);
+}
+
+/// Live record references as `(record, slot, sha256)`.
+async fn promoted_references(
+    fixture: &client_http::ClientFixture,
+) -> BTreeSet<(uuid::Uuid, String, String)> {
+    fixture
+        .database
+        .admin
+        .query(
+            "SELECT record_id, slot_id, sha256
+               FROM registry_internal.registry_record_attachments WHERE erased_at IS NULL",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect()
+}
+
+/// A promoted Proposal file reaches the record as a reference to the S3
+/// object the Proposal stored. The apply writes nothing to S3, the record
+/// download reads that object, and Proposal erasure leaves it in place. A
+/// file whose verdict turned pending or rejected after submission refuses
+/// the apply with 412 `precondition.failed`, and nothing is promoted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn promotion_references_the_verified_s3_object_and_refuses_unverified_bytes() {
+    use registry_breg_client::BRegProblemCode;
+    use sha2::{Digest, Sha256};
+    const BYTES: &[u8] = b"promoted-exact-bytes";
+    let s3 = S3Fixture::new().await;
+    let storage = s3.storage.clone();
+    let verification = s3.config.activate_attachment_verification().unwrap();
+    let configured_verification = verification.clone();
+    let mut source = registry_source(false);
+    source["recordTypes"]["target"]["attachments"] = json!([{"id":"evidence","maximumBytes":4096,
+        "contentTypes":["text/plain"],"classification":"restricted","writeOnce":true}]);
+    source["accessProfiles"]["clerk"]["permissions"]["records"][0]["readableAttachments"] =
+        json!(["evidence"]);
+    source["actions"]["correct-name"]["plan"]["effects"][0]["attachments"] =
+        json!({"evidence":{"fromAttachment":"support"}});
+    // Record reads use the same S3 storage, as startup configures them.
+    let fixture = client_http::ClientFixture::start_with_attachment_storage(
+        compile(source),
+        claims("synthetic-author", "zone-a"),
+        storage,
+        move |mutations| mutations.with_attachment_verification(configured_verification),
+    )
+    .await;
+    let (audit, _capture) =
+        registry_breg::audit::test_support::capturing(verification_audit_profile());
+    let worker = verification_worker(&fixture, &s3, &verification, &audit);
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "After", "promotion-start").await;
+    let uploaded = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            BYTES,
+            &key("promotion-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(worker.run_once().await.unwrap());
+    let uploaded = client.read_proposal(&uploaded).await.unwrap().value;
+    let submit = client
+        .prepare_proposal(&uploaded, "submit", json!({}), &key("promotion-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let target: uuid::Uuid = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT DISTINCT record_id FROM registry_internal.registry_revisions",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let blobs = || async {
+        fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_attachment_blobs",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+    };
+    assert_eq!(blobs().await, 1);
+    let puts = s3.state.puts.load(Ordering::SeqCst);
+    assert_eq!(puts, 1);
+
+    for verdict in ["rejected", "pending"] {
+        set_verdict(&fixture, BYTES, verdict).await;
+        let apply = client
+            .prepare_proposal(
+                &submitted,
+                "apply",
+                json!({"submissionVersion":1,"effectDigest":submitted.effect_digest().unwrap(),
+                    "reason":"promotion-reason"}),
+                &key(&format!("promotion-apply-{verdict}")),
+            )
+            .unwrap();
+        let refused = client
+            .execute_proposal(&apply)
+            .await
+            .expect_err("a file without an approved verdict is not promoted");
+        assert_eq!(refused.status(), Some(412), "{verdict}");
+        assert_eq!(
+            refused.problem_code(),
+            Some(BRegProblemCode::PreconditionFailed),
+            "{verdict}"
+        );
+        assert!(promoted_references(&fixture).await.is_empty(), "{verdict}");
+    }
+
+    set_verdict(&fixture, BYTES, "approved").await;
+    let apply = client
+        .prepare_proposal(
+            &submitted,
+            "apply",
+            json!({"submissionVersion":1,"effectDigest":submitted.effect_digest().unwrap(),
+                "reason":"promotion-reason"}),
+            &key("promotion-apply-approved"),
+        )
+        .unwrap();
+    let applied = client.execute_proposal(&apply).await.unwrap().value;
+    let sha256 = hex::encode(Sha256::digest(BYTES));
+    assert_eq!(
+        promoted_references(&fixture).await,
+        BTreeSet::from([(target, "evidence".to_owned(), sha256.clone())])
+    );
+    assert_eq!(blobs().await, 1, "the record refers to the Proposal's blob");
+    assert_eq!(
+        s3.state.puts.load(Ordering::SeqCst),
+        puts,
+        "promotion copies nothing"
+    );
+    let read_record = || async {
+        client
+            .download_record_attachment("targets", &target.to_string(), "evidence", Some("clerk"))
+            .await
+            .unwrap()
+            .value
+    };
+    assert_eq!(read_record().await.as_bytes(), BYTES);
+
+    let erased = cleanup(&fixture, s3.storage.clone())
+        .with_verification_policy_for_test(verification.binding_digest())
+        .erase(
+            registry_breg::proposal_retention::ProposalDetailErasureScope {
+                action_id: "correct-name",
+                proposal_id: uuid::Uuid::parse_str(applied.id()).unwrap(),
+                submission_version: 1,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(erased.pending_external_deletions, 0);
+    let cleaned = cleanup(&fixture, s3.storage.clone())
+        .with_verification_policy_for_test(verification.binding_digest())
+        .cleanup_attachments()
+        .await
+        .unwrap();
+    assert_eq!(cleaned.pending_external_deletions, 0);
+    assert_eq!(s3.state.deletes.load(Ordering::SeqCst), 0);
+    assert_eq!(s3.state.bytes.lock().await.len(), 1);
+    assert_eq!(blobs().await, 1);
+    assert_eq!(read_record().await.as_bytes(), BYTES);
+    fixture.finish().await;
+}

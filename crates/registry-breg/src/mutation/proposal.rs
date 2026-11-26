@@ -2502,6 +2502,8 @@ impl MutationTransaction {
         let mut links = Vec::new();
         let mut rows = Vec::new();
         let mut timer_rows = Vec::new();
+        // Effect id to the record revision it wrote, for promotions.
+        let mut applied = BTreeMap::<String, (String, Uuid, i64)>::new();
         let mut groups = Vec::<Vec<&crate::proposal_workflow::PreparedEffect>>::new();
         let mut positions = BTreeMap::<(String, Uuid), usize>::new();
         for effect in frozen.effects() {
@@ -2724,8 +2726,20 @@ impl MutationTransaction {
                 current.record_uuid,
                 current.record_revision,
             ));
+            for effect in &group {
+                applied.insert(
+                    effect.id().as_str().to_owned(),
+                    (
+                        entity.id.clone(),
+                        current.record_uuid,
+                        current.record_revision,
+                    ),
+                );
+            }
             timer_rows.push((entity, current));
         }
+        self.promote_proposal_attachments(tx, action, document, frozen, binding, &applied)
+            .await?;
         stage_record_timer_rows(
             tx,
             timer_staging,
@@ -2767,6 +2781,72 @@ impl MutationTransaction {
         )
         .await?;
         Ok((observed, links))
+    }
+
+    /// Fill the record slots the Action's effects promote into. Each slot
+    /// references the bytes the frozen Proposal file already holds in the
+    /// store, so nothing is copied. The reference commits with the record
+    /// revision its effect wrote, or the apply fails. An empty optional
+    /// Proposal slot leaves its record slot empty.
+    async fn promote_proposal_attachments(
+        &self,
+        tx: &Transaction<'_>,
+        action: &CompiledAction,
+        document: &ProposalDocument,
+        frozen: &crate::proposal_workflow::ProposalSnapshot,
+        binding: &crate::idempotency::ResolvedIdempotencyBinding,
+        applied: &BTreeMap<String, (String, Uuid, i64)>,
+    ) -> Result<(), MutationError> {
+        let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+            return Err(MutationError::PreconditionFailed);
+        };
+        if proposal.promotions.is_empty() {
+            return Ok(());
+        }
+        let backend = self.attachment_storage.binding_digest();
+        let verification = self.attachment_verification.binding_digest();
+        for promotion in &proposal.promotions {
+            let Some(file) = frozen.attachments().get(&promotion.from_attachment) else {
+                continue;
+            };
+            let (entity_id, record_id, revision) = applied
+                .get(&promotion.effect_id)
+                .ok_or(MutationError::PreconditionFailed)?;
+            // The compiler checked these bounds against the Proposal slot.
+            // The frozen file is checked again so a changed slot fails closed.
+            if *entity_id != promotion.entity_id
+                || !promotion.content_types.contains(&file.content_type)
+                || file.byte_size > u64::from(promotion.maximum_bytes)
+            {
+                return Err(MutationError::PreconditionFailed);
+            }
+            crate::attachment_store::require_frozen_reference(
+                tx,
+                &document.action_id,
+                document.proposal_id,
+                document.header.submission_version,
+                &promotion.from_attachment,
+                file,
+            )
+            .await?;
+            crate::attachment_store::attach_record_reference(
+                tx,
+                &crate::attachment_store::RecordAttachmentReference {
+                    entity_id,
+                    record_id: *record_id,
+                    slot_id: &promotion.slot_id,
+                    sha256: &file.sha256,
+                    content_type: &file.content_type,
+                    byte_size: file.byte_size,
+                    attached_revision: *revision,
+                    attached_by: &binding.principal_reference,
+                },
+                &backend,
+                &verification,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     pub(crate) async fn authorize_proposal_review_read(
