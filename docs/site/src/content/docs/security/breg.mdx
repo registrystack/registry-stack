@@ -257,8 +257,8 @@ BReg resolves the link from the Proposal's stored application results, then keep
 selected access profile could read that Proposal: the same grant, ownership and row-boundary check a
 Proposal read applies, run by the same code.
 A profile that reads the Record's history but holds no `get` grant on the Proposal, a caller who does
-not own a caller-owned Proposal, a caller whose row boundaries exclude a target, and a caller under
-a task grant all receive the revision without the member.
+not own a caller-owned Proposal, a caller whose row boundaries exclude a target, a caller under
+a task grant and a standing agent all receive the revision without the member.
 That response is the one a revision no Proposal produced would get.
 Operator erasure of a Proposal's detail keeps the link, because the identifier and state survive and
 the Proposal read already reports that its detail was erased.
@@ -291,6 +291,7 @@ The link has these known limits:
     record_history_omits_the_proposal_when_ownership_does_not_match,
     record_history_omits_the_proposal_outside_the_proposal_row_boundary,
     record_history_never_names_the_proposal_to_a_task_grant_caller,
+    record_history_never_names_the_proposal_to_a_standing_agent,
     record_history_reads_the_link_while_another_session_locks_the_proposal_row,
     record_history_is_unavailable_when_the_proposal_link_check_fails,
     record_discovery_declares_the_proposal_link_only_to_a_caller_who_can_receive_it,

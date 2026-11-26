@@ -238,6 +238,7 @@ traceability:
   # No Proposal grant: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_omits_the_proposal_from_a_profile_without_a_proposal_grant
   # Row boundary: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_omits_the_proposal_outside_the_proposal_row_boundary
   # Task grant: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_never_names_the_proposal_to_a_task_grant_caller
+  # Standing agent: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_never_names_the_proposal_to_a_standing_agent
   # Failed check answers 503: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_is_unavailable_when_the_proposal_link_check_fails
   # Caller-filtered OpenAPI: crates/registry-breg/tests/postgres_proposal_security.rs::record_discovery_declares_the_proposal_link_only_to_a_caller_who_can_receive_it
   - {"id": "BREG-SEC-217", "state": "enforced", "negativeId": "BREG-NEG-217", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_security.rs", "name": "record_history_omits_the_proposal_when_ownership_does_not_match"}}

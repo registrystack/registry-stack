@@ -2919,6 +2919,50 @@ async fn record_history_never_names_the_proposal_to_a_task_grant_caller() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn record_history_never_names_the_proposal_to_a_standing_agent() {
+    let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
+    let (_, target, id) = linked_history(&fixture).await;
+    assert_link(&fixture.http, &target, "clerk", &id).await;
+    // The Proposal's own author acting as an agent without a task grant is a
+    // standing agent. Its profile still reads the history and owns the
+    // Proposal, so only the standing-agent ceiling keeps the link from it.
+    let agent = fixture
+        .client_for(
+            VerifiedRequestClaims::authenticated_with_actor_kind(
+                "registry_principal",
+                "author",
+                BTreeSet::from(["proposal:manage".into()]),
+                Some("registry-administration".into()),
+                BTreeMap::from([(
+                    "jurisdiction".into(),
+                    VerifiedClaimValue::direct_string("zone-a").unwrap(),
+                )]),
+                registry_platform_oidc::ActorKind::Agent,
+            )
+            .unwrap(),
+        )
+        .await;
+    let (code, proposal, _) = send(
+        &agent,
+        Method::GET,
+        &format!("/v1/proposals/{id}?accessProfile=clerk"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        code,
+        StatusCode::NOT_FOUND,
+        "a standing agent cannot read the Proposal itself: {proposal}"
+    );
+    let list = history(&agent, "targets", &target, "clerk").await;
+    assert_eq!(list["items"].as_array().unwrap().len(), 2, "{list}");
+    assert_no_link(&agent, &target, "clerk").await;
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_history_reads_the_link_while_another_session_locks_the_proposal_row() {
     let fixture = client_http::ClientFixture::start(compile(link_source()), clerk()).await;
     let (_, target, id) = linked_history(&fixture).await;
