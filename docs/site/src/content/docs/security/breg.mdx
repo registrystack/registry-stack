@@ -262,6 +262,10 @@ a task grant and a standing agent all receive the revision without the member.
 That response is the one a revision no Proposal produced would get.
 Operator erasure of a Proposal's detail keeps the link, because the identifier and state survive and
 the Proposal read already reports that its detail was erased.
+History erasure removes the link with the revision it erases.
+The Proposal keeps its state and application, and its `resultLinks` stop naming that revision.
+A Proposal read still checks every record the application wrote, including a record whose revision
+was erased.
 The check reads the Proposal without locking its row, because an applied Proposal no longer changes.
 All the checks of one read share one deadline.
 If a check cannot finish, because of a conflict, a store failure or that deadline, the read answers
@@ -296,6 +300,11 @@ The link has these known limits:
     record_history_is_unavailable_when_the_proposal_link_check_fails,
     record_discovery_declares_the_proposal_link_only_to_a_caller_who_can_receive_it,
     record_history_keeps_the_proposal_after_operator_erasure;
+    crates/registry-breg/src/history_erasure.rs, delete_proposal_result_links;
+    crates/registry-breg/src/mutation/proposal.rs, authorize_proposal_document;
+    crates/registry-breg/tests/postgres_record_attachments.rs,
+    history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision,
+    an_applied_proposal_stays_bounded_by_a_record_whose_revision_was_erased;
     products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-217. */}
 
 ### Record files
@@ -334,6 +343,7 @@ Both name the operation after the record's `get` operation and the slot, such as
 A download that fails after it starts is audited as refused and is not logged for the subject.
 
 History erasure removes a record's file references with the revisions that added them.
+That includes a file a Proposal promoted, together with the Proposal's link to the erased revision.
 BReg deletes the bytes only when no other record and no Proposal refers to them.
 Proposal erasure and attachment cleanup count record references too.
 The verification worker also checks files that only a record holds.
@@ -367,6 +377,7 @@ Erasing the Proposal keeps the promoted bytes and removes files that nothing pro
     record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers_to,
     proposal_erasure_never_removes_bytes_a_record_refers_to,
     an_applied_proposal_promotes_its_file_by_reference_and_erasure_keeps_it,
+    history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision,
     promotion_into_a_filled_slot_answers_409_and_rolls_back_the_whole_apply;
     crates/registry-breg/src/immediate_actions.rs, compile_attachment_promotions, definition_revision;
     crates/registry-breg/tests/attachment_promotion_compiler.rs,

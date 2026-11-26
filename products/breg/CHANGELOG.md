@@ -63,6 +63,14 @@
   `503 source.unavailable`. The generated OpenAPI document declares the member
   only for a registry with a Proposal Action, and the caller-filtered document
   only for a caller who would receive it.
+- History erasure can erase a revision that an applied Proposal wrote. Before,
+  the Proposal's result row still named the revision and the erasure rolled
+  back. The erasure now removes that result row in the same transaction. The
+  Proposal keeps its state and application, its `resultLinks` no longer name
+  the erased revision, and record history shows no Proposal link for it. A
+  file the Proposal promoted at that revision is erased like any other record
+  file. A Proposal read still requires the caller's row boundaries to hold
+  every record the Proposal wrote.
 - `bregctl generate evidence-source --public-check` exports the Source of an
   Evidence public check. Evidence compares the check code only after the
   Source returns a record, so this export states each fact's scalar type and
