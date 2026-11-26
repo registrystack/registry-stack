@@ -87,6 +87,17 @@ fn check_current_proposal_grant(authority: &ProposalAuthority) -> Result<(), Mut
     Ok(())
 }
 
+/// The answer to a target context the database refused to install. A context
+/// `install_target` rejects means the caller may not read that target. A
+/// store failure means nobody knows yet, so it answers 503 instead of being
+/// taken for a refusal that would silently omit what the caller may read.
+fn target_install_error(error: crate::postgres::PostgresKernelError) -> MutationError {
+    match error {
+        crate::postgres::PostgresKernelError::Configuration(_) => MutationError::PreconditionFailed,
+        _ => MutationError::Unavailable,
+    }
+}
+
 fn validate_attachment_authority(
     action: &CompiledAction,
     authority: &ProposalAuthority,
@@ -796,7 +807,7 @@ impl MutationTransaction {
                     digest,
                 )
                 .await
-                .map_err(|_| MutationError::PreconditionFailed)?;
+                .map_err(target_install_error)?;
             let lock = !matches!(
                 authority.operation,
                 ProposalAuthorityOperation::Lifecycle(
@@ -889,7 +900,7 @@ impl MutationTransaction {
                         None,
                     )
                     .await
-                    .map_err(|_| MutationError::PreconditionFailed)?;
+                    .map_err(target_install_error)?;
                 let current = load_proposal_row(tx, entity, id, false).await?;
                 if !authority
                     .authorizes_snapshot(entity, id, &current.data)
@@ -4733,6 +4744,26 @@ mod commit_guard_date_tests {
         assert!(matches!(
             check("2026-10-30"),
             Err(MutationError::ProposalGuardFailed(_))
+        ));
+    }
+}
+
+#[cfg(test)]
+mod target_install_tests {
+    use super::*;
+    use crate::postgres::PostgresKernelError;
+
+    #[test]
+    fn a_refused_target_context_is_a_refusal_and_a_store_failure_is_unavailable() {
+        assert!(matches!(
+            target_install_error(PostgresKernelError::Configuration(
+                "verified database context is incomplete or invalid"
+            )),
+            MutationError::PreconditionFailed
+        ));
+        assert!(matches!(
+            target_install_error(PostgresKernelError::Connection),
+            MutationError::Unavailable
         ));
     }
 }
