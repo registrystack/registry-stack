@@ -309,9 +309,15 @@ pub(super) async fn dispatch(
     } else {
         None
     };
-    let Ok(body) = bounded_body_to(body, maximum_action_body_bytes(surface.action)).await else {
-        return refusal(invalid_request()).await;
-    };
+    let body =
+        match read_action_body(body, maximum_action_body_bytes(surface.action, route.kind)).await {
+            Ok(body) => body,
+            // Files are what make a body on a route that takes them this large.
+            Err(ActionBodyError::TooLarge) if takes_files(surface.action, route.kind) => {
+                return refusal(fixed_problem(ProblemCode::AttachmentTooLarge)).await;
+            }
+            Err(_) => return refusal(invalid_request()).await,
+        };
     let parsed = match parse_body(surface.action, route.kind, &body) {
         Ok(parsed) => parsed,
         Err(error) => return refusal(invalid_action_request(error)).await,
@@ -492,7 +498,7 @@ fn parse_body(
 ) -> Result<ParsedActionBody, ParseActionError> {
     let value = parse_json_strict(bytes).map_err(|_| ParseActionError::at(""))?;
     let envelope = value.as_object().ok_or_else(|| ParseActionError::at(""))?;
-    let accepts_attachments = kind == ActionRouteKind::Invoke && !action.attachments.is_empty();
+    let accepts_attachments = takes_files(action, kind);
     if envelope.keys().any(|name| {
         name != "input"
             && (name != "preconditions" || kind != ActionRouteKind::Invoke)
@@ -735,13 +741,20 @@ fn valid_lowercase_sha256(value: &str) -> bool {
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// The largest request body an Action accepts: its snapshot budget plus room
-/// for each declared attachment at its slot limit in base64 with its member
-/// framing. A larger body cannot be attributed to one cause and is refused
-/// as an invalid request.
-fn maximum_action_body_bytes(action: &CompiledAction) -> usize {
+/// Whether a request on this route carries request files: only the invocation
+/// of an Action that declares them does.
+fn takes_files(action: &CompiledAction, kind: ActionRouteKind) -> bool {
+    kind == ActionRouteKind::Invoke && !action.attachments.is_empty()
+}
+
+/// The largest request body an Action route accepts: its snapshot budget,
+/// plus, on a route that takes files, room for each declared file at its slot
+/// limit in base64 with its member framing. A larger body on a route that
+/// takes files is refused as `attachment.too-large`, and on any other route as
+/// an invalid request.
+fn maximum_action_body_bytes(action: &CompiledAction, kind: ActionRouteKind) -> usize {
     let snapshot = action.maximum_snapshot_bytes as usize;
-    if action.attachments.is_empty() {
+    if !takes_files(action, kind) {
         return snapshot;
     }
     action
@@ -751,6 +764,42 @@ fn maximum_action_body_bytes(action: &CompiledAction) -> usize {
             let encoded = (attachment.maximum_bytes as usize).div_ceil(3) * 4;
             total + encoded + name.len() + 512
         })
+}
+
+/// Why an Action request body was not read.
+enum ActionBodyError {
+    /// The body is longer than the route reads.
+    TooLarge,
+    /// The body is empty or its stream failed.
+    Invalid,
+}
+
+/// Reads at most `maximum_bytes` of an Action request body. Unlike a plain
+/// bounded read, it tells a body that is too long apart from a broken one.
+async fn read_action_body(
+    mut body: Body,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, ActionBodyError> {
+    use axum::body::HttpBody as _;
+
+    let mut bytes = Vec::new();
+    while let Some(frame) =
+        std::future::poll_fn(|context| std::pin::Pin::new(&mut body).poll_frame(context)).await
+    {
+        let frame = frame.map_err(|_| ActionBodyError::Invalid)?;
+        // A trailers frame carries no body bytes.
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        if data.len() > maximum_bytes - bytes.len() {
+            return Err(ActionBodyError::TooLarge);
+        }
+        bytes.extend_from_slice(&data);
+    }
+    if bytes.is_empty() {
+        return Err(ActionBodyError::Invalid);
+    }
+    Ok(bytes)
 }
 
 fn valid_action_condition(value: &str) -> bool {

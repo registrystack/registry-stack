@@ -1896,17 +1896,18 @@ fn action_operation_responses(
             })
             .collect::<Map<_, _>>();
         if status == "422" {
-            examples = action
-                .handler
-                .as_ref()
-                .into_iter()
-                .flat_map(|handler| &handler.refusals)
-                .map(|(code, label)| {
-                    let mut example = problem_example(status, "action.refused", label);
-                    example["refusalCode"] = json!(code);
-                    (code.clone(), json!({"value": example}))
-                })
-                .collect();
+            examples.extend(
+                action
+                    .handler
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|handler| &handler.refusals)
+                    .map(|(code, label)| {
+                        let mut example = problem_example(status, "action.refused", label);
+                        example["refusalCode"] = json!(code);
+                        (code.clone(), json!({"value": example}))
+                    }),
+            );
         }
         responses.insert(
             status.to_owned(),
@@ -2040,6 +2041,27 @@ fn action_problem_responses(
             );
         }
         responses.insert("412", precondition_problems);
+        if !action.execution.is_proposal() && !action.attachments.is_empty() {
+            responses.insert(
+                "413",
+                vec![ProblemExample {
+                    code: "attachment.too-large",
+                    detail: "The file is larger than the attachment slot accepts.",
+                }],
+            );
+            responses.entry("415").or_default().push(ProblemExample {
+                code: "attachment.content-type",
+                detail: "The file media type is not one the attachment slot accepts.",
+            });
+            responses.entry("422").or_default().push(ProblemExample {
+                code: "attachment.digest-mismatch",
+                detail: "The file content does not match its declared SHA-256 digest.",
+            });
+            responses.entry("409").or_default().push(ProblemExample {
+                code: "attachment.slot-write-once",
+                detail: "The record attachment slot already holds a file and is write-once.",
+            });
+        }
     }
     if may_refuse_write {
         responses.insert("403", vec![WRITE_OUTSIDE_BOUNDARY]);
@@ -4615,6 +4637,7 @@ fn problem_example(status: &str, code: &str, detail: &str) -> Value {
             "409" => "Conflict",
             "410" => "Gone",
             "412" => "Precondition Failed",
+            "413" => "Content Too Large",
             "415" => "Unsupported Media Type",
             "422" => "Unprocessable Entity",
             "428" => "Precondition Required",

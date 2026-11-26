@@ -740,6 +740,41 @@ fn invocation_uses_public_names_and_a_closed_typed_envelope() {
 }
 
 #[test]
+fn only_an_invocation_that_takes_files_reads_past_the_snapshot_budget() {
+    let registry = compiled();
+    let mut action = registry.actions().actions[0].clone();
+    let snapshot = action.maximum_snapshot_bytes as usize;
+    for kind in [
+        ActionRouteKind::Availability,
+        ActionRouteKind::Invoke,
+        ActionRouteKind::TargetConditions,
+    ] {
+        assert_eq!(maximum_action_body_bytes(&action, kind), snapshot);
+    }
+    action.attachments.insert(
+        "evidence".to_owned(),
+        crate::model::CompiledActionAttachment {
+            effect_id: "rename".to_owned(),
+            entity_id: "case".to_owned(),
+            slot_id: "evidence".to_owned(),
+            maximum_bytes: 3_000,
+            content_types: vec!["text/plain".to_owned()],
+        },
+    );
+    // Neither read takes a file, so neither reads more than the snapshot.
+    assert_eq!(
+        maximum_action_body_bytes(&action, ActionRouteKind::Availability),
+        snapshot
+    );
+    assert_eq!(
+        maximum_action_body_bytes(&action, ActionRouteKind::TargetConditions),
+        snapshot
+    );
+    // The invocation adds the file in base64 with its member framing.
+    assert!(maximum_action_body_bytes(&action, ActionRouteKind::Invoke) >= snapshot + 4_000);
+}
+
+#[test]
 fn a_fixed_patch_target_remains_required_when_its_input_is_declared_optional() {
     let mut project = parse_project_yaml(PROJECT.as_bytes()).unwrap();
     project.actions[0].inputs[0].required = false;
