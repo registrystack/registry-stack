@@ -1360,6 +1360,232 @@ async fn an_applied_proposal_promotes_its_file_by_reference_and_erasure_keeps_it
     fixture.finish().await;
 }
 
+/// The record source with the clerk reading application history.
+fn history_source() -> Value {
+    let mut source = record_source();
+    let application = &mut source["accessProfiles"]["clerk"]["permissions"]["records"][0];
+    application["operations"] = json!(["get", "list", "revisions"]);
+    application["revisionAccess"] = json!(true);
+    source
+}
+
+async fn get_json(
+    fixture: &client_http::ClientFixture,
+    claims: VerifiedRequestClaims,
+    uri: &str,
+) -> (StatusCode, Value) {
+    let response = send(
+        fixture,
+        claims,
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    (response.status, response.json())
+}
+
+/// The Proposal ids record history links, newest revision first.
+async fn history_links(fixture: &client_http::ClientFixture, record: Uuid) -> Vec<Value> {
+    let (status, history) = get_json(
+        fixture,
+        clerk("zone-a"),
+        &format!("/v1/records/applications/{record}/revisions"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    history["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["proposal"]["proposalId"].clone())
+        .collect()
+}
+
+/// `enrol` creates a record and promotes its file at revision 1, and a
+/// `rename` Proposal writes revision 2. History erasure through revision 1
+/// erases the promoted file and the link to the Proposal that wrote that
+/// revision. Each Proposal still reads, and only `rename` names a revision.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn history_erasure_removes_a_promoted_file_and_the_link_to_the_erased_revision() {
+    let fixture =
+        client_http::ClientFixture::start(compile(history_source()).unwrap(), clerk("zone-a"))
+            .await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let enrol = submit_proposal(
+        &fixture,
+        "enrol",
+        enrol_input(programme, "Erased applicant"),
+        &[("document", EVIDENCE)],
+        "erase-enrol",
+    )
+    .await;
+    assert_eq!(
+        run_automatic(&fixture, &enrol).await,
+        ("applied".to_owned(), None)
+    );
+    let record = *application_ids(&fixture, "Erased applicant")
+        .await
+        .first()
+        .expect("the applied Proposal created the record");
+    let rename = submit_proposal(
+        &fixture,
+        "rename",
+        json!({"target":record.to_string(),"value":"Renamed applicant"}),
+        &[],
+        "erase-rename",
+    )
+    .await;
+    let renamed = apply_proposal(&fixture, &rename, "erase-rename")
+        .await
+        .unwrap();
+    assert_eq!(renamed.state(), BRegProposalState::Applied);
+    assert_eq!(
+        history_links(&fixture, record).await,
+        vec![json!(rename.id()), json!(enrol.id())],
+        "each Proposal-written revision links its Proposal before erasure"
+    );
+
+    erase_history(&fixture, record).await;
+
+    assert!(
+        record_references(&fixture).await.is_empty(),
+        "the file promoted at revision 1 is erased with it"
+    );
+    assert_eq!(
+        download(
+            &fixture,
+            clerk("zone-a"),
+            &record.to_string(),
+            "evidence",
+            None
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        blob_hashes(&fixture).await,
+        BTreeSet::from([sha256_hex(EVIDENCE)]),
+        "the enrol Proposal still refers to the bytes"
+    );
+    assert_eq!(
+        history_links(&fixture, record).await,
+        vec![json!(rename.id())],
+        "history keeps the surviving revision's link and names no erased revision"
+    );
+    let (status, erased) = get_json(
+        &fixture,
+        clerk("zone-a"),
+        &format!("/v1/records/applications/{record}/revisions/1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{erased}");
+    let (status, enrolled) = get_json(
+        &fixture,
+        clerk("zone-a"),
+        &format!("/v1/proposals/{}", enrol.id()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enrolled}");
+    assert_eq!(enrolled["state"], "applied", "{enrolled}");
+    assert_eq!(
+        enrolled["application"]["resultLinks"],
+        json!([]),
+        "the Proposal names no erased revision"
+    );
+    let (status, renamed) = get_json(
+        &fixture,
+        clerk("zone-a"),
+        &format!("/v1/proposals/{}", rename.id()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(
+        renamed["application"]["resultLinks"],
+        json!([{"recordType":"application","recordId":record.to_string(),"revision":2}]),
+        "{renamed}"
+    );
+
+    assert_eq!(erase_proposal(&fixture, "enrol", &enrol).await, 1);
+    assert!(
+        blob_hashes(&fixture).await.is_empty(),
+        "bytes no reference holds are removed"
+    );
+    let (status, enrolled) = get_json(
+        &fixture,
+        clerk("zone-a"),
+        &format!("/v1/proposals/{}", enrol.id()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enrolled}");
+    assert_eq!(enrolled["state"], "applied", "{enrolled}");
+    fixture.finish().await;
+}
+
+/// The record source with an `overseer` profile that reads an `enrol`
+/// Proposal only when the record it created is inside its row boundary. The
+/// programme the Proposal names is unrestricted, so only the created record
+/// bounds the read.
+fn overseer_source() -> Value {
+    let mut source = record_source();
+    source["accessProfiles"]["overseer"] = json!({"principalClaim":"sub",
+        "requiredScopes":["application:oversee"],"requiredPurposes":["registry-administration"],
+        "permissions":{"proposals":[{"action":"enrol","operations":["get"],"ownership":"caller",
+            "targets":[{"recordType":"programme","rowBoundaries":"unrestricted"},
+                {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]}]}});
+    source
+}
+
+/// An applied Proposal reads only for a caller whose row boundary holds each
+/// record it wrote. Erasing the revision it wrote removes the link, not
+/// that check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_applied_proposal_stays_bounded_by_a_record_whose_revision_was_erased() {
+    let fixture =
+        client_http::ClientFixture::start(compile(overseer_source()).unwrap(), clerk("zone-a"))
+            .await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    let enrol = submit_proposal(
+        &fixture,
+        "enrol",
+        enrol_input(programme, "Bounded applicant"),
+        &[("document", EVIDENCE)],
+        "bounded-enrol",
+    )
+    .await;
+    assert_eq!(
+        run_automatic(&fixture, &enrol).await,
+        ("applied".to_owned(), None)
+    );
+    let record = *application_ids(&fixture, "Bounded applicant")
+        .await
+        .first()
+        .expect("the applied Proposal created the record");
+    let path = format!("/v1/proposals/{}?accessProfile=overseer", enrol.id());
+    let inside = || claims("clerk", "zone-a", "application:oversee");
+    let outside = || claims("clerk", "zone-b", "application:oversee");
+    let (status, read) = get_json(&fixture, inside(), &path).await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    let (status, refused) = get_json(&fixture, outside(), &path).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+
+    erase_history(&fixture, record).await;
+
+    let (status, read) = get_json(&fixture, inside(), &path).await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["application"]["resultLinks"], json!([]), "{read}");
+    let (status, still_refused) = get_json(&fixture, outside(), &path).await;
+    assert_eq!(
+        (status, &still_refused["code"]),
+        (StatusCode::NOT_FOUND, &refused["code"]),
+        "{still_refused}"
+    );
+    fixture.finish().await;
+}
+
 /// An optional Proposal slot left empty leaves the record slot empty, and
 /// the apply succeeds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -278,6 +278,9 @@ async fn erase_record_history_scoped(
         .await
         .map_err(|_| HistoryErasureError::Unavailable)?;
     }
+    // An applied Proposal keeps its receipt, and its link to a revision this
+    // erasure removes goes with that revision.
+    delete_proposal_result_links(&transaction, &request.target).await?;
     let erased_revision_count = delete_revisions(&transaction, &request.target).await?;
     let removed_descriptor_count =
         delete_unreferenced_history_descriptors(&transaction, request.expected).await?;
@@ -448,6 +451,27 @@ async fn delete_commit_members(
         )
         .await
         .map_err(|_| HistoryErasureError::Unavailable)
+}
+
+async fn delete_proposal_result_links(
+    transaction: &tokio_postgres::Transaction<'_>,
+    target: &RecordHistoryErasureTarget<'_>,
+) -> Result<(), HistoryErasureError> {
+    transaction
+        .execute(
+            "DELETE FROM registry_internal.registry_proposal_results
+              WHERE target_entity_id = $1
+                AND target_record_id = $2
+                AND target_revision <= $3",
+            &[
+                &target.entity_id,
+                &target.record_id,
+                &target.erase_through_revision,
+            ],
+        )
+        .await
+        .map_err(|_| HistoryErasureError::Unavailable)?;
+    Ok(())
 }
 
 async fn delete_revisions(
