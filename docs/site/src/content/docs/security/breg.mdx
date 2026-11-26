@@ -263,7 +263,14 @@ That response is the one a revision no Proposal produced would get.
 Operator erasure of a Proposal's detail keeps the link, because the identifier and state survive and
 the Proposal read already reports that its detail was erased.
 History erasure removes the link with the revision it erases.
-The Proposal keeps its state and application, and its `resultLinks` stop naming that revision.
+The Proposal keeps its state and application, and a current Proposal read leaves that revision out
+of `resultLinks`.
+The receipt of the original apply is not rewritten.
+While the registry holds that response, a retry by the same authorised caller with the same
+idempotency key returns the receipt as first issued.
+It names the record and the revision number, and carries no field values.
+`bregctl proposal-retention erase` for that Proposal removes the held response with the rest of the
+Proposal's detail, where the Action's retention mode allows it.
 A Proposal read still checks every record the application wrote, including a record whose revision
 was erased.
 The check reads the Proposal without locking its row, because an applied Proposal no longer changes.

@@ -542,7 +542,8 @@ bregctl field-encryption erase-history --runtime-config /etc/breg/runtime.yaml \
 The request names no Record or field: its scope is the recorded `erase-and-rebaseline` flips, and a
 file with any other key, or one other users can read, is refused before a connection opens. For
 each affected Record it uses the same erasure as [`history erase`](../breg-retention/#erase-retained-history),
-then restores snapshot coverage with one rebaseline, which blocks reads and writes until it commits;
+including its effect on applied Proposals, and keeps the Record's files. It then restores snapshot
+coverage with one rebaseline, which blocks reads and writes until it commits;
 run it in a maintenance window as
 [restore snapshot coverage](../breg-retention/#restore-snapshot-coverage-after-an-erasure)
 describes. Backups taken before the flip still hold plaintext until you retire them.
