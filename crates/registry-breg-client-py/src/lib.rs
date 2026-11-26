@@ -2243,6 +2243,30 @@ impl BaseRegistryClient {
         raw_value(py, &value.value, &value.metadata)
     }
 
+    /// Download the file in one record attachment slot. The bytes are
+    /// returned only when they match the service's `Repr-Digest`.
+    #[pyo3(signature = (record_route, record_identifier, slot, access_profile=None))]
+    fn download_record_attachment<'py>(
+        &self,
+        py: Python<'py>,
+        record_route: &str,
+        record_identifier: &str,
+        slot: &str,
+        access_profile: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.download_record_attachment(
+                    record_route,
+                    record_identifier,
+                    slot,
+                    access_profile,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &value.value, &value.metadata)
+    }
+
     #[pyo3(signature = (record_route, record_identifier, revision, *, select=None, access_profile=None, format="json"))]
     #[allow(clippy::too_many_arguments)]
     fn get_record_revision<'py>(

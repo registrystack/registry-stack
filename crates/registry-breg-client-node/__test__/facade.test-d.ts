@@ -153,6 +153,12 @@ client.patchRecord(patch, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', [
   { op: 'replace', field: 'name', value: 'Grace' },
 ], 'patch-person-1')
 client.recordRevisions('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'auditor')
+client.downloadRecordAttachment('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 'photo', 'auditor').then(outcome => {
+  const digest: string | undefined = outcome.reprDigest
+  void digest
+})
+// @ts-expect-error The slot is required.
+client.downloadRecordAttachment('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
 client.getRecordRevision('people', '9f6973f9-10b3-4c58-b41b-494cba26796f', 2)
 client.getGeoJsonRecord('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')
 client.getGeoJsonRecordJson('people', '9f6973f9-10b3-4c58-b41b-494cba26796f')

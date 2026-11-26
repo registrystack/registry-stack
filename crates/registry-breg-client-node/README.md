@@ -293,6 +293,19 @@ Downloads follow the promoted link and return bounded bytes with their stored
 content type. Keep the returned Proposal for subsequent operations; do not
 substitute a Registry Record ETag or construct an attachment route.
 
+## Record attachments
+
+An applied Proposal can promote its file into a record attachment slot. Read
+that file with
+`downloadRecordAttachment(recordRoute, recordIdentifier, slot, accessProfile?)`.
+The method checks the route, record identifier and slot before I/O. It returns
+the bytes only when they match the service's `Repr-Digest`.
+
+```js
+const file = await client.downloadRecordAttachment('applications', recordId,
+  'evidence', 'auditor');
+```
+
 ## Explicit OAuth token exchange
 
 `breg.PrivateKeyJwt` wraps the shared Rust OAuth provider. Construct it with the

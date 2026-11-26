@@ -505,6 +505,13 @@ class BaseRegistryClient:
         record_identifier: str,
         access_profile: str | None = None,
     ) -> dict[str, Any]: ...
+    def download_record_attachment(
+        self,
+        record_route: str,
+        record_identifier: str,
+        slot: str,
+        access_profile: str | None = None,
+    ) -> dict[str, Any]: ...
     def get_record_revision(
         self,
         record_route: str,

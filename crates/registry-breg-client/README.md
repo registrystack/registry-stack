@@ -295,6 +295,10 @@ value. Get and readable-attachment grants are separate from write authority, so 
 successful write may omit value metadata. An omitted value does not independently
 prove its stored content. An invalid receipt leaves the mutation outcome unknown;
 retain the original condition, bytes and key for same-command recovery.
+`download_record_attachment(record_route, record_identifier, slot,
+access_profile)` reads the file that an applied Proposal promoted into a record
+slot. It checks the route, record identifier and slot before I/O. It returns the
+bytes only when they match the service's `Repr-Digest`.
 
 ## Response security
 

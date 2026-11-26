@@ -953,6 +953,8 @@ export declare class BaseRegistryClient {
   registryContract(accessProfile?: string | null, request?: ReadRequestOptions): Promise<BRegMetadata>
   recordSchema(recordTypeIdentifier: string, accessProfile?: string | null, request?: ReadRequestOptions): Promise<RawOutcome>
   recordRevisions(recordRoute: string, recordIdentifier: string, accessProfile?: string | null, request?: ReadRequestOptions): Promise<RawOutcome>
+  /** Download one record attachment slot. The bytes are returned only when they match the service's `Repr-Digest`. */
+  downloadRecordAttachment(recordRoute: string, recordIdentifier: string, slot: string, accessProfile?: string | null): Promise<RawOutcome>
   getRecordRevision(recordRoute: string, recordIdentifier: string, revision: SafeInteger, options?: RecordProjectionOptions | null, request?: ReadRequestOptions): Promise<RawOutcome>
   getRecord(recordRoute: string, recordIdentifier: string, options?: RecordOptions | null, request?: ReadRequestOptions): Promise<CompleteOutcome<RecordEnvelope>>
   listRecords(recordRoute: string, options?: ListOptions | null, request?: ReadRequestOptions): Promise<PageOutcome>
