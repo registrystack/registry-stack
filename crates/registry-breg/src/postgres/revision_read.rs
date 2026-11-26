@@ -190,6 +190,10 @@ impl PostgresRevisionReadService {
                 return Err(self.refused(&claims, &request, &plan, error).await);
             }
         };
+        let materialized = match resolve_proposal_links(&request, materialized).await {
+            Ok(materialized) => materialized,
+            Err(error) => return Err(self.refused(&claims, &request, &plan, error).await),
+        };
         let held = match RevisionReadResult::from_rows(
             &self.registry,
             &plan.entity,
@@ -306,7 +310,7 @@ impl PostgresRevisionReadService {
                 _ => None,
             }
         };
-        let rows = match withheld_fields {
+        let mut rows = match withheld_fields {
             None => Vec::new(),
             Some(withheld_fields) => {
                 let disclosure = RevisionDisclosure {
@@ -347,6 +351,15 @@ impl PostgresRevisionReadService {
                 .await?
             }
         };
+        if request.proposal_links.is_some() && !rows.is_empty() {
+            attach_proposal_links(
+                transaction.transaction(),
+                &plan.entity.id,
+                record_id,
+                &mut rows,
+            )
+            .await?;
+        }
         if !rows.is_empty() {
             crate::subject_access_log::record_reads(
                 transaction.transaction(),
@@ -721,6 +734,28 @@ struct RevisionEnvelope {
     data: Map<String, Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     change_context: Option<Map<String, Value>>,
+    /// The Proposal submission that wrote this revision. Present only after
+    /// the caller's Proposal read authority admitted it.
+    #[serde(skip_serializing)]
+    proposal: Option<ProposalLink>,
+}
+
+/// The stored link from a revision to the Proposal submission that wrote it.
+#[derive(Clone)]
+struct ProposalLink {
+    action_id: String,
+    proposal_id: Uuid,
+    submission_version: i64,
+}
+
+impl ProposalLink {
+    fn member(&self) -> Value {
+        json!({
+            "actionId": self.action_id,
+            "proposalId": self.proposal_id.to_string(),
+            "submissionVersion": self.submission_version,
+        })
+    }
 }
 
 impl RevisionEnvelope {
@@ -754,9 +789,91 @@ impl RevisionEnvelope {
         if let Some(change_context) = self.change_context {
             extensions.insert("changeContext".to_owned(), Value::Object(change_context));
         }
+        if let Some(link) = &self.proposal {
+            extensions.insert("proposal".to_owned(), link.member());
+        }
         record_profile::record_member(self.id, self.revision.to_string(), self.data, extensions)
             .map_err(|_| ReadServiceError::Unavailable)
     }
+}
+
+/// Attach the stored Proposal link of each revision that has one. The link is
+/// not yet disclosed: [`resolve_proposal_links`] keeps it only for a caller
+/// who may read the Proposal.
+async fn attach_proposal_links(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity_id: &str,
+    record_id: Uuid,
+    envelopes: &mut [RevisionEnvelope],
+) -> Result<(), ReadServiceError> {
+    let revisions = envelopes
+        .iter()
+        .map(|envelope| i64::try_from(envelope.revision).map_err(|_| ReadServiceError::Unavailable))
+        .collect::<Result<Vec<_>, _>>()?;
+    let rows = transaction
+        .query(
+            "SELECT target_revision, action_id, proposal_id, submission_version
+               FROM registry_internal.registry_proposal_results
+              WHERE target_entity_id = $1 AND target_record_id = $2
+                AND target_revision = ANY($3)",
+            &[&entity_id, &record_id, &revisions],
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    for row in rows {
+        let revision =
+            u64::try_from(row.get::<_, i64>(0)).map_err(|_| ReadServiceError::Unavailable)?;
+        if let Some(envelope) = envelopes
+            .iter_mut()
+            .find(|envelope| envelope.revision == revision)
+        {
+            envelope.proposal = Some(ProposalLink {
+                action_id: row.get(1),
+                proposal_id: row.get(2),
+                submission_version: row.get(3),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Drop each Proposal link the caller could not read the Proposal of. The
+/// check is the Proposal read's own authorization, applied once per Proposal.
+/// A caller with no Proposal read authority for an Action sees no link to it.
+async fn resolve_proposal_links(
+    request: &RevisionReadRequest,
+    mut envelopes: Vec<RevisionEnvelope>,
+) -> Result<Vec<RevisionEnvelope>, ReadServiceError> {
+    let mut decided: BTreeMap<(String, Uuid), bool> = BTreeMap::new();
+    for envelope in &mut envelopes {
+        let Some(link) = envelope.proposal.as_ref() else {
+            continue;
+        };
+        let key = (link.action_id.clone(), link.proposal_id);
+        let readable = match decided.get(&key) {
+            Some(readable) => *readable,
+            None => {
+                let readable = match request.proposal_links.as_ref().and_then(|access| {
+                    access
+                        .authorities
+                        .get(&link.action_id)
+                        .map(|authority| (&access.mutations, authority))
+                }) {
+                    Some((mutations, authority)) => mutations
+                        .proposal_link_readable(link.proposal_id, authority)
+                        .await
+                        .map_err(|_| ReadServiceError::Unavailable)?,
+                    None => false,
+                };
+                decided.insert(key, readable);
+                readable
+            }
+        };
+        if !readable {
+            envelope.proposal = None;
+        }
+    }
+    Ok(envelopes)
 }
 
 #[allow(clippy::too_many_arguments)] // Authority, projection and retained-schema caches stay separate.
@@ -949,6 +1066,7 @@ async fn revision_from_row(
         request_reference,
         data,
         change_context,
+        proposal: None,
     }))
 }
 

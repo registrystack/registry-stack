@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Record history names the Proposal that produced a revision. A revision list
+  item and a revision detail gain an optional `proposal` member with
+  `actionId`, `proposalId` and `submissionVersion`, derived from the existing
+  Proposal result rows with no migration. The member appears only when the
+  selected access profile could read that Proposal under its `get` grant,
+  ownership and row boundaries. Otherwise the member is absent and the
+  response is unchanged. A revision written by an immediate Action, a direct
+  write, a batch or an import never carries it. Operator Proposal erasure
+  keeps the link. Task-grant callers do not see it.
 - The model explanation schema now declares `derivation` on a derived field:
   a non-empty string naming the derived relation the registry uses to work the
   field out when the record is read. `bregctl explain model` already emitted

@@ -2950,6 +2950,31 @@ async fn record_revisions_uses_bounded_native_route_and_refuses_invalid_selector
     assert_eq!(fixture.requests.lock().unwrap().len(), 1);
 }
 
+#[tokio::test]
+async fn record_revisions_returns_the_proposal_member_as_the_server_sent_it() {
+    let linked = json!({
+        "revisionIdentifier": "2",
+        "recordIdentifier": RECORD_ID,
+        "proposal": {
+            "actionId": "correct-name",
+            "proposalId": "00000000-0000-4000-8000-0000000000aa",
+            "submissionVersion": 1
+        }
+    });
+    let fixture = test_client(vec![MockResponse::json(
+        StatusCode::OK,
+        json!({"items": [linked.clone()], "pageInfo": {"hasNextPage": false}}),
+    )])
+    .await;
+    let result = fixture
+        .client
+        .record_revisions("companies", RECORD_ID, Some("company-writer"))
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(result.value.as_bytes()).unwrap();
+    assert_eq!(body["items"][0]["proposal"], linked["proposal"]);
+}
+
 fn ingestion_response(status: StatusCode, body: Value) -> MockResponse {
     MockResponse::json(status, body)
         .with_header("cache-control", "no-store")

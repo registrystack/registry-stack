@@ -670,6 +670,80 @@ impl PostgresRecordMutationService {
         }
     }
 
+    /// Whether the caller could read this Proposal. It runs the check a
+    /// Proposal read runs, [`Self::proposal_document`], through the same
+    /// `authorize_proposal_document`, in its own read transaction, and it
+    /// writes no audit entry: the caller is a revision read that audits its own
+    /// response. A Proposal the caller may not read, or that no longer exists,
+    /// is `Ok(false)`. Only a store failure is an error.
+    pub(crate) async fn proposal_link_readable(
+        &self,
+        id: Uuid,
+        authority: &ProposalAuthority,
+    ) -> Result<bool, MutationError> {
+        let deadline = tokio::time::Instant::now() + self.action_timeout;
+        let client = self.proposal_read_client(authority, deadline).await?;
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
+        let result = tokio::time::timeout_at(deadline, async {
+            let guarded = begin_proposal_transaction(
+                guard.client(),
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+                authority,
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+            guarded
+                .set_statement_budget(
+                    deadline.saturating_duration_since(tokio::time::Instant::now()),
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            let document = match proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Share,
+            )
+            .await
+            {
+                Ok(document) => document,
+                Err(MutationError::PreconditionFailed) => return Ok(false),
+                Err(error) => return Err(error),
+            };
+            let readable = match self
+                .coordinator
+                .authorize_proposal_document(
+                    guarded.transaction(),
+                    &self.registry,
+                    &document,
+                    authority,
+                )
+                .await
+            {
+                Ok(()) => true,
+                Err(MutationError::Unavailable) => return Err(MutationError::Unavailable),
+                Err(_) => false,
+            };
+            guarded
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            Ok(readable)
+        })
+        .await;
+        match result {
+            Ok(result) => {
+                guard.disarm();
+                result
+            }
+            Err(_) => {
+                guard.cancel_and_discard().await;
+                Err(MutationError::Unavailable)
+            }
+        }
+    }
+
     pub(crate) async fn proposal_document(
         &self,
         id: Uuid,
