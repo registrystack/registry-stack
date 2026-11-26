@@ -56,6 +56,11 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapterctl --locked --featu
 clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine
+# The full CI lane proves the legacy payment signature against a real local
+# Transit and its token-injecting Unix proxy before this target is cleared.
+if [[ "${ADAPTER_TEST_OPENBAO_TRANSIT:-false}" == true ]]; then
+  products/adapter/scripts/test-payments-openbao.sh
+fi
 clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter-engine/job-file --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-engine --features registry-adapter/job-file,registry-adapter-engine/job-file

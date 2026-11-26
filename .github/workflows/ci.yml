@@ -1414,6 +1414,8 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
           ADAPTER_CONTRACTS_CLEAN_BETWEEN_LANES: "1"
+          ADAPTER_TEST_OPENBAO_TRANSIT: ${{ needs.changes.outputs.full_sweep == 'true' || github.event_name == 'merge_group' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          OPENBAO_PULL: "true"
         run: products/adapter/scripts/check-contracts.sh
 
       - name: Registry Adapter facade recovery runner
