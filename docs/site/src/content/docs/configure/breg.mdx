@@ -175,6 +175,7 @@ A slot declares its byte limit, its accepted media types and its classification.
 A Record type declares at most eight slots, each up to 16 MiB with at most 16 media types.
 A slot ID cannot reuse a field ID.
 `writeOnce: true` is required, because nothing replaces a file once a slot holds one.
+A successor package can add slots, but it must keep every existing slot ID and definition unchanged.
 
 Two things fill a slot: the create effect of an immediate Action, or an applied Proposal that promotes one of its files.
 [Keep a supporting document on the record](../breg-proposals/#keep-a-supporting-document-on-the-record) covers the Proposal path.

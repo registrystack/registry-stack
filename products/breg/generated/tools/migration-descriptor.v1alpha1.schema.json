@@ -45,6 +45,9 @@
         "entity-access-log-changed",
         "entity-geo-json-changed",
         "entity-temporal-changed",
+        "record-attachment-slot-added",
+        "record-attachment-slot-removed",
+        "record-attachment-slot-changed",
         "field-added-optional",
         "field-added-required",
         "field-removed",
@@ -123,6 +126,7 @@
       "enum": [
         "registry",
         "record-type",
+        "record-attachment-slot",
         "field",
         "derived-relation",
         "constraint",
