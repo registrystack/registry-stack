@@ -74,7 +74,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 218) if index not in {61, 62}],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 221) if index not in {61, 62}],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -252,7 +252,7 @@ class BRegProductCatalogTests(unittest.TestCase):
 
     def test_native_proposal_targets_replace_retired_request_targets(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)
-        for target in ("postgres_refactor", "postgres_proposal", "postgres_proposal_security", "postgres_proposal_s3", "postgres_native_retention", "postgres_facility_proposal", "postgres_action_task_grants", "postgres_generated_console"):
+        for target in ("postgres_refactor", "postgres_proposal", "postgres_proposal_security", "postgres_proposal_s3", "postgres_record_attachments", "postgres_native_retention", "postgres_facility_proposal", "postgres_action_task_grants", "postgres_generated_console"):
             self.assertIn("cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test " + target, commands)
         self.assertFalse(any("--test postgres_request_" in command or "--test postgres_change_requests" in command or "--test postgres_rhai_planner" in command for command in commands))
 

@@ -129,6 +129,15 @@ impl HeldReadResponse {
     }
 }
 
+/// One record slot's stored file, held until the read's terminal audit is
+/// durable. `sha256` is the lowercase hex digest recorded when the file was
+/// attached, and the held bytes were checked against it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HeldRecordAttachment {
+    pub response: HeldReadResponse,
+    pub sha256: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ReadResponseContentType {
     Json,
@@ -195,8 +204,20 @@ pub struct ImmediateActionInput<'a> {
     pub context: &'a AuthorizedActionContext,
     pub input: serde_json::Map<String, Value>,
     pub preconditions: BTreeMap<String, String>,
+    /// Files sent in the same request for the Action's declared record attachment slots.
+    pub attachments: Vec<ActionRequestAttachment>,
     pub body_bytes: usize,
     pub correlation: &'a RequestCorrelation,
+}
+
+/// One decoded file from an immediate Action request's `attachments` member.
+///
+/// `name` is the Action's attachment name, not the record slot id.
+pub struct ActionRequestAttachment {
+    pub name: String,
+    pub content_type: String,
+    pub sha256: String,
+    pub content: Vec<u8>,
 }
 
 /// Exact-ID condition acquisition under an action's selected authority.
@@ -766,6 +787,17 @@ pub trait RecordReadService: Send + Sync {
         _slot_id: String,
         _proposal_version: u32,
     ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        Box::pin(async { Err(ReadServiceError::Unavailable) })
+    }
+
+    /// Download one record slot's file after the record itself is visible to
+    /// the selected profile's GET authority. The HTTP layer has already
+    /// checked the profile's slot grant. The default backend releases nothing.
+    fn record_attachment(
+        &self,
+        _request: RecordReadRequest,
+        _slot_id: String,
+    ) -> ServiceFuture<'_, Result<Option<HeldRecordAttachment>, ReadServiceError>> {
         Box::pin(async { Err(ReadServiceError::Unavailable) })
     }
 

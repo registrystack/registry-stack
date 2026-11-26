@@ -15,8 +15,8 @@ use crate::diagnostics::Diagnostic;
 use crate::logical_names::{default_api_name, reserved_logical_name, valid_api_name};
 mod commit_evidence;
 use crate::model::{
-    ActionRouteKind, CompiledAction, CompiledActionAccessEntry, CompiledActionInput,
-    CompiledActionInventory, CompiledActionPermission, CompiledActionRoute,
+    ActionRouteKind, CompiledAction, CompiledActionAccessEntry, CompiledActionAttachment,
+    CompiledActionInput, CompiledActionInventory, CompiledActionPermission, CompiledActionRoute,
     CompiledActionTargetPermission, CompiledActionTargetUse, CompiledActionTargetUseSource,
     CompiledCommitGuard, CompiledEntity, CompiledPlanEffect, CompiledPlanMutation,
     CompiledPlanTarget, CompiledPlanTargetBinding, CompiledPlanValue, CompiledProposalPermission,
@@ -321,6 +321,7 @@ fn compile_action(
         }
     }
     let requires = compile_requirements(action, &input_map, entities, &target_uses, errors);
+    let attachments = compile_action_attachments(action, &inputs, entities, timer_actions, errors);
     let writes_path = if handler.is_some() {
         "actions[].plan.writes"
     } else {
@@ -386,6 +387,7 @@ fn compile_action(
         handler,
         inputs,
         effects,
+        attachments,
         requires,
         target_uses,
         permissions,
@@ -561,6 +563,7 @@ fn compile_handler(
             operation: slot.operation,
             set: BTreeMap::new(),
             clear: Default::default(),
+            attachments: BTreeMap::new(),
         };
         let diagnostics_start = errors.len();
         let target = compile_target(
@@ -1354,6 +1357,104 @@ fn compile_inputs(
         });
     }
     inputs
+}
+
+/// Binds each file an Action request carries to the record slot one create
+/// effect fills. Only an immediate fixed-plan Action without Evidence or a
+/// timer can carry files: every other path has no request to take them
+/// from, or commits outside the request's own transaction.
+fn compile_action_attachments(
+    action: &ActionSource,
+    inputs: &[CompiledActionInput],
+    entities: &BTreeMap<String, CompiledEntity>,
+    timer_actions: &BTreeSet<String>,
+    errors: &mut Vec<Diagnostic>,
+) -> BTreeMap<String, CompiledActionAttachment> {
+    let mut compiled = BTreeMap::new();
+    let declared = action
+        .effects()
+        .iter()
+        .any(|effect| !effect.attachments.is_empty());
+    if !declared {
+        return compiled;
+    }
+    let base = format!("actions[id={}].plan.effects", action.id);
+    if action.is_proposal()
+        || !action.evidence.is_empty()
+        || !action.commit_guards.evidence.is_empty()
+        || timer_actions.contains(&action.id)
+    {
+        errors.push(Diagnostic::error(
+            "breg.action.attachment-invalid",
+            &base,
+            "only an immediate Action without Evidence or a timer can attach files to records",
+        ));
+    }
+    let input_names = inputs
+        .iter()
+        .flat_map(|input| [input.id.clone(), input.api_name.clone()])
+        .collect::<BTreeSet<_>>();
+    for (index, effect) in action.effects().iter().enumerate() {
+        if effect.attachments.is_empty() {
+            continue;
+        }
+        let effect_id = effective_action_effect_id(effect, index);
+        let path = format!("{base}[id={effect_id}].attachments");
+        let entity = match (&effect.operation, &effect.target.entity) {
+            (Operation::Create, Some(entity_id)) => entities.get(entity_id),
+            _ => None,
+        };
+        let Some(entity) = entity else {
+            errors.push(Diagnostic::error(
+                "breg.action.attachment-invalid",
+                &path,
+                "only a create effect on a declared record type can attach files",
+            ));
+            continue;
+        };
+        for (slot_id, source) in &effect.attachments {
+            let slot_path = format!("{path}[slot={slot_id}]");
+            let Some(slot) = entity.attachments.get(slot_id) else {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    &slot_path,
+                    "an effect attachment must name a slot the target record type declares",
+                ));
+                continue;
+            };
+            let name = &source.from_attachment;
+            if input_names.contains(name) {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    format!("{slot_path}.fromAttachment"),
+                    "an Action attachment name must not collide with an Action input",
+                ));
+                continue;
+            }
+            let attachment = CompiledActionAttachment {
+                effect_id: effect_id.clone(),
+                entity_id: entity.id.clone(),
+                slot_id: slot.id.clone(),
+                maximum_bytes: slot.maximum_bytes,
+                content_types: slot.content_types.clone(),
+            };
+            if compiled.insert(name.clone(), attachment).is_some() {
+                errors.push(Diagnostic::error(
+                    "breg.action.attachment-invalid",
+                    format!("{slot_path}.fromAttachment"),
+                    "each Action attachment fills exactly one record slot",
+                ));
+            }
+        }
+    }
+    if compiled.len() > crate::contract::MAX_ATTACHMENT_SLOTS {
+        errors.push(Diagnostic::error(
+            "breg.action.attachment-invalid",
+            &base,
+            "an Action request carries at most eight attachments",
+        ));
+    }
+    compiled
 }
 
 fn compile_effects(
@@ -2299,6 +2400,7 @@ fn validate_permission_access_requirements(
             require_access_reason: profile.require_access_reason,
             operations: [Operation::Invoke].into(),
             readable_fields: Default::default(),
+            readable_attachments: Default::default(),
             writable_fields: Default::default(),
             filterable_fields: Default::default(),
             required_filters: Vec::new(),

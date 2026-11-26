@@ -427,6 +427,11 @@ path = "tests/postgres_proposal.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_record_attachments"
+path = "tests/postgres_record_attachments.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_proposal_task_authority"
 path = "tests/postgres_proposal_task_authority.rs"
 required-features = ["postgres-test"]

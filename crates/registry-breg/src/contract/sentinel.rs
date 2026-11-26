@@ -472,6 +472,9 @@ pub(super) struct AuthoredModuleProfile {
     operations: UniqueSet<Operation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
+    /// Record attachment slots the profile may download. Requires `get`.
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    readable_attachments: UniqueSet<String>,
     #[serde(default)]
     writable_fields: UniqueSet<String>,
     #[serde(default)]
@@ -542,6 +545,7 @@ impl From<AuthoredModuleProfile> for AccessProfileSource {
             require_access_reason: authored.require_access_reason,
             operations: authored.operations,
             readable_fields: authored.readable_fields,
+            readable_attachments: authored.readable_attachments,
             writable_fields: authored.writable_fields,
             filterable_fields: authored.filterable_fields,
             required_filters: authored.required_filters,
@@ -575,6 +579,7 @@ impl From<AccessProfileSource> for AuthoredModuleProfile {
             require_access_reason: profile.require_access_reason,
             operations: profile.operations,
             readable_fields: profile.readable_fields,
+            readable_attachments: profile.readable_attachments,
             writable_fields: profile.writable_fields,
             filterable_fields: profile.filterable_fields,
             required_filters: profile.required_filters,
@@ -671,6 +676,9 @@ pub(super) struct AuthoredEntityPermission {
     operations: UniqueSet<Operation>,
     #[serde(default)]
     readable_fields: UniqueSet<String>,
+    /// Record attachment slots the profile may download. Requires `get`.
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    readable_attachments: UniqueSet<String>,
     #[serde(default)]
     writable_fields: UniqueSet<String>,
     #[serde(default)]
@@ -736,6 +744,7 @@ impl TryFrom<AuthoredEntityPermission> for EntityPermissionSource {
             entity: authored.entity,
             operations: authored.operations,
             readable_fields: authored.readable_fields,
+            readable_attachments: authored.readable_attachments,
             writable_fields: authored.writable_fields,
             filterable_fields: authored.filterable_fields,
             required_filters: authored.required_filters,

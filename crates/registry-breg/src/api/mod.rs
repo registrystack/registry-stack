@@ -12,6 +12,7 @@ mod gis;
 mod ingestion;
 mod metadata;
 pub(crate) mod proposals;
+mod record_attachments;
 mod service;
 mod statistics;
 
@@ -41,13 +42,14 @@ pub(crate) use service::{
     cursor_query_reference_value, valid_text_search_term, CursorQueryReferenceInput,
 };
 pub use service::{
-    ActionTargetConditionsInput, BatchMutationInput, CompiledLookupSelector, CompiledReadQuery,
-    ConditionalMutationInput, CreateMutationInput, HeldReadResponse, HttpService,
-    ImmediateActionInput, LookupSelectorValue, ReadBboxQuery, ReadFilterExpr, ReadFilterOperator,
-    ReadFilterPredicate, ReadLogicalOp, ReadOrderClause, ReadProjectionField, ReadRuntimeIdentity,
-    ReadServiceError, ReadSpatialQuery, ReadinessProbe, RecordReadKind, RecordReadRefusal,
-    RecordReadRequest, RecordReadService, RevisionReadRefusal, RevisionReadRequest,
-    RevisionReadService, ServiceFuture, SnapshotReadRequest, SnapshotReadService,
+    ActionRequestAttachment, ActionTargetConditionsInput, BatchMutationInput,
+    CompiledLookupSelector, CompiledReadQuery, ConditionalMutationInput, CreateMutationInput,
+    HeldReadResponse, HeldRecordAttachment, HttpService, ImmediateActionInput, LookupSelectorValue,
+    ReadBboxQuery, ReadFilterExpr, ReadFilterOperator, ReadFilterPredicate, ReadLogicalOp,
+    ReadOrderClause, ReadProjectionField, ReadRuntimeIdentity, ReadServiceError, ReadSpatialQuery,
+    ReadinessProbe, RecordReadKind, RecordReadRefusal, RecordReadRequest, RecordReadService,
+    RevisionReadRefusal, RevisionReadRequest, RevisionReadService, ServiceFuture,
+    SnapshotReadRequest, SnapshotReadService,
 };
 
 use crate::auth::{authenticate_request, RegistryAuthenticator};
@@ -78,7 +80,8 @@ use uuid::Uuid;
 use crate::artifacts::{
     access_log_path, openapi_access_log_operation, openapi_access_log_response_schema,
     openapi_components, openapi_entity_input_schema, openapi_input_schema_id, openapi_operation,
-    OpenApiAccessProfiles, OpenApiOperationSpec, ACCESS_LOG_RESPONSE_SCHEMA_ID,
+    openapi_record_attachment_operation, record_attachment_path, OpenApiAccessProfiles,
+    OpenApiOperationSpec, ACCESS_LOG_RESPONSE_SCHEMA_ID,
 };
 
 const MAX_MUTATION_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -228,6 +231,7 @@ fn route_set(service: Arc<HttpService>) -> Router {
 
     app.merge(access_log::routes(&service))
         .merge(attachments::routes(&service))
+        .merge(record_attachments::routes(&service))
         .merge(gis::routes())
         .merge(statistics::routes(&service))
         .merge(external_views::routes(&service.registry))
@@ -470,6 +474,34 @@ async fn openapi(
                     ),
                 );
             has_access_log = true;
+        }
+        if surface.route.operation == Operation::Get && surface.read_path.is_none() {
+            let granted = surface
+                .entity
+                .access_profiles
+                .get(surface.context.selected_profile())
+                .map(|profile| &profile.readable_attachments);
+            for slot in surface
+                .entity
+                .attachments
+                .values()
+                .filter(|slot| granted.is_some_and(|granted| granted.contains(&slot.id)))
+            {
+                paths
+                    .entry(record_attachment_path(surface.route, &slot.id))
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .expect("OpenAPI paths are objects")
+                    .insert(
+                        "get".to_owned(),
+                        openapi_record_attachment_operation(
+                            surface.route,
+                            surface.entity,
+                            slot,
+                            OpenApiAccessProfiles::Selected(surface.context.selected_profile()),
+                        ),
+                    );
+            }
         }
         readable_by_entity
             .entry(surface.response_entity.id.clone())
@@ -5556,6 +5588,14 @@ fn mutation_problem(error: MutationError) -> Response {
             fixed_problem(ProblemCode::MutationConflict)
         }
         MutationError::ProposalRejected => fixed_problem(ProblemCode::ProposalRejected),
+        MutationError::AttachmentSlotWriteOnce => {
+            fixed_problem(ProblemCode::AttachmentSlotWriteOnce)
+        }
+        MutationError::AttachmentTooLarge => fixed_problem(ProblemCode::AttachmentTooLarge),
+        MutationError::AttachmentContentType => fixed_problem(ProblemCode::AttachmentContentType),
+        MutationError::AttachmentDigestMismatch => {
+            fixed_problem(ProblemCode::AttachmentDigestMismatch)
+        }
         MutationError::ProposalReviewResultMismatch => {
             fixed_problem(ProblemCode::ProposalReviewResultMismatch)
         }

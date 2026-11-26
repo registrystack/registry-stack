@@ -723,6 +723,71 @@ impl BaseRegistryClient {
         .await
     }
 
+    /// Download the file held in one record attachment slot.
+    ///
+    /// The service must send one `Repr-Digest` for the stored file, and the
+    /// client returns the bytes only when they match it.
+    pub async fn download_record_attachment(
+        &self,
+        record_route: &str,
+        record_identifier: &str,
+        slot: &str,
+        access_profile: Option<&str>,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        validate_record_route(record_route)?;
+        validate_record_uuid(record_identifier)?;
+        validate_breg_identifier(
+            slot,
+            "the Base Registry Engine attachment slot identifier is invalid",
+        )?;
+        let pairs = access_profile_query(access_profile)?;
+        let url = self.url_with_query(
+            &[
+                "v1",
+                "records",
+                record_route,
+                record_identifier,
+                "attachments",
+                slot,
+            ],
+            &pairs,
+        )?;
+        let builder = self
+            .authorize(
+                self.transport.http.get(url).header(ACCEPT, ANY_MEDIA_TYPE),
+                Credential::Optional,
+            )
+            .await?;
+        let response = self.transport.send(builder).await?;
+        let status = response.status();
+        let digest = if status == StatusCode::OK {
+            let trace_id = breg_trace_id(status, response.headers())?;
+            parse_representation_digest(status, response.headers(), &trace_id, true)?
+        } else {
+            None
+        };
+        let complete = self
+            .attachment_wire_limit(response, MAX_BREG_ATTACHMENT_BYTES)
+            .await?;
+        match digest {
+            Some((value, expected))
+                if expected == Sha256::digest(complete.value.as_bytes()).as_slice() =>
+            {
+                Ok(BRegComplete {
+                    value: complete
+                        .value
+                        .with_verified_digest(BRegRepresentationDigest::new(value)),
+                    metadata: complete.metadata,
+                })
+            }
+            _ => Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::RepresentationDigest,
+                Some(complete.metadata.trace_id().clone()),
+            )),
+        }
+    }
+
     /// Retrieve one exact positive revision as a Registry Record single envelope.
     pub async fn get_record_revision(
         &self,

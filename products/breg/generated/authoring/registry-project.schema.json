@@ -119,6 +119,16 @@
     "ActionEffectSource": {
       "additionalProperties": false,
       "properties": {
+        "attachments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EffectAttachmentSource"
+          },
+          "description": "Record slots a create effect fills from files in the same request,\nkeyed by slot id.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
         "clear": {
           "default": [],
           "items": {
@@ -2177,6 +2187,19 @@
       ],
       "type": "string"
     },
+    "EffectAttachmentSource": {
+      "additionalProperties": false,
+      "description": "Where a create effect takes one record slot's file from: the named file\nin the same Action request.",
+      "properties": {
+        "fromAttachment": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "fromAttachment"
+      ],
+      "type": "object"
+    },
     "EffectiveTimeSource": {
       "additionalProperties": false,
       "description": "A point or a span of effect. An open end means the effect has no end.",
@@ -2249,6 +2272,14 @@
             "$ref": "#/$defs/ReadPathPermissionSource"
           },
           "type": "array"
+        },
+        "readableAttachments": {
+          "description": "Record attachment slots the profile may download. Requires `get`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
         },
         "readableFields": {
           "default": [],
@@ -4484,6 +4515,42 @@
       },
       "type": "object"
     },
+    "RecordAttachmentSlotSource": {
+      "additionalProperties": false,
+      "description": "One file slot on a record type. A file enters it only through an\nimmediate Action create effect in the same request, and once written it\nnever changes.",
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "contentTypes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "maximumBytes": {
+          "format": "uint32",
+          "maximum": 16777216,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "writeOnce": {
+          "description": "Must be `true`: a record slot holds the first file written to it.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "maximumBytes",
+        "contentTypes",
+        "classification",
+        "writeOnce"
+      ],
+      "type": "object"
+    },
     "ReferenceDelete": {
       "enum": [
         "restrict"
@@ -6261,6 +6328,14 @@
                   },
                   "type": "array"
                 },
+                "readableAttachments": {
+                  "description": "Record attachment slots the profile may download. Requires `get`.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
                 "readableFields": {
                   "default": [],
                   "items": {
@@ -6362,6 +6437,13 @@
           },
           "apiName": {
             "type": "string"
+          },
+          "attachments": {
+            "description": "Write-once file slots filled by immediate Action create effects.",
+            "items": {
+              "$ref": "#/$defs/RecordAttachmentSlotSource"
+            },
+            "type": "array"
           },
           "batch": {
             "$ref": "#/$defs/BatchSource"

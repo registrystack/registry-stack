@@ -903,3 +903,92 @@ async fn a_mutation_response_for_another_proposal_is_refused() {
         .await
         .is_err());
 }
+
+fn repr_digest(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    format!(
+        "sha-256=:{}:",
+        base64::engine::general_purpose::STANDARD.encode(Sha256::digest(bytes))
+    )
+}
+
+#[tokio::test]
+async fn record_attachment_download_uses_the_slot_route_and_verifies_the_stored_digest() {
+    let fixture = test_client(vec![
+        download_response().with_header("repr-digest", &repr_digest(PDF)),
+        download_response().with_header("repr-digest", &repr_digest(b"other bytes")),
+        download_response(),
+        download_response()
+            .with_header("repr-digest", &repr_digest(PDF))
+            .with_header("repr-digest", &repr_digest(PDF)),
+        problem_response(
+            BRegProblemCode::ResourceNotFound,
+            "The requested resource was not found.",
+        ),
+    ])
+    .await;
+    let downloaded = fixture
+        .client
+        .download_record_attachment("applications", RECORD_ID, SLOT, Some("auditor"))
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(downloaded.as_bytes(), PDF);
+    assert_eq!(downloaded.media_type(), "application/pdf");
+    assert_eq!(
+        downloaded.representation_digest().unwrap().as_str(),
+        repr_digest(PDF)
+    );
+    for label in ["mismatched", "missing", "repeated"] {
+        let refusal = fixture
+            .client
+            .download_record_attachment("applications", RECORD_ID, SLOT, None)
+            .await
+            .expect_err(label);
+        let BaseRegistryClientError::Protocol { failure, .. } = refusal else {
+            panic!("a {label} digest must be a protocol refusal")
+        };
+        assert_eq!(
+            failure,
+            BRegProtocolFailure::RepresentationDigest,
+            "{label}"
+        );
+    }
+    assert!(matches!(
+        fixture
+            .client
+            .download_record_attachment("applications", RECORD_ID, SLOT, None)
+            .await,
+        Err(BaseRegistryClientError::Problem { .. })
+    ));
+    for (route, record, slot) in [
+        ("applications", "not-a-record", SLOT),
+        ("applications", RECORD_ID, "../evidence"),
+        ("applications", RECORD_ID, "Evidence"),
+        ("applications/other", RECORD_ID, SLOT),
+    ] {
+        assert!(matches!(
+            fixture
+                .client
+                .download_record_attachment(route, record, slot, None)
+                .await,
+            Err(BaseRegistryClientError::InvalidRequest { .. })
+        ));
+    }
+    let requests = fixture.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 5, "invalid identifiers never reach HTTP");
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].uri,
+        format!("/tenant/base/v1/records/applications/{RECORD_ID}/attachments/{SLOT}?accessProfile=auditor")
+    );
+    assert_eq!(requests[0].accept.as_deref(), Some("*/*"));
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some("Bearer attachment-boundary-token")
+    );
+    assert_eq!(
+        requests[1].uri,
+        format!("/tenant/base/v1/records/applications/{RECORD_ID}/attachments/{SLOT}")
+    );
+}

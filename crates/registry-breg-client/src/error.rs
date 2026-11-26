@@ -142,6 +142,10 @@ pub enum BRegProblemCode {
     ActionGuardFailed,
     ActionHandlerFailed,
     ActionRefused,
+    AttachmentContentType,
+    AttachmentDigestMismatch,
+    AttachmentSlotWriteOnce,
+    AttachmentTooLarge,
     AuthenticationRefused,
     ExternalViewIncomplete,
     IdempotencyConflict,
@@ -178,11 +182,15 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 41] = [
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
+        Self::AttachmentContentType,
+        Self::AttachmentDigestMismatch,
+        Self::AttachmentSlotWriteOnce,
+        Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
         Self::ExternalViewIncomplete,
         Self::IdempotencyConflict,
@@ -225,6 +233,10 @@ impl BRegProblemCode {
             Self::ActionGuardFailed => "action.guard_failed",
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
+            Self::AttachmentContentType => "attachment.content-type",
+            Self::AttachmentDigestMismatch => "attachment.digest-mismatch",
+            Self::AttachmentSlotWriteOnce => "attachment.slot-write-once",
+            Self::AttachmentTooLarge => "attachment.too-large",
             Self::AuthenticationRefused => "authentication.refused",
             Self::ExternalViewIncomplete => "external_view.incomplete",
             Self::IdempotencyConflict => "idempotency.key-reused",
@@ -274,7 +286,8 @@ impl BRegProblemCode {
             Self::AuthenticationRefused => 401,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
-            Self::IdempotencyConflict
+            Self::AttachmentSlotWriteOnce
+            | Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
             | Self::IngestionRunNotOpen
@@ -288,8 +301,11 @@ impl BRegProblemCode {
             Self::ActionGuardFailed
             | Self::PreconditionFailed
             | Self::ProposalReviewResultMismatch => 412,
-            Self::UnsupportedMediaType => 415,
-            Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
+            Self::AttachmentTooLarge => 413,
+            Self::AttachmentContentType | Self::UnsupportedMediaType => 415,
+            Self::ActionRefused
+            | Self::AttachmentDigestMismatch
+            | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
             Self::StatisticalDatasetDomainViolation => 500,
             Self::ExternalViewIncomplete
@@ -322,6 +338,7 @@ impl BRegProblemCode {
             409 => "Conflict",
             410 => "Gone",
             412 => "Precondition Failed",
+            413 => "Content Too Large",
             415 => "Unsupported Media Type",
             422 => "Unprocessable Entity",
             428 => "Precondition Required",
@@ -343,6 +360,16 @@ impl BRegProblemCode {
             // The published sentence for the code. A refusal carries its
             // package-declared label on the wire instead.
             Self::ActionRefused => "The action was refused by a declared business rule.",
+            Self::AttachmentContentType => {
+                "The file media type is not one the attachment slot accepts."
+            }
+            Self::AttachmentDigestMismatch => {
+                "The file content does not match its declared SHA-256 digest."
+            }
+            Self::AttachmentSlotWriteOnce => {
+                "The record attachment slot already holds a file and is write-once."
+            }
+            Self::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::ExternalViewIncomplete => {
                 "The external view's indexed coverage is incomplete for this request."

@@ -122,6 +122,7 @@ postgres_targets=(
   postgres_proposal_guard_failure
   postgres_proposal_security
   postgres_proposal_s3
+  postgres_record_attachments
   postgres_facility_proposal
   postgres_action_task_grants
   postgres_generated_console

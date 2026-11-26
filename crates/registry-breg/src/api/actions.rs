@@ -309,14 +309,18 @@ pub(super) async fn dispatch(
     } else {
         None
     };
-    let Ok(body) = bounded_body_to(body, surface.action.maximum_snapshot_bytes as usize).await
-    else {
+    let Ok(body) = bounded_body_to(body, maximum_action_body_bytes(surface.action)).await else {
         return refusal(invalid_request()).await;
     };
     let parsed = match parse_body(surface.action, route.kind, &body) {
         Ok(parsed) => parsed,
         Err(error) => return refusal(invalid_action_request(error)).await,
     };
+    if let Err(error) =
+        crate::mutation::validate_action_attachments(surface.action, &parsed.attachments)
+    {
+        return refusal(mutation_problem(error)).await;
+    }
     match route.kind {
         ActionRouteKind::Availability => {
             match availability::observe(
@@ -355,6 +359,7 @@ pub(super) async fn dispatch(
                     context: &surface.context,
                     input: parsed.input,
                     preconditions: parsed.preconditions,
+                    attachments: parsed.attachments,
                     body_bytes: body.len(),
                     correlation: &correlation,
                 })
@@ -460,6 +465,7 @@ struct ParsedActionBody {
     input: Map<String, Value>,
     preconditions: BTreeMap<String, String>,
     target_input: Option<String>,
+    attachments: Vec<ActionRequestAttachment>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -486,10 +492,12 @@ fn parse_body(
 ) -> Result<ParsedActionBody, ParseActionError> {
     let value = parse_json_strict(bytes).map_err(|_| ParseActionError::at(""))?;
     let envelope = value.as_object().ok_or_else(|| ParseActionError::at(""))?;
+    let accepts_attachments = kind == ActionRouteKind::Invoke && !action.attachments.is_empty();
     if envelope.keys().any(|name| {
         name != "input"
             && (name != "preconditions" || kind != ActionRouteKind::Invoke)
             && (name != "targetInput" || kind != ActionRouteKind::Availability)
+            && (name != "attachments" || !accepts_attachments)
     }) {
         return Err(ParseActionError::at(""));
     }
@@ -644,11 +652,105 @@ fn parse_body(
     } else {
         None
     };
+    let attachments = if accepts_attachments {
+        parse_attachments(action, envelope.get("attachments"))?
+    } else {
+        Vec::new()
+    };
     Ok(ParsedActionBody {
         input,
         preconditions,
         target_input,
+        attachments,
     })
+}
+
+/// Parses the `attachments` member: exactly one file object per declared
+/// Action attachment name, each with a media type, a lowercase sha256 and
+/// canonical standard base64 content. Slot limits are checked afterwards so
+/// they refuse with their own problem codes.
+fn parse_attachments(
+    action: &CompiledAction,
+    value: Option<&Value>,
+) -> Result<Vec<ActionRequestAttachment>, ParseActionError> {
+    use base64::Engine as _;
+    let members = value
+        .and_then(Value::as_object)
+        .ok_or_else(|| ParseActionError::at("/attachments"))?;
+    if members
+        .keys()
+        .any(|name| !action.attachments.contains_key(name))
+    {
+        return Err(ParseActionError::at("/attachments"));
+    }
+    let mut attachments = Vec::with_capacity(action.attachments.len());
+    for name in action.attachments.keys() {
+        let at = |member: &str| {
+            ParseActionError::at(if member.is_empty() {
+                json_pointer(["attachments", name.as_str()])
+            } else {
+                json_pointer(["attachments", name.as_str(), member])
+            })
+        };
+        let file = members
+            .get(name)
+            .and_then(Value::as_object)
+            .ok_or_else(|| at(""))?;
+        if file
+            .keys()
+            .any(|member| !matches!(member.as_str(), "contentType" | "sha256" | "content"))
+        {
+            return Err(at(""));
+        }
+        let content_type = file
+            .get("contentType")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| at("contentType"))?;
+        let sha256 = file
+            .get("sha256")
+            .and_then(Value::as_str)
+            .filter(|value| valid_lowercase_sha256(value))
+            .ok_or_else(|| at("sha256"))?;
+        let content = file
+            .get("content")
+            .and_then(Value::as_str)
+            .and_then(|text| base64::engine::general_purpose::STANDARD.decode(text).ok())
+            .filter(|bytes| !bytes.is_empty())
+            .ok_or_else(|| at("content"))?;
+        attachments.push(ActionRequestAttachment {
+            name: name.clone(),
+            content_type: content_type.to_owned(),
+            sha256: sha256.to_owned(),
+            content,
+        });
+    }
+    Ok(attachments)
+}
+
+fn valid_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The largest request body an Action accepts: its snapshot budget plus room
+/// for each declared attachment at its slot limit in base64 with its member
+/// framing. A larger body cannot be attributed to one cause and is refused
+/// as an invalid request.
+fn maximum_action_body_bytes(action: &CompiledAction) -> usize {
+    let snapshot = action.maximum_snapshot_bytes as usize;
+    if action.attachments.is_empty() {
+        return snapshot;
+    }
+    action
+        .attachments
+        .iter()
+        .fold(snapshot + 32, |total, (name, attachment)| {
+            let encoded = (attachment.maximum_bytes as usize).div_ceil(3) * 4;
+            total + encoded + name.len() + 512
+        })
 }
 
 fn valid_action_condition(value: &str) -> bool {

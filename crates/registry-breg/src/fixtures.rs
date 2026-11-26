@@ -1880,6 +1880,7 @@ fn action_profile_from_grant(
         required_purposes: grant.required_purposes.clone().into(),
         operations: grant.operations.clone().into(),
         readable_fields: Default::default(),
+        readable_attachments: Default::default(),
         writable_fields: Default::default(),
         filterable_fields: Default::default(),
         required_filters: Vec::new(),

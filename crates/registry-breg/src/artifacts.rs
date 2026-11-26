@@ -861,6 +861,10 @@ pub(crate) fn openapi_action_input_schema(action: &CompiledAction) -> Value {
     if !condition_inputs.is_empty() {
         required.push(Value::String("preconditions".to_owned()));
     }
+    if !action.execution.is_proposal() && !action.attachments.is_empty() {
+        properties.insert("attachments".to_owned(), action_attachments_schema(action));
+        required.push(Value::String("attachments".to_owned()));
+    }
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": format!("urn:breg:action:{}:invoke-input", action.id),
@@ -873,6 +877,48 @@ pub(crate) fn openapi_action_input_schema(action: &CompiledAction) -> Value {
             .iter()
             .map(|input| input.api_name.as_str())
             .collect::<Vec<_>>(),
+    })
+}
+
+/// The `attachments` member of an immediate Action request: exactly one file
+/// for each declared attachment, in standard base64 with its media type and
+/// lowercase SHA-256 digest. The server refuses a size, media type or digest
+/// outside the slot's declaration with the slot's own problem code.
+fn action_attachments_schema(action: &CompiledAction) -> Value {
+    let properties = action
+        .attachments
+        .iter()
+        .map(|(name, attachment)| {
+            let encoded = u64::from(attachment.maximum_bytes).div_ceil(3) * 4;
+            (
+                name.clone(),
+                json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["contentType", "sha256", "content"],
+                    "properties": {
+                        "contentType": {"type": "string", "enum": attachment.content_types},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "content": {
+                            "type": "string",
+                            "contentEncoding": "base64",
+                            "minLength": 4,
+                            "maxLength": encoded,
+                            "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+                        },
+                    },
+                    "x-registry-recordType": attachment.entity_id,
+                    "x-registry-attachmentSlot": attachment.slot_id,
+                    "x-registry-maximumBytes": attachment.maximum_bytes,
+                }),
+            )
+        })
+        .collect::<Map<_, _>>();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": action.attachments.keys().collect::<Vec<_>>(),
+        "properties": properties,
     })
 }
 
@@ -2275,6 +2321,27 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
                 );
             has_access_log = true;
         }
+        if route.operation == Operation::Get && read_path_for_route(route, entity).is_none() {
+            for slot in entity.attachments.values() {
+                if record_attachment_profiles(route, entity, &slot.id).is_empty() {
+                    continue;
+                }
+                paths
+                    .entry(record_attachment_path(route, &slot.id))
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .expect("OpenAPI path entries are objects")
+                    .insert(
+                        "get".to_owned(),
+                        openapi_record_attachment_operation(
+                            route,
+                            entity,
+                            slot,
+                            OpenApiAccessProfiles::All,
+                        ),
+                    );
+            }
+        }
     }
 
     let mut has_immediate_actions = false;
@@ -2456,6 +2523,116 @@ pub(crate) fn openapi_access_log_operation(
             "400": access_log_problem_response("The query or cursor is invalid."),
             "404": access_log_problem_response("The record or subject-owned access log was not found."),
             "503": access_log_problem_response("The subject access-log service is unavailable.")
+        }),
+    );
+    Value::Object(operation)
+}
+
+pub(crate) fn record_attachment_path(route: &CompiledRoute, slot_id: &str) -> String {
+    format!("{}/attachments/{slot_id}", route.path)
+}
+
+/// The route's profiles whose `readableAttachments` grant names the slot.
+pub(crate) fn record_attachment_profiles<'a>(
+    route: &'a CompiledRoute,
+    entity: &CompiledEntity,
+    slot_id: &str,
+) -> Vec<&'a String> {
+    route
+        .access_profiles
+        .iter()
+        .filter(|profile| {
+            entity
+                .access_profiles
+                .get(profile.as_str())
+                .is_some_and(|grant| grant.readable_attachments.contains(slot_id))
+        })
+        .collect()
+}
+
+/// The download of one record slot. With every profile, it names only the
+/// profiles whose grant reads the slot.
+pub(crate) fn openapi_record_attachment_operation(
+    route: &CompiledRoute,
+    entity: &CompiledEntity,
+    slot: &crate::model::CompiledRecordAttachmentSlot,
+    access_profiles: OpenApiAccessProfiles<'_>,
+) -> Value {
+    debug_assert_eq!(route.operation, Operation::Get);
+    let mut operation = Map::from_iter([
+        (
+            "operationId".to_owned(),
+            json!(format!("{}.attachment.{}", route.id, slot.id)),
+        ),
+        ("x-registry-recordType".to_owned(), json!(entity.id)),
+        ("x-registry-operation".to_owned(), json!("attachment")),
+        ("x-registry-attachmentSlot".to_owned(), json!(slot.id)),
+        (
+            "description".to_owned(),
+            json!(
+                "Download the file in this record slot. The selected profile must grant get on the record type and name the slot in readableAttachments. The record must be visible to it as on get. A record outside the caller's authority, an unknown record and an empty slot all answer 404."
+            ),
+        ),
+        ("security".to_owned(), json!([{"bearerAuth": []}])),
+    ]);
+    match access_profiles {
+        OpenApiAccessProfiles::All => {
+            operation.insert(
+                "x-registry-accessProfiles".to_owned(),
+                json!(record_attachment_profiles(route, entity, &slot.id)),
+            );
+        }
+        OpenApiAccessProfiles::Selected(profile) => {
+            operation.insert("x-registry-accessProfile".to_owned(), json!(profile));
+        }
+    }
+    operation.insert(
+        "parameters".to_owned(),
+        json!([
+            path_parameter(
+                "record_id",
+                json!({"type": "string", "format": "uuid"}),
+                "Canonical record UUID."
+            ),
+            header_parameter(
+                "traceparent",
+                false,
+                traceparent_schema(),
+                "Optional W3C trace context. Responses carry Registry trace context for the request."
+            ),
+            access_profile_parameter(route.default_access_profile.is_none())
+        ]),
+    );
+    let content = slot
+        .content_types
+        .iter()
+        .map(|media_type| {
+            (
+                media_type.clone(),
+                json!({"schema": {"type": "string", "format": "binary", "maxLength": slot.maximum_bytes}}),
+            )
+        })
+        .collect::<Map<_, _>>();
+    operation.insert(
+        "responses".to_owned(),
+        json!({
+            "200": {
+                "description": "The stored file, with the media type and SHA-256 digest recorded when it was attached",
+                "headers": {
+                    "traceparent": traceparent_header("Trace context for this response."),
+                    "Cache-Control": no_store_header(),
+                    "Content-Disposition": {"schema": {"const": crate::attachment::DOWNLOAD_CONTENT_DISPOSITION}},
+                    "X-Content-Type-Options": {"schema": {"const": "nosniff"}},
+                    "Repr-Digest": {
+                        "description": "RFC 9530 SHA-256 digest of the stored bytes.",
+                        "schema": {"type": "string", "pattern": "^sha-256=:[A-Za-z0-9+/]{43}=:$"}
+                    }
+                },
+                "content": content
+            },
+            "400": access_log_problem_response("The query is invalid."),
+            "404": access_log_problem_response("The record or its file was not found."),
+            "503": access_log_problem_response("The record attachment service is unavailable.")
         }),
     );
     Value::Object(operation)

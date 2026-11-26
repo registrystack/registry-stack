@@ -1879,6 +1879,9 @@ pub struct EntitySource {
     pub fields: Vec<FieldSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<GeoJsonSource>,
+    /// Write-once file slots filled by immediate Action create effects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<RecordAttachmentSlotSource>,
     /// Mandatory request-access requirements checked against every profile, including module contributions.
     #[serde(
         default,
@@ -2307,6 +2310,39 @@ pub struct AttachmentSlotSource {
     pub maximum_bytes: u32,
     pub content_types: Vec<String>,
     pub classification: Classification,
+}
+
+/// One file slot on a record type. A file enters it only through an
+/// immediate Action create effect in the same request, and once written it
+/// never changes.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RecordAttachmentSlotSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub id: String,
+    #[serde(deserialize_with = "bounded_u32::<_, 1, MAX_ATTACHMENT_BYTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, MAX_ATTACHMENT_BYTES>")
+    )]
+    pub maximum_bytes: u32,
+    pub content_types: Vec<String>,
+    pub classification: Classification,
+    /// Must be `true`: a record slot holds the first file written to it.
+    pub write_once: bool,
+}
+
+/// Where a create effect takes one record slot's file from: the named file
+/// in the same Action request.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EffectAttachmentSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub from_attachment: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2886,6 +2922,18 @@ pub struct ActionEffectSource {
     pub set: BTreeMap<String, ActionValueSource>,
     #[serde(default)]
     pub clear: UniqueSet<String>,
+    /// Record slots a create effect fills from files in the same request,
+    /// keyed by slot id.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "local_id_map"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "local_id_map_schema::<EffectAttachmentSource>")
+    )]
+    pub attachments: BTreeMap<String, EffectAttachmentSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -5111,6 +5159,9 @@ pub struct AccessProfileSource {
     pub operations: UniqueSet<Operation>,
     #[serde(default)]
     pub readable_fields: UniqueSet<String>,
+    /// Record attachment slots the profile may download. Requires `get`.
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub readable_attachments: UniqueSet<String>,
     #[serde(default)]
     pub writable_fields: UniqueSet<String>,
     #[serde(default)]
@@ -5672,6 +5723,9 @@ pub struct EntityPermissionSource {
     pub entity: String,
     pub operations: UniqueSet<Operation>,
     pub readable_fields: UniqueSet<String>,
+    /// Record attachment slots the profile may download. Requires `get`.
+    #[serde(skip_serializing_if = "UniqueSet::is_empty")]
+    pub readable_attachments: UniqueSet<String>,
     pub writable_fields: UniqueSet<String>,
     pub filterable_fields: UniqueSet<String>,
     /// Alternative search criteria; a `list` must satisfy at least one.
