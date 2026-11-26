@@ -299,7 +299,8 @@ The link has these known limits:
 
 ### Record files
 
-A Record type's file slot is written once, by the create effect of an immediate Action.
+A Record type's file slot is written once.
+The create effect of an immediate Action writes it, or an applied Proposal promotes one of its files into it.
 The file commits in the transaction that writes the record, its history, the idempotency receipt and
 any hook event.
 BReg checks the media type, the size and the SHA-256 digest before it writes anything.
@@ -325,6 +326,19 @@ BReg deletes the bytes only when no other record and no Proposal refers to them.
 Proposal erasure and attachment cleanup count record references too.
 The verification worker also checks files that only a record holds.
 
+A promotion adds a record reference to the bytes that the frozen Proposal file already holds.
+`bregctl check` accepts it only when the record slot accepts every media type and size the Proposal slot accepts.
+The record slot must also be classified at least as restricted as the Proposal slot, so a promoted file never loses protection.
+Promotions are part of the Action's definition revision, so changing one changes the Action.
+So are the request-file bindings of an immediate Action.
+Apply rebuilds the Proposal's file manifest and refuses a file that verification has not approved.
+Inside the apply transaction it checks the frozen file against the record slot again.
+It then adds the reference beside the record revision the effect wrote.
+An unapproved file answers `412 precondition.failed`.
+A filled slot answers `409 attachment.slot-write-once`.
+Either refusal rolls back the whole apply.
+Erasing the Proposal keeps the promoted bytes and removes files that nothing promoted.
+
 {/* Evidence: crates/registry-breg/src/api/record_attachments.rs;
     crates/registry-breg/src/postgres/record_attachment_read.rs, read_record_attachment;
     crates/registry-breg/src/attachment_store.rs, attach_record_reference, load_record_attachment,
@@ -335,9 +349,17 @@ The verification worker also checks files that only a record holds.
     a_write_once_slot_refuses_a_second_file_even_after_erasure,
     a_failed_commit_leaves_neither_the_record_nor_the_file,
     record_erasure_removes_the_reference_then_the_bytes_nothing_else_refers_to,
-    proposal_erasure_never_removes_bytes_a_record_refers_to;
-    products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-218, BREG-SEC-219 and
-    BREG-SEC-220. */}
+    proposal_erasure_never_removes_bytes_a_record_refers_to,
+    an_applied_proposal_promotes_its_file_by_reference_and_erasure_keeps_it,
+    promotion_into_a_filled_slot_answers_409_and_rolls_back_the_whole_apply;
+    crates/registry-breg/src/immediate_actions.rs, compile_attachment_promotions, definition_revision;
+    crates/registry-breg/tests/attachment_promotion_compiler.rs,
+    a_promotion_refuses_a_record_slot_less_restricted_than_the_proposal_slot,
+    an_immediate_action_revision_covers_its_request_file_bindings;
+    crates/registry-breg/src/mutation/proposal.rs, promote_proposal_attachments;
+    crates/registry-breg/tests/postgres_proposal_s3.rs,
+    promotion_references_the_verified_s3_object_and_refuses_unverified_bytes;
+    products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-218 to BREG-SEC-223. */}
 
 ## Operator obligations
 

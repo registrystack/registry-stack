@@ -260,13 +260,16 @@ Erased the retained Proposal.
 
 Listing again shows `"detailErased":true`. A pinned version, or an Action in `retain` mode, is
 refused and left intact: finish the Proposal under its ordinary authority first. Identical
-attachment bytes stay while another retained reference needs them, including a record's file. A Review still waiting on
-remote recovery keeps the exact request and acceptance that recovery needs.
+attachment bytes stay while another retained reference needs them, including a record's file. So a file that the
+applied Proposal promoted to a record stays readable through the record. A Review still waiting on remote recovery keeps
+the exact request and acceptance that recovery needs.
 
 {/* Evidence: crates/registry-breg/src/proposal_retention.rs, detail_is_pinned (draft, submitted),
     the cancelled/applied/rejected draft-input rule, RetainMode, and ActiveDetailPinned;
     crates/registry-breg/src/proposal_store.rs, Proposal states;
-    crates/registry-bregctl/src/lib.rs, ProposalRetentionCommand and ProposalRetentionExactArgs. */}
+    crates/registry-bregctl/src/lib.rs, ProposalRetentionCommand and ProposalRetentionExactArgs;
+    crates/registry-breg/tests/postgres_record_attachments.rs,
+    an_applied_proposal_promotes_its_file_by_reference_and_erasure_keeps_it. */}
 
 ## Retry external attachment cleanup
 
