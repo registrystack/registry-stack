@@ -193,8 +193,9 @@ An immediate Action's effect names the slot and the request file that fills it:
 ```
 
 `bregctl check` refuses a request file on a patch effect, an Action with Evidence and a timer Action.
-A file name cannot reuse an Action input ID.
+A file name cannot reuse an Action input ID or `apiName`.
 
+Send `Content-Type: application/json`.
 The request carries every file the Action names in `attachments`, beside `input`.
 Each file has its media type, its SHA-256 digest in lowercase hexadecimal and its base64 content:
 
@@ -221,6 +222,7 @@ The record, its history, the file reference, the idempotency receipt and any hoo
 Hook events never carry file bytes.
 
 Reading a file needs its own grant.
+The slot's classification label does not restrict downloads.
 List the slot in `readableAttachments` on a record grant that includes `get`:
 
 ```yaml

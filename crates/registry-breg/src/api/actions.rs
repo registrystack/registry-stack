@@ -322,6 +322,8 @@ pub(super) async fn dispatch(
         Ok(parsed) => parsed,
         Err(error) => return refusal(invalid_action_request(error)).await,
     };
+    let body_bytes = body.len();
+    drop(body);
     match route.kind {
         ActionRouteKind::Availability => {
             match availability::observe(
@@ -366,7 +368,7 @@ pub(super) async fn dispatch(
                     input: parsed.input,
                     preconditions: parsed.preconditions,
                     attachments: parsed.attachments,
-                    body_bytes: body.len(),
+                    body_bytes,
                     correlation: &correlation,
                 })
                 .await;

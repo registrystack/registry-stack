@@ -772,6 +772,23 @@ fn only_an_invocation_that_takes_files_reads_past_the_snapshot_budget() {
     );
     // The invocation adds the file in base64 with its member framing.
     assert!(maximum_action_body_bytes(&action, ActionRouteKind::Invoke) >= snapshot + 4_000);
+
+    for (kind, mut body) in [
+        (
+            ActionRouteKind::Availability,
+            json!({"input":{"caseId":"00000000-0000-4000-8000-000000000001"},
+                "targetInput":"caseId"}),
+        ),
+        (
+            ActionRouteKind::TargetConditions,
+            json!({"input":{"caseId":"00000000-0000-4000-8000-000000000001"}}),
+        ),
+    ] {
+        assert!(parse_body(&action, kind, &serde_json::to_vec(&body).unwrap()).is_ok());
+        body["attachments"] = json!({"evidence":{
+            "contentType":"text/plain", "sha256":"0".repeat(64), "content":"ZmlsZQ=="}});
+        assert!(parse_body(&action, kind, &serde_json::to_vec(&body).unwrap()).is_err());
+    }
 }
 
 #[test]

@@ -962,6 +962,158 @@ async fn profiles_without_the_grant_or_outside_the_row_boundary_cannot_read() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn immediate_action_refuses_a_completed_rejected_verdict_and_keeps_approved_and_unseen_files()
+{
+    use registry_breg::attachment_verification::AttachmentVerification;
+    use registry_platform_config::{AttachmentVerifierConfig, SecretProvider, SecretResolver};
+    use registry_platform_objectstore::{HttpVerifierSettings, VerifierNamespace};
+
+    const REJECTED: &[u8] = b"synthetic-rejected-file";
+    const APPROVED: &[u8] = b"synthetic-approved-file";
+    const UNSEEN: &[u8] = b"synthetic-unseen-file";
+    let secrets = tempfile::tempdir().unwrap();
+    let credential = secrets.path().join("verifier");
+    std::fs::write(&credential, b"synthetic-verifier-token").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let resolver = SecretResolver::new([SecretProvider::File], secrets.path()).unwrap();
+    let config: AttachmentVerifierConfig = serde_json::from_value(json!({
+        "url":"http://127.0.0.1:1/verify", "policyId":"synthetic-policy",
+        "authorizationRef":"secret:file/verifier", "attemptTimeoutMilliseconds":2000
+    }))
+    .unwrap();
+    let verification = AttachmentVerification::Http(std::sync::Arc::new(
+        HttpVerifierSettings::from_config(&config)
+            .unwrap()
+            .activate(
+                VerifierNamespace {
+                    binding_domain: "breg-attachment-verification-http-v1",
+                    max_content_bytes: registry_breg::contract::MAX_ATTACHMENT_BYTES as u64,
+                },
+                &resolver,
+            )
+            .unwrap(),
+    ));
+    let policy = verification.binding_digest();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(),
+        clerk("zone-a"),
+        move |mutations| mutations.with_attachment_verification(verification),
+    )
+    .await;
+    let programme = insert_programme(&fixture, true, "zone-a").await;
+    fixture
+        .database
+        .admin
+        .execute(
+            "INSERT INTO registry_internal.registry_attachment_storage_binding
+               (singleton, backend_id, verification_policy) VALUES (true, 'database', $1)",
+            &[&policy],
+        )
+        .await
+        .unwrap();
+    // Synthetic stored files whose verification has already completed.
+    for (bytes, verdict) in [(REJECTED, "rejected"), (APPROVED, "approved")] {
+        let hash = sha256_hex(bytes);
+        fixture
+            .database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_attachment_blobs
+               (sha256, byte_size, backend_id, content, state)
+             VALUES ($1, $2, 'database', $3, 'live')",
+                &[&hash, &(bytes.len() as i64), &bytes],
+            )
+            .await
+            .unwrap();
+        fixture
+            .database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_attachment_verification
+               (sha256, policy_digest, content_type, verdict) VALUES ($1, $2, 'text/plain', $3)",
+                &[&hash, &policy, &verdict],
+            )
+            .await
+            .unwrap();
+    }
+    let before = counts(&fixture).await;
+    let refused = invoke(
+        &fixture,
+        clerk("zone-a"),
+        "register-rejected",
+        register_input(programme),
+        Some(json!({"evidence":file("text/plain", REJECTED)})),
+    )
+    .await;
+    let after = counts(&fixture).await;
+    let observed = (
+        refused.status,
+        refused.code(),
+        after.applications,
+        after.references,
+        after.live_references,
+        after.blobs,
+        after.outbox,
+    );
+
+    let approved = register(&fixture, programme, "register-approved", APPROVED).await;
+    let unseen = register(&fixture, programme, "register-unseen", UNSEEN).await;
+    assert_file(
+        &download(
+            &fixture,
+            clerk("zone-a"),
+            &approved.to_string(),
+            "evidence",
+            None,
+        )
+        .await,
+        APPROVED,
+    );
+    assert_eq!(
+        download(
+            &fixture,
+            clerk("zone-a"),
+            &unseen.to_string(),
+            "evidence",
+            None
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND,
+        "an unseen file still commits and waits for verification"
+    );
+    let pending: String = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT verdict FROM registry_internal.registry_attachment_verification
+         WHERE sha256=$1 AND policy_digest=$2 AND content_type='text/plain'",
+            &[&sha256_hex(UNSEEN), &policy],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(pending, "pending");
+    fixture.finish().await;
+    assert_eq!(
+        observed,
+        (
+            StatusCode::PRECONDITION_FAILED,
+            "precondition.failed".to_owned(),
+            before.applications,
+            before.references,
+            before.live_references,
+            before.blobs,
+            before.outbox
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_file_waiting_for_or_refused_by_verification_is_concealed() {
     let fixture = client_http::ClientFixture::start(registry(), clerk("zone-a")).await;
     let programme = insert_programme(&fixture, true, "zone-a").await;
