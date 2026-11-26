@@ -12,6 +12,87 @@ const CURRENT_VIEW_OPTIONS: &str = "WITH (security_invoker=true)";
 const EARLIER_VIEW_OPTIONS: &str = "WITH (security_invoker=true, security_barrier=true)";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn adding_only_a_record_attachment_slot_applies_without_ddl() {
+    let database = TestDatabase::create(1).await;
+    let module_bytes = indexed_module_bytes(OtherEntity::Unchanged);
+    let mut initial_request = indexed_request(module_bytes.clone());
+    let provisional = prepare_package(initial_request.clone()).expect("initial package prepares");
+    initial_request.schema_fingerprint =
+        measure_fresh_compiled_schema(&database, provisional.registry()).await;
+    let (initial_root, initial) = publish_and_load(initial_request);
+    let active = apply_package(
+        &database,
+        &initial,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("initial package applies");
+    let predecessor = load_predecessor_package(initial_root.path(), &local_context())
+        .expect("active package is a readable predecessor");
+
+    let mut module: Value = serde_json::from_slice(&module_bytes).expect("module is JSON");
+    module["recordTypes"]["neutral-record"]["attachments"] = json!([{
+        "id": "evidence",
+        "maximumBytes": 4096,
+        "contentTypes": ["application/pdf"],
+        "classification": "restricted",
+        "writeOnce": true
+    }]);
+    let mut request = indexed_request(serde_json::to_vec(&module).expect("module serializes"));
+    request.from_package_digest = Some(active.package_digest.clone());
+    request
+        .schema_fingerprint
+        .clone_from(&active.schema_fingerprint);
+    request.migration_plan = PackageMigrationPlanInput::SuccessorFromBaseline {
+        prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+    };
+    let (successor_root, successor) = publish_and_load(request);
+    let plan = &successor.manifest().migration_plan;
+    let [addition] = plan.changes.as_slice() else {
+        panic!("expected one change, the attachment slot addition");
+    };
+    assert_eq!(
+        addition.class,
+        CompiledRegistryChangeClass::CompatibleAdditive
+    );
+    assert_eq!(
+        addition.code,
+        CompiledRegistryChangeCode::RecordAttachmentSlotAdded
+    );
+    assert!(plan.statements.is_empty());
+    assert!(plan.reviewed_descriptors.is_empty());
+
+    let upgraded = apply_package(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("an attachment slot alone applies without SQL");
+    assert_eq!(upgraded.schema_fingerprint, active.schema_fingerprint);
+    let ledger = database
+        .admin
+        .query_one(
+            "SELECT migration_kind, statement_checksums FROM registry_internal.registry_migrations
+             WHERE activation_id = $1::text::uuid",
+            &[&upgraded.activation_id],
+        )
+        .await
+        .expect("the successor has an activation ledger entry");
+    assert_eq!(ledger.get::<_, String>(0), "metadata-only");
+    assert!(ledger.get::<_, Vec<String>>(1).is_empty());
+    assert!(successor.registry().entities()["neutral-record"]
+        .attachments
+        .contains_key("evidence"));
+    assert_startup(&database, &successor_root, &successor).await;
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unchanged_successor_over_an_earlier_compilers_package_refreshes_compiler_owned_ddl_once(
 ) {
     let earlier = EarlierCompilerRegistry::activate().await;

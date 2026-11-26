@@ -239,10 +239,9 @@ pub enum MigrationError {
 
 pub type Result<T> = std::result::Result<T, MigrationError>;
 
-/// Whether a package applied as a successor has nothing to apply: its plan has
-/// no schema statement and no reviewed migration, and it is not an access or
-/// disclosure change or a changed compiled presentation alone. This reads only
-/// the package, so a caller can refuse it before opening the database.
+/// A successor is empty when its plan has no schema statements, reviewed
+/// migration, verified metadata changes, or timer-store installation. This
+/// reads only the package, so a caller can refuse it before opening the database.
 pub fn successor_plan_is_empty(package: &VerifiedPackage) -> bool {
     let plan = &package.manifest().migration_plan;
     plan.statements.is_empty()
@@ -265,10 +264,11 @@ fn verified_metadata_only_plan(package: &VerifiedPackage) -> bool {
                             && prior.registry_revision != file.sha256
                     })
             }))
-        && plan
-            .changes
-            .iter()
-            .all(|change| change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange)
+        && plan.changes.iter().all(|change| {
+            change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange
+                || (change.class == CompiledRegistryChangeClass::CompatibleAdditive
+                    && change.code == CompiledRegistryChangeCode::RecordAttachmentSlotAdded)
+        })
 }
 
 fn installs_record_timer_store(package: &VerifiedPackage) -> bool {
