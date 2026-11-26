@@ -1142,7 +1142,9 @@ Create the request-signing key inside Transit, so it is non-exportable and servi
 The released Payment Hub EE channel and operations apps ship with authorisation turned off, so enable bearer authorisation on them, or enforce it at a trusted gateway, before the Adapter's Operations credential means anything.
 An attempt reaches `Bound` before it is signed and sent, so let every `Bound` disbursement attempt dispatch before you raise the signing key's `min_encryption_version`; a raised minimum otherwise holds those attempts.
 The [Mifos connector README](https://github.com/registrystack/registry-stack/blob/main/crates/registry-payment-mifos-connector/README.md) and the [platform crypto README](https://github.com/registrystack/registry-stack/blob/main/crates/registry-platform-crypto/README.md) carry the exact profile and Transit details.
-Live signing through a real Transit engine is not verified yet, so do not let a live disbursement move real money until it is.
+Full Linux CI exercises the signing and acknowledgement checks with OpenBao Transit over its Unix proxy.
+The test uses a synthetic provider.
+Run a sandbox disbursement with your pinned Mifos deployment and its configured Transit proxy before enabling live transfers.
 
 The separate confirmation operation accepts only a disbursement identifier.
 The Adapter reports verified provider completion through its restricted BReg Action, using the original instruction facts and a separately keyed exact command.
@@ -1166,6 +1168,8 @@ Payment audit events carry no values and commit before an effect or a response i
     crates/registry-adapter/tests/payment_config.rs live_mifos_collections_are_refused_as_simulation_only;
     crates/registry-adapter/src/payments/service.rs;
     crates/registry-adapter/src/payments/g2p_model.rs mifos-legacy-signature;
+    crates/registry-adapter/tests/g2p_provider.rs real_openbao_transit_signs_requests_and_refuses_a_changed_response;
+    products/adapter/scripts/test-payments-openbao.sh;
     crates/registry-adapter/tests/payment_service.rs;
     crates/registry-adapter/tests/payment_store.rs;
     products/adapter/scripts/check_dependency_direction.py. */}

@@ -64,8 +64,9 @@ Replace the example Transit SPKI digests, key versions, key names, socket path,
 origins and secret references with deployment-owned values. The socket must be
 an absolute local Unix socket protected by ACLs and a trusted proxy policy.
 The host validates the pinned key metadata at startup and never receives
-private key bytes. Repository tests use a fake Transit endpoint and do not
-establish live OpenBao `/none` plus `prehashed` interoperability.
+private key bytes. The Linux signing test uses OpenBao Transit over its
+Unix proxy. A synthetic provider checks request signatures and supplies
+signed acknowledgements.
 
 Build matching `adapter` and `adapterctl` binaries from this checkout, using
 the repository's external Cargo target directory. Check the configuration
@@ -159,11 +160,11 @@ connection/service scope.
 This slice permits one attempt per bill version, including after a definitive
 failure. There is no replacement-attempt operation, refund, settlement,
 callback handler or live collection provider. Disbursements can bind a live
-provider pack, but live Mifos signing through a real Transit engine is not
-verified yet: do not let a live disbursement move real money until that
-verification lands. Attempts and command receipts
-have no automatic expiry; they contain restricted bill/payer facts needed for
-recovery and require protected database storage and backup. Generic facade
+provider pack. Before you enable live transfers, use your pinned provider
+pack to run a sandbox disbursement with Mifos and its Transit proxy.
+Attempts and command receipts have no automatic expiry. They contain
+restricted bill and payer facts needed for recovery. Protect their PostgreSQL
+storage and backups. Generic facade
 retention does not erase these records.
 
 The focused `payment_service` PostgreSQL tests exercise recovery using
