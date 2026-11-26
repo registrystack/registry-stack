@@ -4133,6 +4133,7 @@ pub(crate) fn expand_project_access(
                 require_access_reason: profile.require_access_reason,
                 operations: grant.operations.clone(),
                 readable_fields: grant.readable_fields.clone(),
+                readable_attachments: grant.readable_attachments.clone(),
                 writable_fields: grant.writable_fields.clone(),
                 filterable_fields: grant.filterable_fields.clone(),
                 sortable_fields: grant.sortable_fields.clone(),
@@ -4337,6 +4338,7 @@ fn validate_entities(
             _ => {}
         }
         validate_entity_fields(entity, entities, errors);
+        validate_record_attachments(entity, errors);
         validate_access_log(entity, entities, errors);
         validate_geojson(entity, errors);
         validate_derived(entity, errors);
@@ -4364,6 +4366,69 @@ fn validate_entities(
         }
     }
     validate_read_path_cycles(entities, errors);
+}
+
+fn validate_record_attachments(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
+    if entity.attachments.is_empty() {
+        return;
+    }
+    let field_names = entity
+        .fields
+        .iter()
+        .flat_map(|field| {
+            [
+                field.id.clone(),
+                field
+                    .api_name
+                    .clone()
+                    .unwrap_or_else(|| default_api_name(&field.id)),
+            ]
+        })
+        .chain(derived_field_map(entity).keys().map(|id| (*id).to_owned()))
+        .collect::<BTreeSet<_>>();
+    attachments::validate_record_slots(
+        &entity.attachments,
+        &field_names,
+        "recordTypes[].attachments",
+        errors,
+    );
+}
+
+/// A profile reads a record slot only through the record's own `get` grant,
+/// so `readableAttachments` names declared slots on a profile that grants
+/// `get`.
+fn validate_attachment_grant(
+    entity: &EntitySource,
+    access: &AccessProfileSource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if access.readable_attachments.is_empty() {
+        return;
+    }
+    let path = format!(
+        "recordTypes[id={}].accessProfiles[id={}].readableAttachments",
+        entity.id, access.id
+    );
+    if !access.operations.contains(&Operation::Get) {
+        errors.push(Diagnostic::error(
+            "breg.access-profile.attachment-grant-invalid",
+            &path,
+            "readableAttachments requires the get operation on the record type",
+        ));
+    }
+    for slot in &access.readable_attachments {
+        if !entity
+            .attachments
+            .iter()
+            .any(|declared| &declared.id == slot)
+        {
+            errors.push(Diagnostic::error(
+                "breg.access-profile.attachment-grant-invalid",
+                format!("{path}[slot={slot}]"),
+                "readableAttachments must name an attachment slot the record type declares",
+            ));
+        }
+    }
 }
 
 fn validate_access_log(
@@ -5959,6 +6024,7 @@ fn validate_profiles(
         }
         validate_spatial_queries(access, entity, errors);
         validate_required_filters(access, entity, errors);
+        validate_attachment_grant(entity, access, errors);
         let mut read_processed = access.readable_fields.clone();
         read_processed.extend(access.filterable_fields.iter().cloned());
         read_processed.extend(access.sortable_fields.iter().cloned());
@@ -8189,6 +8255,7 @@ fn compile_entities(
                 derived_relations,
                 source_relation,
                 selector_profiles,
+                attachments: attachments::compile_record_slots(&source.attachments),
                 timers: BTreeMap::new(),
                 read_paths,
                 change_control: source.mutation_policy.clone().map(|change_control| {

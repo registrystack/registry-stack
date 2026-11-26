@@ -1664,13 +1664,13 @@
         "protocol": "id.registrystack.org/protocols/review/v1"
       }
     ],
-    "revision": "sha256:24f18ae5ae8cdf18d0df9b280db52b59d143fac1d4ce83727ff0817dbafef3f0",
+    "revision": "sha256:dca3c6da48851de9878daa19e0f15b48f867abc87bfd90a0e5ef738a75dc79bd",
     "statisticalDatasets": []
   },
   "kind": "BRegCtlReport",
   "ok": true,
   "profile": "authoring",
-  "revision": "sha256:24f18ae5ae8cdf18d0df9b280db52b59d143fac1d4ce83727ff0817dbafef3f0",
+  "revision": "sha256:dca3c6da48851de9878daa19e0f15b48f867abc87bfd90a0e5ef738a75dc79bd",
   "status": "complete",
   "version": "0.49.0-dev"
 }

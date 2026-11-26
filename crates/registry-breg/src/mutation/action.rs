@@ -15,7 +15,9 @@ use crate::action_handler::{
 use crate::action_outcome::{
     bound_document, decode_document, json_document, validate_proposed_outcome,
 };
-use crate::api::{ActionTargetConditionsInput, HeldReadResponse, ImmediateActionInput};
+use crate::api::{
+    ActionRequestAttachment, ActionTargetConditionsInput, HeldReadResponse, ImmediateActionInput,
+};
 
 type ActionInputs = Map<String, Value>;
 
@@ -186,7 +188,8 @@ impl MutationTransaction {
                 }
             };
         let request_digest =
-            match canonical_action_request_digest(action, &normalized_input, &BTreeMap::new()) {
+            match canonical_action_request_digest(action, &normalized_input, &BTreeMap::new(), &[])
+            {
                 Ok(digest) => digest,
                 Err(error) => {
                     self.record_action_boundary_audit(
@@ -266,6 +269,7 @@ impl MutationTransaction {
                 None,
                 None,
                 Some(authority),
+                &[],
             )
             .await;
         let definite_refusal = failure_is_refusal(&result) && !fault.is_enabled();
@@ -570,11 +574,17 @@ impl MutationTransaction {
         let normalized_input =
             validate_action_input_with_constraints(&***client, action, input.input).await?;
         validate_precondition_set(action, &input.preconditions)?;
+        let attachments = input.attachments;
+        validate_action_attachments(action, &attachments)?;
         let _attempt = self
             .begin_action_boundary_audit(claims, input.route_id, input.correlation)
             .await?;
-        let request_digest =
-            canonical_action_request_digest(action, &normalized_input, &input.preconditions)?;
+        let request_digest = canonical_action_request_digest(
+            action,
+            &normalized_input,
+            &input.preconditions,
+            &attachments,
+        )?;
         let binding = resolve_action_binding(
             self.audit.profile(),
             &self.idempotency,
@@ -592,6 +602,8 @@ impl MutationTransaction {
             },
         )?;
         let reserved_creates = reserve_action_create_ids(action)?;
+        self.stage_action_attachments(client, claims, &attachments, deadline)
+            .await?;
         let mut candidate = None;
         let trusted_now = time::OffsetDateTime::now_utc();
         let application_id = Uuid::new_v4();
@@ -619,6 +631,7 @@ impl MutationTransaction {
                     None,
                     None,
                     None,
+                    &attachments,
                 )
                 .await;
             if matches!(attempt, Err(MutationError::RetryableConflict))
@@ -647,6 +660,125 @@ impl MutationTransaction {
                 }
                 other => other,
             })
+    }
+
+    /// Stage each external file in its own committed transaction before any
+    /// object write, as a Proposal upload does. A request that later refuses
+    /// leaves a staged row the retention sweep removes. The database backend
+    /// stores bytes in the record's own transaction and stages nothing.
+    async fn stage_action_attachments(
+        &self,
+        client: &mut Client,
+        claims: &ActionClaimContext,
+        attachments: &[ActionRequestAttachment],
+        deadline: tokio::time::Instant,
+    ) -> Result<(), MutationError> {
+        if attachments.is_empty()
+            || !matches!(
+                self.attachment_storage,
+                crate::attachment_storage::AttachmentStorage::S3(_)
+            )
+        {
+            return Ok(());
+        }
+        let guarded = begin_action_transaction(
+            client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            claims,
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+        guarded
+            .set_statement_budget(deadline.saturating_duration_since(tokio::time::Instant::now()))
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        for attachment in attachments_in_lock_order(attachments) {
+            crate::attachment_store::stage_external(
+                guarded.transaction(),
+                &attachment.sha256,
+                attachment.content.len() as u64,
+                &self.attachment_storage.binding_digest(),
+                &self.attachment_verification.binding_digest(),
+            )
+            .await?;
+        }
+        guarded
+            .commit()
+            .await
+            .map_err(|_| MutationError::Unavailable)
+    }
+
+    /// Fill each record slot the Action declares from its file, in the
+    /// transaction that writes the created record, its history, the receipt
+    /// and the outbox. Every file commits with the record or none does.
+    async fn write_action_attachments(
+        &self,
+        transaction: &Transaction<'_>,
+        action: &CompiledAction,
+        claims: &ActionClaimContext,
+        binding: &crate::idempotency::ResolvedIdempotencyBinding,
+        results: &[ActionEffectResult],
+        attachments: &[ActionRequestAttachment],
+    ) -> Result<(), MutationError> {
+        if attachments.is_empty() {
+            return Ok(());
+        }
+        let backend = self.attachment_storage.binding_digest();
+        let verification = self.attachment_verification.binding_digest();
+        for attachment in attachments_in_lock_order(attachments) {
+            let declared = action
+                .attachments
+                .get(&attachment.name)
+                .ok_or(MutationError::InvalidRequest)?;
+            // Compilation binds every attachment to one create effect of a
+            // fixed plan, so a missing result is a runtime fault.
+            let record = results
+                .iter()
+                .find(|result| {
+                    result.effect_id == declared.effect_id
+                        && result.entity_id == declared.entity_id
+                        && result.operation == Operation::Create
+                })
+                .ok_or(MutationError::Unavailable)?;
+            let byte_size = attachment.content.len() as u64;
+            if let crate::attachment_storage::AttachmentStorage::S3(store) =
+                &self.attachment_storage
+            {
+                crate::attachment_store::lock_hash(transaction, &attachment.sha256).await?;
+                crate::attachment_store::require_backend(
+                    transaction,
+                    &attachment.sha256,
+                    &backend,
+                    byte_size,
+                )
+                .await?;
+                check_current_action_grant(claims)?;
+                store
+                    .put(&attachment.sha256, attachment.content.clone())
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?;
+            }
+            crate::attachment_store::put_record_attachment(
+                transaction,
+                &crate::attachment_store::RecordAttachmentReference {
+                    entity_id: &declared.entity_id,
+                    record_id: record.record_uuid,
+                    slot_id: &declared.slot_id,
+                    sha256: &attachment.sha256,
+                    content_type: &attachment.content_type,
+                    byte_size,
+                    attached_revision: record.record_revision,
+                    attached_by: &binding.principal_reference,
+                },
+                &attachment.content,
+                &backend,
+                &verification,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// Apply one settled hook proposal through the immediate-action path.
@@ -1121,7 +1253,7 @@ impl MutationTransaction {
         };
 
         let Ok(request_digest) =
-            canonical_action_request_digest(action, &normalized_input, &preconditions)
+            canonical_action_request_digest(action, &normalized_input, &preconditions, &[])
         else {
             return refused_proposal(
                 "hook.proposal.input_refused",
@@ -1203,6 +1335,7 @@ impl MutationTransaction {
                     None,
                     Some(&causation),
                     None,
+                    &[],
                 )
                 .await;
             if matches!(attempt, Err(MutationError::RetryableConflict))
@@ -1401,6 +1534,7 @@ impl MutationTransaction {
         commit_requests: Option<&[(CompiledEvidenceCapability, EvidenceSubjects)]>,
         causation: Option<&Causation>,
         timer_authority: Option<&TimerActionAuthority>,
+        attachments: &[ActionRequestAttachment],
     ) -> Result<ImmediateActionExecutionOutcome, MutationError> {
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
@@ -1901,6 +2035,15 @@ impl MutationTransaction {
                 change_context: None,
                 members: &members,
             },
+        )
+        .await?;
+        self.write_action_attachments(
+            transaction.transaction(),
+            action,
+            claims,
+            binding,
+            &results,
+            attachments,
         )
         .await?;
 
@@ -3664,15 +3807,94 @@ fn canonical_action_request_digest(
     action: &CompiledAction,
     input_values: &ActionInputs,
     preconditions: &BTreeMap<String, String>,
+    attachments: &[ActionRequestAttachment],
 ) -> Result<[u8; 32], MutationError> {
-    let canonical = canonicalize_json(&json!({
+    let mut request = json!({
         "action": action.id,
         "route": action.route,
         "input": input_values,
         "preconditions": preconditions,
-    }))
-    .map_err(|_| MutationError::InvalidRequest)?;
+    });
+    // A request without files keeps its digest, so receipts stored before
+    // record attachment slots existed still replay. A file binds by its
+    // digest, media type and size, never by its bytes.
+    if !attachments.is_empty() {
+        request["attachments"] = attachments
+            .iter()
+            .map(|attachment| {
+                (
+                    attachment.name.clone(),
+                    json!({
+                        "contentType": attachment.content_type,
+                        "sha256": attachment.sha256,
+                        "byteSize": attachment.content.len(),
+                    }),
+                )
+            })
+            .collect::<Map<_, _>>()
+            .into();
+    }
+    let canonical = canonicalize_json(&request).map_err(|_| MutationError::InvalidRequest)?;
     Ok(Sha256::digest(canonical).into())
+}
+
+/// Content-hash lock order, so two requests sharing files cannot deadlock.
+fn attachments_in_lock_order(
+    attachments: &[ActionRequestAttachment],
+) -> Vec<&ActionRequestAttachment> {
+    let mut ordered = attachments.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        left.sha256
+            .cmp(&right.sha256)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    ordered
+}
+
+/// Checks the files of one immediate Action request against the record slots
+/// the Action fills: exactly the declared names, each within its slot's media
+/// types and size, and each matching its declared sha256.
+///
+/// # Errors
+///
+/// [`MutationError::InvalidRequest`] for a missing, unknown or empty file,
+/// [`MutationError::AttachmentContentType`], [`MutationError::AttachmentTooLarge`]
+/// and [`MutationError::AttachmentDigestMismatch`] for a file its slot refuses.
+pub(crate) fn validate_action_attachments(
+    action: &CompiledAction,
+    attachments: &[ActionRequestAttachment],
+) -> Result<(), MutationError> {
+    let names = attachments
+        .iter()
+        .map(|attachment| attachment.name.as_str())
+        .collect::<BTreeSet<_>>();
+    if names.len() != attachments.len()
+        || !names
+            .iter()
+            .copied()
+            .eq(action.attachments.keys().map(String::as_str))
+    {
+        return Err(MutationError::InvalidRequest);
+    }
+    for attachment in attachments {
+        let declared = action
+            .attachments
+            .get(&attachment.name)
+            .ok_or(MutationError::InvalidRequest)?;
+        if attachment.content.is_empty() {
+            return Err(MutationError::InvalidRequest);
+        }
+        if !declared.content_types.contains(&attachment.content_type) {
+            return Err(MutationError::AttachmentContentType);
+        }
+        if attachment.content.len() > declared.maximum_bytes as usize {
+            return Err(MutationError::AttachmentTooLarge);
+        }
+        if crate::attachment_store::content_hash(&attachment.content) != attachment.sha256 {
+            return Err(MutationError::AttachmentDigestMismatch);
+        }
+    }
+    Ok(())
 }
 
 // Admission state is created once, before protected external processing. It
@@ -3839,6 +4061,10 @@ impl MutationTransaction {
         let normalized =
             validate_action_input_with_constraints(&***client, action, input.input).await?;
         validate_precondition_set(action, &input.preconditions)?;
+        // Compilation refuses record attachment slots on Evidence Actions.
+        if !input.attachments.is_empty() {
+            return Err(MutationError::InvalidRequest);
+        }
         *attempt = Some(
             self.begin_action_boundary_audit(claims, input.route_id, input.correlation)
                 .await?,
@@ -3860,6 +4086,7 @@ impl MutationTransaction {
                     action,
                     &normalized,
                     &input.preconditions,
+                    &[],
                 )?,
             },
         )?;
@@ -4016,6 +4243,7 @@ impl MutationTransaction {
                     Some(&prepared.commit_requests),
                     None,
                     None,
+                    &[],
                 )
                 .await;
             if matches!(result, Err(MutationError::RetryableConflict))

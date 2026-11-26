@@ -145,6 +145,7 @@ const MANAGED_INTERNAL_INDEXES: &[&str] = &[
     "registry_internal.registry_proposal_queue",
     "registry_internal.registry_proposal_review_completion_reconcile",
     "registry_internal.registry_proposal_review_submission_jobs",
+    "registry_internal.registry_record_attachment_live_references",
     super::timer::TIMER_BINDINGS_OPEN_INDEX,
     super::timer::TIMER_DUE_INDEX,
     super::timer::TIMER_HISTORY_INDEX,

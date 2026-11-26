@@ -113,10 +113,14 @@ macro_rules! verifiable {
         "(verdict.policy_digest = (SELECT verification_policy \
              FROM {schema}.registry_attachment_storage_binding WHERE singleton) \
          AND blob.state = 'live' \
-         AND EXISTS (SELECT 1 FROM {schema}.registry_proposal_attachments AS reference \
+         AND (EXISTS (SELECT 1 FROM {schema}.registry_proposal_attachments AS reference \
              WHERE reference.sha256 = verdict.sha256 \
                AND reference.content_type = verdict.content_type \
-               AND reference.erased_at IS NULL))"
+               AND reference.erased_at IS NULL) \
+           OR EXISTS (SELECT 1 FROM {schema}.registry_record_attachments AS record_reference \
+             WHERE record_reference.sha256 = verdict.sha256 \
+               AND record_reference.content_type = verdict.content_type \
+               AND record_reference.erased_at IS NULL)))"
     };
 }
 /// A job is claimable when its verdict row is gone or decided, so it can

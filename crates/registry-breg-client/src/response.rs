@@ -39,6 +39,13 @@ impl BRegRawDocument {
         }
     }
 
+    pub(crate) fn with_verified_digest(self, digest: BRegRepresentationDigest) -> Self {
+        Self {
+            representation_digest: Some(digest),
+            ..self
+        }
+    }
+
     #[must_use]
     pub fn media_type(&self) -> &str {
         &self.media_type

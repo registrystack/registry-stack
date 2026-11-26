@@ -810,6 +810,7 @@ fn authentication_profile(
         required_purposes: profile.required_purposes.clone(),
         operations: Default::default(),
         readable_fields: Default::default(),
+        readable_attachments: Default::default(),
         writable_fields: Default::default(),
         filterable_fields: Default::default(),
         required_filters: Vec::new(),

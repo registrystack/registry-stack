@@ -30,6 +30,9 @@ pub(crate) const ATTACHMENT_TABLES: &[(&str, &[&str])] = &[
         "registry_proposal_attachments",
         &["INSERT", "SELECT", "UPDATE", "DELETE"],
     ),
+    // The runtime only adds record references. Erasure runs as the owning
+    // migration role, and a write-once slot is never updated or deleted.
+    ("registry_record_attachments", &["INSERT", "SELECT"]),
 ];
 
 /// The verification job table in the shape `registry-platform-dispatch`
@@ -89,7 +92,24 @@ pub(crate) async fn install(
                 OR (erased_at IS NOT NULL AND uploaded_at IS NULL AND uploaded_by IS NULL))
         );
         CREATE INDEX IF NOT EXISTS registry_attachment_live_references
-            ON registry_internal.registry_proposal_attachments (sha256) WHERE erased_at IS NULL;"
+            ON registry_internal.registry_proposal_attachments (sha256) WHERE erased_at IS NULL;
+        CREATE TABLE IF NOT EXISTS registry_internal.registry_record_attachments (
+            entity_id text NOT NULL CHECK (entity_id <> ''),
+            record_id uuid NOT NULL,
+            slot_id text NOT NULL CHECK (slot_id <> ''),
+            sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+            content_type text NOT NULL CHECK (content_type <> ''),
+            byte_size bigint NOT NULL CHECK (byte_size BETWEEN 1 AND 16777216),
+            attached_revision bigint NOT NULL CHECK (attached_revision > 0),
+            attached_at timestamptz,
+            attached_by text,
+            erased_at timestamptz,
+            PRIMARY KEY (entity_id, record_id, slot_id),
+            CHECK ((erased_at IS NULL AND attached_at IS NOT NULL AND attached_by IS NOT NULL)
+                OR (erased_at IS NOT NULL AND attached_at IS NULL AND attached_by IS NULL))
+        );
+        CREATE INDEX IF NOT EXISTS registry_record_attachment_live_references
+            ON registry_internal.registry_record_attachments (sha256) WHERE erased_at IS NULL;"
     ).await.map_err(unavailable)?;
     let revoke_grantees = crate::postgres::RuntimeRevoke::detect(client, role)
         .await
@@ -370,24 +390,7 @@ pub(crate) async fn put(
         )
         .await
         .map_err(unavailable)?;
-    if verification_policy != "disabled" {
-        // A new verdict row and its verification job commit together, so
-        // every pending verdict has exactly one job a worker can claim.
-        let created = client
-            .query_opt(
-                "INSERT INTO registry_internal.registry_attachment_verification
-             (sha256,policy_digest,content_type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING
-             RETURNING verification_id",
-                &[&hash, &verification_policy, &content_type],
-            )
-            .await
-            .map_err(unavailable)?;
-        if let Some(row) = created {
-            crate::attachment_verification_worker::enqueue(client, row.get(0))
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-        }
-    }
+    request_verification(client, &hash, content_type, verification_policy).await?;
     let row=client.query_one("INSERT INTO registry_internal.registry_proposal_attachments
              (action_id,proposal_id,submission_version,slot_id,sha256,content_type,byte_size,uploaded_at,uploaded_by)
              VALUES ($1,$2,$3,$4,$5,$6,$7,transaction_timestamp(),$8) ON CONFLICT
@@ -408,6 +411,34 @@ pub(crate) async fn put(
         uploaded_at: row.get(0),
         uploaded_by: actor.to_owned(),
     })
+}
+
+async fn request_verification(
+    client: &Transaction<'_>,
+    hash: &str,
+    content_type: &str,
+    verification_policy: &str,
+) -> Result<(), MutationError> {
+    if verification_policy == "disabled" {
+        return Ok(());
+    }
+    // A new verdict row and its verification job commit together, so
+    // every pending verdict has exactly one job a worker can claim.
+    let created = client
+        .query_opt(
+            "INSERT INTO registry_internal.registry_attachment_verification
+             (sha256,policy_digest,content_type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING
+             RETURNING verification_id",
+            &[&hash, &verification_policy, &content_type],
+        )
+        .await
+        .map_err(unavailable)?;
+    if let Some(row) = created {
+        crate::attachment_verification_worker::enqueue(client, row.get(0))
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn remove(
@@ -453,6 +484,8 @@ async fn retire_unreferenced(client: &impl GenericClient, hash: &str) -> Result<
                  DELETE FROM registry_internal.registry_attachment_verification v WHERE sha256=$1
                  AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
                      WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL)
+                 AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_record_attachments r
+                     WHERE r.sha256=v.sha256 AND r.content_type=v.content_type AND r.erased_at IS NULL)
                  RETURNING verification_id)
              DELETE FROM registry_internal.registry_attachment_verification_jobs j
               USING retired WHERE j.verification_id=retired.verification_id AND j.state<>'leased'",
@@ -462,7 +495,9 @@ async fn retire_unreferenced(client: &impl GenericClient, hash: &str) -> Result<
         .map_err(unavailable)?;
     client.execute("UPDATE registry_internal.registry_attachment_blobs b SET state='delete_pending', deletion_checked_at=NULL WHERE
              sha256=$1 AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
-             WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)", &[&hash]).await.map_err(unavailable)?;
+             WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)
+             AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_record_attachments r
+             WHERE r.sha256=b.sha256 AND r.erased_at IS NULL)", &[&hash]).await.map_err(unavailable)?;
     client
         .execute(
             "DELETE FROM registry_internal.registry_attachment_blobs WHERE sha256=$1 AND
@@ -682,6 +717,250 @@ pub(crate) async fn erase(
     Ok(count)
 }
 
+/// One record slot's reference to deduplicated bytes. A record slot is
+/// write-once: its first reference fills it for good, and an erased
+/// reference stays as a value-free tombstone that keeps the slot filled.
+pub(crate) struct RecordAttachmentReference<'a> {
+    pub entity_id: &'a str,
+    pub record_id: Uuid,
+    pub slot_id: &'a str,
+    pub sha256: &'a str,
+    pub content_type: &'a str,
+    pub byte_size: u64,
+    /// The record revision that filled the slot. History erasure through
+    /// this revision erases the reference.
+    pub attached_revision: i64,
+    /// A keyed actor reference, never a raw principal.
+    pub attached_by: &'a str,
+}
+
+/// Fill a record slot with a reference to bytes already live in the store,
+/// without copying them. The caller's transaction also writes the record
+/// revision the reference names, so both commit or neither does.
+///
+/// # Errors
+///
+/// [`MutationError::AttachmentSlotWriteOnce`] when the slot already holds a
+/// reference, live or erased. [`MutationError::PreconditionFailed`] when the
+/// bytes are not live under this size. [`MutationError::Conflict`] when the
+/// pinned storage binding differs.
+pub(crate) async fn attach_record_reference(
+    client: &Transaction<'_>,
+    reference: &RecordAttachmentReference<'_>,
+    backend: &str,
+    verification_policy: &str,
+) -> Result<(), MutationError> {
+    verify_backend_binding(client, backend, verification_policy).await?;
+    lock_hash(client, reference.sha256).await?;
+    let size = i64::try_from(reference.byte_size).map_err(|_| MutationError::InvalidRequest)?;
+    let live = client
+        .query_opt(
+            "SELECT 1 FROM registry_internal.registry_attachment_blobs
+             WHERE sha256=$1 AND byte_size=$2 AND backend_id=$3 AND state='live'",
+            &[&reference.sha256, &size, &backend],
+        )
+        .await
+        .map_err(unavailable)?;
+    if live.is_none() {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let inserted = client
+        .query_opt(
+            "INSERT INTO registry_internal.registry_record_attachments
+             (entity_id,record_id,slot_id,sha256,content_type,byte_size,attached_revision,
+              attached_at,attached_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,transaction_timestamp(),$8)
+             ON CONFLICT (entity_id,record_id,slot_id) DO NOTHING RETURNING 1",
+            &[
+                &reference.entity_id,
+                &reference.record_id,
+                &reference.slot_id,
+                &reference.sha256,
+                &reference.content_type,
+                &size,
+                &reference.attached_revision,
+                &reference.attached_by,
+            ],
+        )
+        .await
+        .map_err(unavailable)?;
+    if inserted.is_none() {
+        return Err(MutationError::AttachmentSlotWriteOnce);
+    }
+    request_verification(
+        client,
+        reference.sha256,
+        reference.content_type,
+        verification_policy,
+    )
+    .await
+}
+
+/// Store one file's bytes and fill a record slot with them in the caller's
+/// transaction. External bytes were staged in a separately committed
+/// transaction and written under this transaction's hash lock first.
+pub(crate) async fn put_record_attachment(
+    client: &Transaction<'_>,
+    reference: &RecordAttachmentReference<'_>,
+    bytes: &[u8],
+    backend: &str,
+    verification_policy: &str,
+) -> Result<(), MutationError> {
+    if bytes.is_empty()
+        || bytes.len() > 16777216
+        || bytes.len() as u64 != reference.byte_size
+        || content_hash(bytes) != reference.sha256
+    {
+        return Err(MutationError::InvalidRequest);
+    }
+    pin_backend(client, backend, verification_policy).await?;
+    lock_hash(client, reference.sha256).await?;
+    let size = bytes.len() as i64;
+    if backend == "database" {
+        client
+            .execute(
+                "INSERT INTO registry_internal.registry_attachment_blobs
+                 (sha256,byte_size,backend_id,content,state) VALUES ($1,$2,'database',$3,'live')
+                 ON CONFLICT DO NOTHING",
+                &[&reference.sha256, &size, &bytes],
+            )
+            .await
+            .map_err(unavailable)?;
+    }
+    require_backend(client, reference.sha256, backend, reference.byte_size).await?;
+    if backend == "database" {
+        let intact: bool = client
+            .query_one(
+                "SELECT content=$2 FROM registry_internal.registry_attachment_blobs WHERE sha256=$1",
+                &[&reference.sha256, &bytes],
+            )
+            .await
+            .map_err(unavailable)?
+            .get(0);
+        if !intact {
+            return Err(MutationError::Unavailable);
+        }
+    }
+    client
+        .execute(
+            "UPDATE registry_internal.registry_attachment_blobs SET state='live',
+             deletion_checked_at=NULL WHERE sha256=$1",
+            &[&reference.sha256],
+        )
+        .await
+        .map_err(unavailable)?;
+    attach_record_reference(client, reference, backend, verification_policy).await
+}
+
+/// One record slot's admitted bytes: database content, or `None` for bytes
+/// the caller reads from the pinned external backend under the hash lock.
+pub(crate) struct StoredRecordAttachment {
+    pub sha256: String,
+    pub content_type: String,
+    pub byte_size: u64,
+    pub backend_id: String,
+    pub content: Option<Vec<u8>>,
+}
+
+/// Admit one record slot's bytes for a read the caller already authorized
+/// for the record in this transaction. The hash lock lasts until the
+/// transaction ends, so external bytes are read before deletion can run.
+/// An empty, erased, or unverified slot answers `None`.
+///
+/// # Errors
+///
+/// [`MutationError::Unavailable`] when a live reference has no live bytes of
+/// its recorded size, which only a storage fault produces.
+pub(crate) async fn load_record_attachment(
+    client: &impl GenericClient,
+    entity_id: &str,
+    record_id: Uuid,
+    slot_id: &str,
+) -> Result<Option<StoredRecordAttachment>, MutationError> {
+    let Some(row) = client
+        .query_opt(
+            "SELECT sha256,content_type FROM registry_internal.registry_record_attachments
+             WHERE entity_id=$1 AND record_id=$2 AND slot_id=$3 AND erased_at IS NULL",
+            &[&entity_id, &record_id, &slot_id],
+        )
+        .await
+        .map_err(unavailable)?
+    else {
+        return Ok(None);
+    };
+    let sha256: String = row.get(0);
+    let content_type: String = row.get(1);
+    lock_hash(client, &sha256).await?;
+    if !verification_status(client, &sha256, &content_type)
+        .await?
+        .permits_content()
+    {
+        return Ok(None);
+    }
+    // Recheck the reference after acquiring the deletion lock.
+    let Some(row) = client
+        .query_opt(
+            "SELECT a.byte_size, b.state='live' AND b.byte_size=a.byte_size, b.backend_id, b.content
+               FROM registry_internal.registry_record_attachments a
+               LEFT JOIN registry_internal.registry_attachment_blobs b ON b.sha256=a.sha256
+              WHERE a.entity_id=$1 AND a.record_id=$2 AND a.slot_id=$3 AND a.erased_at IS NULL
+                AND a.sha256=$4",
+            &[&entity_id, &record_id, &slot_id, &sha256],
+        )
+        .await
+        .map_err(unavailable)?
+    else {
+        return Ok(None);
+    };
+    if row.get::<_, Option<bool>>(1) != Some(true) {
+        return Err(MutationError::Unavailable);
+    }
+    Ok(Some(StoredRecordAttachment {
+        sha256,
+        content_type,
+        byte_size: u64::try_from(row.get::<_, i64>(0)).map_err(|_| MutationError::Unavailable)?,
+        backend_id: row.get(2),
+        content: row.get(3),
+    }))
+}
+
+/// Erase the references that a record's erased history introduced: every
+/// slot filled at or before `through_revision`. Each slot keeps a value-free
+/// tombstone, so a write-once slot is never filled again, and bytes nothing
+/// else refers to become eligible for deletion.
+pub(crate) async fn erase_record_attachments(
+    client: &impl GenericClient,
+    entity_id: &str,
+    record_id: Uuid,
+    through_revision: i64,
+) -> Result<u64, MutationError> {
+    let hashes = client
+        .query(
+            "SELECT DISTINCT sha256 FROM registry_internal.registry_record_attachments
+             WHERE entity_id=$1 AND record_id=$2 AND attached_revision<=$3 AND erased_at IS NULL
+             ORDER BY sha256",
+            &[&entity_id, &record_id, &through_revision],
+        )
+        .await
+        .map_err(unavailable)?;
+    for row in &hashes {
+        lock_hash(client, &row.get::<_, String>(0)).await?;
+    }
+    let count = client
+        .execute(
+            "UPDATE registry_internal.registry_record_attachments SET
+             attached_by=NULL,attached_at=NULL,erased_at=transaction_timestamp()
+             WHERE entity_id=$1 AND record_id=$2 AND attached_revision<=$3 AND erased_at IS NULL",
+            &[&entity_id, &record_id, &through_revision],
+        )
+        .await
+        .map_err(unavailable)?;
+    for row in hashes {
+        retire_unreferenced(client, &row.get::<_, String>(0)).await?;
+    }
+    Ok(count)
+}
+
 fn unavailable(_: tokio_postgres::Error) -> MutationError {
     MutationError::Unavailable
 }
@@ -771,7 +1050,9 @@ pub(crate) async fn finish_external_delete(
          WHERE sha256=$1 AND backend_id=$2
            AND state IN ('staged','delete_pending','delete_confirmed')
            AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
-               WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)",
+               WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)
+           AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_record_attachments r
+               WHERE r.sha256=b.sha256 AND r.erased_at IS NULL)",
             &[&hash, &backend],
         )
         .await
@@ -792,7 +1073,9 @@ pub(crate) async fn fail_external_delete(
          WHERE sha256=$1 AND backend_id=$2
            AND state IN ('staged','delete_pending','delete_confirmed')
            AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
-               WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)",
+               WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)
+           AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_record_attachments r
+               WHERE r.sha256=b.sha256 AND r.erased_at IS NULL)",
             &[&hash, &backend],
         )
         .await
@@ -957,6 +1240,44 @@ pub mod test_support {
     ) -> Result<(), MutationError> {
         super::verify_backend_binding(client, backend, policy).await
     }
+    /// Fill a record slot with database-stored bytes in one transaction,
+    /// as a second writer would, and commit only when the store accepts it.
+    pub async fn attach_record(
+        client: &mut tokio_postgres::Client,
+        entity: &str,
+        record: uuid::Uuid,
+        slot: &str,
+        content_type: &str,
+        bytes: &[u8],
+        revision: i64,
+    ) -> Result<(), MutationError> {
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let sha256 = super::content_hash(bytes);
+        super::put_record_attachment(
+            &transaction,
+            &super::RecordAttachmentReference {
+                entity_id: entity,
+                record_id: record,
+                slot_id: slot,
+                sha256: &sha256,
+                content_type,
+                byte_size: bytes.len() as u64,
+                attached_revision: revision,
+                attached_by: "attacher",
+            },
+            bytes,
+            "database",
+            "disabled",
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| MutationError::Unavailable)
+    }
     /// Load the bytes of one verdict row under `lease_token`, as a leased
     /// verification job does: `true` when the row still waits for a
     /// verdict, `false` when it is settled.
@@ -1075,8 +1396,10 @@ pub(crate) async fn load_verification_content(
          WHERE v.verification_id=$1 AND v.sha256=$2 AND v.content_type=$3 AND v.verdict='pending'
            AND j.state='leased' AND j.lease_token=$4 AND j.lease_expires_at>transaction_timestamp()
            AND b.state='live' AND b.backend_id=$5 AND b.byte_size=$6
-           AND EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
-               WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL)",
+           AND (EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
+                   WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL)
+             OR EXISTS (SELECT 1 FROM registry_internal.registry_record_attachments r
+                   WHERE r.sha256=v.sha256 AND r.content_type=v.content_type AND r.erased_at IS NULL))",
             &[
                 &target.verification_id,
                 &target.sha256,

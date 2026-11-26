@@ -2115,6 +2115,7 @@ fn problem_title(status: u16) -> &'static str {
         409 => "Conflict",
         410 => "Gone",
         412 => "Precondition Failed",
+        413 => "Content Too Large",
         415 => "Unsupported Media Type",
         422 => "Unprocessable Entity",
         428 => "Precondition Required",
@@ -2133,6 +2134,16 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::ActionGuardFailed => "The action guard was not satisfied.",
         Code::ActionHandlerFailed => "The action handler could not produce an accepted result.",
         Code::ActionRefused => REFUSAL_LABEL,
+        Code::AttachmentContentType => {
+            "The file media type is not one the attachment slot accepts."
+        }
+        Code::AttachmentDigestMismatch => {
+            "The file content does not match its declared SHA-256 digest."
+        }
+        Code::AttachmentSlotWriteOnce => {
+            "The record attachment slot already holds a file and is write-once."
+        }
+        Code::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
         Code::ExternalViewIncomplete => {
             "The external view's indexed coverage is incomplete for this request."

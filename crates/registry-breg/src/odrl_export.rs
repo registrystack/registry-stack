@@ -351,6 +351,9 @@ fn audit_access_profile(access: &AccessProfileSource) {
         required_purposes: _,
         operations: _,
         readable_fields: _,
+        // The export describes record field projections only. A profile's
+        // file downloads are not part of the exported permission.
+        readable_attachments: _,
         writable_fields: _,
         filterable_fields: _,
         // Read by `omission_reasons`, which omits the list grant as `required-filters`.

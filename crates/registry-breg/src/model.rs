@@ -105,6 +105,30 @@ pub struct CompiledAttachmentSlot {
     pub classification: Classification,
 }
 
+/// A record type's write-once file slot. The first file written to it is
+/// the only file it ever holds.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledRecordAttachmentSlot {
+    pub id: String,
+    pub maximum_bytes: u32,
+    pub content_types: Vec<String>,
+    pub classification: Classification,
+}
+
+/// One file an immediate Action request carries, and the record slot its
+/// create effect writes it into.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledActionAttachment {
+    pub effect_id: String,
+    #[serde(rename = "recordType")]
+    pub entity_id: String,
+    pub slot_id: String,
+    pub maximum_bytes: u32,
+    pub content_types: Vec<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledLogicalField {
@@ -431,6 +455,9 @@ pub struct CompiledAction {
     pub condition_route: Option<String>,
     pub inputs: Vec<CompiledActionInput>,
     pub effects: Vec<CompiledPlanEffect>,
+    /// Files the request carries, keyed by their name in the request.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attachments: BTreeMap<String, CompiledActionAttachment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<CompiledCommitGuard>,
     pub target_uses: Vec<CompiledActionTargetUse>,
@@ -1030,6 +1057,9 @@ pub struct CompiledEntity {
     pub derived_relations: BTreeMap<String, CompiledDerivedRelation>,
     pub source_relation: CompiledSourceRelation,
     pub selector_profiles: BTreeMap<String, CompiledSelectorProfile>,
+    /// Write-once file slots keyed by slot id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attachments: BTreeMap<String, CompiledRecordAttachmentSlot>,
     /// Root-enabled autonomous timers keyed by their stable identifier.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub timers: BTreeMap<String, CompiledTimer>,

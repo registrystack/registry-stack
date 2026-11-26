@@ -2070,7 +2070,13 @@ impl PostgresRecordMutationService {
                     | MutationError::ActionHandlerFailure(_)
                     | MutationError::ActionEvidenceFailure { .. }
                     | MutationError::ActionRefusal(_)
-                    | MutationError::TimerGenerationUnsupported => {
+                    | MutationError::TimerGenerationUnsupported
+                    // An ingestion batch never writes a file, so these
+                    // refusals cannot reach a run.
+                    | MutationError::AttachmentSlotWriteOnce
+                    | MutationError::AttachmentTooLarge
+                    | MutationError::AttachmentContentType
+                    | MutationError::AttachmentDigestMismatch => {
                         (IngestionAttemptOutcome::Unavailable, None)
                     }
                 };

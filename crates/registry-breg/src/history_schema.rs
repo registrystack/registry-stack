@@ -836,6 +836,7 @@ mod tests {
             definition_revision:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             relationships: Default::default(),
+            attachments: Default::default(),
             primary_dataset: None,
             id: "membership".to_owned(),
             source_module: None,

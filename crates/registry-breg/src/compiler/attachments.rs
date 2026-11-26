@@ -4,14 +4,68 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
-    AttachmentSlotSource, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_CONTENT_TYPES, MAX_ATTACHMENT_SLOTS,
+    AttachmentSlotSource, RecordAttachmentSlotSource, MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENT_CONTENT_TYPES, MAX_ATTACHMENT_SLOTS,
 };
 use crate::diagnostics::Diagnostic;
 use crate::logical_names::reserved_logical_name;
-use crate::model::CompiledAttachmentSlot;
+use crate::model::{CompiledAttachmentSlot, CompiledRecordAttachmentSlot};
+
+/// The members every slot declaration shares, whoever owns the slot.
+struct SlotShape<'a> {
+    id: &'a String,
+    maximum_bytes: u32,
+    content_types: &'a [String],
+}
 
 pub(crate) fn validate_slots(
     slots: &[AttachmentSlotSource],
+    field_names: &BTreeSet<String>,
+    base: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let shapes = slots
+        .iter()
+        .map(|slot| SlotShape {
+            id: &slot.id,
+            maximum_bytes: slot.maximum_bytes,
+            content_types: &slot.content_types,
+        })
+        .collect::<Vec<_>>();
+    validate_shapes(&shapes, "a Proposal", field_names, base, errors);
+}
+
+/// Validates a record type's slots. Each must also declare `writeOnce: true`,
+/// the only mode a record slot has.
+pub(crate) fn validate_record_slots(
+    slots: &[RecordAttachmentSlotSource],
+    field_names: &BTreeSet<String>,
+    base: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let shapes = slots
+        .iter()
+        .map(|slot| SlotShape {
+            id: &slot.id,
+            maximum_bytes: slot.maximum_bytes,
+            content_types: &slot.content_types,
+        })
+        .collect::<Vec<_>>();
+    validate_shapes(&shapes, "a record type", field_names, base, errors);
+    for (index, slot) in slots.iter().enumerate() {
+        if !slot.write_once {
+            errors.push(Diagnostic::error(
+                "breg.attachment.write-once-required",
+                format!("{base}[{index}].writeOnce"),
+                "a record attachment slot must declare writeOnce: true",
+            ));
+        }
+    }
+}
+
+fn validate_shapes(
+    slots: &[SlotShape<'_>],
+    owner: &str,
     field_names: &BTreeSet<String>,
     base: &str,
     errors: &mut Vec<Diagnostic>,
@@ -20,21 +74,21 @@ pub(crate) fn validate_slots(
         errors.push(Diagnostic::error(
             "breg.attachment.slots-bounds-invalid",
             base,
-            "a Proposal supports at most eight attachment slots",
+            &format!("{owner} supports at most eight attachment slots"),
         ));
     }
     let mut ids = BTreeSet::new();
     for (index, slot) in slots.iter().enumerate() {
         let path = format!("{base}[{index}]");
-        super::validate_id(&slot.id, &format!("{path}.id"), errors);
-        if reserved_logical_name(&slot.id) || field_names.contains(&slot.id) {
+        super::validate_id(slot.id, &format!("{path}.id"), errors);
+        if reserved_logical_name(slot.id) || field_names.contains(slot.id) {
             errors.push(Diagnostic::error(
                 "breg.attachment.id-collision",
                 format!("{path}.id"),
                 "an attachment ID must not collide with a stored, derived, API, or server-owned field name",
             ));
         }
-        if !ids.insert(&slot.id) {
+        if !ids.insert(slot.id) {
             errors.push(Diagnostic::error(
                 "breg.attachment.id-duplicate",
                 format!("{path}.id"),
@@ -108,6 +162,25 @@ pub(crate) fn compile_slots(
                 CompiledAttachmentSlot {
                     id: slot.id.clone(),
                     required: slot.required,
+                    maximum_bytes: slot.maximum_bytes,
+                    content_types: slot.content_types.clone(),
+                    classification: slot.classification,
+                },
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn compile_record_slots(
+    slots: &[RecordAttachmentSlotSource],
+) -> BTreeMap<String, CompiledRecordAttachmentSlot> {
+    slots
+        .iter()
+        .map(|slot| {
+            (
+                slot.id.clone(),
+                CompiledRecordAttachmentSlot {
+                    id: slot.id.clone(),
                     maximum_bytes: slot.maximum_bytes,
                     content_types: slot.content_types.clone(),
                     classification: slot.classification,

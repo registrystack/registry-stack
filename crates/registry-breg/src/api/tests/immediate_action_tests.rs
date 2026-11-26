@@ -217,6 +217,7 @@ async fn task_granted_invoke_uses_exact_action_scope_and_frozen_subjects() {
                 context: &surface.context,
                 input: Map::new(),
                 preconditions: BTreeMap::new(),
+                attachments: Vec::new(),
                 body_bytes: 2,
                 correlation: &correlation,
             })

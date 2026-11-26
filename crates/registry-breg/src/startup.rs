@@ -1849,7 +1849,8 @@ async fn finish_prepared_server(
     .with_event_destinations(
         Some(Arc::clone(&event_destinations)),
         config.identity().instance_id(),
-    );
+    )
+    .with_attachment_storage(attachment_storage.clone());
     let records = Arc::new(match field_encryption.clone() {
         Some(field_encryption) => records.with_field_encryption(field_encryption),
         None => records,

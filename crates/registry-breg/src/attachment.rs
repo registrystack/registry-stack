@@ -7,8 +7,8 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 
 /// Downloads carry no filename: no slot metadata holds one, and deriving one would
-/// echo authored configuration text back into a response header.
-#[cfg(feature = "runtime")]
+/// echo authored configuration text back into a response header. The
+/// generated contract publishes the same value.
 pub(crate) const DOWNLOAD_CONTENT_DISPOSITION: &str = "attachment";
 
 #[derive(Clone, Eq, PartialEq)]

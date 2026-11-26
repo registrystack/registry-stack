@@ -26,6 +26,10 @@ pub enum ProblemCode {
     ActionGuardFailed,
     ActionHandlerFailed,
     ActionRefused,
+    AttachmentContentType,
+    AttachmentDigestMismatch,
+    AttachmentSlotWriteOnce,
+    AttachmentTooLarge,
     AuthenticationRefused,
     ExternalViewIncomplete,
     IdempotencyConflict,
@@ -68,6 +72,10 @@ impl ProblemCode {
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
+        Self::AttachmentContentType,
+        Self::AttachmentDigestMismatch,
+        Self::AttachmentSlotWriteOnce,
+        Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
         Self::ExternalViewIncomplete,
         Self::IdempotencyExpired,
@@ -113,6 +121,10 @@ impl ProblemCode {
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
+        Self::AttachmentContentType,
+        Self::AttachmentDigestMismatch,
+        Self::AttachmentSlotWriteOnce,
+        Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
         Self::IdempotencyExpired,
         Self::IdempotencyConflict,
@@ -153,6 +165,10 @@ impl ProblemCode {
             Self::ActionGuardFailed => "action.guard_failed",
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
+            Self::AttachmentContentType => "attachment.content-type",
+            Self::AttachmentDigestMismatch => "attachment.digest-mismatch",
+            Self::AttachmentSlotWriteOnce => "attachment.slot-write-once",
+            Self::AttachmentTooLarge => "attachment.too-large",
             Self::AuthenticationRefused => "authentication.refused",
             Self::ExternalViewIncomplete => "external_view.incomplete",
             Self::IdempotencyConflict => "idempotency.key-reused",
@@ -201,7 +217,8 @@ impl ProblemCode {
             Self::AuthenticationRefused => 401,
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
-            Self::IdempotencyConflict
+            Self::AttachmentSlotWriteOnce
+            | Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
             | Self::IngestionRunNotOpen
@@ -215,8 +232,11 @@ impl ProblemCode {
             Self::ActionGuardFailed
             | Self::PreconditionFailed
             | Self::ProposalReviewResultMismatch => 412,
-            Self::UnsupportedMediaType => 415,
-            Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
+            Self::AttachmentTooLarge => 413,
+            Self::AttachmentContentType | Self::UnsupportedMediaType => 415,
+            Self::ActionRefused
+            | Self::AttachmentDigestMismatch
+            | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
             Self::ActionHandlerFailed | Self::StatisticalDatasetDomainViolation => 500,
             Self::ActionEvidenceFailed
@@ -240,6 +260,7 @@ impl ProblemCode {
             409 => "Conflict",
             410 => "Gone",
             412 => "Precondition Failed",
+            413 => "Content Too Large",
             415 => "Unsupported Media Type",
             422 => "Unprocessable Entity",
             428 => "Precondition Required",
@@ -261,6 +282,16 @@ impl ProblemCode {
             Self::ActionGuardFailed => "The action guard was not satisfied.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
             Self::ActionRefused => "The action was refused by a declared business rule.",
+            Self::AttachmentContentType => {
+                "The file media type is not one the attachment slot accepts."
+            }
+            Self::AttachmentDigestMismatch => {
+                "The file content does not match its declared SHA-256 digest."
+            }
+            Self::AttachmentSlotWriteOnce => {
+                "The record attachment slot already holds a file and is write-once."
+            }
+            Self::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::ExternalViewIncomplete => {
                 "The external view's indexed coverage is incomplete for this request."
@@ -360,6 +391,42 @@ mod tests {
                 422,
                 "Unprocessable Entity",
                 "action.refused",
+            ),
+        ] {
+            assert!(ProblemCode::ALL.contains(&problem));
+            assert!(ProblemCode::DOCUMENTED.contains(&problem));
+            assert_eq!(problem.status(), status);
+            assert_eq!(problem.title(), title);
+            assert_eq!(problem.code(), code);
+        }
+    }
+
+    #[test]
+    fn record_attachment_refusals_have_their_exact_public_contracts() {
+        for (problem, status, title, code) in [
+            (
+                ProblemCode::AttachmentContentType,
+                415,
+                "Unsupported Media Type",
+                "attachment.content-type",
+            ),
+            (
+                ProblemCode::AttachmentDigestMismatch,
+                422,
+                "Unprocessable Entity",
+                "attachment.digest-mismatch",
+            ),
+            (
+                ProblemCode::AttachmentSlotWriteOnce,
+                409,
+                "Conflict",
+                "attachment.slot-write-once",
+            ),
+            (
+                ProblemCode::AttachmentTooLarge,
+                413,
+                "Content Too Large",
+                "attachment.too-large",
             ),
         ] {
             assert!(ProblemCode::ALL.contains(&problem));

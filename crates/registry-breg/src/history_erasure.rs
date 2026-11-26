@@ -264,6 +264,20 @@ async fn erase_record_history_scoped(
     let scrubbed_change_context_count =
         scrub_change_contexts(&transaction, &affected_positions).await?;
     let erased_commit_member_count = delete_commit_members(&transaction, &request.target).await?;
+    // A record slot's file belongs to the revision that attached it. Erasing
+    // that revision erases the reference, and bytes nothing else refers to
+    // become eligible for deletion. Field-encryption erase-and-rebaseline
+    // rewrites history for a record that keeps its files, so it keeps them.
+    if lifecycle_reference.is_none() {
+        crate::attachment_store::erase_record_attachments(
+            &transaction,
+            request.target.entity_id,
+            request.target.record_id,
+            request.target.erase_through_revision,
+        )
+        .await
+        .map_err(|_| HistoryErasureError::Unavailable)?;
+    }
     let erased_revision_count = delete_revisions(&transaction, &request.target).await?;
     let removed_descriptor_count =
         delete_unreferenced_history_descriptors(&transaction, request.expected).await?;

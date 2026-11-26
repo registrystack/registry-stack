@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- A Record type can keep files. It declares write-once slots under
+  `attachments`, each with `maximumBytes`, `contentTypes`, `classification`
+  and `writeOnce: true`. The create effect of an immediate Action fills a slot
+  from a file sent in the same request, under the request's new
+  `attachments` member. The file commits with the record, its history, the
+  idempotency receipt and any hook event, or nothing commits. Hook events
+  never carry the bytes. A profile reads a slot only when its record grant
+  lists it in `readableAttachments` beside `get`. The new
+  `GET /v1/records/{route}/{record_id}/attachments/{slot_id}` route returns
+  the stored bytes, the stored media type and a `Repr-Digest` header. Any
+  other caller, a record outside the row boundary and an empty slot get the
+  same 404. New problems are `attachment.slot-write-once` (409),
+  `attachment.too-large` (413), `attachment.content-type` (415) and
+  `attachment.digest-mismatch` (422). `bregctl check` refuses a slot on a
+  patch effect, a Proposal-mode Action, an Action with Evidence and a timer
+  Action. History erasure removes a record's file references, and the bytes
+  go once no record or Proposal refers to them. Proposal erasure keeps bytes
+  a record refers to. The Rust client gains `download_record_attachment`.
+- BREAKING: record file references live in the
+  `registry_internal.registry_record_attachments` table, and the managed
+  schema fingerprint changes with it. Migration: install the release on a
+  fresh database.
+- Every registry revision changes on upgrade, even for a project that
+  declares no slots, because the problem code list in the generated OpenAPI
+  document grew. Per-action contract revisions do not change. Operators who
+  pin a registry revision update the pin.
 - Record history names the Proposal that produced a revision. A revision list
   item and a revision detail gain an optional `proposal` member with
   `actionId`, `proposalId` and `submissionVersion`, derived from the existing

@@ -4,6 +4,8 @@
 
 #[path = "access_log.rs"]
 mod access_log;
+#[path = "record_attachment_read.rs"]
+mod record_attachment_read;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -63,6 +65,7 @@ pub struct PostgresRecordReadService {
     fault: ReadFaultControl,
     field_encryption: Option<Arc<FieldEncryptionService>>,
     read_alerts: Option<crate::outbox::ReadAlerts>,
+    attachment_storage: crate::attachment_storage::AttachmentStorage,
     #[cfg(feature = "postgres-test")]
     query_plan: Option<Arc<std::sync::Mutex<Vec<Value>>>>,
 }
@@ -89,6 +92,7 @@ impl PostgresRecordReadService {
             fault: ReadFaultControl::Disabled,
             field_encryption: None,
             read_alerts: None,
+            attachment_storage: crate::attachment_storage::AttachmentStorage::Database,
             #[cfg(feature = "postgres-test")]
             query_plan: None,
         }
@@ -118,6 +122,18 @@ impl PostgresRecordReadService {
             &self.expected.package_id,
             instance_id,
         ));
+        self
+    }
+
+    /// Bind the storage record attachment bytes are read from. It must be the
+    /// binding the mutation service writes under, or every stored file reads
+    /// as unavailable.
+    #[must_use]
+    pub fn with_attachment_storage(
+        mut self,
+        storage: crate::attachment_storage::AttachmentStorage,
+    ) -> Self {
+        self.attachment_storage = storage;
         self
     }
 
@@ -722,6 +738,14 @@ impl RecordReadService for PostgresRecordReadService {
         limit: u16,
     ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
         Box::pin(self.read_access_log(request, cursor, limit))
+    }
+
+    fn record_attachment(
+        &self,
+        request: RecordReadRequest,
+        slot_id: String,
+    ) -> ServiceFuture<'_, Result<Option<crate::api::HeldRecordAttachment>, ReadServiceError>> {
+        Box::pin(self.read_record_attachment(request, slot_id))
     }
 
     fn get(

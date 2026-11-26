@@ -5,6 +5,7 @@
 mod action;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use action::erase_expired_action_evidence;
+pub(crate) use action::validate_action_attachments;
 pub(crate) use action::{HookChangeApplication, HookChangeOutcome};
 mod proposal;
 pub(crate) use proposal::{
@@ -2425,6 +2426,19 @@ pub enum MutationError {
     /// The review authority rejected the Proposal, and a rejection is terminal.
     #[error("the review rejected this Proposal")]
     ProposalRejected,
+    /// A record attachment slot already holds a file. Record slots are
+    /// write-once, so a second write is refused whatever its bytes are.
+    #[error("the record attachment slot already holds a file")]
+    AttachmentSlotWriteOnce,
+    /// A file is larger than its attachment slot's `maximumBytes`.
+    #[error("the file is larger than the attachment slot accepts")]
+    AttachmentTooLarge,
+    /// A file's declared media type is not in its slot's `contentTypes`.
+    #[error("the file media type is not one the attachment slot accepts")]
+    AttachmentContentType,
+    /// A file's bytes do not hash to the SHA-256 digest the request declared.
+    #[error("the file content does not match its declared digest")]
+    AttachmentDigestMismatch,
     #[error("idempotency key is already bound to another request")]
     IdempotencyConflict,
     /// The exact request already committed under this key and its held

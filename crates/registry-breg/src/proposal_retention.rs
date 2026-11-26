@@ -762,7 +762,9 @@ impl ProposalRetentionOperatorService {
                AND (state IN ('delete_pending','delete_confirmed')
                  OR (state='staged' AND created_at < transaction_timestamp()-interval '10 minutes'))
                AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
-                   WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)",
+                   WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)
+               AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_record_attachments r
+                   WHERE r.sha256=b.sha256 AND r.erased_at IS NULL)",
                 &[&hash, &backend],
             )
             .await
