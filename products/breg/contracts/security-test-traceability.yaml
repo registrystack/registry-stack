@@ -235,7 +235,12 @@ traceability:
   - {"id": "BREG-SEC-214", "state": "enforced", "negativeId": "BREG-NEG-214", "negativeTest": {"path": "crates/registry-breg/tests/postgres_statistics_protected_sums.rs", "name": "the_dry_run_names_the_reason_of_every_withheld_cell_and_publish_stores_the_same_document"}}
   - {"id": "BREG-SEC-215", "state": "enforced", "negativeId": "BREG-NEG-215", "negativeTest": {"path": "crates/registry-breg/tests/postgres_statistics_protected_sums.rs", "name": "the_dry_run_names_the_reason_of_every_withheld_cell_and_publish_stores_the_same_document"}}
   - {"id": "BREG-SEC-216", "state": "enforced", "negativeId": "BREG-NEG-216", "negativeTest": {"path": "crates/registry-breg/tests/postgres_statistics_protected_sums.rs", "name": "the_dry_run_is_unavailable_to_a_release_reader_and_a_live_reader"}}
-  - {"id": "BREG-SEC-217", "state": "enforced", "negativeId": "BREG-NEG-217", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_security.rs", "name": "record_history_omits_the_proposal_from_a_profile_without_a_proposal_grant"}}
+  # No Proposal grant: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_omits_the_proposal_from_a_profile_without_a_proposal_grant
+  # Row boundary: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_omits_the_proposal_outside_the_proposal_row_boundary
+  # Task grant: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_never_names_the_proposal_to_a_task_grant_caller
+  # Failed check answers 503: crates/registry-breg/tests/postgres_proposal_security.rs::record_history_is_unavailable_when_the_proposal_link_check_fails
+  # Caller-filtered OpenAPI: crates/registry-breg/tests/postgres_proposal_security.rs::record_discovery_declares_the_proposal_link_only_to_a_caller_who_can_receive_it
+  - {"id": "BREG-SEC-217", "state": "enforced", "negativeId": "BREG-NEG-217", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_security.rs", "name": "record_history_omits_the_proposal_when_ownership_does_not_match"}}
   - {"id": "BREG-SEC-218", "state": "enforced", "negativeId": "BREG-NEG-218", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "profiles_without_the_grant_or_outside_the_row_boundary_cannot_read"}}
   - {"id": "BREG-SEC-219", "state": "enforced", "negativeId": "BREG-NEG-219", "negativeTest": {"path": "crates/registry-breg/tests/postgres_record_attachments.rs", "name": "a_write_once_slot_refuses_a_second_file_even_after_erasure"}}
   # Proposal erasure keeps bytes a Record refers to: crates/registry-breg/tests/postgres_record_attachments.rs::proposal_erasure_never_removes_bytes_a_record_refers_to

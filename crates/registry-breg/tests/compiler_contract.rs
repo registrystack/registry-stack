@@ -6245,6 +6245,10 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "action.guard_failed",
             "action.handler_failed",
             "action.refused",
+            "attachment.content-type",
+            "attachment.digest-mismatch",
+            "attachment.slot-write-once",
+            "attachment.too-large",
             "authentication.refused",
             "idempotency.expired",
             "idempotency.key-reused",
@@ -7576,6 +7580,103 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
         .as_object()
         .expect("revision detail properties render")
         .contains_key("changeContext"));
+    for schema in [revision_schema, revision_detail_schema] {
+        assert!(
+            !schema["properties"]
+                .as_object()
+                .expect("revision properties render")
+                .contains_key("proposal"),
+            "a registry without a Proposal Action declares no Proposal link"
+        );
+    }
+}
+
+/// The optional `proposal` member of a revision names the Proposal that wrote
+/// it, so the OpenAPI document declares it only for a registry that has a
+/// Proposal Action. A registry whose Actions are all immediate declares none.
+#[test]
+fn revision_schemas_declare_the_proposal_link_only_for_a_registry_with_proposal_actions() {
+    let targets = json!([{"recordType":"target","rowBoundaries":"unrestricted"}]);
+    let source = |execution: Value, operation: &str, proposals: Value| {
+        json!({"datasets":{"directory": {}},
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind":"BRegProject",
+            "project":{"id":"revision-proposal-link","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+            "recordTypes":{"target": {"primaryDataset":"directory","route":"targets","mutationMode":"mutable","classification":"internal",
+                "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}},
+            "actions":{"correct-name": {"execution":execution,
+                "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
+                    {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"}],
+                "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}},
+            "accessProfiles":{"historian": {"default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":{
+                "records":[{"recordType":"target","operations":["get","revisions"],"revisionAccess":true,
+                    "readableFields":["name"],"rowBoundaries":"unrestricted"}],
+                "actions":[{"action":"correct-name","operations":[operation],"targets":targets}],
+                "proposals":proposals}}}
+        })
+    };
+    let proposal = source(
+        json!({"mode":"proposal","proposal":{"review":{"type":"none"},
+            "application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}}),
+        "start",
+        json!([{"action":"correct-name","operations":["get"],"ownership":"caller","targets":targets}]),
+    );
+    let immediate = source(json!({"mode":"immediate"}), "invoke", json!([]));
+    let revision_schemas = |source: &Value| {
+        let compiled = compile_json(&serde_json::to_vec(source).expect("source serializes"))
+            .expect("the revision link project compiles");
+        let openapi = compiled
+            .artifacts()
+            .get("generated/openapi.json")
+            .expect("OpenAPI is generated");
+        let openapi = parse_json_strict(&openapi.bytes).expect("OpenAPI is strict JSON");
+        let list = openapi["paths"]["/v1/records/targets/{record_id}/revisions"]["get"]
+            ["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["items"]
+            ["items"]
+            .clone();
+        let detail = openapi["paths"]["/v1/records/targets/{record_id}/revisions/{revision}"]
+            ["get"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
+            ["data"]
+            .clone();
+        [list, detail]
+    };
+
+    for schema in revision_schemas(&proposal) {
+        assert_eq!(
+            schema["properties"]["proposal"],
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["actionId", "proposalId", "submissionVersion"],
+                "properties": {
+                    "actionId": {"type": "string"},
+                    "proposalId": {"type": "string", "format": "uuid"},
+                    "submissionVersion": {"type": "integer", "format": "int64", "minimum": 1}
+                }
+            }),
+            "a registry with a Proposal Action declares the Proposal link"
+        );
+        assert!(!schema["required"]
+            .as_array()
+            .expect("revision required properties render")
+            .contains(&json!("proposal")));
+    }
+    for schema in revision_schemas(&immediate) {
+        assert!(
+            schema["properties"]
+                .as_object()
+                .expect("revision properties render")
+                .contains_key("domainData"),
+            "the revision schema renders"
+        );
+        assert!(
+            !schema["properties"]
+                .as_object()
+                .expect("revision properties render")
+                .contains_key("proposal"),
+            "a registry with only immediate Actions declares no Proposal link"
+        );
+    }
 }
 
 #[test]

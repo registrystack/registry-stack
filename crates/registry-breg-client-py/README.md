@@ -52,6 +52,10 @@ page. Application result references grant no target read authority. Read the
 target through an ordinary authorized `get_record`; the retained result revision
 records application provenance, not a current ETag or write precondition.
 
+A revision written by an applied Proposal may carry an optional `proposal`
+member (`actionId`, `proposalId`, `submissionVersion`) when the profile can
+read that Proposal. Both revision reads return it as the server sent it.
+
 ## Hook verification
 
 `verify_hook_delivery(method=..., path=..., headers=..., body=..., key=...)`

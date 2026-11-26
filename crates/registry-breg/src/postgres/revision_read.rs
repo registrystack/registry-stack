@@ -184,13 +184,24 @@ impl PostgresRevisionReadService {
             .read_rows(session.client(), &request, &claims, &plan)
             .await;
         session.disarm();
+        // The Proposal link check below takes its own pooled session, so the
+        // record session goes back to the pool first. Holding both at once
+        // would exhaust a small pool and deadlock concurrent reads.
+        drop(session);
         let materialized = match materialized {
             Ok(materialized) => materialized,
             Err(error) => {
                 return Err(self.refused(&claims, &request, &plan, error).await);
             }
         };
-        let materialized = match resolve_proposal_links(&request, materialized).await {
+        // One deadline bounds every Proposal link check of this read, however
+        // many distinct Proposals the page names.
+        let link_deadline = request
+            .proposal_links
+            .as_ref()
+            .map(|access| tokio::time::Instant::now() + access.mutations.proposal_link_budget());
+        let materialized = match resolve_proposal_links(&request, link_deadline, materialized).await
+        {
             Ok(materialized) => materialized,
             Err(error) => return Err(self.refused(&claims, &request, &plan, error).await),
         };
@@ -815,7 +826,8 @@ async fn attach_proposal_links(
             "SELECT target_revision, action_id, proposal_id, submission_version
                FROM registry_internal.registry_proposal_results
               WHERE target_entity_id = $1 AND target_record_id = $2
-                AND target_revision = ANY($3)",
+                AND target_revision = ANY($3)
+              ORDER BY target_revision, action_id, proposal_id, submission_version",
             &[&entity_id, &record_id, &revisions],
         )
         .await
@@ -840,8 +852,11 @@ async fn attach_proposal_links(
 /// Drop each Proposal link the caller could not read the Proposal of. The
 /// check is the Proposal read's own authorization, applied once per Proposal.
 /// A caller with no Proposal read authority for an Action sees no link to it.
+/// Every check runs under the read's one `deadline`, which is present when
+/// the request carries Proposal link access.
 async fn resolve_proposal_links(
     request: &RevisionReadRequest,
+    deadline: Option<tokio::time::Instant>,
     mut envelopes: Vec<RevisionEnvelope>,
 ) -> Result<Vec<RevisionEnvelope>, ReadServiceError> {
     let mut decided: BTreeMap<(String, Uuid), bool> = BTreeMap::new();
@@ -853,14 +868,16 @@ async fn resolve_proposal_links(
         let readable = match decided.get(&key) {
             Some(readable) => *readable,
             None => {
-                let readable = match request.proposal_links.as_ref().and_then(|access| {
-                    access
-                        .authorities
-                        .get(&link.action_id)
-                        .map(|authority| (&access.mutations, authority))
-                }) {
-                    Some((mutations, authority)) => mutations
-                        .proposal_link_readable(link.proposal_id, authority)
+                let readable = match request.proposal_links.as_ref().zip(deadline).and_then(
+                    |(access, deadline)| {
+                        access
+                            .authorities
+                            .get(&link.action_id)
+                            .map(|authority| (&access.mutations, authority, deadline))
+                    },
+                ) {
+                    Some((mutations, authority, deadline)) => mutations
+                        .proposal_link_readable(link.proposal_id, authority, deadline)
                         .await
                         .map_err(|_| ReadServiceError::Unavailable)?,
                     None => false,

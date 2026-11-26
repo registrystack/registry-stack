@@ -439,6 +439,11 @@ async fn openapi(
         };
         let request_schema_ref =
             openapi_input_schema_id(&surface.entity.id, surface.route.operation);
+        // The same check a revision read runs decides whether this caller's
+        // document declares the Proposal link.
+        let proposal_links = surface.route.revision_kind.is_some()
+            && proposal_link_access(&service, &claims, surface.context.selected_profile())
+                .is_some();
         methods.insert(
             method_name(surface.route.method).to_owned(),
             openapi_operation(OpenApiOperationSpec {
@@ -453,6 +458,7 @@ async fn openapi(
                 access_profiles: OpenApiAccessProfiles::Selected(
                     surface.context.selected_profile(),
                 ),
+                proposal_links,
             }),
         );
         if surface.route.operation == Operation::Get

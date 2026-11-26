@@ -262,13 +262,38 @@ a task grant all receive the revision without the member.
 That response is the one a revision no Proposal produced would get.
 Operator erasure of a Proposal's detail keeps the link, because the identifier and state survive and
 the Proposal read already reports that its detail was erased.
+The check reads the Proposal without locking its row, because an applied Proposal no longer changes.
+All the checks of one read share one deadline.
+If a check cannot finish, because of a conflict, a store failure or that deadline, the read answers
+`503 source.unavailable` instead of leaving out the member.
+The caller-filtered OpenAPI document declares the member only on the revision routes where the
+caller would receive it.
+
+The link has these known limits:
+
+- A caller who holds a Proposal `get` grant for the Action but fails its ownership or row-boundary
+  check makes BReg run one extra short transaction for each linked Proposal.
+  That caller may infer from the response time that a Proposal wrote a revision.
+- The check writes no Proposal-read audit entry.
+  Only the revision read is audited.
+- The member disappears once a record the Proposal targeted is tombstoned, because the Proposal
+  target check sees only active records.
+- Each distinct Proposal on a page costs one short read transaction, up to 100 on a full page.
 
 {/* Evidence: crates/registry-breg/src/postgres/proposal.rs, proposal_link_readable;
     crates/registry-breg/src/postgres/revision_read.rs, resolve_proposal_links;
+    crates/registry-breg/src/proposal_ddl.rs, record_lifecycle = 'active';
+    crates/registry-breg/src/api/mod.rs, openapi;
     crates/registry-breg/tests/postgres_proposal_security.rs,
     record_history_names_the_proposal_for_a_caller_who_can_read_it,
+    record_history_links_proposals_over_a_single_connection_pool,
     record_history_omits_the_proposal_from_a_profile_without_a_proposal_grant,
     record_history_omits_the_proposal_when_ownership_does_not_match,
+    record_history_omits_the_proposal_outside_the_proposal_row_boundary,
+    record_history_never_names_the_proposal_to_a_task_grant_caller,
+    record_history_reads_the_link_while_another_session_locks_the_proposal_row,
+    record_history_is_unavailable_when_the_proposal_link_check_fails,
+    record_discovery_declares_the_proposal_link_only_to_a_caller_who_can_receive_it,
     record_history_keeps_the_proposal_after_operator_erasure;
     products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-217. */}
 

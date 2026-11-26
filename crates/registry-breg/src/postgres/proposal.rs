@@ -670,18 +670,26 @@ impl PostgresRecordMutationService {
         }
     }
 
+    /// How long the Proposal link checks of one revision read may take
+    /// together. The read computes one deadline from it for all its checks.
+    pub(crate) fn proposal_link_budget(&self) -> std::time::Duration {
+        self.action_timeout
+    }
+
     /// Whether the caller could read this Proposal. It runs the check a
     /// Proposal read runs, [`Self::proposal_document`], through the same
     /// `authorize_proposal_document`, in its own read transaction, and it
     /// writes no audit entry: the caller is a revision read that audits its own
     /// response. A Proposal the caller may not read, or that no longer exists,
-    /// is `Ok(false)`. Only a store failure is an error.
+    /// is `Ok(false)`. Every other failure is an error, so a conflict or a
+    /// store failure fails the read instead of hiding the link. `deadline` is
+    /// the revision read's one deadline for all its link checks.
     pub(crate) async fn proposal_link_readable(
         &self,
         id: Uuid,
         authority: &ProposalAuthority,
+        deadline: tokio::time::Instant,
     ) -> Result<bool, MutationError> {
-        let deadline = tokio::time::Instant::now() + self.action_timeout;
         let client = self.proposal_read_client(authority, deadline).await?;
         let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         let result = tokio::time::timeout_at(deadline, async {
@@ -700,31 +708,35 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            // No row lock. A link names an applied Proposal, and applied is
+            // terminal: no runtime write changes its lifecycle row, inputs,
+            // submission or results, and operator erasure and other
+            // maintenance take the exclusive registry lock this transaction's
+            // shared lock excludes. The Proposal read locks the row to keep a
+            // changing document coherent, and `authorize_proposal_document`
+            // itself takes no lock for a Get, so a plain read gives the same
+            // answer here without waiting behind a lifecycle command's row
+            // lock.
             let document = match proposal_store::load_document(
                 guarded.transaction(),
                 id,
-                proposal_store::DocumentLock::Share,
+                proposal_store::DocumentLock::None,
             )
             .await
             {
                 Ok(document) => document,
-                Err(MutationError::PreconditionFailed) => return Ok(false),
-                Err(error) => return Err(error),
+                Err(error) => return link_readable(Err(error)),
             };
-            let readable = match self
-                .coordinator
-                .authorize_proposal_document(
-                    guarded.transaction(),
-                    &self.registry,
-                    &document,
-                    authority,
-                )
-                .await
-            {
-                Ok(()) => true,
-                Err(MutationError::Unavailable) => return Err(MutationError::Unavailable),
-                Err(_) => false,
-            };
+            let readable = link_readable(
+                self.coordinator
+                    .authorize_proposal_document(
+                        guarded.transaction(),
+                        &self.registry,
+                        &document,
+                        authority,
+                    )
+                    .await,
+            )?;
             guarded
                 .commit()
                 .await
@@ -1619,5 +1631,45 @@ impl PostgresRecordMutationService {
             return Err(MutationError::PreconditionFailed);
         }
         Ok(value)
+    }
+}
+
+/// Whether a link check's authorization outcome lets the caller read the
+/// Proposal. Only the two refusals a Proposal read gives a caller who may not
+/// read it omit the link. A conflict, a retryable conflict or any other
+/// failure stays an error, which the revision read answers as unavailable.
+fn link_readable(outcome: Result<(), MutationError>) -> Result<bool, MutationError> {
+    match outcome {
+        Ok(()) => Ok(true),
+        Err(MutationError::AuthorizationRefused | MutationError::PreconditionFailed) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_link_check_omits_only_a_refusal_and_fails_on_anything_else() {
+        assert_eq!(link_readable(Ok(())), Ok(true));
+        for refusal in [
+            MutationError::AuthorizationRefused,
+            MutationError::PreconditionFailed,
+        ] {
+            assert_eq!(link_readable(Err(refusal)), Ok(false));
+        }
+        for failure in [
+            MutationError::Conflict,
+            MutationError::RetryableConflict,
+            MutationError::Unavailable,
+            MutationError::InvalidRequest,
+        ] {
+            assert_eq!(
+                link_readable(Err(failure.clone())),
+                Err(failure),
+                "a store failure is a 503, never a silent omission"
+            );
+        }
     }
 }

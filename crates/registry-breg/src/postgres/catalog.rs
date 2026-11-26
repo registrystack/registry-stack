@@ -143,6 +143,7 @@ const MANAGED_INTERNAL_INDEXES: &[&str] = &[
     "registry_internal.registry_proposal_idempotency_by_request",
     "registry_internal.registry_proposal_pending_targets",
     "registry_internal.registry_proposal_queue",
+    "registry_internal.registry_proposal_results_by_target",
     "registry_internal.registry_proposal_review_completion_reconcile",
     "registry_internal.registry_proposal_review_submission_jobs",
     "registry_internal.registry_record_attachment_live_references",

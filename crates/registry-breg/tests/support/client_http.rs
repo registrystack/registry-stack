@@ -90,11 +90,22 @@ impl ClientFixture {
         claims: VerifiedRequestClaims,
         configure: impl FnOnce(PostgresRecordMutationService) -> PostgresRecordMutationService,
     ) -> Self {
+        Self::start_with_pool(registry, claims, 8, configure).await
+    }
+
+    /// The same services over a runtime pool of `pool_size` connections, for
+    /// proving that one request never holds two pooled connections at once.
+    pub async fn start_with_pool(
+        registry: registry_breg::CompiledRegistry,
+        claims: VerifiedRequestClaims,
+        pool_size: usize,
+        configure: impl FnOnce(PostgresRecordMutationService) -> PostgresRecordMutationService,
+    ) -> Self {
         assert!(
             !registry.ddl().requires_postgis,
             "spatial SDK tests use SpatialHarness"
         );
-        let database = TestDatabase::create(8).await;
+        let database = TestDatabase::create(pool_size).await;
         if registry.ddl().requires_btree_gist {
             database
                 .admin
