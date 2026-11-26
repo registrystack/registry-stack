@@ -923,6 +923,15 @@ async fn every_refusal_leaves_no_record_and_no_file() {
             StatusCode::PAYLOAD_TOO_LARGE,
             "attachment.too-large",
         ),
+        // Far past the slot, the body itself outgrows what the Action reads.
+        // It is the same refusal, not a malformed request.
+        (
+            "far-too-large",
+            open,
+            Some(json!({"evidence":file("text/plain", &vec![b'a'; 3 * 1024 * 1024])})),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "attachment.too-large",
+        ),
         (
             "digest",
             open,
@@ -1561,4 +1570,45 @@ fn generated_contracts_publish_the_slot_download_and_the_invoke_file_member() {
     // A Proposal-mode Action carries no record file member.
     let start = artifact("generated/action-schemas/rename.invoke.input.schema.json");
     assert!(start["properties"].get("attachments").is_none());
+}
+
+#[test]
+fn the_invoke_operation_documents_every_file_refusal() {
+    let compiled = registry();
+    let openapi: Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let examples = |path: &str, status: &str| -> BTreeSet<String> {
+        openapi["paths"][path]["post"]["responses"][status]["content"]["application/problem+json"]
+            ["examples"]
+            .as_object()
+            .map(|examples| examples.keys().cloned().collect())
+            .unwrap_or_default()
+    };
+    for (status, code) in [
+        ("413", "attachment.too-large"),
+        ("415", "attachment.content-type"),
+        ("422", "attachment.digest-mismatch"),
+        ("409", "attachment.slot-write-once"),
+    ] {
+        assert!(
+            examples("/v1/actions/register", status).contains(code),
+            "{status} {code}"
+        );
+        // An Action that takes no request files answers none of them.
+        assert!(
+            !examples("/v1/actions/rename", status).contains(code),
+            "{status} {code}"
+        );
+    }
+    assert_eq!(
+        openapi["paths"]["/v1/actions/register"]["post"]["responses"]["413"]["content"]
+            ["application/problem+json"]["examples"]["attachment.too-large"]["value"]["title"],
+        "Content Too Large"
+    );
 }
