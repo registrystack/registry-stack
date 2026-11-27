@@ -31,6 +31,7 @@
 //! sends the stale reminder, and the receiver gets no ordering promise
 //! across processes: that is inherent to at-least-once delivery.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -39,18 +40,19 @@ use std::time::{Duration, SystemTime};
 
 use clap::{Arg, Command};
 use registry_platform_audit::{AuditProfile, AuditWriter};
-use registry_platform_config::{ProtectedSecret, SecretResolver, MAX_SECRET_BYTES};
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields, SigningError};
-use registry_platform_dispatch::idempotency_key;
+use registry_platform_config::{ProtectedSecret, SecretReference, SecretResolver};
+use registry_platform_crypto::delivery_signature::{
+    distinct_delivery_keys, sign, DeliveryKey, DeliveryKeys,
+};
 use registry_platform_dispatch::postgres::{DispatchOutcome, DispatchWorker, WorkerConfig};
 use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use registry_platform_httputil::destination::{
-    DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
-    DestinationBodyTemplate, DestinationMethod, DestinationProfile, FixedDestinationPolicy,
+    DataDestinationPolicy, DataDestinationRequest, DataDestinationRequestTemplate,
+    DestinationAuthorizationTemplate, DestinationBodyTemplate, DestinationMethod,
+    DestinationProfile, DestinationRequestError, FixedDestinationPolicy,
 };
 use registry_platform_oidc::task_grant::TaskGrantStatusRegistry;
 use thiserror::Error;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Interval, MissedTickBehavior};
@@ -60,6 +62,7 @@ use crate::auth::SchedulingAuthenticator;
 use crate::config::{
     reminder_destination_origin_and_path, same_reminder_destination_origin,
     ReminderDestinationConfig, RuntimeConfig, RuntimeConfigError, TaskGrantStatus,
+    UrlHookDestinationConfig,
 };
 use crate::hooks::{ActivatedHooks, HookActivationError, HookRuntimeIdentity};
 use crate::http::{metrics_router, router, HttpState};
@@ -82,18 +85,9 @@ const INTENT_DRAIN_LIMIT: usize = 1024;
 /// One rendered reminder event is bounded, as is the whole request.
 const REMINDER_MAXIMUM_BODY_BYTES: usize = 16 * 1024;
 const REMINDER_MAXIMUM_REQUEST_BYTES: usize = 32 * 1024;
-const REMINDER_BEARER_MAXIMUM_BYTES: usize = 8192;
-const MIN_REMINDER_HMAC_SHA256_KEY_BYTES: usize = 32;
-const REMINDER_IDEMPOTENCY_DOMAIN: &[u8] = b"scheduling-reminder-delivery-v1";
-const REMINDER_ACCEPT_MAXIMUM_BYTES: usize = 32;
-const REMINDER_CONTENT_TYPE_MAXIMUM_BYTES: usize = 64;
-const REMINDER_EVENT_ID_MAXIMUM_BYTES: usize = 128;
-const REMINDER_EVENT_SOURCE_MAXIMUM_BYTES: usize = 2_048;
-const REMINDER_EVENT_TYPE_MAXIMUM_BYTES: usize = 256;
-const REMINDER_EVENT_TIME_MAXIMUM_BYTES: usize = 64;
-const REMINDER_EVENT_DATASCHEMA_MAXIMUM_BYTES: usize = 2_048;
-const REMINDER_DELIVERY_FIELD_MAXIMUM_BYTES: usize = 256;
-const REMINDER_SIGNATURE_MAXIMUM_BYTES: usize = 256;
+const REMINDER_CONFIG_PATH: &str = "destinations.reminders";
+const CURRENT_KEY_MEMBER: &str = "hmacSha256KeyRef";
+const PREVIOUS_KEY_MEMBER: &str = "previousHmacSha256KeyRef";
 
 #[must_use]
 pub fn command() -> Command {
@@ -261,7 +255,11 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
 
     let reminders = match &config.destinations.reminders {
         Some(destination) => {
-            Some(reminder_transport(destination, &secrets).map_err(RuntimeError::Destination)?)
+            let transport =
+                reminder_transport(destination, &secrets).map_err(RuntimeError::Destination)?;
+            check_delivery_keys(&transport, &config.destinations.hooks, &secrets)
+                .map_err(RuntimeError::Destination)?;
+            Some(transport)
         }
         None => None,
     };
@@ -648,9 +646,8 @@ pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, Runtime
 // Reminder dispatch
 // ---------------------------------------------------------------------------
 
-/// The frozen outbound transport for due reminder intents: one fixed origin,
-/// four purpose-selected reviewed request shapes, and an operator-configured
-/// bearer credential that never reaches a log line.
+/// The frozen outbound transport for due reminder intents: one fixed origin
+/// and a signed request template and key set per configured destination.
 ///
 /// Public, with its fields kept private, so the database suite can point a
 /// dispatch pass at a local destination it controls. What the deployment
@@ -658,187 +655,201 @@ pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, Runtime
 /// destination that answers.
 pub struct ReminderTransport {
     policy: DataDestinationPolicy,
-    targets: ReminderRequestTargets,
-    bearer: Option<ProtectedSecret>,
-    hmac_sha256_key: Option<ProtectedSecret>,
+    fallback: ReminderRequestTarget,
+    purposes: BTreeMap<&'static str, ReminderRequestTarget>,
 }
 
 struct ReminderRequestTarget {
     template: DataDestinationRequestTemplate,
-    request_target: String,
+    keys: DeliveryKeys,
 }
 
-struct ReminderRequestTargets {
-    confirmation: ReminderRequestTarget,
-    change: ReminderRequestTarget,
-    cancellation: ReminderRequestTarget,
-    reminder: ReminderRequestTarget,
+impl ReminderRequestTarget {
+    fn render(
+        &self,
+        event: RenderedReminderEvent,
+        attempt_started_at: SystemTime,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        let timestamp = attempt_started_at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|_| DestinationRequestError::InvalidHeaderValue)?
+            .as_secs();
+        let signature = sign(&self.keys, &event.id, timestamp, &event.body)
+            .map_err(|_| DestinationRequestError::InvalidHeaderValue)?;
+        self.template.render(
+            &[],
+            &[
+                b"application/json",
+                b"application/json",
+                event.id.as_bytes(),
+                timestamp.to_string().as_bytes(),
+                signature.as_bytes(),
+            ],
+            None,
+            Some(event.body),
+        )
+    }
 }
 
 impl ReminderTransport {
     fn target_for_purpose(&self, purpose: &str) -> Option<&ReminderRequestTarget> {
         match purpose {
-            "confirmation" => Some(&self.targets.confirmation),
-            "change" => Some(&self.targets.change),
-            "cancellation" => Some(&self.targets.cancellation),
-            "reminder" => Some(&self.targets.reminder),
+            "confirmation" | "change" | "cancellation" | "reminder" => {
+                Some(self.purposes.get(purpose).unwrap_or(&self.fallback))
+            }
             _ => None,
         }
     }
 }
 
-/// Compile one operator-configured destination into the frozen transport the
-/// dispatch loop sends through.
+fn resolve_delivery_key(
+    secrets: &SecretResolver,
+    path: &str,
+    reference: &SecretReference,
+) -> Result<DeliveryKey, String> {
+    let secret = secrets
+        .resolve_binary_reference(reference)
+        .map_err(|error| {
+            crate::config::describe_secret_failure(path, reference.as_str(), &error)
+        })?;
+    let bytes = secret.expose_secret();
+    DeliveryKey::new(bytes).map_err(|error| {
+        format!(
+            "{path} has {} bytes (trailing newline: {}). {error}. Supply 32 to 64 exact key bytes.",
+            bytes.len(),
+            bytes.ends_with(b"\n")
+        )
+    })
+}
+
+fn key_members(keys: &DeliveryKeys) -> impl Iterator<Item = (&'static str, &DeliveryKey)> {
+    std::iter::once((CURRENT_KEY_MEMBER, keys.current()))
+        .chain(keys.previous().map(|key| (PREVIOUS_KEY_MEMBER, key)))
+}
+
+fn check_delivery_keys(
+    reminders: &ReminderTransport,
+    hooks: &BTreeMap<String, UrlHookDestinationConfig>,
+    secrets: &SecretResolver,
+) -> Result<(), String> {
+    let mut hook_keys = Vec::new();
+    for (id, hook) in hooks {
+        for (member, reference) in std::iter::once((CURRENT_KEY_MEMBER, &hook.hmac_sha256_key_ref))
+            .chain(
+                hook.previous_hmac_sha256_key_ref
+                    .as_ref()
+                    .map(|key| (PREVIOUS_KEY_MEMBER, key)),
+            )
+        {
+            let path = format!("destinations.hooks.{id}.{member}");
+            let key = resolve_delivery_key(secrets, &path, reference)?;
+            hook_keys.push((path, key));
+        }
+    }
+    let reminder_keys = key_members(&reminders.fallback.keys)
+        .map(|(member, key)| (format!("{REMINDER_CONFIG_PATH}.{member}"), key))
+        .chain(reminders.purposes.iter().flat_map(|(purpose, target)| {
+            key_members(&target.keys).map(move |(member, key)| {
+                (
+                    format!("{REMINDER_CONFIG_PATH}.purposes.{purpose}.{member}"),
+                    key,
+                )
+            })
+        }))
+        .collect::<Vec<_>>();
+    distinct_delivery_keys(
+        reminder_keys
+            .iter()
+            .map(|(path, key)| (path.as_str(), *key))
+            .chain(hook_keys.iter().map(|(path, key)| (path.as_str(), key))),
+    )
+    .map_err(|error| format!("{error}. Configure distinct keys."))
+}
+
+/// Compile the fallback and every configured purpose destination into the
+/// frozen transport the dispatch loop sends through.
 ///
 /// # Errors
-///
-/// Returns the operator-facing sentence naming what about the configured
-/// destination could not be frozen.
+/// Returns the operator-facing refusal for a destination that cannot activate.
 pub fn reminder_transport(
     destination: &ReminderDestinationConfig,
     secrets: &SecretResolver,
 ) -> Result<ReminderTransport, String> {
     let (origin, _) = reminder_destination_origin_and_path(&destination.url)
         .ok_or_else(|| "destinations.reminders.url is not a safe destination URL".to_owned())?;
-    let scheme = origin
-        .split_once("://")
-        .map(|(scheme, _)| scheme.to_owned())
-        .unwrap_or_default();
-    // The configuration check already confines plain http to loopback hosts;
-    // the transport pins the same rule into the frozen policy.
-    let profile = match scheme.as_str() {
-        "https" => DestinationProfile::ProductionHttps,
-        "http" => DestinationProfile::LoopbackHttp,
-        _ => return Err("the destination URL scheme is not http(s)".to_owned()),
+    let profile = if origin.starts_with("https://") {
+        DestinationProfile::ProductionHttps
+    } else {
+        DestinationProfile::LoopbackHttp
     };
     let policy = FixedDestinationPolicy::new("scheduling-reminders", &origin, profile, &[])
         .map_err(|_| "the destination could not be frozen as a fixed origin".to_owned())?;
-    let bearer = destination
-        .bearer_token_ref
-        .as_ref()
-        .map(|reference| {
-            secrets.resolve(reference).map_err(|error| {
-                crate::config::describe_secret_failure(
-                    "destinations.reminders.bearerTokenRef",
-                    reference,
-                    &error,
-                )
-            })
-        })
-        .transpose()?;
-    let authorization = if bearer.is_some() {
-        DestinationAuthorizationTemplate::Bearer {
-            max_value_bytes: REMINDER_BEARER_MAXIMUM_BYTES,
+    let compile_target = |config_path: &str,
+                          url: &str,
+                          reference: &SecretReference,
+                          previous: Option<&SecretReference>| {
+        let (_, path) = reminder_destination_origin_and_path(url)
+            .ok_or_else(|| format!("{config_path}.url is not a safe destination URL"))?;
+        if !same_reminder_destination_origin(&destination.url, url) {
+            return Err(format!(
+                "{config_path}.url must use the fallback URL origin"
+            ));
         }
-    } else {
-        DestinationAuthorizationTemplate::Forbidden
-    };
-    let hmac_sha256_key = destination
-        .hmac_sha256_key_ref
-        .as_ref()
-        .map(|reference| {
-            secrets.resolve(reference).map_err(|error| {
-                crate::config::describe_secret_failure(
-                    "destinations.reminders.hmacSha256KeyRef",
-                    reference,
-                    &error,
-                )
-            })
-        })
-        .transpose()?;
-    if hmac_sha256_key.as_ref().is_some_and(|key| {
-        !(MIN_REMINDER_HMAC_SHA256_KEY_BYTES..=MAX_SECRET_BYTES).contains(&key.len())
-    }) {
-        return Err(format!(
-            "destinations.reminders.hmacSha256KeyRef must resolve to between {MIN_REMINDER_HMAC_SHA256_KEY_BYTES} and {MAX_SECRET_BYTES} bytes"
-        ));
-    }
-    let signed = hmac_sha256_key.is_some();
-    let compile_target = |configured: Option<&str>| {
-        let configured = configured.unwrap_or(&destination.url);
-        if !same_reminder_destination_origin(&destination.url, configured) {
-            return Err(
-                "destinations.reminders.purposeUrls must use the fallback URL origin".to_owned(),
-            );
-        }
-        let (_, path) = reminder_destination_origin_and_path(configured).ok_or_else(|| {
-            "a destinations.reminders purpose URL is not a safe destination URL".to_owned()
+        let current_path = format!("{config_path}.{CURRENT_KEY_MEMBER}");
+        let previous_path = format!("{config_path}.{PREVIOUS_KEY_MEMBER}");
+        let current = resolve_delivery_key(secrets, &current_path, reference)?;
+        let previous = previous
+            .map(|reference| resolve_delivery_key(secrets, &previous_path, reference))
+            .transpose()?;
+        let keys = DeliveryKeys::new(current, previous).map_err(|error| {
+            format!("{current_path} and {previous_path}: {error}. Configure distinct keys.")
         })?;
-        Ok(ReminderRequestTarget {
-            template: reminder_template(&path, authorization, signed)?,
-            request_target: path,
-        })
-    };
-    Ok(ReminderTransport {
-        policy,
-        targets: ReminderRequestTargets {
-            confirmation: compile_target(destination.purpose_urls.confirmation.as_deref())?,
-            change: compile_target(destination.purpose_urls.change.as_deref())?,
-            cancellation: compile_target(destination.purpose_urls.cancellation.as_deref())?,
-            reminder: compile_target(destination.purpose_urls.reminder.as_deref())?,
-        },
-        bearer,
-        hmac_sha256_key,
-    })
-}
-
-fn reminder_template(
-    path: &str,
-    authorization: DestinationAuthorizationTemplate,
-    signed: bool,
-) -> Result<DataDestinationRequestTemplate, String> {
-    if signed {
-        return DataDestinationRequestTemplate::new(
+        let template = DataDestinationRequestTemplate::new(
             DestinationMethod::ReviewedReadOnlyPost,
-            path,
+            &path,
             &[],
             &[
-                ("accept", REMINDER_ACCEPT_MAXIMUM_BYTES),
-                ("content-type", REMINDER_CONTENT_TYPE_MAXIMUM_BYTES),
-                ("ce-specversion", 3),
-                ("ce-id", REMINDER_EVENT_ID_MAXIMUM_BYTES),
-                ("ce-source", REMINDER_EVENT_SOURCE_MAXIMUM_BYTES),
-                ("ce-type", REMINDER_EVENT_TYPE_MAXIMUM_BYTES),
-                ("ce-time", REMINDER_EVENT_TIME_MAXIMUM_BYTES),
-                ("ce-dataschema", REMINDER_EVENT_DATASCHEMA_MAXIMUM_BYTES),
-                (
-                    "x-registry-event-generation",
-                    REMINDER_DELIVERY_FIELD_MAXIMUM_BYTES,
-                ),
-                (
-                    "x-registry-delivery-attempt",
-                    REMINDER_DELIVERY_FIELD_MAXIMUM_BYTES,
-                ),
-                (
-                    "x-registry-delivery-time",
-                    REMINDER_EVENT_TIME_MAXIMUM_BYTES,
-                ),
-                ("idempotency-key", REMINDER_DELIVERY_FIELD_MAXIMUM_BYTES),
-                ("x-registry-signature", REMINDER_SIGNATURE_MAXIMUM_BYTES),
+                ("accept", 16),
+                ("content-type", 16),
+                ("webhook-id", 256),
+                ("webhook-timestamp", 20),
+                ("webhook-signature", 256),
             ],
-            authorization,
+            DestinationAuthorizationTemplate::Forbidden,
             DestinationBodyTemplate::Required {
                 max_bytes: REMINDER_MAXIMUM_BODY_BYTES,
             },
             REMINDER_MAXIMUM_REQUEST_BYTES,
         )
-        .map_err(|_| "the signed reminder request shape could not be compiled".to_owned());
-    }
-    DataDestinationRequestTemplate::new_with_exact_headers(
-        DestinationMethod::ReviewedReadOnlyPost,
-        path,
-        &[],
-        &[
-            ("accept", b"application/json".as_slice()),
-            ("content-type", b"application/json".as_slice()),
-        ],
-        authorization,
-        DestinationBodyTemplate::Required {
-            max_bytes: REMINDER_MAXIMUM_BODY_BYTES,
-        },
-        REMINDER_MAXIMUM_REQUEST_BYTES,
-    )
-    .map_err(|_| "the reminder request shape could not be compiled".to_owned())
+        .map_err(|error| {
+            format!("{config_path}.url could not be compiled as a signed reminder request: {error}")
+        })?;
+        Ok(ReminderRequestTarget { template, keys })
+    };
+    let fallback = compile_target(
+        REMINDER_CONFIG_PATH,
+        &destination.url,
+        &destination.hmac_sha256_key_ref,
+        destination.previous_hmac_sha256_key_ref.as_ref(),
+    )?;
+    let purposes = destination
+        .purposes
+        .iter()
+        .map(|(purpose, entry)| {
+            compile_target(
+                &format!("{REMINDER_CONFIG_PATH}.purposes.{purpose}"),
+                &entry.url,
+                &entry.hmac_sha256_key_ref,
+                entry.previous_hmac_sha256_key_ref.as_ref(),
+            )
+            .map(|target| (purpose, target))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(ReminderTransport {
+        policy,
+        fallback,
+        purposes,
+    })
 }
 
 /// Render one due intent as the shared hook envelope in canonical JSON, the
@@ -848,10 +859,6 @@ fn reminder_template(
 /// runtime committed.
 struct RenderedReminderEvent {
     id: String,
-    source: String,
-    event_type: String,
-    time: String,
-    data_schema: String,
     body: Vec<u8>,
 }
 
@@ -876,104 +883,9 @@ fn reminder_event(
     let body = envelope
         .to_canonical_bytes(&EnvelopeLimits::tightened_to(REMINDER_MAXIMUM_BODY_BYTES))
         .map_err(|_| RuntimeError::ReminderEvent)?;
-    let wire: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|_| RuntimeError::ReminderEvent)?;
-    let time = wire
-        .get("time")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(RuntimeError::ReminderEvent)?
-        .to_owned();
     Ok(RenderedReminderEvent {
         id: envelope.id,
-        source: envelope.source,
-        event_type: envelope.event_type,
-        time,
-        data_schema: envelope.dataschema,
         body,
-    })
-}
-
-fn reminder_idempotency_key(event_id: &str) -> String {
-    idempotency_key(REMINDER_IDEMPOTENCY_DOMAIN, &[event_id.as_bytes()])
-}
-
-/// The delivery time a signed attempt carries: the database clock when its
-/// lease was taken, as the shared verifier reads it.
-fn reminder_delivery_time(moment: SystemTime) -> Result<String, time::error::Format> {
-    OffsetDateTime::from(moment).format(&Rfc3339)
-}
-
-struct SignedReminderEvent {
-    generation: String,
-    attempt: String,
-    delivery_time: String,
-    idempotency_key: String,
-    signature: String,
-}
-
-impl SignedReminderEvent {
-    #[cfg(test)]
-    fn fields<'a>(
-        &'a self,
-        event: &'a RenderedReminderEvent,
-        request_target: &'a str,
-    ) -> SignatureFields<'a> {
-        SignatureFields {
-            id: &event.id,
-            source: &event.source,
-            event_type: &event.event_type,
-            time: &event.time,
-            data_schema: &event.data_schema,
-            generation: &self.generation,
-            attempt: &self.attempt,
-            delivery_time: &self.delivery_time,
-            method: "POST",
-            request_target,
-            content_type: "application/json",
-            idempotency_key: &self.idempotency_key,
-            body: &event.body,
-        }
-    }
-}
-
-/// Sign one rendered event for the leased attempt that carries it: the
-/// dispatch generation, the attempt counted from one, and the exact request
-/// target the selected purpose URL compiled to.
-fn sign_reminder_event(
-    key: &[u8],
-    event: &RenderedReminderEvent,
-    generation: i64,
-    attempt: i16,
-    request_target: &str,
-    delivery_time: String,
-) -> Result<SignedReminderEvent, SigningError> {
-    let generation = generation.to_string();
-    let attempt = attempt.to_string();
-    let idempotency_key = reminder_idempotency_key(&event.id);
-    let signature = sign_v1(
-        key,
-        SignatureFields {
-            id: &event.id,
-            source: &event.source,
-            event_type: &event.event_type,
-            time: &event.time,
-            data_schema: &event.data_schema,
-            generation: &generation,
-            attempt: &attempt,
-            delivery_time: &delivery_time,
-            method: "POST",
-            request_target,
-            content_type: "application/json",
-            idempotency_key: &idempotency_key,
-            body: &event.body,
-        },
-    )?;
-    Ok(SignedReminderEvent {
-        generation,
-        attempt,
-        delivery_time,
-        idempotency_key,
-        signature,
     })
 }
 
@@ -1152,7 +1064,7 @@ pub async fn send_claimed_intent_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeZone as _, Utc};
+    use chrono::{TimeZone as _, Utc};
     use registry_platform_config::SecretProvider;
     use serde_json::Value;
     use uuid::Uuid;
@@ -1205,186 +1117,215 @@ mod tests {
         assert_eq!(decoded.id, row.outbox_id.to_string());
     }
 
+    fn reminder_secrets(keys: &[(&str, &[u8])]) -> (tempfile::TempDir, SecretResolver) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        for (name, bytes) in keys {
+            let path = directory.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let resolver = SecretResolver::new([SecretProvider::File], directory.path()).unwrap();
+        (directory, resolver)
+    }
+
+    fn reminder_destination(origin: &str) -> ReminderDestinationConfig {
+        serde_json::from_value(serde_json::json!({
+            "url": format!("{origin}/fallback"),
+            "hmacSha256KeyRef": "secret:file/current"
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn a_short_reminder_signing_key_is_refused_at_activation() {
-        let secret_name =
-            format!("SCHEDULING_SHORT_REMINDER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
-        std::env::set_var(&secret_name, "too-short");
-        let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
-            .expect("the reminder secret resolver");
-        let destination = ReminderDestinationConfig {
-            url: "http://127.0.0.1:1/reminders".to_owned(),
-            purpose_urls: Default::default(),
-            bearer_token_ref: None,
-            hmac_sha256_key_ref: Some(format!("secret:env/{secret_name}")),
-        };
-        let error = reminder_transport(&destination, &secrets)
+        let (_directory, secrets) = reminder_secrets(&[("current", b"too-short")]);
+        let error = reminder_transport(&reminder_destination("http://127.0.0.1:1"), &secrets)
             .err()
             .expect("short signing material is refused");
         assert!(
             error.contains("destinations.reminders.hmacSha256KeyRef"),
             "{error}"
         );
-        assert!(error.contains("between 32 and"), "{error}");
-    }
-
-    fn reminder_destination(
-        purpose_urls: crate::config::ReminderPurposeUrls,
-    ) -> ReminderDestinationConfig {
-        ReminderDestinationConfig {
-            url: "http://127.0.0.1:1/fallback".to_owned(),
-            purpose_urls,
-            bearer_token_ref: None,
-            hmac_sha256_key_ref: None,
-        }
+        assert!(error.contains("9 bytes"), "{error}");
     }
 
     #[test]
-    fn reminders_use_the_fallback_or_the_selected_purpose_url() {
-        let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
-            .expect("the test secret resolver");
-        let fallback = reminder_transport(&reminder_destination(Default::default()), &secrets)
-            .expect("fallback transport");
-        for purpose in ["confirmation", "change", "cancellation", "reminder"] {
-            assert_eq!(
-                fallback.target_for_purpose(purpose).unwrap().request_target,
-                "/fallback"
-            );
-        }
-        assert!(fallback
-            .target_for_purpose("unknown-persisted-purpose")
-            .is_none());
-
-        let selected = reminder_transport(
-            &reminder_destination(crate::config::ReminderPurposeUrls {
-                confirmation: Some("http://127.0.0.1:1/confirmed".to_owned()),
-                change: Some("http://127.0.0.1:1/rescheduled".to_owned()),
-                cancellation: Some("http://127.0.0.1:1/cancelled".to_owned()),
-                reminder: Some("http://127.0.0.1:1/reminder".to_owned()),
-            }),
-            &secrets,
-        )
-        .expect("purpose-specific transport");
-        for (purpose, path) in [
-            ("confirmation", "/confirmed"),
-            ("change", "/rescheduled"),
-            ("cancellation", "/cancelled"),
-            ("reminder", "/reminder"),
-        ] {
-            assert_eq!(
-                selected.target_for_purpose(purpose).unwrap().request_target,
-                path
-            );
-        }
+    fn a_65_byte_reminder_key_ending_in_a_newline_names_its_length_and_the_newline() {
+        let mut key = [0x5a; 65];
+        key[64] = b'\n';
+        let (_directory, secrets) = reminder_secrets(&[("current", &key)]);
+        let error = reminder_transport(&reminder_destination("http://127.0.0.1:1"), &secrets)
+            .err()
+            .expect("oversized signing material is refused");
+        assert!(
+            error.contains("destinations.reminders.hmacSha256KeyRef"),
+            "{error}"
+        );
+        assert!(error.contains("65 bytes"), "{error}");
+        assert!(error.contains("trailing newline: true"), "{error}");
     }
 
     #[test]
-    fn reminder_signature_binds_the_selected_exact_target() {
-        use registry_platform_crypto::delivery_signature::{verify_v1, VerificationError};
-
-        const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
-        let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
-            .expect("the test secret resolver");
-        let transport = reminder_transport(
-            &reminder_destination(crate::config::ReminderPurposeUrls {
-                confirmation: Some("http://127.0.0.1:1/alpha/../confirmed".to_owned()),
-                ..Default::default()
-            }),
-            &secrets,
-        )
-        .expect("purpose-specific transport");
-        let target = transport
-            .target_for_purpose("confirmation")
-            .expect("the typed confirmation target");
-        assert_eq!(target.request_target, "/confirmed");
-        let row = intent("confirmation");
-        let event = reminder_event("registry-north", &row).unwrap();
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_788_048_001);
-        let delivery_time = "2026-08-30T00:00:01Z".to_owned();
-        let signed = sign_reminder_event(KEY, &event, 1, 1, &target.request_target, delivery_time)
-            .expect("the selected target is signed");
-        verify_v1(
-            KEY,
-            signed.fields(&event, &target.request_target),
-            &signed.signature,
-            now,
-            Duration::from_secs(5),
-        )
-        .expect("the selected exact target verifies");
-        assert_eq!(
-            verify_v1(
-                KEY,
-                signed.fields(&event, "/fallback"),
-                &signed.signature,
-                now,
-                Duration::from_secs(5),
-            ),
-            Err(VerificationError::InvalidSignature)
+    fn a_reminder_key_equal_to_a_hook_key_is_refused_naming_both_paths() {
+        let (_directory, secrets) =
+            reminder_secrets(&[("current", &[0x5a; 32]), ("hook", &[0x5a; 32])]);
+        let transport =
+            reminder_transport(&reminder_destination("http://127.0.0.1:1"), &secrets).unwrap();
+        let hooks = serde_json::from_value(serde_json::json!({
+            "appointment-events": {
+                "url": "https://events.example.test/hook",
+                "hmacSha256KeyRef": "secret:file/hook"
+            }
+        }))
+        .unwrap();
+        let error = check_delivery_keys(&transport, &hooks, &secrets).unwrap_err();
+        assert!(
+            error.contains("destinations.reminders.hmacSha256KeyRef"),
+            "{error}"
+        );
+        assert!(
+            error.contains("destinations.hooks.appointment-events.hmacSha256KeyRef"),
+            "{error}"
         );
     }
 
-    #[test]
-    fn reminder_delivery_times_are_canonical_for_every_millisecond_shape() {
-        use registry_platform_crypto::delivery_signature::verify_v1;
+    const TEST_CURRENT: [u8; 32] = [0x5a; 32];
+    const TEST_PURPOSE: [u8; 32] = [0x5b; 32];
+    const TEST_PREVIOUS: [u8; 32] = [0x5c; 32];
 
-        const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
-        let row = intent("reminder");
-        let event = reminder_event("registry-north", &row).unwrap();
-        for (input, expected) in [
-            ("2026-08-30T00:00:01.000Z", "2026-08-30T00:00:01Z"),
-            ("2026-08-30T00:00:01.010Z", "2026-08-30T00:00:01.01Z"),
-            ("2026-08-30T00:00:01.100Z", "2026-08-30T00:00:01.1Z"),
-            ("2026-08-30T00:00:01.120Z", "2026-08-30T00:00:01.12Z"),
-            ("2026-08-30T00:00:01.123Z", "2026-08-30T00:00:01.123Z"),
-        ] {
-            let moment = DateTime::parse_from_rfc3339(input)
+    async fn capture_reminders(
+        purposes: &[&str],
+        times: &[SystemTime],
+    ) -> (OutboxRow, Vec<wiremock::Request>) {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&server)
+            .await;
+        let (_directory, secrets) = reminder_secrets(&[
+            ("current", &TEST_CURRENT),
+            ("purpose", &TEST_PURPOSE),
+            ("previous", &TEST_PREVIOUS),
+        ]);
+        let mut destination = reminder_destination(&server.uri());
+        destination.previous_hmac_sha256_key_ref =
+            Some(SecretReference::parse("secret:file/previous").unwrap());
+        destination.purposes.confirmation = Some(
+            serde_json::from_value(serde_json::json!({
+                "url": format!("{}/confirmed", server.uri()),
+                "hmacSha256KeyRef": "secret:file/purpose"
+            }))
+            .unwrap(),
+        );
+        let transport = reminder_transport(&destination, &secrets).unwrap();
+        assert!(transport.target_for_purpose("unknown").is_none());
+        let row = intent("confirmation");
+        for (&purpose, &time) in purposes.iter().zip(times) {
+            let request = transport
+                .target_for_purpose(purpose)
                 .unwrap()
-                .with_timezone(&Utc);
-            let delivery_time = reminder_delivery_time(SystemTime::from(moment)).unwrap();
-            let signed =
-                sign_reminder_event(KEY, &event, 1, 1, "/reminder", delivery_time.clone()).unwrap();
-            let now = SystemTime::UNIX_EPOCH
-                + Duration::from_secs(u64::try_from(moment.timestamp()).unwrap())
-                + Duration::from_nanos(u64::from(moment.timestamp_subsec_nanos()));
-            verify_v1(
-                KEY,
-                signed.fields(&event, "/reminder"),
-                &signed.signature,
-                now,
-                Duration::ZERO,
-            )
-            .expect("the sender emits a delivery time the shared verifier accepts");
-            assert_eq!(delivery_time, expected);
+                .render(reminder_event("registry-north", &row).unwrap(), time)
+                .unwrap();
+            transport
+                .policy
+                .send(request, Duration::from_secs(5))
+                .await
+                .unwrap();
+        }
+        (row, server.received_requests().await.unwrap())
+    }
+
+    fn captured_header<'a>(request: &'a wiremock::Request, name: &str) -> &'a str {
+        request.headers[name].to_str().unwrap()
+    }
+
+    fn signed_content(
+        request: &wiremock::Request,
+    ) -> registry_platform_crypto::delivery_signature::SignedContent<'_> {
+        registry_platform_crypto::delivery_signature::SignedContent {
+            id: captured_header(request, "webhook-id"),
+            timestamp: captured_header(request, "webhook-timestamp"),
+            signature: captured_header(request, "webhook-signature"),
+            body: &request.body,
         }
     }
 
-    #[test]
-    fn reminder_idempotency_is_stable_across_rendered_retry_attempts() {
-        const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
-        let row = intent("reminder");
-        let event = reminder_event("registry-north", &row).unwrap();
-        let first = sign_reminder_event(
-            KEY,
-            &event,
-            1,
-            1,
-            "/reminder",
-            "2026-08-30T00:00:01Z".to_owned(),
+    #[tokio::test]
+    async fn reminders_use_the_fallback_or_the_selected_purpose_url() {
+        let (_, requests) = capture_reminders(
+            &["confirmation", "change", "cancellation", "reminder"],
+            &[SystemTime::UNIX_EPOCH; 4],
         )
-        .unwrap();
-        let retry = sign_reminder_event(
-            KEY,
-            &event,
-            1,
-            2,
-            "/reminder",
-            "2026-08-30T00:00:31Z".to_owned(),
+        .await;
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.url.path())
+                .collect::<Vec<_>>(),
+            ["/confirmed", "/fallback", "/fallback", "/fallback"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reminder_purpose_signs_with_its_own_key() {
+        use registry_platform_crypto::delivery_signature::verify_authenticity;
+
+        let (_, requests) = capture_reminders(&["confirmation"], &[SystemTime::UNIX_EPOCH]).await;
+        let keys = |key: &[u8]| DeliveryKeys::new(DeliveryKey::new(key).unwrap(), None).unwrap();
+        verify_authenticity(&keys(&TEST_PURPOSE), signed_content(&requests[0])).unwrap();
+        assert!(verify_authenticity(&keys(&TEST_CURRENT), signed_content(&requests[0])).is_err());
+    }
+
+    #[tokio::test]
+    async fn reminders_use_the_outbox_id_as_webhook_id() {
+        let (row, requests) = capture_reminders(
+            &["confirmation"; 2],
+            &[
+                SystemTime::UNIX_EPOCH,
+                SystemTime::UNIX_EPOCH + Duration::from_secs(30),
+            ],
         )
-        .unwrap();
-        assert_eq!(first.idempotency_key, retry.idempotency_key);
-        assert_ne!(first.attempt, retry.attempt);
-        assert_ne!(first.delivery_time, retry.delivery_time);
-        assert_ne!(first.signature, retry.signature);
+        .await;
+        for request in &requests {
+            let envelope: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(
+                captured_header(request, "webhook-id"),
+                row.outbox_id.to_string()
+            );
+            assert_eq!(envelope["id"], row.outbox_id.to_string());
+        }
+        assert_ne!(
+            captured_header(&requests[0], "webhook-signature"),
+            captured_header(&requests[1], "webhook-signature")
+        );
+    }
+
+    #[tokio::test]
+    async fn reminder_timestamps_are_the_lease_time_in_unix_seconds() {
+        let lease = SystemTime::UNIX_EPOCH + Duration::from_millis(1_788_048_001_123);
+        let (_, requests) = capture_reminders(&["reminder"], &[lease]).await;
+        assert_eq!(
+            captured_header(&requests[0], "webhook-timestamp"),
+            "1788048001"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_previous_reminder_key_adds_a_second_entry_after_the_current_one() {
+        let (_, requests) = capture_reminders(&["reminder"], &[SystemTime::UNIX_EPOCH]).await;
+        let content = signed_content(&requests[0]);
+        let signature = |key: &[u8]| {
+            let keys = DeliveryKeys::new(DeliveryKey::new(key).unwrap(), None).unwrap();
+            sign(&keys, content.id, 0, content.body).unwrap()
+        };
+        assert_eq!(
+            content.signature,
+            format!("{} {}", signature(&TEST_CURRENT), signature(&TEST_PREVIOUS))
+        );
     }
 
     #[test]

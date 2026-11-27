@@ -67,7 +67,7 @@ const IDENTITY_LOCK_TIMEOUT_MS: u32 = 5_000;
 const _: () = assert!(MAXIMUM_PAYLOAD_BYTES <= MAX_DESTINATION_REQUEST_BODY_BYTES);
 
 /// Value-free refusal from hook compilation or deployment activation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HookActivationError {
     #[error("the Scheduling hook declaration is invalid")]
     InvalidDeclaration,
@@ -91,8 +91,8 @@ pub enum HookActivationError {
     InvalidDestination,
     #[error("a Scheduling hook destination widens the fixed delivery budget")]
     DeliveryBudgetWidening,
-    #[error("a Scheduling hook signing secret is unavailable or invalid")]
-    InvalidSigningMaterial,
+    #[error("{0}")]
+    SigningMaterial(String),
     #[error("the Scheduling hook runtime identity is invalid")]
     InvalidIdentity,
 }
@@ -569,10 +569,26 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
             HookActivationError::DeliveryBudgetWidening
         }
         UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
-        UrlHookActivationError::SigningKeyUnavailable { .. }
-        | UrlHookActivationError::InvalidSigningKey { .. }
-        | UrlHookActivationError::RepeatedSigningKey { .. } => {
-            HookActivationError::InvalidSigningMaterial
+        UrlHookActivationError::SigningKeyUnavailable {
+            ref destination,
+            member,
+            ..
+        }
+        | UrlHookActivationError::InvalidSigningKey {
+            ref destination,
+            member,
+            ..
+        } => HookActivationError::SigningMaterial(format!(
+            "destinations.hooks.{destination}.{member}: {error}"
+        )),
+        UrlHookActivationError::RepeatedSigningKey { first, second } => {
+            HookActivationError::SigningMaterial(
+                UrlHookActivationError::RepeatedSigningKey {
+                    first: format!("destinations.hooks.{first}"),
+                    second: format!("destinations.hooks.{second}"),
+                }
+                .to_string(),
+            )
         }
     }
 }
@@ -1124,6 +1140,61 @@ mod tests {
         assert_eq!(retry_delays_ms(), expected);
     }
 
+    fn hook_key_refusal(second_key: &[u8]) -> String {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        for (name, key) in [
+            ("event-key", [0x5a; 32].as_slice()),
+            ("mirror-key", second_key),
+        ] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, key).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let secrets = SecretResolver::new([SecretProvider::File], directory.path()).unwrap();
+        let configured: DestinationsConfig = serde_json::from_value(json!({"hooks": {
+            "appointment-events": {
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/event-key"
+            },
+            "audit-mirror": {
+                "url": "https://events.example.test/mirror",
+                "hmacSha256KeyRef": "secret:file/mirror-key"
+            }
+        }}))
+        .unwrap();
+        activate_destinations(&BTreeSet::new(), &configured.hooks, &secrets)
+            .expect_err("hook signing material is refused")
+            .to_string()
+    }
+
+    #[test]
+    fn a_repeated_hook_key_names_both_destinations() {
+        let error = hook_key_refusal(&[0x5a; 32]);
+        assert!(
+            error.contains("destinations.hooks.appointment-events.hmacSha256KeyRef"),
+            "{error}"
+        );
+        assert!(
+            error.contains("destinations.hooks.audit-mirror.hmacSha256KeyRef"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_hook_key_names_its_path_length_and_newline() {
+        let mut key = [0x5b; 65];
+        key[64] = b'\n';
+        let error = hook_key_refusal(&key);
+        assert!(
+            error.contains("destinations.hooks.audit-mirror.hmacSha256KeyRef"),
+            "{error}"
+        );
+        assert!(error.contains("65 bytes"), "{error}");
+        assert!(error.contains("trailing newline: true"), "{error}");
+    }
+
     /// The binding digests a deployed Scheduling runtime records with every
     /// captured delivery. A retained delivery is refused once its recorded
     /// digest no longer matches the activated destination, so these values
@@ -1137,6 +1208,10 @@ mod tests {
         std::fs::write(&key_path, [0x5a; 32]).expect("write the test hook key");
         std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
             .expect("restrict the test hook key");
+        let mirror_path = directory.path().join("mirror-key");
+        std::fs::write(&mirror_path, [0x5b; 32]).expect("write the test mirror key");
+        std::fs::set_permissions(&mirror_path, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict the test mirror key");
         let secrets = SecretResolver::new([SecretProvider::File], directory.path())
             .expect("the test secret resolver");
         let configured: DestinationsConfig = serde_json::from_value(json!({"hooks": {
@@ -1146,7 +1221,7 @@ mod tests {
             },
             "audit-mirror": {
                 "url": "http://127.0.0.1:8080/hooks",
-                "hmacSha256KeyRef": "secret:file/hook-key",
+                "hmacSha256KeyRef": "secret:file/mirror-key",
                 "attemptTimeoutMilliseconds": 250,
                 "maximumAttempts": 3,
             },
@@ -1159,7 +1234,7 @@ mod tests {
 
         assert_eq!(
             activated.binding_digest,
-            "sha256:6021194b5df3b34eeb31b21c8b3ef448f2d639d3e8393d13b98a8276b5411df0"
+            "sha256:63f9ba0e4c8368aa0a5f82253a3523ed604c0553b8f39c7e349b5277fc962782"
         );
         assert_eq!(
             activated.bindings["appointment-events"].binding_digest(),
@@ -1167,7 +1242,7 @@ mod tests {
         );
         assert_eq!(
             activated.bindings["audit-mirror"].binding_digest(),
-            "sha256:dd0b35e51274ab6a1d2456e9b0520acdf5b68e720a352d0d4819f41090ff7d97"
+            "sha256:2f321a61540105f154d771348140d9275e1a0e2eed721f6d593a0a59f5babc9e"
         );
     }
 
@@ -1243,7 +1318,7 @@ mod tests {
             if configured {
                 accepted += 1;
                 assert!(
-                    matches!(activated, Err(HookActivationError::InvalidSigningMaterial)),
+                    matches!(activated, Err(HookActivationError::SigningMaterial(_))),
                     "activation refused {id:?} {config:?} for its budget, which the configuration accepts"
                 );
             } else {

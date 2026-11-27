@@ -72,12 +72,16 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_ledger_refuses_a_claim_or_an_allocation_without_an_operational_mode}
   - id: SCHEDULING-SEC-38
     tests:
-      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_signed_reminder_uses_the_shared_event_delivery_contract}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_signed_reminder_uses_the_standard_webhooks_delivery_contract}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_reminder_destination_without_a_key_is_refused_with_its_fix}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_reminder_purpose_without_its_own_key_is_refused}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: a_reminder_key_equal_to_a_hook_key_is_refused_naming_both_paths}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: a_previous_reminder_key_adds_a_second_entry_after_the_current_one}
       - {path: crates/registry-scheduling/src/config.rs, name: invalid_reminder_purpose_urls_are_refused_without_repeating_values}
       - {path: crates/registry-scheduling/src/runtime.rs, name: reminders_use_the_fallback_or_the_selected_purpose_url}
-      - {path: crates/registry-scheduling/src/runtime.rs, name: reminder_signature_binds_the_selected_exact_target}
-      - {path: crates/registry-scheduling/src/runtime.rs, name: reminder_delivery_times_are_canonical_for_every_millisecond_shape}
-      - {path: crates/registry-scheduling/src/runtime.rs, name: reminder_idempotency_is_stable_across_rendered_retry_attempts}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: a_reminder_purpose_signs_with_its_own_key}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: reminder_timestamps_are_the_lease_time_in_unix_seconds}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: reminders_use_the_outbox_id_as_webhook_id}
       - {path: crates/registry-coordinator/tests/scheduling_event_native.rs, name: native_signed_scheduling_confirmation_drives_one_deduplicated_message, features: [postgres-test]}
       - {path: crates/registry-coordinator/tests/scheduling_event_native.rs, name: native_authored_scheduling_reminder_drives_one_deduplicated_message, features: [postgres-test]}
   - id: SCHEDULING-SEC-35

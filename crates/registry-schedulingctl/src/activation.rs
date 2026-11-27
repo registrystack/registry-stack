@@ -307,7 +307,7 @@ pub fn plan(config_path: &Path) -> Result<Value> {
             "code": HOOK_DESTINATIONS_CODE,
             "message": format!(
                 "{error}; bind every destination the policy hooks name under destinations.hooks, \
-                 with an hmacSha256KeyRef that resolves to a key of at least 32 bytes, then plan again"
+                 with an hmacSha256KeyRef that resolves to a key of 32 to 64 bytes, distinct across destinations, then plan again"
             ),
         }));
     }

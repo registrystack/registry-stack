@@ -204,7 +204,7 @@ cancellation sends only `appointmentId`, `revision`, and `state`. `check` refuse
 with `scheduling.project.unsupported-hook-projection`, so a hook never sends the station, the
 caller, or the cancellation reason. A cancellation intent sent to the reminder destination does
 carry the reason. Delivery happens after the appointment commits,
-at least once, signed with HMAC-SHA256, and the receiver's answer never changes a booking.
+at least once, signed with Standard Webhooks, and the receiver's answer never changes a booking.
 
 {/* Evidence: crates/registry-scheduling-core/src/policy.rs, HookPolicy and ObserverTrigger;
     crates/registry-scheduling/src/hooks.rs; crates/registry-schedulingctl/src/project.rs, check()
@@ -316,15 +316,17 @@ A reminder whose appointment was cancelled or moved to a newer revision is set a
 With no reminder destination configured, each intent stays readable in the outbox and is set aside as local when it falls due, never pretended delivered.
 Adopting the product does not require wiring a notification bus first.
 
-You can sign reminder delivery with the optional `destinations.reminders.hmacSha256KeyRef`.
-Signed delivery uses the shared CloudEvents delivery headers and an HMAC-SHA-256 signature that binds the request target, the envelope bytes, and the delivery metadata.
-`destinations.reminders.url` is the fallback for every purpose.
-The optional closed `purposeUrls` block selects separate `confirmation`, `change`, `cancellation`, and `reminder` endpoints on that fallback URL's origin, and missing purposes keep using the fallback.
-The runtime compiles every effective endpoint at startup and signs the exact selected path, so a proxy cannot reroute a signed event to another typed receiver.
-The event identity and idempotency key stay fixed across retries, while the attempt and delivery time change.
-Configure the matching trusted source and key at the receiver.
-The optional `destinations.reminders.bearerTokenRef` authenticates access to the destination independently and can be used with signing, and omitting the signing key keeps bearer-only delivery.
-A valid event signature proves origin and integrity; it does not grant appointment-read or message-send authority.
+Reminders use Standard Webhooks with the required `destinations.reminders.hmacSha256KeyRef`.
+The runtime signs the canonical envelope bytes, the outbox id carried in `webhook-id`, and the
+lease time in Unix seconds carried in `webhook-timestamp`. The receiver reads the signature from
+`webhook-signature` and deduplicates by `webhook-id`, which stays fixed across retries.
+
+`destinations.reminders.url` is the fallback for every purpose. The optional `purposes` block
+configures separate destinations for `confirmation`, `change`, `cancellation`, or `reminder`.
+Each must share the fallback URL's origin and use its own signing key. Configure the matching
+trusted source and key at the receiver for each URL. During rotation, set
+`previousHmacSha256KeyRef` to send a second signature after the current one. Use distinct keys
+across all reminder and hook destinations.
 
 ### Appointment observers
 
@@ -341,7 +343,7 @@ A policy may declare `phase: after` with a URL handler for exactly four triggers
 The runtime refuses conditions, principals, Rhai or Wasm handlers, unknown triggers, and fields outside that table.
 It captures one canonical event and its delivery row in the same transaction as the appointment change.
 An after-commit worker then POSTs it to the deployment-bound destination.
-Delivery is at least once, signed with HMAC-SHA256, retried within fixed product ceilings, and audited without payload values.
+Delivery is at least once, signed with Standard Webhooks, retried within fixed product ceilings, and audited without payload values.
 Each attempt's audit entry is accepted before the request leaves, or the delivery stays pending and nothing is sent.
 A receiver response is observation only: Registry Scheduling deterministically refuses every proposal and never turns it into a booking, reschedule, or cancellation.
 
@@ -355,7 +357,7 @@ Retained payloads expire after `retention.hookPayloadRetentionDays`, and termina
 [Registry Scheduling configuration reference](../../reference/scheduling-configuration/#retention) states the exact cleanup rules.
 
 {/* Evidence: crates/registry-scheduling/src/hooks.rs; crates/registry-scheduling-core/src/policy.rs ObserverTrigger;
-    crates/registry-scheduling/src/config.rs reminder_purpose_urls_are_typed_and_optional;
+    crates/registry-scheduling/src/config.rs reminder_purposes_are_typed_and_optional;
     crates/registry-scheduling/tests/postgres_commitments/attendance.rs attendance_commit_captures_one_minimized_signed_after_event;
     crates/registry-platform-dispatch/src/retry.rs. */}
 {/* TODO[evidence]: the envelope member table (causation root and hop, dataschema) has no single test that asserts every member. */}

@@ -699,16 +699,16 @@
     "ReminderDestinationConfig": {
       "additionalProperties": false,
       "properties": {
-        "bearerTokenRef": {
+        "hmacSha256KeyRef": {
           "$ref": "#/$defs/SecretReference"
         },
-        "hmacSha256KeyRef": {
+        "previousHmacSha256KeyRef": {
           "$ref": "#/$defs/SecretReference",
-          "description": "Optional HMAC-SHA-256 key for the shared signed event-delivery\ncontract. Bearer authentication, when configured, remains independent."
+          "description": "Previous signing key during rotation."
         },
-        "purposeUrls": {
-          "$ref": "#/$defs/ReminderPurposeUrls",
-          "description": "Optional endpoints for individual reminder purposes. Any omitted\npurpose uses `url`; every override must share that URL's origin."
+        "purposes": {
+          "$ref": "#/$defs/ReminderPurposes",
+          "description": "Purpose-specific destinations on the fallback URL's origin."
         },
         "url": {
           "$ref": "#/$defs/Url",
@@ -716,25 +716,45 @@
         }
       },
       "required": [
-        "url"
+        "url",
+        "hmacSha256KeyRef"
       ],
       "type": "object"
     },
-    "ReminderPurposeUrls": {
+    "ReminderPurposeDestinationConfig": {
       "additionalProperties": false,
-      "description": "Optional endpoint overrides named for the four reminder intent purposes\nScheduling emits.",
+      "properties": {
+        "hmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Previous signing key during rotation."
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "url",
+        "hmacSha256KeyRef"
+      ],
+      "type": "object"
+    },
+    "ReminderPurposes": {
+      "additionalProperties": false,
       "properties": {
         "cancellation": {
-          "$ref": "#/$defs/Url"
+          "$ref": "#/$defs/ReminderPurposeDestinationConfig"
         },
         "change": {
-          "$ref": "#/$defs/Url"
+          "$ref": "#/$defs/ReminderPurposeDestinationConfig"
         },
         "confirmation": {
-          "$ref": "#/$defs/Url"
+          "$ref": "#/$defs/ReminderPurposeDestinationConfig"
         },
         "reminder": {
-          "$ref": "#/$defs/Url"
+          "$ref": "#/$defs/ReminderPurposeDestinationConfig"
         }
       },
       "type": "object"

@@ -271,15 +271,18 @@ mod tests {
                 "DatabaseConfig.{property} must be a secret reference"
             );
         }
-        for (definition, property) in [
-            ("ReminderDestinationConfig", "bearerTokenRef"),
-            ("UrlHookDestinationConfig", "hmacSha256KeyRef"),
+        for definition in [
+            "ReminderDestinationConfig",
+            "ReminderPurposeDestinationConfig",
+            "UrlHookDestinationConfig",
         ] {
-            assert_eq!(
-                document["$defs"][definition]["properties"][property]["$ref"],
-                "#/$defs/SecretReference",
-                "{definition}.{property} must be a secret reference"
-            );
+            for property in ["hmacSha256KeyRef", "previousHmacSha256KeyRef"] {
+                assert_eq!(
+                    document["$defs"][definition]["properties"][property]["$ref"],
+                    "#/$defs/SecretReference",
+                    "{definition}.{property} must be a secret reference"
+                );
+            }
         }
         assert_eq!(
             document["$defs"]["SecretProvidersConfig"]["anyOf"],

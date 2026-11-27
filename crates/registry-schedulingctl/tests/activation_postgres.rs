@@ -448,13 +448,24 @@ async fn plan_reports_a_hook_destination_apply_cannot_sign_for() {
             "schedulingctl.activation.hook-destinations"
         );
         let message = refusals[0]["message"].as_str().unwrap();
-        assert!(message.contains("signing secret"), "{message}");
+        let path = "destinations.hooks.appointment-events.hmacSha256KeyRef";
+        let reason = if key.is_some() {
+            "9 bytes"
+        } else {
+            "the referenced secret is unavailable"
+        };
+        assert!(message.contains(path), "{message}");
+        assert!(message.contains(reason), "{message}");
+        assert!(
+            message.contains("a key of 32 to 64 bytes, distinct across destinations"),
+            "{message}"
+        );
         assert!(!report.to_string().contains("too-short"), "{report}");
         let refused = apply(&config).expect_err("apply refuses the same destination");
-        assert!(
-            format!("{refused:#}").contains("signing secret"),
-            "{refused:#}"
-        );
+        let message = format!("{refused:#}");
+        assert!(message.contains(path), "{message}");
+        assert!(message.contains(reason), "{message}");
+        assert!(!message.contains("too-short"), "{message}");
         assert_eq!(deployment.tables().await, 0, "apply created a table");
     }
 
