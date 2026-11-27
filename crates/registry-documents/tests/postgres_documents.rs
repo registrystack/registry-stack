@@ -3889,9 +3889,9 @@ async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
         .execute(&format!(
             "INSERT INTO documents_activations \
                (activation_id, apply_order, package_digest, predecessor_package_digest, \
-                database_id, plan_kind, applied_at, role_mode) \
+                database_id, plan_kind, applied_at, role_mode, posture) \
              SELECT gen_random_uuid(), apply_order + 1, 'sha256:{}', package_digest, \
-                    database_id, 'successor', now(), role_mode \
+                    database_id, 'successor', now(), role_mode, posture \
                FROM documents_activations ORDER BY apply_order DESC LIMIT 1",
             "0".repeat(64)
         ))

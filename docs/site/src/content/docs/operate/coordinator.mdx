@@ -560,7 +560,7 @@ Startup refuses when a runtime file change alters a live run's endpoint, client 
 Restore the original binding, or investigate with `coordinator --runtime-config FILE --recovery-only`, which admits and dispatches nothing.
 Recovery-only still verifies the active package, database, schema, role, and custody, and its readiness remains false.
 
-The service requires protected state schema version 6.
+The service requires protected state schema version 7.
 An earlier layout is refused: `apply` reports `coordinator.command.schema-version`, and runtime state access, including `deployment-status`, fails closed as `coordinator.command.store-unavailable`.
 Apply does not adopt or rewrite an earlier layout, and there is no in-place state migration.
 Settle the retained work with its matching binary, then create a fresh namespace and database identity for this version, and keep the original keys, packages, and audit history until retention permits erasure.

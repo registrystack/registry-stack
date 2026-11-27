@@ -105,7 +105,7 @@ async fn a_fresh_database_is_refused_by_serve_until_the_package_is_applied() {
         .await
         .expect("the package applies");
     assert!(applied.recorded);
-    assert_eq!(applied.schema_versions_applied, vec![100]);
+    assert_eq!(applied.schema_versions_applied, vec![100, 101]);
     assert_eq!(applied.activation.plan_kind, PlanKind::Initial);
     assert_eq!(applied.activation.role_mode, RoleMode::Single);
     prepare(&deployment.runtime)
@@ -123,7 +123,7 @@ async fn plan_reports_the_change_and_writes_nothing() {
     assert_eq!(plan.change, ActivationChange::Activate);
     assert_eq!(plan.plan_kind, PlanKind::Initial);
     assert_eq!(plan.active_digest, None);
-    assert_eq!(plan.pending_schema_versions, vec![100]);
+    assert_eq!(plan.pending_schema_versions, vec![100, 101]);
     assert_eq!(plan.database_id, DatabaseIdCheck::NotRecorded);
     assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
     assert!(plan.package_digest.starts_with("sha256:"));
@@ -256,7 +256,7 @@ async fn status_reports_the_active_package_and_its_history() {
     assert_eq!(active.activation_id, second.activation.activation_id);
     assert_eq!(active.package_digest, second.activation.package_digest);
     assert_eq!(active.database_id, "registry-documents-test");
-    assert_eq!(status.schema_version, Some(100));
+    assert_eq!(status.schema_version, Some(101));
     assert_eq!(
         status
             .history

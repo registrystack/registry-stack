@@ -687,15 +687,15 @@ async fn apply_in(
     let activation = platform_activation::append_activation(
         transaction,
         &activation_layout(),
-        &NewActivation {
+        &NewActivation::without_posture(
             activation_id,
-            package_digest: candidate.package_digest,
-            database_id: candidate.database_id,
-            operator_reference_hash: operator_reference_hash.as_deref(),
-            backup_references: &request.backup_references,
+            candidate.package_digest,
+            candidate.database_id,
+            operator_reference_hash.as_deref(),
+            &request.backup_references,
             role_mode,
-            runtime_role: None,
-        },
+            None,
+        ),
     )
     .await
     .map_err(platform_error)?;

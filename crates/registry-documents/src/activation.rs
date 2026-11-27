@@ -580,15 +580,15 @@ async fn apply_begun(
     let activation = platform::append_activation(
         &*tx,
         &layout(),
-        &NewActivation {
+        &NewActivation::without_posture(
             activation_id,
             package_digest,
             database_id,
-            operator_reference_hash: operator_reference_hash.as_deref(),
-            backup_references: &request.backup_references,
+            operator_reference_hash.as_deref(),
+            &request.backup_references,
             role_mode,
-            runtime_role: None,
-        },
+            None,
+        ),
     )
     .await
     .map_err(platform_error)?;
@@ -649,18 +649,24 @@ pub async fn check_runtime(
         return Err(ActivationError::LedgerUnreadable);
     }
     crate::store::check_activation_schema(&**client).await?;
-    let active = platform::check_active_package(&**client, &layout(), database_id, package_digest)
-        .await
-        .map_err(|error| match error {
-            platform::ActivePackageError::NotActivated => ActivationError::NotActivated,
-            platform::ActivePackageError::DatabaseIdMismatch => ActivationError::DatabaseIdMismatch,
-            platform::ActivePackageError::PackageNotActive { .. } => {
-                ActivationError::PackageNotActive
-            }
-            platform::ActivePackageError::Activation(error) => {
-                ActivationError::Store(platform_error(error))
-            }
-        })?;
+    let active = platform::check_active_package_without_posture(
+        &**client,
+        &layout(),
+        database_id,
+        package_digest,
+    )
+    .await
+    .map_err(|error| match error {
+        platform::ActivePackageError::NotActivated => ActivationError::NotActivated,
+        platform::ActivePackageError::DatabaseIdMismatch => ActivationError::DatabaseIdMismatch,
+        platform::ActivePackageError::PackageNotActive { .. } => ActivationError::PackageNotActive,
+        // Until this product declares a posture it checks as production,
+        // so a ledger recorded in development is not its active package.
+        platform::ActivePackageError::PostureMismatch { .. } => ActivationError::PackageNotActive,
+        platform::ActivePackageError::Activation(error) => {
+            ActivationError::Store(platform_error(error))
+        }
+    })?;
     crate::store::schema_ready(&client).await?;
     let role = observe(&**client, None)
         .await?

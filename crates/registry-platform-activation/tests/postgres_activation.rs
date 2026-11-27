@@ -6,6 +6,7 @@ use registry_platform_activation::{
     observe_role, stray_authority, ActivePackageError, AuthorityCause, DatabaseIdCheck, Layout,
     NewActivation, PlanKind, RoleMode,
 };
+use registry_platform_posture::Posture;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -57,7 +58,8 @@ async fn ledger_identity_and_split_role_share_one_postgres_boundary() {
                applied_at timestamptz NOT NULL,
                operator_reference_hash text,
                backup_references text[] NOT NULL,
-               role_mode text NOT NULL CHECK(role_mode IN ('single','split'))
+               role_mode text NOT NULL CHECK(role_mode IN ('single','split')),
+               posture text NOT NULL CHECK(posture IN ('development','production'))
              );"
         ))
         .await
@@ -90,6 +92,7 @@ async fn ledger_identity_and_split_role_share_one_postgres_boundary() {
             operator_reference_hash: None,
             backup_references: &[],
             role_mode: role.mode,
+            posture: Posture::Production,
             runtime_role: None,
         },
     )
@@ -118,6 +121,7 @@ async fn ledger_identity_and_split_role_share_one_postgres_boundary() {
         &layout(),
         "fixture-database",
         "sha256:fixture",
+        Posture::Production,
     )
     .await
     .expect("accept exact active package");
@@ -126,7 +130,8 @@ async fn ledger_identity_and_split_role_share_one_postgres_boundary() {
             &transaction,
             &layout(),
             "another-database",
-            "sha256:fixture"
+            "sha256:fixture",
+            Posture::Production
         )
         .await,
         Err(ActivePackageError::DatabaseIdMismatch)
@@ -611,4 +616,293 @@ async fn postgres_version_floor_precedes_missing_ledger_observation() {
         .await
         .expect("connection task")
         .expect("connection closes");
+}
+
+const POSTURE_FIXTURE_LEDGER: &str = "CREATE TABLE fixture_schema_migrations(
+       version bigint PRIMARY KEY,
+       applied_at timestamptz NOT NULL DEFAULT now()
+     );
+     CREATE TABLE fixture_activations(
+       activation_id uuid PRIMARY KEY,
+       apply_order bigint NOT NULL UNIQUE,
+       package_digest text NOT NULL,
+       predecessor_package_digest text,
+       database_id text NOT NULL,
+       plan_kind text NOT NULL CHECK(plan_kind IN ('initial','successor')),
+       applied_at timestamptz NOT NULL,
+       operator_reference_hash text,
+       backup_references text[] NOT NULL,
+       role_mode text NOT NULL CHECK(role_mode IN ('single','split'))
+     );";
+
+/// The migration every product ledger applies to gain the column.
+const POSTURE_MIGRATION: &str =
+    "ALTER TABLE fixture_activations ADD COLUMN posture text NOT NULL DEFAULT 'production'
+         CHECK (posture IN ('development', 'production'));
+     ALTER TABLE fixture_activations ALTER COLUMN posture DROP DEFAULT;";
+
+struct PostureFixture {
+    client: tokio_postgres::Client,
+    schema: String,
+    connection_task: tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+}
+
+impl PostureFixture {
+    async fn new(ledger_sql: &str) -> Self {
+        let (client, connection) = tokio_postgres::connect(&database_url(), NoTls)
+            .await
+            .expect("connect to disposable PostgreSQL");
+        let connection_task = tokio::spawn(connection);
+        let schema = format!("posture_{}", Uuid::new_v4().simple());
+        client
+            .batch_execute(&format!(
+                "CREATE SCHEMA {schema}; SET search_path TO {schema}; {ledger_sql}"
+            ))
+            .await
+            .expect("create posture fixture");
+        Self {
+            client,
+            schema,
+            connection_task,
+        }
+    }
+
+    async fn finish(self) {
+        self.client
+            .batch_execute(&format!(
+                "RESET search_path; DROP SCHEMA {} CASCADE;",
+                self.schema
+            ))
+            .await
+            .expect("remove posture fixture");
+        drop(self.client);
+        self.connection_task
+            .await
+            .expect("join PostgreSQL connection")
+            .expect("PostgreSQL connection completes");
+    }
+}
+
+async fn append(
+    client: &tokio_postgres::Client,
+    posture: Posture,
+) -> registry_platform_activation::Activation {
+    append_activation(
+        client,
+        &layout(),
+        &NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest: "sha256:fixture",
+            database_id: "fixture-database",
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            posture,
+            runtime_role: None,
+        },
+    )
+    .await
+    .expect("append activation")
+}
+
+#[tokio::test]
+async fn append_activation_round_trips_the_posture() {
+    let fixture =
+        PostureFixture::new(&format!("{POSTURE_FIXTURE_LEDGER}{POSTURE_MIGRATION}")).await;
+    for posture in [Posture::Development, Posture::Production] {
+        let fresh =
+            PostureFixture::new(&format!("{POSTURE_FIXTURE_LEDGER}{POSTURE_MIGRATION}")).await;
+        let appended = append(&fresh.client, posture).await;
+        assert_eq!(appended.posture, posture);
+        let read = active_activation(&fresh.client, &layout())
+            .await
+            .expect("read active")
+            .expect("one row");
+        assert_eq!(read.posture, posture);
+        assert_eq!(
+            activation_history(&fresh.client, &layout())
+                .await
+                .expect("history"),
+            vec![appended]
+        );
+        fresh.finish().await;
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn check_active_package_reports_a_posture_mismatch_in_both_directions() {
+    for (recorded, declared) in [
+        (Posture::Production, Posture::Development),
+        (Posture::Development, Posture::Production),
+    ] {
+        let fixture =
+            PostureFixture::new(&format!("{POSTURE_FIXTURE_LEDGER}{POSTURE_MIGRATION}")).await;
+        append(&fixture.client, recorded).await;
+        let result = check_active_package(
+            &fixture.client,
+            &layout(),
+            "fixture-database",
+            "sha256:fixture",
+            declared,
+        )
+        .await;
+        match result {
+            Err(ActivePackageError::PostureMismatch {
+                recorded: seen,
+                declared: asked,
+            }) => {
+                assert_eq!((seen, asked), (recorded, declared));
+                let message = ActivePackageError::PostureMismatch {
+                    recorded: seen,
+                    declared: asked,
+                }
+                .to_string();
+                assert!(message.contains(recorded.as_str()) && message.contains(declared.as_str()));
+            }
+            other => panic!("expected a posture mismatch, got {other:?}"),
+        }
+        let matching = check_active_package(
+            &fixture.client,
+            &layout(),
+            "fixture-database",
+            "sha256:fixture",
+            recorded,
+        )
+        .await
+        .expect("matching posture is accepted");
+        assert_eq!(matching.posture, recorded);
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn the_transitional_check_and_constructor_behave_as_production() {
+    let fixture =
+        PostureFixture::new(&format!("{POSTURE_FIXTURE_LEDGER}{POSTURE_MIGRATION}")).await;
+    let request = NewActivation::without_posture(
+        Uuid::new_v4(),
+        "sha256:fixture",
+        "fixture-database",
+        None,
+        &[],
+        RoleMode::Single,
+        None,
+    );
+    assert_eq!(request.posture, Posture::Production);
+    append_activation(&fixture.client, &layout(), &request)
+        .await
+        .expect("append");
+    registry_platform_activation::check_active_package_without_posture(
+        &fixture.client,
+        &layout(),
+        "fixture-database",
+        "sha256:fixture",
+    )
+    .await
+    .expect("production row passes the transitional check");
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_row_from_before_the_migration_reads_production() {
+    let fixture = PostureFixture::new(POSTURE_FIXTURE_LEDGER).await;
+    fixture
+        .client
+        .batch_execute(
+            "INSERT INTO fixture_activations VALUES(
+               '00000000-0000-0000-0000-000000000001', 1, 'sha256:fixture', NULL,
+               'fixture-database', 'initial', now(), NULL, '{}', 'single');",
+        )
+        .await
+        .expect("insert a pre-migration row");
+    fixture
+        .client
+        .batch_execute(POSTURE_MIGRATION)
+        .await
+        .expect("apply the posture migration");
+    let read = active_activation(&fixture.client, &layout())
+        .await
+        .expect("read active")
+        .expect("one row");
+    assert_eq!(read.posture, Posture::Production);
+    check_active_package(
+        &fixture.client,
+        &layout(),
+        "fixture-database",
+        "sha256:fixture",
+        Posture::Production,
+    )
+    .await
+    .expect("a legacy row serves production");
+    assert!(matches!(
+        check_active_package(
+            &fixture.client,
+            &layout(),
+            "fixture-database",
+            "sha256:fixture",
+            Posture::Development,
+        )
+        .await,
+        Err(ActivePackageError::PostureMismatch {
+            recorded: Posture::Production,
+            declared: Posture::Development
+        })
+    ));
+    // The default is dropped, so an insert that names no posture fails.
+    let missing = fixture
+        .client
+        .batch_execute(
+            "INSERT INTO fixture_activations(activation_id, apply_order, package_digest,
+               database_id, plan_kind, applied_at, backup_references, role_mode)
+             VALUES(gen_random_uuid(), 2, 'sha256:x', 'd', 'successor', now(), '{}', 'single');",
+        )
+        .await;
+    assert!(missing.is_err(), "the migration leaves no posture default");
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn an_unknown_recorded_posture_is_corrupt() {
+    let fixture = PostureFixture::new(POSTURE_FIXTURE_LEDGER).await;
+    fixture
+        .client
+        .batch_execute(
+            "ALTER TABLE fixture_activations ADD COLUMN posture text NOT NULL DEFAULT 'staging';
+             INSERT INTO fixture_activations VALUES(
+               '00000000-0000-0000-0000-000000000001', 1, 'sha256:fixture', NULL,
+               'fixture-database', 'initial', now(), NULL, '{}', 'single', 'staging');",
+        )
+        .await
+        .expect("insert an unknown posture");
+    assert!(matches!(
+        active_activation(&fixture.client, &layout()).await,
+        Err(registry_platform_activation::Error::Corrupt)
+    ));
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_ledger_without_the_posture_column_reads_production() {
+    let fixture = PostureFixture::new(POSTURE_FIXTURE_LEDGER).await;
+    fixture
+        .client
+        .batch_execute(
+            "INSERT INTO fixture_activations VALUES(
+               '00000000-0000-0000-0000-000000000001', 1, 'sha256:fixture', NULL,
+               'fixture-database', 'initial', now(), NULL, '{}', 'single');",
+        )
+        .await
+        .expect("insert a pre-migration row");
+    let read = active_activation(&fixture.client, &layout())
+        .await
+        .expect("read active")
+        .expect("one row");
+    assert_eq!(read.posture, Posture::Production);
+    let history = activation_history(&fixture.client, &layout())
+        .await
+        .expect("read history");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].posture, Posture::Production);
+    fixture.finish().await;
 }

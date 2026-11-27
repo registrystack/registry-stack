@@ -9,7 +9,7 @@
 //! A runtime left running across an activation then stops delivering rather
 //! than serving work under a package that is no longer active.
 
-use registry_platform_activation::{check_active_package, Layout};
+use registry_platform_activation::{check_active_package_without_posture, Layout};
 use tokio_postgres::Transaction;
 
 use super::seams::DeliveryError;
@@ -45,7 +45,7 @@ pub async fn verify_active_package(
         )
         .await
         .map_err(|_| DeliveryError::Unavailable)?;
-    check_active_package(transaction, layout, database_id, package_digest)
+    check_active_package_without_posture(transaction, layout, database_id, package_digest)
         .await
         .map(drop)
         .map_err(|_| DeliveryError::Unavailable)

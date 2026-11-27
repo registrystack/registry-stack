@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A migration adds a posture to the activation ledger. Every activation
+  records production until the runtime declares its posture, and the
+  activation objects in `schedulingctl` reports carry it as `posture`.
+
 - Add `schedulingctl provision`. From the two database URLs in the runtime file
   and an administrator URL (`--admin-url-file` or `--admin-url-env`, a role
   with `CREATEROLE` and `CREATEDB` on the same host and port, over verified

@@ -17,6 +17,10 @@ const PINS: &[(&str, &str)] = &[
         "0101_dispatch_lease_expiry.sql",
         "2a505e1bac1e306880409ddc67c0fb0a55a5ca65714b41875eda7ac176b9796d",
     ),
+    (
+        "0102_activation_posture.sql",
+        "a18f643199189538139927ea61749ca829ba3868ff37cb054877deee8df1e475",
+    ),
 ];
 
 #[test]

@@ -1916,15 +1916,15 @@ async fn hook_fixture_at(hook_url: &str) -> Fixture {
     registry_platform_activation::append_activation(
         &fx.admin,
         &activation_layout(),
-        &registry_platform_activation::NewActivation {
-            activation_id: Uuid::new_v4(),
-            package_digest: PACKAGE_DIGEST,
-            database_id: DATABASE_ID,
-            operator_reference_hash: None,
-            backup_references: &[],
-            role_mode: RoleMode::Single,
-            runtime_role: Some("scheduling_test"),
-        },
+        &registry_platform_activation::NewActivation::without_posture(
+            Uuid::new_v4(),
+            PACKAGE_DIGEST,
+            DATABASE_ID,
+            None,
+            &[],
+            RoleMode::Single,
+            Some("scheduling_test"),
+        ),
     )
     .await
     .expect("record the fixture activation");
@@ -2410,15 +2410,15 @@ async fn hook_delivery_is_refused_when_the_activation_record_names_another_datab
     registry_platform_activation::append_activation(
         &fx.admin,
         &activation_layout(),
-        &registry_platform_activation::NewActivation {
-            activation_id: Uuid::new_v4(),
-            package_digest: PACKAGE_DIGEST,
-            database_id: "another-scheduling-database",
-            operator_reference_hash: None,
-            backup_references: &[],
-            role_mode: RoleMode::Single,
-            runtime_role: Some("scheduling_test"),
-        },
+        &registry_platform_activation::NewActivation::without_posture(
+            Uuid::new_v4(),
+            PACKAGE_DIGEST,
+            "another-scheduling-database",
+            None,
+            &[],
+            RoleMode::Single,
+            Some("scheduling_test"),
+        ),
     )
     .await
     .expect("record an activation naming another database");
@@ -2461,16 +2461,15 @@ async fn hook_delivery_stops_once_the_activation_record_names_another_package() 
     registry_platform_activation::append_activation(
         &fx.admin,
         &activation_layout(),
-        &registry_platform_activation::NewActivation {
-            activation_id: Uuid::new_v4(),
-            package_digest:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000002",
-            database_id: DATABASE_ID,
-            operator_reference_hash: None,
-            backup_references: &[],
-            role_mode: RoleMode::Single,
-            runtime_role: Some("scheduling_test"),
-        },
+        &registry_platform_activation::NewActivation::without_posture(
+            Uuid::new_v4(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            DATABASE_ID,
+            None,
+            &[],
+            RoleMode::Single,
+            Some("scheduling_test"),
+        ),
     )
     .await
     .expect("record a superseding activation");
@@ -5232,8 +5231,8 @@ async fn a_records_swap_checks_the_active_package_under_its_locks() {
         .execute(
             "INSERT INTO scheduling_activations(activation_id, apply_order, package_digest, \
              predecessor_package_digest, database_id, plan_kind, applied_at, role_mode, \
-             runtime_role) SELECT gen_random_uuid(), max(apply_order) + 1, $1, $2, \
-             'records-ledger', 'successor', now(), 'single', current_user \
+             runtime_role, posture) SELECT gen_random_uuid(), max(apply_order) + 1, $1, $2, \
+             'records-ledger', 'successor', now(), 'single', current_user, 'production' \
              FROM scheduling_activations",
             &[&second, &first],
         )

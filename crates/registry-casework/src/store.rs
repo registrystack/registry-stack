@@ -16,8 +16,13 @@ use uuid::Uuid;
 /// Every schema version, in the order it is applied. The baseline is
 /// version [`BASELINE_SCHEMA_VERSION`], above every version an earlier
 /// release applied; each later migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 1] =
-    [(200, include_str!("../migrations/0200_reviews.sql"))];
+pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+    (200, include_str!("../migrations/0200_reviews.sql")),
+    (
+        201,
+        include_str!("../migrations/0201_activation_posture.sql"),
+    ),
+];
 /// The baseline schema version. A ledger holding any version below it was
 /// left by an earlier pre-1.0 release, which this release refuses by name:
 /// version 100 is the v0.42.0 and v0.43.0 baseline, whose completion outbox
@@ -942,12 +947,12 @@ mod schema_version_tests {
             }
         }
         assert!(refuse_unsupported_schema(&[]).is_ok());
-        assert!(refuse_unsupported_schema(&[200]).is_ok());
+        assert!(refuse_unsupported_schema(&[200, 201]).is_ok());
         assert!(matches!(
-            refuse_unsupported_schema(&[200, 201]),
+            refuse_unsupported_schema(&[200, 201, 202]),
             Err(StoreError::SchemaNewer {
-                found: 201,
-                supported: 200
+                found: 202,
+                supported: 201
             })
         ));
     }

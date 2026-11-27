@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The shared activation ledger records a posture with every activation.
+  `registry-platform-activation` adds `Activation.posture` and
+  `NewActivation.posture`, and `check_active_package` takes the declared
+  posture and answers `ActivePackageError::PostureMismatch { recorded,
+  declared }` when the active row records the other one. A row written
+  before the column existed reads as production.
+  `NewActivation::without_posture` and `check_active_package_without_posture`
+  record and check production, and every runtime uses them until it declares
+  its posture.
+
 - Every runtime reads a secret file under one rule. A relative link that
   stays below `secretProviders.file.root` is followed, at most eight links
   deep. A file owned by root with mode `0440` or `0640` loads when the

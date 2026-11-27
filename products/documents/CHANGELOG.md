@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A migration adds a posture to the activation ledger. Every activation
+  records production until the runtime declares its posture, and the
+  activation objects in `documentsctl` reports carry it as `posture`.
+
 - `authentication.oidc.allowedClients` accepts the keyword `from-package`,
   which admits the requester clients of the package's access profiles, so the
   clients are written once, in the package. The member stays required, and an
