@@ -45,3 +45,13 @@ The crate contains no HTTP client, credentials, persistence, source adapter,
 policy evaluator, reviewer task, or source execution code. In particular, a
 completion envelope is only a synchronization hint. It cannot carry approval
 evidence or authorize a source operation.
+
+An ask is a reviewer's request for more from the subject's owner. The provider
+owns it. The producer finds it through the ask feed (`GET /v1/review-asks`,
+announcements of ids and times only), reads it at
+`/v1/review-requests/{requestId}/asks/{askId}`, and reports it answered with
+`POST .../answer`. `ReviewAsk` carries reviewer text bounded like a public
+reason, up to eight distinct `wants` (`answer`, `document`), an absolute `dueAt`
+and a state (`open`, `answered`, `expired`, `closed`) whose times must agree.
+`ReviewAskAnswer` holds only the subject binding and the answer time, so it
+cannot carry the answer itself.
