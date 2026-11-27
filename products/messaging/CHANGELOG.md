@@ -12,6 +12,10 @@
   check its producer names, and a key endpoint outage under
   `key-source-unavailable`. `messaging_authentication_refusals_total{reason}`
   is unchanged. Refusal statuses, headers and bodies are unchanged.
+- A scope refusal line also names the scope claim the deployment reads, the
+  scope the access profile requires and the profile's id. The values come from
+  the configuration and the reviewed package, never from the token. No other
+  refusal line carries them, and the answer is unchanged.
 - A static key set with a private key member or a repeated member name is
   refused at startup under `messaging.runtime.unreadable-jwks-secret`, with
   the rule it broke, and `messagingctl` names the rule when it refuses a

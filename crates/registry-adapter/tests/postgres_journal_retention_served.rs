@@ -650,7 +650,7 @@ async fn a_runtime_role_with_members_is_granted_nothing_and_refused() {
 }
 
 /// The role that created the runtime role administers it, as in a database
-/// built by `adapterctl provision`, so its membership does not stop the grant.
+/// built by the shared provisioning plan, so its membership does not stop the grant.
 #[tokio::test]
 async fn a_runtime_role_whose_only_member_administers_it_is_granted_its_privileges() {
     let upstream = UpstreamDouble::start();
@@ -679,7 +679,7 @@ async fn a_runtime_role_whose_only_member_administers_it_is_granted_its_privileg
     drop_role(&database, &role).await;
 }
 
-/// Create the runtime role the way `adapterctl provision` does: a
+/// Create the runtime role the way the shared provisioning plan does: a
 /// `LOGIN CREATEROLE` administrator creates it with `createrole_self_grant`
 /// set to `set,inherit`. PostgreSQL then records two membership rows for the
 /// administrator in the runtime role, one that carries ADMIN OPTION and one
@@ -718,7 +718,7 @@ async fn create_provisioned_runtime_role(database: &str, runtime: &str, administ
     );
 }
 
-/// The layout `adapterctl provision` builds, with the CREATEROLE administrator
+/// The layout the shared provisioning plan builds, with the CREATEROLE administrator
 /// as the runtime role's only member, still receives its grants. Pinned on
 /// the two-row layout: a per-row test of ADMIN OPTION would count the
 /// administrator's plain row and refuse every provisioned database.

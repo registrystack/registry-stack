@@ -23,8 +23,8 @@
 #   journey.promote.<thing>  a promote step with no input or nothing to refuse
 #   journey.keep.<thing>     the keep step lost the written record
 #   journey.attach.<thing>   the attach step refused the reader's own setup
-#   http.<status>.<stage>    a refused call: the HTTP status and the
-#                            authentication stage in the operator log
+#   http.<status>.<stage>    a refused call: the HTTP status and the stage word
+#                            mapped from the operator log's failed_check
 #   product.<dotted code>    the diagnostic code a product prints for a refused
 #                            check or start
 

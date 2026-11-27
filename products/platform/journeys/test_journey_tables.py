@@ -279,11 +279,12 @@ class JourneyFiles(unittest.TestCase):
 
 
 class LoggedStage(unittest.TestCase):
-    """`logged_stage` reads a refused call's stage from `stage` or from `failed_check`."""
+    """`logged_stage` maps the last refusal line's `failed_check` label onto a stage word."""
 
     CASES = (
-        ('{"stage":"token-type","msg":"refused"}', "token-type"),
-        ("WARN refused stage=audience", "audience"),
+        ('{"stage":"token-type","msg":"refused"}', ""),
+        ("WARN refused stage=audience", ""),
+        ('failed_check="token-time"\n{"stage":"extract"}', "time"),
         ('INFO request refused decision="refused" failed_check="token-type" suppressed=0', "token-type"),
         ('{"fields":{"decision":"refused","failed_check":"credential-malformed"}}', "header"),
         ('failed_check="token-client"', "client"),
@@ -291,7 +292,8 @@ class LoggedStage(unittest.TestCase):
         ('failed_check="key-source-unavailable"', "unavailable"),
         ('failed_check="token-key"\nfailed_check="token-time"', "time"),
         ('failed_check="credential-missing"', ""),
-        ('failed_check="token-time"\nfailed_check="operation"', "time"),
+        ('failed_check="token-time"\nfailed_check="operation"', ""),
+        ('failed_check="token-type"\nfailed_check="access-profile"', ""),
         ("no refusal here", ""),
     )
 
@@ -302,7 +304,7 @@ class LoggedStage(unittest.TestCase):
         assert match, f"{script} has no logged_stage"
         return match.group(0)
 
-    def test_the_stage_reads_both_log_fields(self):
+    def test_the_last_refusal_label_decides_the_stage(self):
         for script in ("own-provider.sh", "promote.sh"):
             function = self.function(script)
             for log, expected in self.CASES:
