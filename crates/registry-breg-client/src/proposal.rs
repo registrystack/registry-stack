@@ -9,7 +9,9 @@ use std::fmt;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
+mod additions;
 mod review_document;
+pub use additions::{BRegProposalAddition, BRegProposalAdditionSlot};
 
 // Mirrors MAX_PROPOSAL_SNAPSHOT_BYTES in registry-breg::proposal_store.
 // The client does not depend on the runtime.
@@ -39,6 +41,7 @@ pub enum BRegAvailabilityReason {
     DependencyOutage,
     InvalidInput,
     AlreadyApplied,
+    LimitReached,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -571,6 +574,8 @@ pub struct BRegProposal {
     links: BTreeMap<String, BRegProposalLink>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attachments: BTreeMap<String, BRegProposalAttachment>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    additions: BTreeMap<String, BRegProposalAdditionSlot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application: Option<BRegProposalApplication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -802,6 +807,7 @@ impl BRegProposal {
                 return Err(refusal());
             }
         }
+        self.validate_additions()?;
         Ok(())
     }
     fn discloses_application_actor(&self) -> bool {
@@ -884,6 +890,7 @@ impl BRegProposal {
                     .values()
                     .flat_map(|slot| slot.links.values()),
             )
+            .chain(self.addition_links())
             .any(|link| link.access_profile != profile)
         {
             return Err(refusal());
@@ -1704,6 +1711,7 @@ impl BaseRegistryClient {
                         .values()
                         .flat_map(|slot| slot.links.values()),
                 )
+                .chain(item.addition_links())
                 .any(|link| link.access_profile != collection.profile)
             {
                 return Err(refusal());
@@ -2252,6 +2260,7 @@ fn valid_availability(
                         Reason::StaleRevision | Reason::AlreadyApplied,
                         Recovery::ReceiptOnly
                     )
+                    | (Reason::LimitReached, Recovery::ReceiptOnly)
                     | (Reason::PackageChanged, Recovery::Rebase)
                     | (Reason::DependencyOutage, Recovery::Retry)
                     | (Reason::InvalidInput, Recovery::CorrectInput)

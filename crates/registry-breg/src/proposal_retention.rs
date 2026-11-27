@@ -781,6 +781,8 @@ impl ProposalRetentionOperatorService {
                  OR (state='staged' AND created_at < transaction_timestamp()-interval '10 minutes'))
                AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
                    WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)
+               AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_additions a
+                   WHERE a.sha256=b.sha256 AND a.erased_at IS NULL)
                AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_record_attachments r
                    WHERE r.sha256=b.sha256 AND r.erased_at IS NULL)",
                 &[&hash, &backend],
@@ -1278,9 +1280,12 @@ async fn count_request_detail_erasure(
                     AND proposal_id = $2
                     AND submission_version = $3
                     AND reason IS NOT NULL),
-                (SELECT count(*) FROM registry_internal.registry_proposal_attachments
+                ((SELECT count(*) FROM registry_internal.registry_proposal_attachments
                   WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
-                    AND erased_at IS NULL),
+                    AND erased_at IS NULL)
+                 + (SELECT count(*) FROM registry_internal.registry_proposal_additions
+                  WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
+                    AND erased_at IS NULL)),
                 (SELECT count(*)
                    FROM registry_internal.registry_proposal_review_submissions s
                   WHERE s.action_id=$1 AND s.proposal_id=$2 AND s.submission_version=$3

@@ -50,6 +50,170 @@ fn source() -> Value {
                             {"recordType":"application","rowBoundaries":"unrestricted"}]}]}}}})
 }
 
+fn addition_source() -> Value {
+    mutated(|source| {
+        source["actions"]["amend"]["execution"]["proposal"]["additions"] = json!({
+            "id":"supporting","maximumBytes":64,"maximumCount":2,
+            "contentTypes":["text/plain"],"classification":"restricted"});
+        let grant = &mut source["accessProfiles"]["clerk"]["permissions"]["proposals"][0];
+        grant["operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("add"));
+        grant["readableAttachments"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("supporting"));
+        grant["writableAttachments"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("supporting"));
+    })
+}
+
+#[test]
+fn additions_compile_as_an_optional_bounded_slot() {
+    let compiled = compile(&addition_source()).expect("declared additions compile");
+    let execution = serde_json::to_value(&compiled.actions().actions[0].execution).unwrap();
+    assert_eq!(execution["proposal"]["additions"]["maximumCount"], 2);
+    let plain = compile(&source()).unwrap();
+    let execution = serde_json::to_value(&plain.actions().actions[0].execution).unwrap();
+    assert!(execution["proposal"].get("additions").is_none());
+}
+
+#[test]
+fn additions_refuse_invalid_bounds_types_and_collisions() {
+    for (member, value, code) in [
+        (
+            "maximumBytes",
+            json!(0),
+            "breg.addition.maximum-bytes-bounds-invalid",
+        ),
+        (
+            "maximumBytes",
+            json!(16777217),
+            "breg.addition.maximum-bytes-bounds-invalid",
+        ),
+        (
+            "maximumCount",
+            json!(0),
+            "breg.addition.maximum-count-bounds-invalid",
+        ),
+        (
+            "maximumCount",
+            json!(33),
+            "breg.addition.maximum-count-bounds-invalid",
+        ),
+        (
+            "contentTypes",
+            json!([]),
+            "breg.addition.content-types-bounds-invalid",
+        ),
+        (
+            "contentTypes",
+            json!(["text/*"]),
+            "breg.addition.content-type-invalid",
+        ),
+        (
+            "contentTypes",
+            json!(["text/plain", "text/plain"]),
+            "breg.addition.content-type-duplicate",
+        ),
+        ("id", json!("document"), "breg.addition.id-collision"),
+    ] {
+        let mut source = addition_source();
+        source["actions"]["amend"]["execution"]["proposal"]["additions"][member] = value;
+        let failure = compile(&source).expect_err("invalid addition slot");
+        assert!(
+            failure.diagnostics().iter().any(|d| d.code == code),
+            "{code}: {:?}",
+            failure.diagnostics()
+        );
+    }
+}
+
+#[test]
+fn additions_grants_require_the_declared_slot_and_add_authority() {
+    for missing_slot in [true, false] {
+        let mut source = addition_source();
+        if missing_slot {
+            source["actions"]["amend"]["execution"]["proposal"]
+                .as_object_mut()
+                .unwrap()
+                .remove("additions");
+        } else {
+            source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] =
+                json!(["get", "edit", "submit", "apply"]);
+        }
+        let failure = compile(&source).expect_err("invalid addition authority");
+        assert!(
+            failure
+                .diagnostics()
+                .iter()
+                .any(|d| d.code == "breg.proposal.attachment-grant-invalid"),
+            "{:?}",
+            failure.diagnostics()
+        );
+    }
+}
+
+#[test]
+fn additions_review_context_compiles_a_bounded_document_array() {
+    let mut source = addition_source();
+    source["actions"]["amend"]["execution"]["proposal"]["reviewContext"] = json!({
+        "id":"review","fields":{"otherDocuments":{"type":"additions","slot":"supporting"}}});
+    let compiled = compile(&source).expect("additions context compiles");
+    let schema = registry_breg::compiler::review_context::compile_schema(
+        &compiled,
+        &compiled.actions().actions[0],
+    )
+    .unwrap()
+    .unwrap();
+    let field = &schema.schema["properties"]["otherDocuments"];
+    assert_eq!(field["type"], "array");
+    assert_eq!(field["maxItems"], 2);
+    assert_eq!(field["items"]["properties"]["type"]["const"], "document");
+    assert!(
+        field["items"]["properties"]["download"]["properties"]["path"]["pattern"]
+            .as_str()
+            .unwrap()
+            .contains("/additions/")
+    );
+}
+
+#[test]
+fn additions_publish_only_the_declared_slots_paths_and_document_schema() {
+    for declared in [false, true] {
+        let compiled = compile(&if declared {
+            addition_source()
+        } else {
+            source()
+        })
+        .unwrap();
+        let openapi: Value = serde_json::from_slice(
+            &compiled
+                .artifacts()
+                .get("generated/openapi.json")
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+        let paths = openapi["paths"].as_object().unwrap();
+        assert_eq!(
+            paths.contains_key("/v1/proposals/{proposal_id}/additions/supporting"),
+            declared
+        );
+        assert_eq!(
+            paths.contains_key("/v1/proposals/{proposal_id}/additions/{addition_id}"),
+            declared
+        );
+        let schema = &paths["/v1/proposals/{proposal_id}"]["get"]["responses"]["200"]["content"]
+            ["application/json"]["schema"];
+        assert_eq!(schema["properties"].get("additions").is_some(), declared);
+        assert!(!paths.contains_key("/v1/proposals/{proposal_id}/add"));
+    }
+}
+
 fn compile_bytes(bytes: &[u8]) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
     let project = parse_project_json(bytes)?;
     compile_project(&project, &[], CompileProfile::Authoring)

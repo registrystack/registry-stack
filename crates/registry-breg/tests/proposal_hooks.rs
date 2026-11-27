@@ -18,6 +18,23 @@ fn compile(source: &Value, assets: &[ModuleAssetSource]) -> registry_breg::Compi
 }
 
 #[test]
+fn additions_hooks_select_added_by_default_and_by_explicit_transition() {
+    use registry_breg::contract::ProposalEventTransition;
+    use std::collections::BTreeSet;
+    assert!(
+        registry_breg::proposal_hooks::matching_transitions(&BTreeSet::new())
+            .any(|transition| transition == ProposalEventTransition::Added)
+    );
+    assert_eq!(
+        registry_breg::proposal_hooks::matching_transitions(&BTreeSet::from([
+            ProposalEventTransition::Added
+        ]))
+        .collect::<Vec<_>>(),
+        vec![ProposalEventTransition::Added]
+    );
+}
+
+#[test]
 fn proposal_observers_compile_native_owners_fixed_schema_and_reviewed_handlers() {
     let script = b"fn handle(ctx) { #{answer: \"none\"} }";
     let registry = compile(

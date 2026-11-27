@@ -2,6 +2,7 @@
 
 //! Revision-fenced durable Proposal transitions over one frozen neutral plan.
 use super::*;
+mod additions;
 mod context_projection;
 use crate::api::proposals::ProposalMutationInput;
 use crate::lifecycle::{
@@ -106,32 +107,95 @@ fn validate_attachment_authority(
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
         return Err(MutationError::InvalidRequest);
     };
+    let operation = match authority.operation {
+        ProposalAuthorityOperation::Lifecycle(
+            operation @ (ProposalOperation::Edit | ProposalOperation::Add),
+        ) => operation,
+        _ => return Err(MutationError::InvalidRequest),
+    };
     let grant = proposal
         .permissions
         .iter()
         .find(|grant| {
             grant.profile_id == authority.common.access_profile()
-                && grant.operations.contains(&ProposalOperation::Edit)
+                && grant.operations.contains(&operation)
         })
         .ok_or(MutationError::PreconditionFailed)?;
-    let slot = proposal
-        .attachments
-        .get(&attachment.slot_id)
-        .ok_or(MutationError::PreconditionFailed)?;
-    if !grant.writable_attachments.contains(&slot.id) {
+    let (maximum_bytes, content_types) = if operation == ProposalOperation::Add {
+        let slot = proposal
+            .additions
+            .as_ref()
+            .filter(|slot| slot.id == attachment.slot_id)
+            .ok_or(MutationError::PreconditionFailed)?;
+        (slot.maximum_bytes, &slot.content_types)
+    } else {
+        let slot = proposal
+            .attachments
+            .get(&attachment.slot_id)
+            .ok_or(MutationError::PreconditionFailed)?;
+        (slot.maximum_bytes, &slot.content_types)
+    };
+    if !grant.writable_attachments.contains(&attachment.slot_id) {
         return Err(MutationError::PreconditionFailed);
     }
     match (&attachment.content_type, &attachment.bytes) {
         (Some(content_type), Some(bytes))
             if !bytes.is_empty()
-                && bytes.len() <= slot.maximum_bytes as usize
-                && slot.content_types.contains(content_type) =>
+                && bytes.len() <= maximum_bytes as usize
+                && content_types.contains(content_type) =>
         {
             Ok(())
         }
-        (None, None) => Ok(()),
+        (None, None) if operation == ProposalOperation::Edit => Ok(()),
         _ => Err(MutationError::InvalidRequest),
     }
+}
+
+async fn ensure_additions_open(
+    tx: &Transaction<'_>,
+    document: &ProposalDocument,
+    workflow: &crate::proposal_workflow::ProposalWorkflow,
+) -> Result<(), MutationError> {
+    if document.header.state != "submitted" || document.blocked_reason.is_some() {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let frozen = workflow
+        .current_proposal()
+        .ok_or(MutationError::PreconditionFailed)?;
+    if !matches!(
+        review_progress(tx, document, frozen).await?,
+        ProposalReviewProgress::Pending | ProposalReviewProgress::Retrying
+    ) {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
+}
+
+async fn check_addition_count(
+    tx: &Transaction<'_>,
+    action: &CompiledAction,
+    document: &ProposalDocument,
+) -> Result<(), MutationError> {
+    let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+        return Err(MutationError::InvalidRequest);
+    };
+    let slot = proposal
+        .additions
+        .as_ref()
+        .ok_or(MutationError::PreconditionFailed)?;
+    if crate::attachment_store::additions::count(
+        tx,
+        &action.id,
+        document.proposal_id,
+        document.header.submission_version,
+        &slot.id,
+    )
+    .await?
+        >= u64::from(slot.maximum_count)
+    {
+        return Err(MutationError::AttachmentLimitReached);
+    }
+    Ok(())
 }
 
 /// Refuse a value for an input outside the grant's `writableInputs`. Start
@@ -186,6 +250,7 @@ pub(crate) fn proposal_operation_name(operation: ProposalAuthorityOperation) -> 
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get) => "get",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::List) => "list",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit) => "edit",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Add) => "add",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit) => "submit",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Revise) => "revise",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Cancel) => "cancel",
@@ -208,6 +273,9 @@ pub(crate) fn proposal_operation_name(operation: ProposalAuthorityOperation) -> 
 }
 
 pub(crate) fn proposal_http_method(input: &ProposalMutationInput<'_>) -> HttpMethod {
+    if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Add) {
+        return HttpMethod::Post;
+    }
     match &input.attachment {
         Some(attachment) if attachment.bytes.is_some() => HttpMethod::Patch,
         Some(_) => HttpMethod::Delete,
@@ -353,7 +421,11 @@ impl MutationTransaction {
         let Some(bytes) = &attachment.bytes else {
             return Ok(());
         };
-        if input.operation != ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit) {
+        let adding =
+            input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Add);
+        if !adding
+            && input.operation != ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit)
+        {
             return Err(MutationError::InvalidRequest);
         }
         let action = proposal_action(registry, input.action_id)?;
@@ -386,7 +458,7 @@ impl MutationTransaction {
             if document.header.state == "rejected" {
                 return Err(MutationError::ProposalRejected);
             }
-            if document.header.state != "draft"
+            if document.header.state != if adding { "submitted" } else { "draft" }
                 || document.blocked_reason.is_some()
                 || document.header.current_proposal_erased
                 || document.action_revision != action.definition_revision
@@ -394,6 +466,11 @@ impl MutationTransaction {
                     != Some(self.proposal_etag(&document, input.authority)?.as_str())
             {
                 return Err(MutationError::PreconditionFailed);
+            }
+            if adding {
+                let workflow = proposal_store::load(tx, &action.id, id, false).await?;
+                ensure_additions_open(tx, &document, &workflow).await?;
+                check_addition_count(tx, action, &document).await?;
             }
             check_current_proposal_grant(input.authority)?;
             crate::attachment_store::stage_external(
@@ -577,11 +654,19 @@ impl MutationTransaction {
         };
         let method = if let Some(attachment) = &input.attachment {
             route = format!(
-                "/v1/proposals/{}/attachments/{}",
+                "/v1/proposals/{}/{}/{}",
                 input.proposal_id.ok_or(MutationError::InvalidRequest)?,
+                if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Add)
+                {
+                    "additions"
+                } else {
+                    "attachments"
+                },
                 attachment.slot_id
             );
-            if attachment.bytes.is_some() {
+            if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Add) {
+                HttpMethod::Post
+            } else if attachment.bytes.is_some() {
                 HttpMethod::Patch
             } else {
                 HttpMethod::Delete
@@ -1268,6 +1353,72 @@ impl MutationTransaction {
                     .map_err(|_| MutationError::Unavailable)?;
                 let context = transition_context(&actor)?;
                 let (workflow, transition) = match operation {
+                    ProposalOperation::Add => {
+                        ensure_additions_open(tx, document, &workflow).await?;
+                        check_addition_count(tx, action, document).await?;
+                        let attachment = input
+                            .attachment
+                            .as_ref()
+                            .ok_or(MutationError::InvalidRequest)?;
+                        validate_attachment_authority(action, input.authority, attachment)?;
+                        let (Some(content_type), Some(bytes)) =
+                            (&attachment.content_type, &attachment.bytes)
+                        else {
+                            return Err(MutationError::InvalidRequest);
+                        };
+                        let CompiledActionExecution::Proposal { proposal } = &action.execution
+                        else {
+                            return Err(MutationError::InvalidRequest);
+                        };
+                        let slot = proposal
+                            .additions
+                            .as_ref()
+                            .ok_or(MutationError::PreconditionFailed)?;
+                        let hash = crate::attachment_store::content_hash(bytes);
+                        crate::attachment_store::additions::prepare_put(
+                            tx,
+                            &hash,
+                            &self.attachment_storage.binding_digest(),
+                            &self.attachment_verification.binding_digest(),
+                        )
+                        .await?;
+                        if let crate::attachment_storage::AttachmentStorage::S3(store) =
+                            &self.attachment_storage
+                        {
+                            crate::attachment_store::require_backend(
+                                tx,
+                                &hash,
+                                &self.attachment_storage.binding_digest(),
+                                bytes.len() as u64,
+                            )
+                            .await?;
+                            check_current_proposal_grant(input.authority)?;
+                            store
+                                .put(&hash, bytes.clone())
+                                .await
+                                .map_err(|_| MutationError::Unavailable)?;
+                        }
+                        crate::attachment_store::additions::put(
+                            tx,
+                            &action.id,
+                            id,
+                            document.header.submission_version,
+                            &slot.id,
+                            content_type,
+                            bytes,
+                            &actor,
+                            &self.attachment_storage.binding_digest(),
+                            &self.attachment_verification.binding_digest(),
+                            slot.maximum_count,
+                        )
+                        .await?;
+                        let workflow = workflow
+                            .record_addition(context)
+                            .map_err(workflow_error)?
+                            .into_workflow();
+                        proposal_store::save(tx, &action.id, id, previous, &workflow).await?;
+                        (workflow, "added")
+                    }
                     ProposalOperation::Submit => {
                         let values = document
                             .input
@@ -3281,6 +3432,7 @@ impl MutationTransaction {
                             matches!(
                                 source,
                                 crate::contract::ProposalContextValueSource::Document { .. }
+                                    | crate::contract::ProposalContextValueSource::Additions { .. }
                             )
                         })
                     }) {
@@ -3555,6 +3707,7 @@ impl MutationTransaction {
                     document.header.state != "draft" && !document.header.current_proposal_erased
                 }
                 ProposalOperation::GetApplicationActor => false,
+                ProposalOperation::Add => false,
                 ProposalOperation::List => false,
             };
             if !available
@@ -3722,6 +3875,18 @@ impl MutationTransaction {
             if !slots.is_empty() {
                 value["attachments"] = Value::Object(slots);
             }
+            self.append_additions(
+                tx,
+                registry,
+                action,
+                document,
+                current,
+                claims,
+                permission,
+                read.as_ref(),
+                &mut value,
+            )
+            .await?;
         }
         Ok(value)
     }

@@ -38,8 +38,13 @@ pub(super) async fn fields(
         .iter()
         .filter(|(field, _)| selected_fields.is_none_or(|selected| selected.contains(*field)))
         .map(|(_, source)| source)
-        .any(|source| matches!(source, ProposalContextValueSource::Document { .. }))
-    {
+        .any(|source| {
+            matches!(
+                source,
+                ProposalContextValueSource::Document { .. }
+                    | ProposalContextValueSource::Additions { .. }
+            )
+        }) {
         Some(
             crate::compiler::review_context::compile_schema(registry, action)
                 .map_err(|_| MutationError::Unavailable)?
@@ -93,6 +98,34 @@ pub(super) async fn fields(
             return Err(MutationError::PreconditionFailed);
         }
         let resolved = match source {
+            ProposalContextValueSource::Additions { slot } => {
+                let schema = document_contract
+                    .as_ref()
+                    .ok_or(MutationError::PreconditionFailed)?;
+                let mut items = Vec::new();
+                for addition in crate::attachment_store::additions::metadata(
+                    tx,
+                    &document.action_id,
+                    document.proposal_id,
+                    i64::from(frozen.version().get()),
+                    slot,
+                )
+                .await?
+                {
+                    let file = addition.file;
+                    if !file.verification_status.permits_content() {
+                        continue;
+                    }
+                    let path = format!("/v1/proposals/{}/additions/{}?submissionVersion={}&reviewContextField={}&effectDigest={}&contextSchemaDigest={}",
+                        document.proposal_id, addition.id, frozen.version().get(), field,
+                        frozen.effect_digest().as_str().replace(':', "%3A"), schema.digest.replace(':', "%3A"));
+                    items.push(json!({"type":"document","slotId":slot,"sha256":file.sha256,
+                        "contentType":file.content_type,"byteSize":file.byte_size,
+                        "download":{"method":"GET","operation":"get-review-context",
+                            "accessProfile":authority.common.access_profile(),"path":path}}));
+                }
+                json!(items)
+            }
             ProposalContextValueSource::Document { slot } => {
                 let definition = proposal
                     .attachments

@@ -39,7 +39,7 @@ pub fn proposal_event_schema() -> Value {
             "submissionVersion":{"type":"integer","minimum":1,"maximum":4294967295u64},
             "revision":{"type":"integer","minimum":1,"maximum":9007199254740991u64},
             "fromState":{"anyOf":[states.clone(),{"const":"none"}]},"state":states,
-            "transition":{"type":"string","enum":["started","edited","submitted","revised","rebased","retried","cancelled","applied","rejected","review-returned"]},
+            "transition":{"type":"string","enum":["started","edited","submitted","revised","rebased","retried","cancelled","applied","rejected","review-returned","added"]},
             "effectDigest":nullable_digest.clone(),"authorityKind":{"enum":["caller","system","review"]},
             "systemApplyGrantRevision":nullable_digest,
             "turn":{"type":"string","enum":["party","official","nobody"]}}})
@@ -332,6 +332,7 @@ pub fn matching_transitions(
         ProposalEventTransition::Applied,
         ProposalEventTransition::Rejected,
         ProposalEventTransition::ReviewReturned,
+        ProposalEventTransition::Added,
     ]
     .into_iter()
     .filter(|transition| transitions.is_empty() || transitions.contains(transition))

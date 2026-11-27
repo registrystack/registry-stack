@@ -9,7 +9,8 @@ pub(crate) use action::validate_action_attachments;
 pub(crate) use action::{HookChangeApplication, HookChangeOutcome};
 mod proposal;
 pub(crate) use proposal::{
-    proposal_operation_name, CheckedProposalTaskAuthority, ProposalApplyPreflight,
+    proposal_http_method, proposal_operation_name, CheckedProposalTaskAuthority,
+    ProposalApplyPreflight,
 };
 pub(crate) use proposal::{PUBLIC_REASON_REFERENCE, REVIEW_PROGRESS_REFERENCE};
 mod timer;
@@ -2435,6 +2436,8 @@ pub enum MutationError {
     /// write-once, so a second write is refused whatever its bytes are.
     #[error("the record attachment slot already holds a file")]
     AttachmentSlotWriteOnce,
+    #[error("the supporting document slot has reached its file limit")]
+    AttachmentLimitReached,
     /// A file is larger than its attachment slot's `maximumBytes`.
     #[error("the file is larger than the attachment slot accepts")]
     AttachmentTooLarge,
@@ -2521,6 +2524,7 @@ impl MutationError {
             | Self::ProposalRejected
             | Self::AttachmentSlotWriteOnce
             | Self::AttachmentTooLarge
+            | Self::AttachmentLimitReached
             | Self::AttachmentContentType
             | Self::AttachmentDigestMismatch
             | Self::IdempotencyConflict

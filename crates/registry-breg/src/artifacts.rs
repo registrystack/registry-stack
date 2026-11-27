@@ -1089,8 +1089,8 @@ pub(crate) fn openapi_action_response_schema(
     action: &CompiledAction,
     selected_result_effects: Option<&BTreeSet<String>>,
 ) -> Value {
-    if action.execution.is_proposal() {
-        return proposal_schema();
+    if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+        return proposal_schema_with_additions(proposal.additions.is_some());
     }
     let result_shapes = action_response_result_shapes(action, selected_result_effects);
     let results_schema = match result_shapes.as_slice() {
@@ -1535,6 +1535,43 @@ pub fn proposal_schema() -> Value {
                 "ifMatch":{"type":"string"},"availability":availability_schema()}
         }}
     }})
+}
+
+pub(crate) fn proposal_schema_with_additions(enabled: bool) -> Value {
+    let mut schema = proposal_schema();
+    if enabled {
+        append_proposal_additions_schema(&mut schema);
+    }
+    schema
+}
+
+pub(crate) fn append_proposal_additions_schema(schema: &mut Value) {
+    let mut availability = availability_schema();
+    availability["properties"]["reason"]["enum"]
+        .as_array_mut()
+        .expect("reason enum")
+        .push(json!("limit-reached"));
+    let link = |method: &str, operation: &str| {
+        json!({"type":"object","additionalProperties":false,
+        "required":["method","path","accessProfile","operation"],"properties":{
+            "method":{"const":method},"operation":{"const":operation},"path":{"type":"string"},
+            "accessProfile":{"type":"string"},"ifMatch":{"type":"string"},"availability":availability}})
+    };
+    let item = json!({"type":"object","additionalProperties":false,
+        "required":["id","submissionVersion","sha256","byteSize","contentType","addedAt","verificationStatus","links"],
+        "properties":{"id":{"type":"string","format":"uuid"},"submissionVersion":{"type":"integer","minimum":1,"maximum":u32::MAX},
+            "sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"byteSize":{"type":"integer","minimum":1,"maximum":crate::contract::MAX_ATTACHMENT_BYTES},
+            "contentType":{"type":"string"},"addedAt":{"type":"string","format":"date-time"},
+            "verificationStatus":{"enum":["notRequired","pending","approved","rejected"]},
+            "links":{"type":"object","additionalProperties":false,"properties":{"download":link("GET","download")}}}});
+    schema["properties"]["additions"] = json!({"type":"object","maxProperties":1,"additionalProperties":{
+        "type":"object","additionalProperties":false,
+        "required":["id","maximumBytes","maximumCount","contentTypes","classification","items","links"],
+        "properties":{"id":{"type":"string"},"maximumBytes":{"type":"integer","minimum":1,"maximum":crate::contract::MAX_ATTACHMENT_BYTES},
+            "maximumCount":{"type":"integer","minimum":1,"maximum":32},
+            "contentTypes":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string"}},
+            "classification":{"enum":["public","internal","restricted"]},"items":{"type":"array","maxItems":32,"items":item},
+            "links":{"type":"object","additionalProperties":false,"properties":{"add":link("POST","add")}}}}});
 }
 
 /// Why the review authority refused a submission's hand-off for good. Only

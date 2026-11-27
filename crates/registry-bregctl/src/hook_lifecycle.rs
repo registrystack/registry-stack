@@ -173,7 +173,7 @@ pub(crate) fn sample(
                 Transition::Edited => ("draft", "draft", "party"),
                 Transition::Submitted => ("draft", "submitted", "official"),
                 Transition::Revised | Transition::Rebased => ("submitted", "draft", "party"),
-                Transition::Retried => ("submitted", "submitted", "official"),
+                Transition::Retried | Transition::Added => ("submitted", "submitted", "official"),
                 Transition::Cancelled => ("draft", "cancelled", "nobody"),
                 Transition::Applied => ("submitted", "applied", "nobody"),
                 Transition::Rejected => ("submitted", "rejected", "nobody"),

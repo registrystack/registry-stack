@@ -6,10 +6,49 @@ use crate::model::{CompiledActionExecution, HttpMethod, ProposalOperation};
 use crate::postgres::{ProposalAuthority, ProposalAuthorityOperation};
 
 pub(super) fn routes(_service: &HttpService) -> Router<Arc<HttpService>> {
-    Router::new().route(
-        "/v1/proposals/{proposal_id}/attachments/{slot_id}",
-        get(download).patch(upload).delete(remove),
+    Router::new()
+        .route(
+            "/v1/proposals/{proposal_id}/attachments/{slot_id}",
+            get(download).patch(upload).delete(remove),
+        )
+        .route(
+            "/v1/proposals/{proposal_id}/additions/{file_id}",
+            get(download_addition).post(add),
+        )
+}
+
+async fn add(
+    State(service): State<Arc<HttpService>>,
+    Path((id, slot)): Path<(String, String)>,
+    Extension(correlation): Extension<RequestCorrelation>,
+    Authenticated(claims): Authenticated,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    mutate(
+        service,
+        id,
+        slot,
+        correlation,
+        claims,
+        raw,
+        headers,
+        body,
+        false,
+        true,
     )
+    .await
+}
+
+fn mutation_method(removal: bool, addition: bool) -> HttpMethod {
+    if addition {
+        HttpMethod::Post
+    } else if removal {
+        HttpMethod::Delete
+    } else {
+        HttpMethod::Patch
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31,6 +70,7 @@ async fn upload(
         raw,
         headers,
         body,
+        false,
         false,
     )
     .await
@@ -55,6 +95,7 @@ async fn remove(
         headers,
         body,
         true,
+        false,
     )
     .await
 }
@@ -68,6 +109,7 @@ async fn authorize(
     selected: Option<&str>,
     operation: ProposalOperation,
     context_field: Option<&str>,
+    addition: bool,
     method: HttpMethod,
     correlation: &RequestCorrelation,
 ) -> Result<(String, ProposalAuthority), Response> {
@@ -119,14 +161,36 @@ async fn authorize(
     });
     let allowed = grant.is_some_and(|grant| match operation {
         ProposalOperation::Get => grant.readable_attachments.contains(slot),
-        ProposalOperation::GetReviewContext => context_field.is_some_and(|field|
+        ProposalOperation::GetReviewContext => context_field.is_some_and(|field| {
             grant.readable_context_fields.contains(field)
-            && matches!(proposal.review_context.as_ref().and_then(|context| context.fields.get(field)),
-                Some(crate::contract::ProposalContextValueSource::Document { slot: mapped }) if mapped == slot)),
-        ProposalOperation::Edit => grant.writable_attachments.contains(slot),
+                && match proposal
+                    .review_context
+                    .as_ref()
+                    .and_then(|context| context.fields.get(field))
+                {
+                    Some(crate::contract::ProposalContextValueSource::Document {
+                        slot: mapped,
+                    }) => !addition && mapped == slot,
+                    Some(crate::contract::ProposalContextValueSource::Additions {
+                        slot: mapped,
+                    }) => addition && mapped == slot,
+                    _ => false,
+                }
+        }),
+        ProposalOperation::Edit | ProposalOperation::Add => {
+            grant.writable_attachments.contains(slot)
+        }
         _ => false,
     });
-    if !proposal.attachments.contains_key(slot) || !allowed {
+    let declared = if addition {
+        proposal
+            .additions
+            .as_ref()
+            .is_some_and(|definition| definition.id == slot)
+    } else {
+        proposal.attachments.contains_key(slot)
+    };
+    if !declared || !allowed {
         return Err(super::proposals::admitted_http_refusal(
             mutations,
             &authority,
@@ -150,6 +214,7 @@ async fn mutate(
     headers: HeaderMap,
     body: Body,
     removal: bool,
+    addition: bool,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
         return concealed(FailedCheck::Visibility);
@@ -166,13 +231,14 @@ async fn mutate(
         &slot,
         &claims,
         selected.as_deref(),
-        ProposalOperation::Edit,
-        None,
-        if removal {
-            HttpMethod::Delete
+        if addition {
+            ProposalOperation::Add
         } else {
-            HttpMethod::Patch
+            ProposalOperation::Edit
         },
+        None,
+        addition,
+        mutation_method(removal, addition),
         &correlation,
     )
     .await
@@ -186,11 +252,7 @@ async fn mutate(
         return super::proposals::admitted_http_refusal(
             mutations,
             &authority,
-            if removal {
-                HttpMethod::Delete
-            } else {
-                HttpMethod::Patch
-            },
+            mutation_method(removal, addition),
             &correlation,
             missing_idempotency_key(),
         )
@@ -200,11 +262,7 @@ async fn mutate(
         return super::proposals::admitted_http_refusal(
             mutations,
             &authority,
-            if removal {
-                HttpMethod::Delete
-            } else {
-                HttpMethod::Patch
-            },
+            mutation_method(removal, addition),
             &correlation,
             precondition_required(),
         )
@@ -220,17 +278,19 @@ async fn mutate(
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
         return concealed(FailedCheck::Operation);
     };
-    let definition = &proposal.attachments[&slot];
+    let (content_types, maximum_bytes) = if addition {
+        let definition = proposal.additions.as_ref().expect("admitted addition slot");
+        (&definition.content_types, definition.maximum_bytes)
+    } else {
+        let definition = &proposal.attachments[&slot];
+        (&definition.content_types, definition.maximum_bytes)
+    };
     let (content_type, bytes) = if removal {
         if !to_bytes(body, 0).await.is_ok_and(|bytes| bytes.is_empty()) {
             return super::proposals::admitted_http_refusal(
                 mutations,
                 &authority,
-                if removal {
-                    HttpMethod::Delete
-                } else {
-                    HttpMethod::Patch
-                },
+                mutation_method(removal, addition),
                 &correlation,
                 invalid_request(),
             )
@@ -238,36 +298,33 @@ async fn mutate(
         }
         (None, None)
     } else {
-        let Some(content_type) = single_header(&headers, CONTENT_TYPE.as_str()).filter(|value| {
-            definition
-                .content_types
-                .iter()
-                .any(|allowed| allowed == value)
-        }) else {
+        let Some(content_type) = single_header(&headers, CONTENT_TYPE.as_str())
+            .filter(|value| content_types.iter().any(|allowed| allowed == value))
+        else {
             return super::proposals::admitted_http_refusal(
                 mutations,
                 &authority,
-                if removal {
-                    HttpMethod::Delete
-                } else {
-                    HttpMethod::Patch
-                },
+                mutation_method(removal, addition),
                 &correlation,
-                unsupported_media_type(),
+                if addition {
+                    fixed_problem(ProblemCode::AttachmentContentType)
+                } else {
+                    unsupported_media_type()
+                },
             )
             .await;
         };
-        let Ok(bytes) = bounded_body_to(body, definition.maximum_bytes as usize).await else {
+        let Ok(bytes) = to_bytes(body, maximum_bytes as usize).await else {
             return super::proposals::admitted_http_refusal(
                 mutations,
                 &authority,
-                if removal {
-                    HttpMethod::Delete
-                } else {
-                    HttpMethod::Patch
-                },
+                mutation_method(removal, addition),
                 &correlation,
-                invalid_request(),
+                if addition {
+                    fixed_problem(ProblemCode::AttachmentTooLarge)
+                } else {
+                    invalid_request()
+                },
             )
             .await;
         };
@@ -275,11 +332,7 @@ async fn mutate(
             return super::proposals::admitted_http_refusal(
                 mutations,
                 &authority,
-                if removal {
-                    HttpMethod::Delete
-                } else {
-                    HttpMethod::Patch
-                },
+                mutation_method(removal, addition),
                 &correlation,
                 invalid_request(),
             )
@@ -290,7 +343,11 @@ async fn mutate(
     let input = super::proposals::ProposalMutationInput {
         action_id: &action_id,
         proposal_id: Some(id),
-        operation: ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit),
+        operation: ProposalAuthorityOperation::Lifecycle(if addition {
+            ProposalOperation::Add
+        } else {
+            ProposalOperation::Edit
+        }),
         authority: &authority,
         idempotency_key: key,
         expected_etag: Some(etag),
@@ -328,11 +385,60 @@ async fn download(
     Authenticated(claims): Authenticated,
     RawQuery(raw): RawQuery,
 ) -> Response {
+    download_file(service, id, slot, correlation, claims, raw, false).await
+}
+
+async fn download_addition(
+    State(service): State<Arc<HttpService>>,
+    Path((id, file)): Path<(String, String)>,
+    Extension(correlation): Extension<RequestCorrelation>,
+    Authenticated(claims): Authenticated,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    download_file(service, id, file, correlation, claims, raw, true).await
+}
+
+async fn download_file(
+    service: Arc<HttpService>,
+    id: String,
+    mut slot: String,
+    correlation: RequestCorrelation,
+    claims: VerifiedRequestClaims,
+    raw: Option<String>,
+    addition: bool,
+) -> Response {
     let Some(mutations) = &service.mutations else {
         return concealed(FailedCheck::Visibility);
     };
     let Ok(id) = Uuid::parse_str(&id) else {
         return concealed(FailedCheck::Visibility);
+    };
+    let addition_id = if addition {
+        let Ok(file) = Uuid::parse_str(&slot) else {
+            return concealed(FailedCheck::Visibility);
+        };
+        let action_id = match mutations.proposal_action_id(id).await {
+            Ok(Some(action)) => action,
+            Ok(None) => return concealed(FailedCheck::Visibility),
+            Err(error) => return super::proposals::proposal_problem(error),
+        };
+        let Some(definition) = service
+            .registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == action_id)
+            .and_then(|action| match &action.execution {
+                CompiledActionExecution::Proposal { proposal } => proposal.additions.as_ref(),
+                _ => None,
+            })
+        else {
+            return concealed(FailedCheck::Visibility);
+        };
+        slot = definition.id.clone();
+        Some(file)
+    } else {
+        None
     };
     let Ok(query) = parse_download_query(raw.as_deref()) else {
         return concealed(FailedCheck::Visibility);
@@ -352,6 +458,7 @@ async fn download(
         query.selected.as_deref(),
         operation,
         field,
+        addition,
         HttpMethod::Get,
         &correlation,
     )
@@ -400,6 +507,7 @@ async fn download(
             id,
             query.version,
             &slot,
+            addition_id,
             &authority,
             review.as_ref(),
             &correlation,

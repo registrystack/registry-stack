@@ -28,6 +28,7 @@ pub enum ProblemCode {
     ActionRefused,
     AttachmentContentType,
     AttachmentDigestMismatch,
+    AttachmentLimitReached,
     AttachmentSlotWriteOnce,
     AttachmentTooLarge,
     AuthenticationRefused,
@@ -75,6 +76,7 @@ impl ProblemCode {
         Self::ActionRefused,
         Self::AttachmentContentType,
         Self::AttachmentDigestMismatch,
+        Self::AttachmentLimitReached,
         Self::AttachmentSlotWriteOnce,
         Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
@@ -127,6 +129,7 @@ impl ProblemCode {
         Self::ActionRefused,
         Self::AttachmentContentType,
         Self::AttachmentDigestMismatch,
+        Self::AttachmentLimitReached,
         Self::AttachmentSlotWriteOnce,
         Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
@@ -171,6 +174,7 @@ impl ProblemCode {
             Self::ActionRefused => "action.refused",
             Self::AttachmentContentType => "attachment.content-type",
             Self::AttachmentDigestMismatch => "attachment.digest-mismatch",
+            Self::AttachmentLimitReached => "attachment.limit-reached",
             Self::AttachmentSlotWriteOnce => "attachment.slot-write-once",
             Self::AttachmentTooLarge => "attachment.too-large",
             Self::AuthenticationRefused => "authentication.refused",
@@ -223,6 +227,7 @@ impl ProblemCode {
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::AttachmentSlotWriteOnce
+            | Self::AttachmentLimitReached
             | Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
@@ -300,6 +305,7 @@ impl ProblemCode {
                 "The record attachment slot already holds a file and is write-once."
             }
             Self::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
+            Self::AttachmentLimitReached => "The supporting document slot has reached its file limit.",
             Self::AuthenticationRefused => "The bearer token or delivery signature was not accepted.",
             Self::ExternalViewIncomplete => {
                 "The external view's indexed coverage is incomplete for this request."

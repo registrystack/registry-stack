@@ -3059,6 +3059,15 @@ fn compile_execution(
         errors,
     );
     let attachments = crate::compiler::attachments::compile_slots(&proposal.attachments);
+    if let Some(slot) = &proposal.additions {
+        crate::compiler::attachments::validate_additions(
+            slot,
+            &proposal.attachments,
+            &attachment_field_names,
+            &format!("actions[id={}].execution.proposal.additions", action.id),
+            errors,
+        );
+    }
     let review = match &proposal.review {
         ProposalReviewSource::None {} => CompiledProposalReview::None,
         ProposalReviewSource::Required {
@@ -3359,18 +3368,32 @@ fn compile_execution(
                     ));
                 }
             }
-            let attachment_ids = attachments.keys().cloned().collect::<BTreeSet<_>>();
+            let attachment_ids = attachments
+                .keys()
+                .cloned()
+                .chain(proposal.additions.iter().map(|slot| slot.id.clone()))
+                .collect::<BTreeSet<_>>();
             if !grant.readable_attachments.is_subset(&attachment_ids)
                 || !grant.writable_attachments.is_subset(&attachment_ids)
                 || (!grant.readable_attachments.is_empty()
                     && !grant.operations.contains(&ProposalOperation::Get))
-                || (!grant.writable_attachments.is_empty()
-                    && !grant.operations.contains(&ProposalOperation::Edit))
+                || grant.writable_attachments.iter().any(|id| {
+                    let operation = if proposal
+                        .additions
+                        .as_ref()
+                        .is_some_and(|slot| &slot.id == id)
+                    {
+                        ProposalOperation::Add
+                    } else {
+                        ProposalOperation::Edit
+                    };
+                    !grant.operations.contains(&operation)
+                })
             {
                 errors.push(Diagnostic::error(
                     "breg.proposal.attachment-grant-invalid",
                     "accessProfiles[].permissions.proposals",
-                    "attachment grants must name declared slots and require Get for reads or Edit for writes",
+                    "attachment grants must name declared slots and require Get for reads, Edit for attachment writes, or Add for additions",
                 ));
             }
             permissions.push(CompiledProposalPermission {
@@ -3423,6 +3446,10 @@ fn compile_execution(
             use crate::contract::ProposalContextValueSource;
             let valid = match value {
                 ProposalContextValueSource::Document { slot } => attachments.contains_key(slot),
+                ProposalContextValueSource::Additions { slot } => proposal
+                    .additions
+                    .as_ref()
+                    .is_some_and(|declared| &declared.id == slot),
                 ProposalContextValueSource::Input { input } => {
                     action.inputs.iter().any(|field| &field.id == input)
                 }
@@ -3477,6 +3504,7 @@ fn compile_execution(
             },
             review_context: proposal.review_context.clone(),
             attachments,
+            additions: proposal.additions.clone(),
             promotions: Vec::new(),
             permissions,
         },
@@ -3790,6 +3818,9 @@ pub(crate) fn definition_revision(
         }
         crate::model::CompiledActionExecution::Proposal { proposal } => {
             let mut policy = json!({"mode":"proposal","review":proposal.review,"application":proposal.application,"retention":proposal.retention,"reviewContext":proposal.review_context,"attachments":proposal.attachments});
+            if let Some(slot) = &proposal.additions {
+                policy["additions"] = json!(slot);
+            }
             // Promotions change what an approved Proposal writes, so they are
             // part of the Action's identity. Omitting an empty list keeps the
             // revision of every Action without promotions unchanged.

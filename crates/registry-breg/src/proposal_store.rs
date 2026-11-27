@@ -26,6 +26,7 @@ pub(crate) const PROPOSAL_TABLES: &[(&str, &[&str])] = &[
     ("registry_proposal_activation_compatibility", &["SELECT"]),
     ("registry_proposal_state", &["INSERT", "SELECT", "UPDATE"]),
     ("registry_proposal_submissions", &["INSERT", "SELECT"]),
+    ("registry_proposal_additions", &["INSERT", "SELECT"]),
     ("registry_proposal_task_authority", &["INSERT", "SELECT"]),
     ("registry_proposal_targets", &["INSERT", "SELECT"]),
     ("registry_proposal_applications", &["INSERT", "SELECT"]),

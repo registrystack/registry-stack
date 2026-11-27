@@ -7,6 +7,8 @@ mod client_http;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
+#[path = "support/proposal_additions.rs"]
+mod proposal_additions;
 
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};

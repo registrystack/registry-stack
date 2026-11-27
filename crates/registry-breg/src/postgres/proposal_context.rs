@@ -430,6 +430,7 @@ impl ProposalAuthority {
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get) => "get",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::List) => "list",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit) => "edit",
+                ProposalAuthorityOperation::Lifecycle(ProposalOperation::Add) => "add",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit) => "submit",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Revise) => "revise",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Cancel) => "cancel",

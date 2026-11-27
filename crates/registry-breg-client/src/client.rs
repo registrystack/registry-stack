@@ -1382,6 +1382,7 @@ impl BaseRegistryClient {
         let url = self.url_with_query(&segments, &pairs)?;
         let method = match link.method() {
             "GET" => Method::GET,
+            "POST" => Method::POST,
             "PATCH" => Method::PATCH,
             "DELETE" => Method::DELETE,
             _ => {

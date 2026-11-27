@@ -9,6 +9,10 @@ pub(crate) fn append_proposal_openapi(
     entities: &BTreeMap<String, CompiledEntity>,
     visible: Option<&BTreeSet<(String, String, ProposalOperation)>>,
 ) {
+    let additions_enabled = actions.actions.iter().any(|action| {
+        matches!(&action.execution,
+        CompiledActionExecution::Proposal { proposal } if proposal.additions.is_some())
+    });
     let mut permissions: BTreeMap<ProposalOperation, (BTreeSet<String>, Vec<Value>)> =
         BTreeMap::new();
     // A manual application writes as the applier, so the apply operation may
@@ -30,7 +34,10 @@ pub(crate) fn append_proposal_openapi(
                     })
             };
             for operation in &grant.operations {
-                if *operation == ProposalOperation::GetApplicationActor {
+                if matches!(
+                    operation,
+                    ProposalOperation::GetApplicationActor | ProposalOperation::Add
+                ) {
                     continue;
                 }
                 if !permitted(*operation) {
@@ -105,6 +112,7 @@ pub(crate) fn append_proposal_openapi(
                         method,
                         &BTreeSet::from([grant.profile_id.clone()]),
                         false,
+                        additions_enabled,
                     );
                     if method == "get" {
                         operation["parameters"].as_array_mut().unwrap().push(json!({"name":"submissionVersion","in":"query","required":true,"schema":{"type":"integer","minimum":1,"maximum":u32::MAX}}));
@@ -131,6 +139,38 @@ pub(crate) fn append_proposal_openapi(
                         operation["requestBody"] = json!({"required":true,"content":content});
                     }
                     merge_operation(paths, path.clone(), method, operation);
+                }
+            }
+            if let Some(slot) = &proposal.additions {
+                let profiles = BTreeSet::from([grant.profile_id.clone()]);
+                if permitted(ProposalOperation::Add)
+                    && grant.writable_attachments.contains(&slot.id)
+                {
+                    let path = format!("/v1/proposals/{{proposal_id}}/additions/{}", slot.id);
+                    let mut document = operation_document(
+                        &format!("proposals.additions.{}.post", slot.id),
+                        "post",
+                        &profiles,
+                        false,
+                        true,
+                    );
+                    let content = slot.content_types.iter().map(|media|(media.clone(),json!({"schema":{"type":"string","format":"binary","maxLength":slot.maximum_bytes}}))).collect::<Map<_,_>>();
+                    document["requestBody"] = json!({"required":true,"content":content});
+                    document["responses"]["400"] =
+                        json!({"description":"Empty file body (`request.invalid`)"});
+                    document["responses"]["409"] = json!({"description":"The slot count limit was reached (`attachment.limit-reached`), the Proposal was rejected (`proposal.rejected`), or the idempotency key is bound to different bytes (`idempotency.conflict`)"});
+                    document["responses"]["413"] = json!({"description":"The file exceeds maximumBytes (`attachment.too-large`)"});
+                    document["responses"]["415"] = json!({"description":"The slot does not accept this media type (`attachment.content-type`)"});
+                    merge_operation(paths, path, "post", document);
+                }
+                let reviewer = permitted(ProposalOperation::GetReviewContext) && proposal.review_context.as_ref().is_some_and(|context|
+                    context.fields.iter().any(|(name, field)| grant.readable_context_fields.contains(name)
+                        && matches!(field, crate::contract::ProposalContextValueSource::Additions { slot: mapped } if mapped == &slot.id)));
+                if (permitted(ProposalOperation::Get)
+                    && grant.readable_attachments.contains(&slot.id))
+                    || reviewer
+                {
+                    append_addition_download_path(paths, &profiles);
                 }
             }
         }
@@ -162,6 +202,7 @@ pub(crate) fn append_proposal_openapi(
             method,
             &profiles,
             operation == ProposalOperation::List,
+            additions_enabled,
         );
         if operation == ProposalOperation::List {
             let parameters = document["parameters"].as_array_mut().unwrap();
@@ -192,7 +233,7 @@ pub(crate) fn append_proposal_openapi(
                 }
                 parameters.push(parameter);
             }
-            document["responses"]["200"]["content"]["application/json"]["schema"] = json!({"type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{"type":"array","maxItems":100,"items":proposal_schema()},"nextCursor":{"type":"string"}}});
+            document["responses"]["200"]["content"]["application/json"]["schema"] = json!({"type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{"type":"array","maxItems":100,"items":proposal_schema_with_additions(additions_enabled)},"nextCursor":{"type":"string"}}});
         } else if matches!(
             operation,
             ProposalOperation::GetReviewStatus | ProposalOperation::GetReviewContext
@@ -243,8 +284,13 @@ pub(crate) fn append_proposal_openapi(
                 json!({"required":true,"content":{"application/json":{"schema":schema}}});
         }
         if operation == ProposalOperation::Get {
-            let mut submission =
-                operation_document("proposals.get-submission", "get", &profiles, false);
+            let mut submission = operation_document(
+                "proposals.get-submission",
+                "get",
+                &profiles,
+                false,
+                additions_enabled,
+            );
             submission["parameters"].as_array_mut().unwrap().push(json!({"name":"submission_version","in":"path","required":true,"schema":{"type":"integer","minimum":1,"maximum":u32::MAX}}));
             submission["responses"]["200"]["content"]["application/json"]["schema"] =
                 proposal_submission_schema();
@@ -257,8 +303,13 @@ pub(crate) fn append_proposal_openapi(
             );
         }
         if operation == ProposalOperation::GetReviewContext {
-            let mut batch =
-                operation_document("proposals.get-review-context-batch", "get", &profiles, true);
+            let mut batch = operation_document(
+                "proposals.get-review-context-batch",
+                "get",
+                &profiles,
+                true,
+                additions_enabled,
+            );
             batch["description"] = json!("One bounded transport exchange under each item's current get-review-context authority. Ordered visible or concealed results; operational failures refuse the whole batch. Maximum response is 8 MiB.");
             batch["parameters"].as_array_mut().unwrap().push(json!({"name":"ids","in":"query","required":true,
                 "description":"One to 100 distinct canonical Proposal UUIDs, in response order.",
@@ -383,11 +434,43 @@ fn merge_operation(
     entry[method] = operation;
 }
 
+fn append_addition_download_path(paths: &mut Map<String, Value>, profiles: &BTreeSet<String>) {
+    let mut operation =
+        operation_document("proposals.additions.download", "get", profiles, false, true);
+    operation["parameters"].as_array_mut().expect("parameters").push(json!({"name":"addition_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}));
+    operation["parameters"].as_array_mut().expect("parameters").push(json!({"name":"submissionVersion","in":"query","required":true,"schema":{"type":"integer","minimum":1,"maximum":u32::MAX}}));
+    for (name, schema) in [
+        (
+            "reviewContextField",
+            json!({"type":"string","pattern":"^[a-z][a-zA-Z0-9]{0,63}$"}),
+        ),
+        (
+            "effectDigest",
+            json!({"type":"string","pattern":"^sha256:[a-f0-9]{64}$"}),
+        ),
+        (
+            "contextSchemaDigest",
+            json!({"type":"string","pattern":"^sha256:[a-f0-9]{64}$"}),
+        ),
+    ] {
+        operation["parameters"].as_array_mut().expect("parameters").push(json!({"name":name,"in":"query","required":false,"schema":schema,
+            "description":"All three review-context query members are required together and select get-review-context authority. Omit all three for Get authority."}));
+    }
+    operation["responses"]["200"]["content"] = json!({"*/*":{"schema":{"type":"string","contentMediaType":"application/octet-stream","maxLength":crate::contract::MAX_ATTACHMENT_BYTES}}});
+    merge_operation(
+        paths,
+        "/v1/proposals/{proposal_id}/additions/{addition_id}".to_owned(),
+        "get",
+        operation,
+    );
+}
+
 fn operation_document(
     id: &str,
     method: &str,
     profiles: &BTreeSet<String>,
     collection: bool,
+    additions: bool,
 ) -> Value {
     let mut parameters = vec![
         json!({"name":"accessProfile","in":"query","required":true,"schema":{"type":"string","enum":profiles}}),
@@ -401,11 +484,14 @@ fn operation_document(
         );
         parameters.push(json!({"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string"}}));
     }
-    let response_schema = if id == "proposals.get" {
+    let mut response_schema = if id == "proposals.get" {
         proposal_get_schema()
     } else {
         proposal_schema()
     };
+    if additions {
+        append_proposal_additions_schema(&mut response_schema);
+    }
     let mut document = json!({"operationId":id,"x-registry-accessProfiles":profiles,"parameters":parameters,
         "responses":{"200":{"description":"Authorized Proposal operation","content":{"application/json":{"schema":response_schema}}},"404":{"description":"Resource unavailable to this caller"},"412":{"description":"Observed authority or lifecycle condition changed"}}});
     if matches!(id, "proposals.submit" | "proposals.apply") {
@@ -492,8 +578,8 @@ mod tests {
     fn application_actor_schema_is_limited_to_get_and_submission() {
         let profiles = BTreeSet::from(["reader".to_owned()]);
         let disclosed = application_actor_document();
-        let get = operation_document("proposals.get", "get", &profiles, false);
-        let apply = operation_document("proposals.apply", "post", &profiles, false);
+        let get = operation_document("proposals.get", "get", &profiles, false, false);
+        let apply = operation_document("proposals.apply", "post", &profiles, false, false);
 
         assert!(accepts(&response_schema(&get), &disclosed));
         assert!(!accepts(&proposal_schema(), &disclosed));

@@ -246,6 +246,22 @@ impl ProposalWorkflow {
         })
     }
 
+    /// Record supporting information without changing the frozen submission.
+    pub fn record_addition(
+        mut self,
+        _context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        self.refuse_rejected()?;
+        if self.state != ProposalState::Submitted {
+            return Err(WorkflowError::InvalidTransition);
+        }
+        self.workflow_revision = self.workflow_revision.next()?;
+        Ok(WorkflowTransition {
+            workflow: self,
+            effect: TransitionEffect::Added,
+        })
+    }
+
     /// Records the review authority's rejection of the current submission.
     /// A rejection is terminal: the review policy's changes-requested outcome,
     /// not this state, is how a reviewer allows another attempt.
@@ -1690,6 +1706,7 @@ impl WorkflowTransition {
 
 #[derive(Clone, PartialEq)]
 pub enum TransitionEffect {
+    Added,
     RetryScheduled,
     Submitted {
         version: SubmissionVersion,
@@ -2320,6 +2337,7 @@ impl fmt::Debug for WorkflowTransition {
 impl fmt::Debug for TransitionEffect {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Added => formatter.write_str("Added"),
             Self::RetryScheduled => formatter.write_str("RetryScheduled"),
             Self::Submitted { version, .. } => formatter
                 .debug_struct("Submitted")
@@ -3108,6 +3126,46 @@ mod source_owned_review_tests {
         assert_eq!(
             tampered.verify_digest(submitted.key()),
             Err(WorkflowError::DigestMismatch)
+        );
+    }
+
+    #[test]
+    fn addition_changes_only_the_submitted_workflow_revision() {
+        let now = context("submitter", "2026-09-19T00:00:00Z");
+        assert_eq!(
+            workflow().record_addition(now.clone()).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+        let submitted = workflow()
+            .submit(now.clone(), proposal(required_review()))
+            .unwrap()
+            .into_workflow();
+        let before = submitted.clone();
+        let added = submitted
+            .record_addition(now.clone())
+            .unwrap()
+            .into_workflow();
+        assert_eq!(added.state(), ProposalState::Submitted);
+        assert_eq!(added.current_version(), before.current_version());
+        assert_eq!(added.current_proposal(), before.current_proposal());
+        assert_eq!(
+            added.workflow_revision(),
+            before.workflow_revision().next().unwrap()
+        );
+        let revised = before.clone().revise(now.clone()).unwrap().into_workflow();
+        assert_eq!(
+            revised.record_addition(now.clone()).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+        let rejected = before.clone().reject(now.clone()).unwrap().into_workflow();
+        assert_eq!(
+            rejected.record_addition(now.clone()).err(),
+            Some(WorkflowError::Rejected)
+        );
+        let cancelled = before.cancel(now.clone()).unwrap().into_workflow();
+        assert_eq!(
+            cancelled.record_addition(now).err(),
+            Some(WorkflowError::InvalidTransition)
         );
     }
 

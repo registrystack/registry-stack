@@ -5808,6 +5808,7 @@ fn mutation_problem_response(error: MutationError) -> Response {
             fixed_problem(ProblemCode::AttachmentSlotWriteOnce)
         }
         MutationError::AttachmentTooLarge => fixed_problem(ProblemCode::AttachmentTooLarge),
+        MutationError::AttachmentLimitReached => fixed_problem(ProblemCode::AttachmentLimitReached),
         MutationError::AttachmentContentType => fixed_problem(ProblemCode::AttachmentContentType),
         MutationError::AttachmentDigestMismatch => {
             fixed_problem(ProblemCode::AttachmentDigestMismatch)

@@ -543,6 +543,14 @@ impl ExpectedManagedCatalog {
         );
         catalog.sequence(DELIVERY_SEQUENCE, ["SELECT", "USAGE"]);
         for (table, privileges) in crate::proposal_store::PROPOSAL_TABLES {
+            // File-reference tables are registered with their attachment RLS
+            // policies below, even when Proposal ownership supplies the grants.
+            if crate::attachment_store::ATTACHMENT_TABLES
+                .iter()
+                .any(|(attachment, _)| attachment == table)
+            {
+                continue;
+            }
             catalog.table(
                 &format!("registry_internal.{table}"),
                 privileges.iter().copied(),

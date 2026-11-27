@@ -3567,6 +3567,42 @@ impl BaseRegistryClient {
     }
 
     #[napi]
+    pub async fn add_proposal_addition(
+        &self,
+        proposal: &Proposal,
+        slot: String,
+        content_type: String,
+        bytes: Buffer,
+        key: String,
+    ) -> Result<Proposal> {
+        let key = idempotency_key(key)?;
+        self.inner
+            .add_proposal_addition(&proposal.inner, &slot, &content_type, &bytes, &key)
+            .await
+            .map(|response| Proposal {
+                response_etag: response
+                    .metadata
+                    .etag()
+                    .map(|etag| etag.as_str().to_owned()),
+                inner: response.value,
+            })
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn download_proposal_addition(
+        &self,
+        proposal: &Proposal,
+        addition: String,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .download_proposal_addition(&proposal.inner, &addition)
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
     pub async fn upload_proposal_attachment(
         &self,
         proposal: &Proposal,

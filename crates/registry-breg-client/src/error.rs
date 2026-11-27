@@ -145,6 +145,7 @@ pub enum BRegProblemCode {
     AttachmentContentType,
     AttachmentDigestMismatch,
     AttachmentSlotWriteOnce,
+    AttachmentLimitReached,
     AttachmentTooLarge,
     AuthenticationRefused,
     ExternalViewIncomplete,
@@ -191,6 +192,7 @@ impl BRegProblemCode {
         Self::AttachmentContentType,
         Self::AttachmentDigestMismatch,
         Self::AttachmentSlotWriteOnce,
+        Self::AttachmentLimitReached,
         Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
         Self::ExternalViewIncomplete,
@@ -238,6 +240,7 @@ impl BRegProblemCode {
             Self::AttachmentContentType => "attachment.content-type",
             Self::AttachmentDigestMismatch => "attachment.digest-mismatch",
             Self::AttachmentSlotWriteOnce => "attachment.slot-write-once",
+            Self::AttachmentLimitReached => "attachment.limit-reached",
             Self::AttachmentTooLarge => "attachment.too-large",
             Self::AuthenticationRefused => "authentication.refused",
             Self::ExternalViewIncomplete => "external_view.incomplete",
@@ -290,6 +293,7 @@ impl BRegProblemCode {
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::AttachmentSlotWriteOnce
+            | Self::AttachmentLimitReached
             | Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
@@ -376,6 +380,7 @@ impl BRegProblemCode {
                 "The record attachment slot already holds a file and is write-once."
             }
             Self::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
+            Self::AttachmentLimitReached => "The supporting document slot has reached its file limit.",
             Self::AuthenticationRefused => "The bearer token or delivery signature was not accepted.",
             Self::ExternalViewIncomplete => {
                 "The external view's indexed coverage is incomplete for this request."

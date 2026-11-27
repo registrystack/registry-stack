@@ -329,11 +329,13 @@ impl PostgresRecordMutationService {
         Ok(true)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn proposal_attachment_download(
         &self,
         id: Uuid,
         version: u32,
         slot: &str,
+        addition: Option<Uuid>,
         authority: &ProposalAuthority,
         review: Option<&crate::api::proposals::ReviewContextDocumentRead<'_>>,
         correlation: &crate::correlation::RequestCorrelation,
@@ -375,59 +377,125 @@ impl PostgresRecordMutationService {
             )
             .await?;
             if review.is_some() {
-                if authority.operation != ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext) {
+                if authority.operation
+                    != ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext)
+                {
                     return Err(MutationError::PreconditionFailed);
                 }
-                self.coordinator.authorize_proposal_review_read(
-                    guarded.transaction(),
-                    &self.registry,
-                    &document,
-                    authority,
-                ).await?;
+                self.coordinator
+                    .authorize_proposal_review_read(
+                        guarded.transaction(),
+                        &self.registry,
+                        &document,
+                        authority,
+                    )
+                    .await?;
             } else {
-                if authority.operation != ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get) {
+                if authority.operation
+                    != ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get)
+                {
                     return Err(MutationError::PreconditionFailed);
                 }
-                self.coordinator.authorize_proposal_document(
-                    guarded.transaction(), &self.registry, &document, authority,
-                ).await?;
+                self.coordinator
+                    .authorize_proposal_document(
+                        guarded.transaction(),
+                        &self.registry,
+                        &document,
+                        authority,
+                    )
+                    .await?;
             }
             if document.header.submission_version != i64::from(version) {
                 return Err(MutationError::PreconditionFailed);
             }
             if let Some(review) = review {
-                let action = self.registry.actions().actions.iter().find(|action| action.id == document.action_id)
+                let action = self
+                    .registry
+                    .actions()
+                    .actions
+                    .iter()
+                    .find(|action| action.id == document.action_id)
                     .ok_or(MutationError::PreconditionFailed)?;
-                let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution else {
+                let crate::model::CompiledActionExecution::Proposal { proposal } =
+                    &action.execution
+                else {
                     return Err(MutationError::PreconditionFailed);
                 };
-                if !matches!(proposal.review_context.as_ref().and_then(|context| context.fields.get(review.field)),
-                    Some(crate::contract::ProposalContextValueSource::Document { slot: mapped }) if mapped == slot) {
+                let mapped = match proposal
+                    .review_context
+                    .as_ref()
+                    .and_then(|context| context.fields.get(review.field))
+                {
+                    Some(crate::contract::ProposalContextValueSource::Document {
+                        slot: mapped,
+                    }) => addition.is_none() && mapped == slot,
+                    Some(crate::contract::ProposalContextValueSource::Additions {
+                        slot: mapped,
+                    }) => addition.is_some() && mapped == slot,
+                    _ => false,
+                };
+                if !mapped {
                     return Err(MutationError::PreconditionFailed);
                 }
                 // Run the entire ordinary context disclosure, including consent
                 // and membership, under this same transaction before any bytes.
-                let context = self.coordinator.proposal_review_value(
-                    guarded.transaction(), &self.registry, &document, authority, review.records,
-                    None, None,
-                ).await?;
+                let context = self
+                    .coordinator
+                    .proposal_review_value(
+                        guarded.transaction(),
+                        &self.registry,
+                        &document,
+                        authority,
+                        review.records,
+                        None,
+                        None,
+                    )
+                    .await?;
+                let disclosed = if let Some(addition) = addition {
+                    let prefix = format!("/v1/proposals/{id}/additions/{addition}?");
+                    context["context"]["fields"][review.field]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items.iter().any(|item| {
+                                item["download"]["path"]
+                                    .as_str()
+                                    .is_some_and(|path| path.starts_with(&prefix))
+                            })
+                        })
+                } else {
+                    !context["context"]["fields"][review.field].is_null()
+                };
                 if context["effectDigest"].as_str() != Some(review.effect_digest)
-                    || context["context"]["contract"]["schemaDigest"].as_str() != Some(review.schema_digest)
-                    || context["context"]["fields"][review.field].is_null() {
+                    || context["context"]["contract"]["schemaDigest"].as_str()
+                        != Some(review.schema_digest)
+                    || !disclosed
+                {
                     return Err(MutationError::PreconditionFailed);
                 }
             }
             self.coordinator
                 .verify_proposal_attachment_binding(guarded.transaction())
                 .await?;
-            let attachment = crate::attachment_store::load(
-                guarded.transaction(),
-                &document.action_id,
-                id,
-                i64::from(version),
-                slot,
-            )
-            .await?
+            let attachment = if let Some(addition) = addition {
+                crate::attachment_store::additions::load(
+                    guarded.transaction(),
+                    &document.action_id,
+                    id,
+                    i64::from(version),
+                    addition,
+                    slot,
+                )
+                .await?
+            } else {
+                crate::attachment_store::load(
+                    guarded.transaction(),
+                    &document.action_id,
+                    id,
+                    i64::from(version),
+                    slot,
+                )
+                .await?
+            }
             .ok_or(MutationError::PreconditionFailed)?;
             // Current target, slot, quarantine and deletion-lock admission precede
             // the configured adapter's exact-hash read.
@@ -459,7 +527,14 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(authority, crate::model::HttpMethod::Get, Some(&document), 1, None, correlation)
+                .finish_proposal_read_audit(
+                    authority,
+                    crate::model::HttpMethod::Get,
+                    Some(&document),
+                    1,
+                    None,
+                    correlation,
+                )
                 .await?;
             Ok((attachment.metadata.content_type, bytes))
         })
@@ -517,11 +592,7 @@ impl PostgresRecordMutationService {
         let _audit = self.coordinator.begin_proposal_audit(&input).await?;
         let authority = input.authority;
         let correlation = input.correlation;
-        let method = match &input.attachment {
-            Some(attachment) if attachment.bytes.is_some() => crate::model::HttpMethod::Patch,
-            Some(_) => crate::model::HttpMethod::Delete,
-            None => crate::model::HttpMethod::Post,
-        };
+        let method = crate::mutation::proposal_http_method(&input);
         let result = self.proposal_mutation_after_attempt(input, deadline).await;
         if result.is_err() {
             self.coordinator

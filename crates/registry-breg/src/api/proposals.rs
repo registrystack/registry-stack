@@ -1673,6 +1673,7 @@ pub(crate) fn review_record_authorities(
             use crate::contract::ProposalContextValueSource;
             let target = match source {
                 ProposalContextValueSource::Input { .. }
+                | ProposalContextValueSource::Additions { .. }
                 | ProposalContextValueSource::Document { .. } => continue,
                 ProposalContextValueSource::Record { input, .. } => {
                     let input = action

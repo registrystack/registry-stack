@@ -2076,6 +2076,7 @@ impl PostgresRecordMutationService {
                     // refusals cannot reach a run.
                     | MutationError::AttachmentSlotWriteOnce
                     | MutationError::AttachmentTooLarge
+                    | MutationError::AttachmentLimitReached
                     | MutationError::AttachmentContentType
                     | MutationError::AttachmentDigestMismatch => {
                         (IngestionAttemptOutcome::Unavailable, None)
