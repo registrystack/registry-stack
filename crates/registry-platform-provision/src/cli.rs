@@ -29,15 +29,17 @@ pub const REPORT_API_VERSION: &str =
     "id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1";
 pub const REPORT_KIND: &str = "PlatformCliDatabaseProvisionReport";
 
-/// How the command writes its result.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+/// How the command writes its result. A tool maps its own global `--format`
+/// (`human | json`) onto this.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputFormat {
     #[default]
-    Text,
+    Human,
     Json,
 }
 
-/// The flags of `<tool> provision`.
+/// The flags of `<tool> provision`. The output format is the tool's own global
+/// `--format` flag, passed to [`run_provision`].
 #[derive(clap::Args, Debug, Clone)]
 pub struct ProvisionArgs {
     /// The product's runtime file, the one `apply` reads
@@ -62,9 +64,6 @@ pub struct ProvisionArgs {
     /// Print the SQL script and connect to nothing
     #[arg(long)]
     pub print_sql: bool,
-    /// Output format
-    #[arg(long, value_enum, default_value_t)]
-    pub format: OutputFormat,
 }
 
 /// What a product's loader hands the runner. A loader refuses with one
@@ -527,7 +526,7 @@ impl Output<'_> {
     fn refusal(&mut self, report: &PlatformCliDatabaseProvisionReport) -> u8 {
         let written = match self.format {
             OutputFormat::Json => self.json(report),
-            OutputFormat::Text => report
+            OutputFormat::Human => report
                 .diagnostics
                 .iter()
                 .all(|diagnostic| write!(self.stderr, "{}", diagnostic.render_human()).is_ok()),
@@ -540,17 +539,21 @@ impl Output<'_> {
     }
 }
 
+// The runner's inputs are independent (identity, arguments, format, loader,
+// backend, two streams) and each is a test seam, so they stay positional.
+#[allow(clippy::too_many_arguments)]
 fn run_with(
     tool: &'static str,
     version: &'static str,
     args: &ProvisionArgs,
+    format: OutputFormat,
     load: impl FnOnce(&Path) -> Result<ProvisionInput, Box<Diagnostic>>,
     backend: Backend<'_>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> u8 {
     let mut output = Output {
-        format: args.format,
+        format,
         version,
         stdout,
         stderr,
@@ -639,8 +642,8 @@ fn run_with(
     if args.print_sql {
         report.ok = true;
         report.status = ReportStatus::Complete;
-        let written = match args.format {
-            OutputFormat::Text => output
+        let written = match format {
+            OutputFormat::Human => output
                 .stdout
                 .write_all(render_script(&plan).as_bytes())
                 .is_ok(),
@@ -686,9 +689,9 @@ fn run_with(
             report.ok = true;
             report.status = ReportStatus::Complete;
             report.statements = report_statements(&plan, Some(&outcome));
-            let written = match args.format {
+            let written = match format {
                 OutputFormat::Json => output.json(&report),
-                OutputFormat::Text => write_summary(output.stdout, &report, outcome.single_role),
+                OutputFormat::Human => write_summary(output.stdout, &report, outcome.single_role),
             };
             output.write_failed(written)
         }
@@ -749,6 +752,7 @@ pub fn run_provision(
     tool: &'static str,
     version: &'static str,
     args: &ProvisionArgs,
+    format: OutputFormat,
     load: impl FnOnce(&Path) -> Result<ProvisionInput, Box<Diagnostic>>,
 ) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -765,6 +769,7 @@ pub fn run_provision(
         tool,
         version,
         args,
+        format,
         load,
         &server_backend(&runtime),
         &mut std::io::stdout().lock(),
@@ -862,6 +867,26 @@ mod tests {
         args: ProvisionArgs,
     }
 
+    /// Splits a test's `--format human|json` off the verb's own flags, as the
+    /// tool's global flag does.
+    pub(super) fn split_format<'a>(arguments: &[&'a str]) -> (Vec<&'a str>, OutputFormat) {
+        let mut rest = Vec::new();
+        let mut format = OutputFormat::Human;
+        let mut iter = arguments.iter().copied();
+        while let Some(argument) = iter.next() {
+            if argument == "--format" {
+                format = match iter.next() {
+                    Some("json") => OutputFormat::Json,
+                    Some("human") => OutputFormat::Human,
+                    other => panic!("test format {other:?} is not human or json"),
+                };
+            } else {
+                rest.push(argument);
+            }
+        }
+        (rest, format)
+    }
+
     fn parse(arguments: &[&str]) -> Result<ProvisionArgs, clap::Error> {
         Harness::try_parse_from(std::iter::once("tool").chain(arguments.iter().copied()))
             .map(|harness| harness.args)
@@ -919,6 +944,7 @@ mod tests {
         backend: Backend<'_>,
     ) -> Run {
         let directory = tempfile::tempdir().expect("scratch directory");
+        let (arguments, format) = split_format(arguments);
         let mut full: Vec<String> = arguments.iter().map(|s| (*s).to_owned()).collect();
         if let Some(contents) = admin_file {
             let path = directory.path().join("admin.url");
@@ -935,6 +961,7 @@ mod tests {
             "casectl",
             "1.2.3-test",
             &args,
+            format,
             |_| input,
             backend,
             &mut stdout,
@@ -1026,14 +1053,56 @@ mod tests {
         assert!(parse(&["--runtime-config", "r", "--print-sql"]).is_ok());
     }
 
+    /// A tool declares `--format human|json` globally and mounts the verb
+    /// beneath it. clap refuses a verb flag that reuses a global flag's name.
     #[test]
-    fn the_runtime_config_is_required_and_the_format_is_text_or_json() {
+    fn the_verb_mounts_under_a_tool_with_a_global_format_flag() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+        enum ToolFormat {
+            Human,
+            Json,
+        }
+        let tool = clap::Command::new("tool")
+            .arg(
+                clap::Arg::new("format")
+                    .long("format")
+                    .global(true)
+                    .value_parser(clap::value_parser!(ToolFormat))
+                    .default_value("human"),
+            )
+            .subcommand(<ProvisionArgs as clap::Args>::augment_args(
+                clap::Command::new("provision"),
+            ));
+        tool.clone().debug_assert();
+        let matches = tool
+            .try_get_matches_from([
+                "tool",
+                "provision",
+                "--runtime-config",
+                "r",
+                "--print-sql",
+                "--format",
+                "json",
+            ])
+            .expect("the verb parses under the global format flag");
+        let verb = matches.subcommand_matches("provision").expect("verb");
+        assert_eq!(
+            verb.get_one::<ToolFormat>("format"),
+            Some(&ToolFormat::Json)
+        );
+    }
+
+    #[test]
+    fn the_verb_has_no_format_flag_of_its_own() {
+        let error = parse(&["--runtime-config", "r", "--print-sql", "--format", "json"])
+            .expect_err("format belongs to the tool");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn the_runtime_config_is_required() {
         assert!(parse(&["--print-sql"]).is_err());
-        let args = parse(&["--runtime-config", "r", "--print-sql"]).unwrap();
-        assert_eq!(args.format, OutputFormat::Text);
-        let args = parse(&["--runtime-config", "r", "--print-sql", "--format", "json"]).unwrap();
-        assert_eq!(args.format, OutputFormat::Json);
-        assert!(parse(&["--runtime-config", "r", "--print-sql", "--format", "yaml"]).is_err());
+        assert!(parse(&["--runtime-config", "r", "--print-sql"]).is_ok());
     }
 
     // ---- print mode ----
@@ -1434,8 +1503,6 @@ mod tests {
             "r",
             "--admin-url-file",
             "/nonexistent-provision-admin-url",
-            "--format",
-            "json",
         ])
         .unwrap();
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
@@ -1443,6 +1510,7 @@ mod tests {
             "casectl",
             "1",
             &args,
+            OutputFormat::Json,
             |_| Ok(split_input()),
             &must_not_run,
             &mut stdout,
@@ -1464,8 +1532,6 @@ mod tests {
             "r",
             "--admin-url-env",
             "PROVISION_TEST_UNSET_ADMIN_URL",
-            "--format",
-            "json",
         ])
         .unwrap();
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
@@ -1473,6 +1539,7 @@ mod tests {
             "casectl",
             "1",
             &args,
+            OutputFormat::Json,
             |_| Ok(split_input()),
             &must_not_run,
             &mut stdout,
@@ -1702,7 +1769,7 @@ mod tests {
                 sqlstate: "42710".to_owned(),
             })
         };
-        for format in [["--format", "text"], ["--format", "json"]] {
+        for format in [["--format", "human"], ["--format", "json"]] {
             let run = execute_run(&format, Some(&admin), Ok(split_input()), &backend);
             let output = run.all_output();
             for secret in [
@@ -1784,7 +1851,8 @@ mod postgres_tests {
             "--admin-url-file",
             admin_file.as_str(),
         ];
-        full.extend_from_slice(arguments);
+        let (arguments, format) = tests::split_format(arguments);
+        full.extend_from_slice(&arguments);
         let args = {
             use clap::Parser;
             #[derive(Parser)]
@@ -1801,6 +1869,7 @@ mod postgres_tests {
             "casectl",
             "1.2.3-test",
             &args,
+            format,
             |_| Ok(input),
             backend,
             &mut stdout,
