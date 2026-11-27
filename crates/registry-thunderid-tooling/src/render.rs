@@ -763,7 +763,9 @@ pub(crate) fn build(
         let mut document = json!({
             "resource_type": "application", "id": app.id,
             "name": app.client_id,
-            "description": if extras.is_some() {
+            "description": if app.session.is_some() {
+                "Session application"
+            } else if extras.is_some() {
                 "Browser application"
             } else {
                 "Synthetic local browser application"
@@ -778,8 +780,16 @@ pub(crate) fn build(
             "inboundAuthConfig": [{"type": "oauth2", "config": {
                 "clientId": app.client_id, "clientSecret": secret,
                 "redirectUris": app.redirect_uris,
-                "postLogoutRedirectUris": [app.origin],
-                "grantTypes": ["authorization_code"], "responseTypes": ["code"],
+                "postLogoutRedirectUris": app.session.as_ref().map_or_else(
+                    || vec![app.origin.clone()],
+                    |session| session.post_logout_redirect_uris.clone(),
+                ),
+                "grantTypes": if app.session.is_some() {
+                    vec!["authorization_code", "refresh_token"]
+                } else {
+                    vec!["authorization_code"]
+                },
+                "responseTypes": ["code"],
                 "tokenEndpointAuthMethod": "client_secret_post", "pkceRequired": true, "publicClient": false,
                 "token": {"accessToken": {"defaultAudience": app.audience,
                     "userConfig": {"validityPeriod": 300, "attributes": app.token_attributes}},
@@ -1368,6 +1378,7 @@ mod tests {
                 redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
                 audience: description.resource_servers[0].identifier.clone(),
                 token_attributes: vec!["registry_role".into()],
+                session: None,
             });
         description.synthetic_users.push(SyntheticUser {
             id: "0197aaaa-0000-7000-8000-0000000000e2".into(),

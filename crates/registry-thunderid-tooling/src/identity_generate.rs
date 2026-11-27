@@ -25,8 +25,8 @@ use sha2::{Digest, Sha256};
 
 use crate::description::{
     ExchangeAttributeKind, ExchangeIssuer, ExchangeMapping, InteractiveApplication, MachineClient,
-    OrganizationUnit, Profile, Role, SessionIdentity, SyntheticUser, TokenExchangeClient,
-    DEFAULT_OU_HANDLE, DEFAULT_OU_ID, PRIVATE_JWK_MEMBERS,
+    OrganizationUnit, Profile, Role, SessionIdentity, SessionSignIn, SyntheticUser,
+    TokenExchangeClient, DEFAULT_OU_HANDLE, DEFAULT_OU_ID, PRIVATE_JWK_MEMBERS,
 };
 use crate::identity_deployment::{
     self as deployment_file, relative_path, ClaimValue, Grant, IdentityDeployment,
@@ -73,6 +73,7 @@ pub struct Summary {
     pub resource_servers: usize,
     pub machine_clients: usize,
     pub browser_apps: usize,
+    pub session_apps: usize,
     pub users: usize,
     /// The environment variables the placeholders name, sorted. The
     /// operator must provide each to ThunderID.
@@ -905,6 +906,69 @@ fn assert_only_known_placeholders(
     Ok(())
 }
 
+/// The token attributes an application's tokens carry: those it lists, and
+/// beside them the actor kind and the purpose its products require when it
+/// has room to add them. `products` are the products whose audiences the
+/// application's tokens reach.
+fn project_token_attributes(
+    findings: &mut Findings<'_>,
+    facts: &MergedFacts,
+    pointer: &str,
+    listed: &[String],
+    products: &[&ProductFacts],
+) -> Vec<String> {
+    for name in listed {
+        check_claim(
+            findings,
+            facts,
+            &format!("{pointer}/tokenAttributes"),
+            name,
+            ClaimType::String,
+        );
+    }
+    // Every user is given registry_actor_kind when a product reads it
+    // (BReg refuses a non-delegated token without it), and the purpose
+    // their grants give when one of the application's products requires one
+    // (BReg refuses a token for such a profile without it). The
+    // application's tokens carry both as a machine client's do, listed
+    // or not.
+    let reads_purpose = products.iter().any(|product| {
+        reads_purpose(product)
+            && product
+                .access_profiles
+                .values()
+                .any(|profile| profile.exchange.is_none() && !profile.purposes.is_empty())
+    });
+    let required = [
+        (
+            ACTOR_KIND,
+            facts.claims.get(ACTOR_KIND) == Some(&ClaimType::String),
+            "identity.deployment.actor-kind-not-projected",
+            "the application lists the most token attributes it may carry, so its tokens cannot also carry registry_actor_kind, which the products require",
+            "List registry_actor_kind among the token attributes, or remove one so the generator can add it.",
+        ),
+        (
+            PURPOSE,
+            reads_purpose,
+            "identity.deployment.purpose-not-projected",
+            "the application lists the most token attributes it may carry, so its tokens cannot also carry registry_purpose, which its product requires",
+            "List registry_purpose among the token attributes, or remove one so the generator can add it.",
+        ),
+    ];
+    let mut token_attributes = listed.to_vec();
+    for (name, read, code, message, remedy) in required {
+        if !read || token_attributes.iter().any(|attribute| attribute == name) {
+            continue;
+        }
+        if token_attributes.len() >= MAXIMUM_TOKEN_ATTRIBUTES {
+            findings.error(&format!("{pointer}/tokenAttributes"), code, message, remedy);
+            continue;
+        }
+        token_attributes.push(name.to_owned());
+    }
+    token_attributes
+}
+
 /// The issuer, the merged facts, and the operator file, turned into
 /// ThunderID configuration. Pure: see the module documentation.
 pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
@@ -914,7 +978,15 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         .iter()
         .map(|source| facts_file::read(source.label, source.bytes))
         .collect::<Result<Vec<_>, _>>()?;
-    let facts = facts_file::merge(documents)?;
+    // The deployment declares the audience that products may share, so it is
+    // read before the facts merge; its own refusal is reported after the
+    // facts', as it always was.
+    let deployment_read = deployment_file::read(inputs.deployment.label, inputs.deployment.bytes);
+    let person_audience = deployment_read
+        .as_ref()
+        .ok()
+        .and_then(|(deployment, _)| deployment.person_audience.as_deref());
+    let facts = facts_file::merge_with_person_audience(documents, person_audience)?;
     if !https_url(&facts.issuer) {
         return Err(ToolingError::IdentityRefused {
             code: "identity.facts.issuer-not-https",
@@ -922,8 +994,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             location: "facts/issuer".to_owned(),
         });
     }
-    let (deployment, document) =
-        deployment_file::read(inputs.deployment.label, inputs.deployment.bytes)?;
+    let (deployment, document) = deployment_read?;
     let mut findings = Findings {
         document: &document,
         found: Vec::new(),
@@ -1007,19 +1078,28 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             .map(|server| server.id.clone())
     };
 
-    // A user reaches a product only through that product's browser
-    // applications that sign in the user's type: every application admits
-    // `RegistryPerson`, and an extension type only where its `userTypes`
-    // list it.
+    // A user reaches a product only through a browser application of that
+    // product or a session application that lists it, and only one that
+    // signs in the user's type: every application admits `RegistryPerson`,
+    // and an extension type only where its `userTypes` list it.
     let user_reaching = |user_type: Option<&str>, product: &str| {
+        let signs_in =
+            |types: &[String]| user_type.is_none_or(|wanted| types.iter().any(|id| id == wanted));
         deployment
             .browser_apps
             .iter()
-            .filter(|app| {
-                app.product == product
-                    && user_type.is_none_or(|wanted| app.user_types.iter().any(|id| id == wanted))
-            })
+            .filter(|app| app.product == product && signs_in(&app.user_types))
             .map(|app| app.id.clone())
+            .chain(
+                deployment
+                    .session_apps
+                    .iter()
+                    .filter(|app| {
+                        app.products.iter().any(|listed| listed == product)
+                            && signs_in(&app.user_types)
+                    })
+                    .map(|app| app.id.clone()),
+            )
             .collect::<Vec<_>>()
     };
 
@@ -1195,53 +1275,13 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             );
             continue;
         };
-        for name in &app.token_attributes {
-            check_claim(
-                &mut findings,
-                &facts,
-                &format!("{pointer}/tokenAttributes"),
-                name,
-                ClaimType::String,
-            );
-        }
-        // Every user is given registry_actor_kind when a product reads it
-        // (BReg refuses a non-delegated token without it), and the purpose
-        // their grants give when the application's product requires one
-        // (BReg refuses a token for such a profile without it). The
-        // application's tokens carry both as a machine client's do, listed
-        // or not.
-        let reads_purpose = reads_purpose(product)
-            && product
-                .access_profiles
-                .values()
-                .any(|profile| profile.exchange.is_none() && !profile.purposes.is_empty());
-        let required = [
-            (
-                ACTOR_KIND,
-                facts.claims.get(ACTOR_KIND) == Some(&ClaimType::String),
-                "identity.deployment.actor-kind-not-projected",
-                "the application lists the most token attributes it may carry, so its tokens cannot also carry registry_actor_kind, which the products require",
-                "List registry_actor_kind among the token attributes, or remove one so the generator can add it.",
-            ),
-            (
-                PURPOSE,
-                reads_purpose,
-                "identity.deployment.purpose-not-projected",
-                "the application lists the most token attributes it may carry, so its tokens cannot also carry registry_purpose, which its product requires",
-                "List registry_purpose among the token attributes, or remove one so the generator can add it.",
-            ),
-        ];
-        let mut token_attributes = app.token_attributes.clone();
-        for (name, read, code, message, remedy) in required {
-            if !read || token_attributes.iter().any(|listed| listed == name) {
-                continue;
-            }
-            if token_attributes.len() >= MAXIMUM_TOKEN_ATTRIBUTES {
-                findings.error(&format!("{pointer}/tokenAttributes"), code, message, remedy);
-                continue;
-            }
-            token_attributes.push(name.to_owned());
-        }
+        let token_attributes = project_token_attributes(
+            &mut findings,
+            &facts,
+            &pointer,
+            &app.token_attributes,
+            &[product],
+        );
         projected_requirements
             .entry(app.id.clone())
             .or_default()
@@ -1257,6 +1297,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 redirect_uris: app.redirect_uris.clone(),
                 audience: product.audience.clone(),
                 token_attributes,
+                session: None,
             });
         description.roles.push(Role {
             id: local::derived_uuid(&format!("{sid}:role:application:{}", app.id)),
@@ -1278,6 +1319,111 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             extras.app_logo_urls.insert(app_id.clone(), logo.clone());
         }
         identities.insert(app.id.clone(), json!({"kind": "browser", "sub": app_id}));
+    }
+
+    for (index, app) in deployment.session_apps.iter().enumerate() {
+        let pointer = format!("/sessionApps/{index}");
+        let reaching = |_: &str| vec![app.id.clone()];
+        let granted = resolve_grants(&mut findings, &facts, &pointer, &app.grants, &reaching);
+        if granted
+            .iter()
+            .any(|(_, profile)| profile.exchange.is_some())
+        {
+            findings.error(
+                &format!("{pointer}/grants"),
+                "identity.deployment.exchange-not-interactive",
+                "an exchange profile cannot be granted to a session application",
+                "Grant exchange profiles to a machine client.",
+            );
+        }
+        for (position, grant) in app.grants.iter().enumerate() {
+            if !app.products.contains(&grant.product) {
+                findings.error(
+                    &format!("{pointer}/grants/{position}/product"),
+                    "identity.deployment.grant-outside-products",
+                    "the grant names a product the session application does not list, so its tokens never reach it",
+                    "List the product in the application's products, or remove the grant.",
+                );
+            }
+        }
+        let mut reached: Vec<&ProductFacts> = Vec::new();
+        for (position, name) in app.products.iter().enumerate() {
+            let Some(product) = facts.products.get(name) else {
+                findings.error(
+                    &format!("{pointer}/products/{position}"),
+                    "identity.deployment.unknown-product",
+                    "the application names a product no identity facts document describes",
+                    "Supply the product's identity facts, or name another product.",
+                );
+                continue;
+            };
+            if !product.allowed_clients.admits(&app.id) {
+                findings.error(
+                    &format!("{pointer}/products/{position}"),
+                    "identity.deployment.client-not-admitted",
+                    "the product does not admit the session application's client",
+                    "Admit the client in the product's configuration and regenerate its facts, or remove the product.",
+                );
+            }
+            reached.push(product);
+        }
+        if reached.len() != app.products.len() {
+            continue;
+        }
+        let token_attributes = project_token_attributes(
+            &mut findings,
+            &facts,
+            &pointer,
+            &app.token_attributes,
+            &reached,
+        );
+        projected_requirements
+            .entry(app.id.clone())
+            .or_default()
+            .extend(required_claims(&granted).into_iter().map(str::to_owned));
+        // Products that share an audience count it once.
+        let mut audiences: Vec<String> = Vec::new();
+        for product in &reached {
+            if !audiences.contains(&product.audience) {
+                audiences.push(product.audience.clone());
+            }
+        }
+        let app_id = local::derived_uuid(&format!("{sid}:application:{}", app.id));
+        description
+            .interactive_applications
+            .push(InteractiveApplication {
+                id: app_id.clone(),
+                client_id: app.id.clone(),
+                client_secret_file: Path::new("env").join(app.client_secret_ref.name()),
+                origin: app.origin.clone(),
+                redirect_uris: app.redirect_uris.clone(),
+                audience: audiences[0].clone(),
+                token_attributes,
+                session: Some(SessionSignIn {
+                    post_logout_redirect_uris: app.post_logout_redirect_uris.clone(),
+                    audiences,
+                }),
+            });
+        description.roles.push(Role {
+            id: local::derived_uuid(&format!("{sid}:role:application:{}", app.id)),
+            name: format!("Session {}", app.id),
+            description: "Explicit deployment session application permissions".to_owned(),
+            permissions: permissions(&description, &facts, &granted),
+            assigned_agents: vec![],
+            assigned_users: vec![],
+            assigned_applications: vec![app_id.clone()],
+        });
+        extras.app_user_types.insert(
+            app_id.clone(),
+            app.user_types
+                .iter()
+                .filter_map(|id| type_name(id))
+                .collect(),
+        );
+        if let Some(logo) = &app.logo_url {
+            extras.app_logo_urls.insert(app_id.clone(), logo.clone());
+        }
+        identities.insert(app.id.clone(), json!({"kind": "session", "sub": app_id}));
     }
 
     for (index, user) in deployment.users.iter().enumerate() {
@@ -1377,22 +1523,34 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
     // An application's tokens carry only the attributes it projects, so a
     // claim a profile reached through it requires must be among them; the
     // actor kind and purpose it is given were added above.
-    for (index, app) in deployment.browser_apps.iter().enumerate() {
+    let applications = deployment
+        .browser_apps
+        .iter()
+        .enumerate()
+        .map(|(index, app)| (format!("/browserApps/{index}"), &app.id))
+        .chain(
+            deployment
+                .session_apps
+                .iter()
+                .enumerate()
+                .map(|(index, app)| (format!("/sessionApps/{index}"), &app.id)),
+        );
+    for (pointer, id) in applications {
         let Some(projected) = description
             .interactive_applications
             .iter()
-            .find(|projected| projected.client_id == app.id)
+            .find(|projected| &projected.client_id == id)
         else {
             continue;
         };
         if projected_requirements
-            .get(&app.id)
+            .get(id)
             .into_iter()
             .flatten()
             .any(|name| !projected.token_attributes.contains(name))
         {
             findings.error(
-                &format!("/browserApps/{index}/tokenAttributes"),
+                &format!("{pointer}/tokenAttributes"),
                 "identity.deployment.required-claim-not-projected",
                 "the application's tokens do not carry a claim that an access profile reached through it requires, so the product would refuse them",
                 "List the claim among the application's token attributes.",
@@ -1520,7 +1678,16 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         files: files.keys().cloned().collect(),
         resource_servers: description.resource_servers.len(),
         machine_clients: description.machine_clients.len(),
-        browser_apps: description.interactive_applications.len(),
+        browser_apps: description
+            .interactive_applications
+            .iter()
+            .filter(|app| app.session.is_none())
+            .count(),
+        session_apps: description
+            .interactive_applications
+            .iter()
+            .filter(|app| app.session.is_some())
+            .count(),
         users: description.synthetic_users.len(),
         required_environment,
     };

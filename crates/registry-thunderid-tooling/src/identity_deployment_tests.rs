@@ -239,3 +239,72 @@ fn every_set_list_refuses_a_repeat_at_the_repeat() {
         assert_eq!(found, [(at.to_owned(), vec![first])], "{at}");
     }
 }
+
+const SESSION_APP: &str = "sessionApps:
+  - id: citizen-pages
+    clientSecretRef: secret:env/CITIZEN_PAGES_CLIENT_SECRET
+    origin: https://pages.registry.example
+    redirectUris: [https://pages.registry.example/auth/callback]
+    postLogoutRedirectUris: [https://pages.registry.example/signed-out]
+    products: [breg, evidence]
+    tokenAttributes: [registry_actor_kind]
+    grants:
+      - product: breg
+        accessProfiles: [case-read]
+";
+
+fn with_session_app() -> String {
+    DEPLOYMENT.replace("users:\n", &format!("{SESSION_APP}users:\n"))
+}
+
+#[test]
+fn a_session_application_and_a_person_audience_read() {
+    let text = format!("personAudience: urn:registry:person\n{}", with_session_app());
+    let (deployment, _) = read_text(&text).expect("reads");
+    assert_eq!(deployment.person_audience.as_deref(), Some("urn:registry:person"));
+    let app = &deployment.session_apps[0];
+    assert_eq!(app.products, ["breg", "evidence"]);
+    assert_eq!(
+        app.post_logout_redirect_uris,
+        ["https://pages.registry.example/signed-out"]
+    );
+    assert!(deployment
+        .required_environment()
+        .contains(&"CITIZEN_PAGES_CLIENT_SECRET".to_owned()));
+}
+
+#[test]
+fn a_session_application_shares_the_client_id_and_secret_namespaces() {
+    let reused = with_session_app().replace("id: citizen-pages", "id: staff-portal");
+    assert!(codes(&reused).contains(&"identity.deployment.duplicate-client".to_owned()));
+    let secret = with_session_app().replace("CITIZEN_PAGES_CLIENT_SECRET", "STAFF_PORTAL_CLIENT_SECRET");
+    assert!(codes(&secret).contains(&"identity.deployment.duplicate-secret".to_owned()));
+}
+
+#[test]
+fn a_session_application_needs_https_addresses_and_one_to_eight_distinct_products() {
+    let sign_out = with_session_app().replace("https://pages.registry.example/signed-out", "http://pages.registry.example/signed-out");
+    assert!(codes(&sign_out).contains(&"identity.deployment.invalid-origin".to_owned()));
+    let none = with_session_app().replace("products: [breg, evidence]", "products: []");
+    assert!(codes(&none).contains(&"identity.deployment.invalid-products".to_owned()));
+    let nine = with_session_app().replace(
+        "products: [breg, evidence]",
+        "products: [a, b, c, d, e, f, g, h, i]",
+    );
+    assert!(codes(&nine).contains(&"identity.deployment.invalid-products".to_owned()));
+    let repeated = with_session_app().replace("products: [breg, evidence]", "products: [breg, breg]");
+    assert!(read_text(&repeated).is_err());
+}
+
+#[test]
+fn a_session_application_lets_users_sign_in() {
+    let no_browser = with_session_app()
+        .replace("browserApps:\n  - id: staff-portal\n    clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET\n    origin: https://staff.registry.example\n    redirectUris: [https://staff.registry.example/auth/callback]\n    product: breg\n    tokenAttributes: [registry_actor_kind]\n    grants:\n      - product: breg\n        accessProfiles: [case-read]\n", "");
+    assert!(!codes(&no_browser).contains(&"identity.deployment.users-need-an-app".to_owned()));
+}
+
+#[test]
+fn the_person_audience_must_be_an_absolute_uri() {
+    let bad = format!("personAudience: not a uri\n{DEPLOYMENT}");
+    assert!(codes(&bad).contains(&"identity.person-audience.invalid".to_owned()));
+}

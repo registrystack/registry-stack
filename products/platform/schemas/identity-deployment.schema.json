@@ -197,6 +197,98 @@
       "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
       "type": "string"
     },
+    "SessionApp": {
+      "additionalProperties": false,
+      "description": "A session application: the confidential client a session service uses for\none kind of sign-in. It reaches several products, renews with a refresh\ntoken and states its own sign-out return addresses.",
+      "properties": {
+        "clientSecretRef": {
+          "$ref": "#/$defs/SecretReference",
+          "allOf": [
+            {
+              "pattern": "^secret:env/[A-Z][A-Z0-9_]{0,127}$"
+            }
+          ]
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/Grant"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The OAuth client id."
+        },
+        "logoUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Url"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A public logo URL, shown on the sign-in page; omitted shows none."
+        },
+        "origin": {
+          "type": "string"
+        },
+        "postLogoutRedirectUris": {
+          "description": "Where the issuer may send the browser after sign-out.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "products": {
+          "description": "The `product` values whose audiences the application's tokens may\nreach: 1 to 8, each once.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "redirectUris": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "tokenAttributes": {
+          "description": "Claims the application's tokens carry from the signed-in user.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "userTypes": {
+          "description": "Extension user types (ids of `userTypes`) that may sign in, beside\nthe generated `RegistryPerson`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "clientSecretRef",
+        "origin",
+        "redirectUris",
+        "postLogoutRedirectUris",
+        "products",
+        "tokenAttributes",
+        "grants"
+      ],
+      "type": "object"
+    },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
       "format": "uri",
@@ -319,6 +411,20 @@
     },
     "organizationUnit": {
       "$ref": "#/$defs/OrganizationUnit"
+    },
+    "personAudience": {
+      "description": "The audience that the products a person calls from a page may share\n(an absolute URI). Omitted: every product keeps its own audience.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sessionApps": {
+      "items": {
+        "$ref": "#/$defs/SessionApp"
+      },
+      "maxItems": 256,
+      "type": "array"
     },
     "userTypes": {
       "items": {

@@ -242,8 +242,23 @@ pub struct InteractiveApplication {
     pub client_secret_file: PathBuf,
     pub origin: String,
     pub redirect_uris: Vec<String>,
+    /// The access token's default audience. A session application's is the
+    /// first of its [`SessionSignIn::audiences`].
     pub audience: String,
     pub token_attributes: Vec<String>,
+    /// Present for a session application: the confidential client a session
+    /// service uses for one kind of sign-in. It reaches several audiences,
+    /// renews with a refresh token and states its own sign-out return
+    /// addresses. Absent for a browser application.
+    pub session: Option<SessionSignIn>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSignIn {
+    pub post_logout_redirect_uris: Vec<String>,
+    /// The distinct audiences of the products the application reaches, in
+    /// the order listed. The first is the access token's default audience.
+    pub audiences: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -536,6 +551,27 @@ impl IssuerDescription {
                 })
             {
                 return refuse("local browser application identity, audience, redirect or attributes are invalid");
+            }
+            if let Some(session) = &app.session {
+                if development
+                    || session.audiences.first() != Some(&app.audience)
+                    || session.audiences.len() > 8
+                    || !all_distinct(&session.audiences)
+                    || session
+                        .audiences
+                        .iter()
+                        .any(|audience| !identifiers.contains(audience))
+                    || session.post_logout_redirect_uris.is_empty()
+                    || session.post_logout_redirect_uris.len() > 8
+                    || session
+                        .post_logout_redirect_uris
+                        .iter()
+                        .any(|uri| !https_origin(uri))
+                {
+                    return refuse(
+                        "session application audiences or sign-out return addresses are invalid",
+                    );
+                }
             }
         }
         let mut usernames = BTreeSet::new();
@@ -1128,6 +1164,7 @@ mod tests {
             redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
             audience: description.resource_servers[0].identifier.clone(),
             token_attributes: vec!["registry_role".into()],
+            session: None,
         };
         let user = |n: usize| SyntheticUser {
             id: format!("0197aaaa-0000-7000-8000-0000000002{n:02x}"),
@@ -1168,6 +1205,7 @@ mod tests {
                 redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
                 audience: description.resource_servers[0].identifier.clone(),
                 token_attributes: vec!["registry_role".into()],
+                session: None,
             });
         description.synthetic_users = vec![
             SyntheticUser {
@@ -1208,6 +1246,7 @@ mod tests {
                 redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
                 audience: description.resource_servers[0].identifier.clone(),
                 token_attributes: vec!["registry_role".into()],
+                session: None,
             });
         description.synthetic_users = vec![SyntheticUser {
             id: "0197aaaa-0000-7000-8000-0000000000e2".into(),

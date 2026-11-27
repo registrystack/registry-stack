@@ -2,7 +2,7 @@
 //! hosted issuer's configuration that no product knows.
 //!
 //! The operator writes the organization unit, each client's public key file
-//! and grants, the browser applications, the users, and the environment
+//! and grants, the browser and session applications, the users, and the environment
 //! variable that holds each secret. Everything a product knows (issuer,
 //! audience, admitted clients, claims, access profiles, assertion
 //! authorities) comes from the products' identity facts instead, and the
@@ -130,6 +130,51 @@ pub struct BrowserApp {
     pub logo_url: Option<String>,
 }
 
+/// A session application: the confidential client a session service uses for
+/// one kind of sign-in. It reaches several products, renews with a refresh
+/// token and states its own sign-out return addresses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SessionApp {
+    /// The OAuth client id.
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub id: String,
+    pub client_secret_ref: SecretReference,
+    pub origin: String,
+    #[serde(deserialize_with = "set")]
+    pub redirect_uris: Vec<String>,
+    /// Where the issuer may send the browser after sign-out.
+    #[serde(deserialize_with = "set")]
+    pub post_logout_redirect_uris: Vec<String>,
+    /// The `product` values whose audiences the application's tokens may
+    /// reach: 1 to 8, each once.
+    #[serde(deserialize_with = "set")]
+    pub products: Vec<String>,
+    /// Claims the application's tokens carry from the signed-in user.
+    #[serde(deserialize_with = "set")]
+    pub token_attributes: Vec<String>,
+    pub grants: Vec<Grant>,
+    /// Extension user types (ids of `userTypes`) that may sign in, beside
+    /// the generated `RegistryPerson`.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "set"
+    )]
+    pub user_types: Vec<String>,
+    /// A public logo URL, shown on the sign-in page; omitted shows none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Url>")
+    )]
+    pub logo_url: Option<String>,
+}
+
+/// The most products one session application reaches.
+pub const MAXIMUM_SESSION_PRODUCTS: usize = 8;
+
 /// A user, with the claims their tokens carry stated explicitly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -178,6 +223,12 @@ pub struct IdentityDeployment {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub browser_apps: Vec<BrowserApp>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_apps: Vec<SessionApp>,
+    /// The audience that the products a person calls from a page may share
+    /// (an absolute URI). Omitted: every product keeps its own audience.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_audience: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub users: Vec<User>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_types: Vec<UserType>,
@@ -208,6 +259,7 @@ impl IdentityDeployment {
         self.browser_apps
             .iter()
             .map(|app| &app.client_secret_ref)
+            .chain(self.session_apps.iter().map(|app| &app.client_secret_ref))
             .chain(self.users.iter().map(|user| &user.password_ref))
             .collect()
     }
@@ -262,6 +314,100 @@ fn unknown_actor_kind(pointer: &str, error: &mut dyn FnMut(&str, &str, &str, &st
     );
 }
 
+/// What the browser and session applications share and the checks on it.
+struct Application<'a> {
+    id: &'a str,
+    client_secret_ref: &'a SecretReference,
+    origin: &'a str,
+    redirect_uris: &'a [String],
+    /// Present for a session application, which states its sign-out
+    /// return addresses.
+    post_logout_redirect_uris: Option<&'a [String]>,
+    token_attributes: &'a [String],
+    logo_url: Option<&'a str>,
+}
+
+fn check_application<'a>(
+    pointer: &str,
+    app: &Application<'a>,
+    client_ids: &mut BTreeSet<&'a str>,
+    secret_names: &mut BTreeSet<String>,
+    error: &mut dyn FnMut(&str, &str, &str, &str),
+) {
+    if LocalId::new(app.id.to_owned()).is_err()
+        || !valid_client_id(app.id)
+        || !client_ids.insert(app.id)
+    {
+        error(
+            &format!("{pointer}/id"),
+            "identity.deployment.duplicate-client",
+            "a client id is not a client id, or repeats an earlier client, browser application or session application",
+            "Give each client, browser application and session application its own id.",
+        );
+    }
+    if app.client_secret_ref.provider() != SecretProvider::Environment
+        || !secret_names.insert(app.client_secret_ref.name().to_owned())
+    {
+        let (code, message) = if app.client_secret_ref.provider() != SecretProvider::Environment {
+            (
+                "identity.deployment.environment-secret-only",
+                "the secret reference does not name an environment variable",
+            )
+        } else {
+            (
+                "identity.deployment.duplicate-secret",
+                "the secret reference repeats another secret's environment variable",
+            )
+        };
+        error(
+            &format!("{pointer}/clientSecretRef"),
+            code,
+            message,
+            "Write secret:env/NAME with a variable no other secret uses.",
+        );
+    }
+    let https = |value: &str| {
+        url::Url::parse(value).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.fragment().is_none()
+        })
+    };
+    let addresses =
+        |list: &[String]| !list.is_empty() && list.len() <= 8 && list.iter().all(|uri| https(uri));
+    if !https(app.origin)
+        || !addresses(app.redirect_uris)
+        || app
+            .post_logout_redirect_uris
+            .is_some_and(|list| !addresses(list))
+        || app.logo_url.is_some_and(|logo| !https(logo))
+    {
+        error(
+            pointer,
+            "identity.deployment.invalid-origin",
+            "the origin, a redirect URI, a sign-out return address or the logo is not https, or 1 to 8 redirect URIs (and sign-out return addresses for a session application) are not stated",
+            "Use https URLs without user information or a fragment.",
+        );
+    }
+    if app.token_attributes.is_empty()
+        || app.token_attributes.len() > 16
+        || app
+            .token_attributes
+            .iter()
+            .any(|name| !valid_claim_name(name) || protected_attribute(name))
+        || app.token_attributes.iter().collect::<BTreeSet<_>>().len() != app.token_attributes.len()
+    {
+        error(
+            &format!("{pointer}/tokenAttributes"),
+            "identity.deployment.invalid-claim",
+            "the token attributes are empty, more than 16, repeated, invalid, or protected",
+            "List 1 to 16 distinct claim names.",
+        );
+    }
+}
+
 fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic> {
     let mut found = Vec::new();
     let mut error = |pointer: &str, code: &str, message: &str, action: &str| {
@@ -276,31 +422,50 @@ fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic
             "Write a handle of lowercase letters, digits, `-` and `_`, and a name of at most 128 bytes.",
         );
     }
-    if deployment.clients.is_empty() && deployment.browser_apps.is_empty() {
+    if deployment
+        .person_audience
+        .as_deref()
+        .is_some_and(|audience| !crate::validate::valid_resource_uri(audience))
+    {
+        error(
+            "/personAudience",
+            "identity.person-audience.invalid",
+            "personAudience is not an absolute URI",
+            "Write an absolute URI such as urn:registry:person.",
+        );
+    }
+    if deployment.clients.is_empty()
+        && deployment.browser_apps.is_empty()
+        && deployment.session_apps.is_empty()
+    {
         error(
             "/clients",
             "identity.deployment.no-principals",
-            "the file states no client and no browser application",
-            "State at least one client or browser application.",
+            "the file states no client, browser application or session application",
+            "State at least one client, browser application or session application.",
         );
     }
     if deployment.clients.len() > MAXIMUM_PRINCIPALS
         || deployment.browser_apps.len() > MAXIMUM_PRINCIPALS
+        || deployment.session_apps.len() > MAXIMUM_PRINCIPALS
         || deployment.users.len() > MAXIMUM_PRINCIPALS
     {
         error(
             "/clients",
             "identity.deployment.too-many",
-            "more than 256 clients, browser applications or users are stated",
+            "more than 256 clients, browser applications, session applications or users are stated",
             "State at most 256 of each.",
         );
     }
-    if !deployment.users.is_empty() && deployment.browser_apps.is_empty() {
+    if !deployment.users.is_empty()
+        && deployment.browser_apps.is_empty()
+        && deployment.session_apps.is_empty()
+    {
         error(
             "/users",
             "identity.deployment.users-need-an-app",
-            "users are stated but no browser application lets them sign in",
-            "State a browser application, or remove the users.",
+            "users are stated but no browser or session application lets them sign in",
+            "State a browser or session application, or remove the users.",
         );
     }
 
@@ -377,75 +542,52 @@ fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic
     let mut secret_names = BTreeSet::new();
     for (index, app) in deployment.browser_apps.iter().enumerate() {
         let pointer = format!("/browserApps/{index}");
-        if LocalId::new(app.id.clone()).is_err()
-            || !valid_client_id(&app.id)
-            || !client_ids.insert(app.id.as_str())
-        {
-            error(
-                &format!("{pointer}/id"),
-                "identity.deployment.duplicate-client",
-                "a client id is not a client id, or repeats an earlier client or browser application",
-                "Give each client and browser application its own id.",
-            );
-        }
-        if app.client_secret_ref.provider() != SecretProvider::Environment
-            || !secret_names.insert(app.client_secret_ref.name().to_owned())
-        {
-            let (code, message) = if app.client_secret_ref.provider() != SecretProvider::Environment
-            {
-                (
-                    "identity.deployment.environment-secret-only",
-                    "the secret reference does not name an environment variable",
-                )
-            } else {
-                (
-                    "identity.deployment.duplicate-secret",
-                    "the secret reference repeats another secret's environment variable",
-                )
-            };
-            error(
-                &format!("{pointer}/clientSecretRef"),
-                code,
-                message,
-                "Write secret:env/NAME with a variable no other secret uses.",
-            );
-        }
-        let https = |value: &str| {
-            url::Url::parse(value).is_ok_and(|url| {
-                url.scheme() == "https"
-                    && url.host_str().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.fragment().is_none()
-            })
-        };
-        if !https(&app.origin)
-            || app.redirect_uris.is_empty()
-            || app.redirect_uris.len() > 8
-            || app.redirect_uris.iter().any(|uri| !https(uri))
-            || app.logo_url.as_deref().is_some_and(|logo| !https(logo))
-        {
-            error(
-                &pointer,
-                "identity.deployment.invalid-origin",
-                "the origin, a redirect URI or the logo is not https, or 1 to 8 redirect URIs are not stated",
-                "Use https URLs without user information or a fragment.",
-            );
-        }
-        if app.token_attributes.is_empty()
-            || app.token_attributes.len() > 16
+        check_application(
+            &pointer,
+            &Application {
+                id: &app.id,
+                client_secret_ref: &app.client_secret_ref,
+                origin: &app.origin,
+                redirect_uris: &app.redirect_uris,
+                post_logout_redirect_uris: None,
+                token_attributes: &app.token_attributes,
+                logo_url: app.logo_url.as_deref(),
+            },
+            &mut client_ids,
+            &mut secret_names,
+            &mut error,
+        );
+        check_grants(&pointer, &app.grants, &mut error);
+    }
+    for (index, app) in deployment.session_apps.iter().enumerate() {
+        let pointer = format!("/sessionApps/{index}");
+        check_application(
+            &pointer,
+            &Application {
+                id: &app.id,
+                client_secret_ref: &app.client_secret_ref,
+                origin: &app.origin,
+                redirect_uris: &app.redirect_uris,
+                post_logout_redirect_uris: Some(&app.post_logout_redirect_uris),
+                token_attributes: &app.token_attributes,
+                logo_url: app.logo_url.as_deref(),
+            },
+            &mut client_ids,
+            &mut secret_names,
+            &mut error,
+        );
+        if app.products.is_empty()
+            || app.products.len() > MAXIMUM_SESSION_PRODUCTS
             || app
-                .token_attributes
+                .products
                 .iter()
-                .any(|name| !valid_claim_name(name) || protected_attribute(name))
-            || app.token_attributes.iter().collect::<BTreeSet<_>>().len()
-                != app.token_attributes.len()
+                .any(|product| LocalId::new(product.clone()).is_err())
         {
             error(
-                &format!("{pointer}/tokenAttributes"),
-                "identity.deployment.invalid-claim",
-                "the token attributes are empty, more than 16, repeated, invalid, or protected",
-                "List 1 to 16 distinct claim names.",
+                &format!("{pointer}/products"),
+                "identity.deployment.invalid-products",
+                "a session application lists no product, more than 8, or a name that is not a local identifier",
+                "List 1 to 8 distinct products by their `product` name.",
             );
         }
         check_grants(&pointer, &app.grants, &mut error);
@@ -575,6 +717,20 @@ fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic
         {
             error(
                 &format!("/browserApps/{index}/userTypes"),
+                "identity.deployment.unknown-user-type",
+                "an application admits a user type that userTypes does not state",
+                "Name the id of an entry of userTypes.",
+            );
+        }
+    }
+    for (index, app) in deployment.session_apps.iter().enumerate() {
+        if app
+            .user_types
+            .iter()
+            .any(|id| !type_ids.contains(id.as_str()))
+        {
+            error(
+                &format!("/sessionApps/{index}/userTypes"),
                 "identity.deployment.unknown-user-type",
                 "an application admits a user type that userTypes does not state",
                 "Name the id of an entry of userTypes.",

@@ -306,6 +306,7 @@ fn install_deployment_constraints(schema: &mut Value) {
     for pointer in [
         "/properties/clients",
         "/properties/browserApps",
+        "/properties/sessionApps",
         "/properties/users",
     ] {
         install_bounds(
@@ -316,7 +317,7 @@ fn install_deployment_constraints(schema: &mut Value) {
     }
     install_claim_names(schema, "/$defs/Client/properties/claims");
     install_claim_names(schema, "/$defs/User/properties/claims");
-    for definition in ["Client", "BrowserApp", "User"] {
+    for definition in ["Client", "BrowserApp", "SessionApp", "User"] {
         install_bounds(
             schema,
             &format!("/$defs/{definition}/properties/grants"),
@@ -325,6 +326,7 @@ fn install_deployment_constraints(schema: &mut Value) {
     }
     for pointer in [
         "/$defs/BrowserApp/properties/clientSecretRef",
+        "/$defs/SessionApp/properties/clientSecretRef",
         "/$defs/User/properties/passwordRef",
     ] {
         install_bounds(
@@ -333,11 +335,21 @@ fn install_deployment_constraints(schema: &mut Value) {
             json!({"allOf": [{"pattern": ENVIRONMENT_SECRET_PATTERN}]}),
         );
     }
+    install_bounds(
+        schema,
+        "/$defs/SessionApp/properties/products",
+        json!({"minItems": 1, "maxItems": deployment::MAXIMUM_SESSION_PRODUCTS}),
+    );
     for pointer in [
         "/$defs/Grant/properties/accessProfiles",
         "/$defs/BrowserApp/properties/redirectUris",
         "/$defs/BrowserApp/properties/tokenAttributes",
         "/$defs/BrowserApp/properties/userTypes",
+        "/$defs/SessionApp/properties/redirectUris",
+        "/$defs/SessionApp/properties/postLogoutRedirectUris",
+        "/$defs/SessionApp/properties/products",
+        "/$defs/SessionApp/properties/tokenAttributes",
+        "/$defs/SessionApp/properties/userTypes",
         "/$defs/UserType/properties/attributes",
     ] {
         install_bounds(schema, pointer, json!({"uniqueItems": true}));

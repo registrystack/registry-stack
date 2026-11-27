@@ -234,12 +234,34 @@ resolves no secret.
 
 - Facts are merged by `identity_facts::merge`: the products must trust one
   HTTPS issuer, declare each claim with one type, and state a shared assertion
-  issuer identically.
+  issuer identically. Two products may share one audience only when the
+  deployment file declares it as `personAudience` (see below); any other
+  shared audience is refused (`identity.facts.duplicate-audience`).
 - The deployment file states the organization unit, each client's public JWKS
-  file and grants, browser applications, users with explicit claims, extension
-  user types, and a `secret:env/NAME` reference for every secret. A grant to a
-  client a product does not admit, an unknown claim, or a JWK carrying `d`,
-  `p`, `q`, `dp`, `dq` or `qi` is refused.
+  file and grants, browser applications, session applications, users with
+  explicit claims, extension user types, and a `secret:env/NAME` reference for
+  every secret. A grant to a client a product does not admit, an unknown
+  claim, or a JWK carrying `d`, `p`, `q`, `dp`, `dq` or `qi` is refused.
+- `personAudience` (an absolute URI) names the one audience that the products
+  a person calls from a page may share. They become one resource server, and a
+  grant still resolves to its own product's access profiles. Every member must
+  pass four checks, each its own refusal: it is not `casework`
+  (`identity.person-audience.casework-member`), it declares no
+  `registry_grant_` claim (`...task-grant-member`), it lists its clients
+  rather than `unrestricted` (`...unrestricted-member`), and it states no
+  scope name another member states (`...shared-scope`). A `personAudience`
+  that is not an absolute URI is `identity.person-audience.invalid`.
+- A session application (`sessionApps`) is the confidential client a session
+  service uses for one kind of sign-in. Beside a browser application's members
+  it states `postLogoutRedirectUris` and `products` (1 to 8 distinct product
+  names). Each listed product must admit its client id, and a grant must name
+  a listed product. It renders with the authorization-code and refresh-token
+  grants, PKCE, the client secret in the token request body, its own sign-out
+  return addresses, and a role covering every listed product. Its access
+  token's default audience is the first listed product's audience, and
+  products that share an audience count once. A client id is unique across
+  clients, browser applications and session applications. The summary counts
+  session applications apart from browser applications.
 - The output directory must not exist. It holds `deployment.yaml` (server
   members to merge into the environment's own file), `resources/resources.yaml`
   (one multi-document file), `registry-schema/agent-type.yaml` and

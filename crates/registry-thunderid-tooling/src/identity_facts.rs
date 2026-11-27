@@ -887,6 +887,27 @@ fn refuse(code: &'static str, message: &'static str, location: String) -> Toolin
 /// a product or an audience is stated twice, or when an assertion issuer is
 /// stated two different ways. `facts[n]` in a refusal is the n-th document.
 pub fn merge(documents: Vec<IdentityFacts>) -> Result<MergedFacts, ToolingError> {
+    merge_with_person_audience(documents, None)
+}
+
+/// The product that always keeps its own audience.
+const CASEWORK: &str = "casework";
+
+/// [`merge`], where the products whose audience is `person_audience` may
+/// share it. Each such member must pass the membership checks: it is not
+/// casework, declares no task-grant claim, lists its clients, and states no
+/// scope another member states. Every other shared audience is refused.
+pub fn merge_with_person_audience(
+    documents: Vec<IdentityFacts>,
+    person_audience: Option<&str>,
+) -> Result<MergedFacts, ToolingError> {
+    if person_audience.is_some_and(|audience| !crate::validate::valid_resource_uri(audience)) {
+        return Err(refuse(
+            "identity.person-audience.invalid",
+            "personAudience is not an absolute URI. Write an absolute URI such as urn:registry:person.",
+            "deployment/personAudience".to_owned(),
+        ));
+    }
     let Some(first) = documents.first() else {
         return Err(refuse(
             "identity.facts.none",
@@ -902,6 +923,7 @@ pub fn merge(documents: Vec<IdentityFacts>) -> Result<MergedFacts, ToolingError>
         assertion_issuers: BTreeMap::new(),
     };
     let mut audiences = BTreeSet::new();
+    let mut member_scopes = BTreeSet::new();
     let mut issuer_urls: BTreeMap<String, String> = BTreeMap::new();
     for (index, facts) in documents.into_iter().enumerate() {
         let location = format!("facts[{index}]");
@@ -919,7 +941,11 @@ pub fn merge(documents: Vec<IdentityFacts>) -> Result<MergedFacts, ToolingError>
                 format!("{location}/product"),
             ));
         }
-        if !audiences.insert(facts.audience.clone()) {
+        let member = person_audience == Some(facts.audience.as_str());
+        if member {
+            check_person_member(&facts, &location, &mut member_scopes)?;
+        }
+        if !member && !audiences.insert(facts.audience.clone()) {
             return Err(refuse(
                 "identity.facts.duplicate-audience",
                 "two products share one audience",
@@ -982,6 +1008,57 @@ pub fn merge(documents: Vec<IdentityFacts>) -> Result<MergedFacts, ToolingError>
         );
     }
     Ok(merged)
+}
+
+/// The checks a product passes to share the person audience. `scopes` holds
+/// the scope names of the members seen so far.
+fn check_person_member(
+    facts: &IdentityFacts,
+    location: &str,
+    scopes: &mut BTreeSet<String>,
+) -> Result<(), ToolingError> {
+    if facts.product == CASEWORK {
+        return Err(refuse(
+            "identity.person-audience.casework-member",
+            "casework shares the person audience. Give casework its own audience.",
+            format!("{location}/audience"),
+        ));
+    }
+    if facts
+        .claims
+        .keys()
+        .any(|name| crate::description::protected_attribute(name))
+    {
+        return Err(refuse(
+            "identity.person-audience.task-grant-member",
+            "a member checks task grants, which are bound to its own audience. Give the product its own audience.",
+            format!("{location}/claims"),
+        ));
+    }
+    if facts.allowed_clients == Admission::Unrestricted {
+        return Err(refuse(
+            "identity.person-audience.unrestricted-member",
+            "a member admits every client. List the clients the product admits.",
+            format!("{location}/allowedClients"),
+        ));
+    }
+    // A product's own profiles may repeat a scope; another member may not.
+    for (index, profile) in facts.access_profiles.iter().enumerate() {
+        if profile.scopes.iter().any(|scope| scopes.contains(scope)) {
+            return Err(refuse(
+                "identity.person-audience.shared-scope",
+                "two members state one scope name, which one resource server would merge into one permission. Rename the scope in one product.",
+                format!("{location}/accessProfiles/{index}"),
+            ));
+        }
+    }
+    scopes.extend(
+        facts
+            .access_profiles
+            .iter()
+            .flat_map(|profile| profile.scopes.iter().cloned()),
+    );
+    Ok(())
 }
 
 #[cfg(test)]

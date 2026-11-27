@@ -547,3 +547,125 @@ fn an_http_issuer_follows_the_shared_loopback_rule() {
     }
     assert!(issuer_url("https://id.registry.example"));
 }
+
+const PERSON: &str = "urn:person:example";
+
+/// A product whose facts name the person audience and list its clients.
+fn person_member(product: &str, scope: &str) -> String {
+    format!(
+        "apiVersion: id.registrystack.org/formats/platform/identity-facts/v1\nkind: PlatformIdentityFacts\nproduct: {product}\nissuer: https://id.registry.example\naudience: {PERSON}\nallowedClients:\n  - citizen-pages\nclaims:\n  registry_actor_kind: string\naccessProfiles:\n  - id: read\n    scopes: [{scope}]\n"
+    )
+}
+
+fn person_merge(
+    documents: Vec<String>,
+    audience: Option<&str>,
+) -> Result<MergedFacts, ToolingError> {
+    merge_with_person_audience(documents.iter().map(|text| facts(text)).collect(), audience)
+}
+
+fn breg_like() -> String {
+    person_member("breg", "records:get")
+}
+
+fn store_like() -> String {
+    person_member("documents", "documents:get")
+}
+
+#[test]
+fn two_products_on_one_audience_are_refused_unless_the_deployment_declares_it() {
+    assert_eq!(
+        refusal(person_merge(vec![breg_like(), store_like()], None)),
+        "identity.facts.duplicate-audience"
+    );
+    assert_eq!(
+        refusal(person_merge(
+            vec![breg_like(), store_like()],
+            Some("urn:other:example")
+        )),
+        "identity.facts.duplicate-audience"
+    );
+    let merged = person_merge(vec![breg_like(), store_like()], Some(PERSON)).expect("accepted");
+    assert_eq!(merged.products["breg"].audience, PERSON);
+    assert_eq!(merged.products["documents"].audience, PERSON);
+}
+
+#[test]
+fn a_duplicate_audience_other_than_the_person_audience_stays_refused() {
+    let third = EVIDENCE
+        .replace("product: evidence", "product: third")
+        .replace("urn:evidence:example", "urn:breg:example");
+    let documents = vec![
+        breg_like(),
+        store_like(),
+        BREG.replace("product: breg", "product: second"),
+        third,
+    ];
+    assert_eq!(
+        refusal(person_merge(documents, Some(PERSON))),
+        "identity.facts.duplicate-audience"
+    );
+}
+
+#[test]
+fn the_person_audience_must_be_an_absolute_uri() {
+    assert_eq!(
+        refusal(person_merge(vec![breg_like()], Some("not a uri"))),
+        "identity.person-audience.invalid"
+    );
+}
+
+#[test]
+fn casework_never_shares_the_person_audience() {
+    let casework = person_member("casework", "cases:get");
+    assert_eq!(
+        refusal(person_merge(vec![breg_like(), casework], Some(PERSON))),
+        "identity.person-audience.casework-member"
+    );
+}
+
+#[test]
+fn a_product_that_checks_task_grants_never_shares_the_person_audience() {
+    // The facts reader already refuses such a claim, so build the document
+    // directly to reach the merge check.
+    let mut granting = facts(&store_like());
+    granting
+        .claims
+        .insert("registry_grant_ref".to_owned(), ClaimType::String);
+    assert_eq!(
+        refusal(merge_with_person_audience(
+            vec![facts(&breg_like()), granting],
+            Some(PERSON)
+        )),
+        "identity.person-audience.task-grant-member"
+    );
+}
+
+#[test]
+fn a_member_must_list_its_clients() {
+    let open = store_like().replace("allowedClients:\n  - citizen-pages", "allowedClients: unrestricted");
+    assert_eq!(
+        refusal(person_merge(vec![breg_like(), open], Some(PERSON))),
+        "identity.person-audience.unrestricted-member"
+    );
+}
+
+#[test]
+fn two_members_never_share_a_scope_name() {
+    let clash = person_member("documents", "records:get");
+    assert_eq!(
+        refusal(person_merge(vec![breg_like(), clash], Some(PERSON))),
+        "identity.person-audience.shared-scope"
+    );
+}
+
+#[test]
+fn a_refusal_names_the_offending_member_and_a_remedy() {
+    let open = store_like().replace("allowedClients:\n  - citizen-pages", "allowedClients: unrestricted");
+    let error = person_merge(vec![breg_like(), open], Some(PERSON)).unwrap_err();
+    let ToolingError::IdentityRefused { location, message, .. } = error else {
+        panic!("expected a refusal");
+    };
+    assert_eq!(location, "facts[1]/allowedClients");
+    assert!(message.contains("List"), "{message}");
+}
