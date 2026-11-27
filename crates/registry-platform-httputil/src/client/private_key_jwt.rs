@@ -95,10 +95,10 @@ const _: () = assert!(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS == 86_400);
 /// The grant this provider asks for. The client authenticates as itself, on its
 /// own behalf, which is the closed grant this provider supports.
 const GRANT_TYPE: &str = "client_credentials";
-const AUTHORIZATION_CODE_GRANT_TYPE: &str = "authorization_code";
+pub(super) const AUTHORIZATION_CODE_GRANT_TYPE: &str = "authorization_code";
 /// Longest authorization code this provider will present. Codes are short
 /// opaque strings; the bound keeps a redirect parameter from growing the form.
-const MAXIMUM_AUTHORIZATION_CODE_BYTES: usize = 4 * 1024;
+pub(super) const MAXIMUM_AUTHORIZATION_CODE_BYTES: usize = 4 * 1024;
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const JWT_SUBJECT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
@@ -205,12 +205,12 @@ struct ExchangeGrant<'a> {
 /// The client authentication method of RFC 7523 section 2.2.
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
-const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
-const JSON_MEDIA_TYPE: &str = "application/json";
+pub(super) const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
+pub(super) const JSON_MEDIA_TYPE: &str = "application/json";
 
 /// The only token type an `Authorization: Bearer` request can present. Compared
 /// without case, as RFC 6749 section 5.1 requires.
-const BEARER_TOKEN_TYPE: &str = "bearer";
+pub(super) const BEARER_TOKEN_TYPE: &str = "bearer";
 
 /// Longest token response this provider will read. A token response is a small
 /// JSON object; anything larger is not one.
@@ -1159,7 +1159,7 @@ impl PrivateKeyJwt {
     }
 }
 
-fn token_fetch_policy_failure(error: FetchUrlError) -> TokenError {
+pub(super) fn token_fetch_policy_failure(error: FetchUrlError) -> TokenError {
     match error {
         FetchUrlError::Dns { .. } | FetchUrlError::NoAddresses => TokenError::Transport {
             kind: super::TransportKind::Connect,
@@ -1272,7 +1272,7 @@ struct IssuedToken {
 /// an absent member produces. This runs only for a member that is there, so the
 /// outer `Option` it wraps the result in reports presence and the inner one
 /// reports what was stated.
-fn present_value<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(super) fn present_value<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     T: Deserialize<'de>,
     D: Deserializer<'de>,
@@ -1327,7 +1327,7 @@ fn assertion_refusal(error: ClientAssertionError) -> TokenError {
 /// answering in some other media type, or none at all, never reached the
 /// authorization server's own refusal logic, so it is reported as a protocol
 /// failure instead.
-fn declined(status: u16, media_type: Option<&str>, body: &[u8]) -> TokenError {
+pub(super) fn declined(status: u16, media_type: Option<&str>, body: &[u8]) -> TokenError {
     if !matches!(status, 400 | 401)
         || !media_type.is_some_and(|value| essence(value).eq_ignore_ascii_case(JSON_MEDIA_TYPE))
     {
@@ -1342,11 +1342,11 @@ fn declined(status: u16, media_type: Option<&str>, body: &[u8]) -> TokenError {
 }
 
 /// The media type without its parameters.
-fn essence(value: &str) -> &str {
+pub(super) fn essence(value: &str) -> &str {
     value.split(';').next().unwrap_or_default().trim()
 }
 
-fn exact_content_type(headers: &HeaderMap) -> Option<&str> {
+pub(super) fn exact_content_type(headers: &HeaderMap) -> Option<&str> {
     let mut values = headers.get_all(CONTENT_TYPE).iter();
     match (values.next(), values.next()) {
         (Some(value), None) => value.to_str().ok(),

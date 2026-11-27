@@ -42,6 +42,16 @@ Outbound HTTP utilities for registry services.
   client, assertion-audience and token-endpoint checks for offline configuration
   validation. Key import, certificate and provider readiness remain construction
   checks.
+- `ClientSecretClient` for a confidential web client that keeps its tokens on
+  the server and authenticates with a client secret (`client_secret_post`,
+  RFC 6749 section 2.3.1). `redeem_authorization_code` (with the PKCE verifier,
+  redirect URI and optional RFC 8707 resource), `refresh` and
+  `revoke_refresh_token` (RFC 7009) each make one request with the secret in
+  the form body only. Endpoints must be https, or http on a loopback host.
+  Refusals report the registered error code only, so `invalid_grant` is
+  distinguishable. `IssuedTokens` moves each credential out to its keeper, and
+  `RefreshToken`, `IssuedTokens` and `ClientSecretConfig` render without any
+  secret or token. The client holds no tokens and caches nothing.
 - `ExchangeAuthorization` for one immutable host-verified person or task-grant
   context. The first-party source signs a bounded grantless JWT; the remote
   source obtains a new assertion with a narrowly configured bootstrap on each

@@ -7,6 +7,7 @@ use url::Url;
 
 pub use crate::{MAXIMUM_TRUSTED_ROOT_CERTIFICATES, MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES};
 
+mod client_secret;
 mod exchange_authorization;
 mod exchange_config;
 mod outbound;
@@ -14,6 +15,7 @@ mod private_key_jwt;
 mod retry;
 mod token;
 
+pub use client_secret::{ClientSecretClient, ClientSecretConfig, IssuedTokens, RefreshToken};
 pub use exchange_authorization::{
     ExchangeAssertionSource, ExchangeAuthorization, ExchangeContext, FirstPartyAssertionSource,
     RemoteAssertionSource, SignedExchangeAssertion, UpstreamSubjectToken,
