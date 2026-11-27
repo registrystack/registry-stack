@@ -2801,7 +2801,7 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
     serving_config: &Path,
     unopened: &Path,
 ) {
-    let serving_writer = registry_platform_audit::AuditWriter::open(
+    let serving_writer = registry_platform_audit::AuditWriter::open_without_posture(
         registry_platform_audit::AuditDestination::from_settings(
             registry_platform_audit::AuditDestinationKind::File,
             Some(configured_audit_path(serving_config)),

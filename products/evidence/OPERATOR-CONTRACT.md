@@ -904,7 +904,7 @@ with the generic `503` until the process restarts.
 
 ## Audit destinations, rotation, and retention
 
-Every audit entry is one JSON line with exactly six members:
+The writer emits each audit entry as one JSON line with seven members.
 
 | Member | Meaning |
 |---|---|
@@ -912,6 +912,7 @@ Every audit entry is one JSON line with exactly six members:
 | `eventId` | A random UUID the writer mints for this entry. |
 | `time` | The writer's RFC 3339 UTC timestamp for the append. |
 | `phase` | `request` for an access attempt, written before the source read it authorizes; `response` for every terminal record: a release, a denial, or a failure. |
+| `posture` | The writer’s posture, `development` or `production`. Retained entries may omit it. |
 | `correlation` | The server-minted operation identifier, equal to `record.operation`, shared by every entry of one operation. |
 | `record` | The closed, minimized Evidence record described above. |
 

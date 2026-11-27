@@ -1463,7 +1463,7 @@ async fn replay_audited(
         .await
         .unwrap();
     let audit = DocumentsAudit::new(
-        AuditWriter::from_line_sink(Box::new(LimitedSink { lines })),
+        AuditWriter::from_line_sink_without_posture(Box::new(LimitedSink { lines })),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))
@@ -1836,7 +1836,7 @@ async fn erasure_replay_audited(
         .await
         .unwrap();
     let audit = DocumentsAudit::new(
-        AuditWriter::from_line_sink(Box::new(LimitedSink { lines })),
+        AuditWriter::from_line_sink_without_posture(Box::new(LimitedSink { lines })),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))

@@ -328,7 +328,7 @@ With a `stdout` destination it writes to standard error, so the command's own re
 
 ### Entry shape and failure behaviour
 
-Every entry carries the schema `registry-casework-audit/v1`, a phase, and a correlation shared by an operation's request entry and its response entries.
+Every entry carries the schema `registry-casework-audit/v1`, a phase, a posture, and a correlation shared by an operation's request entry and its response entries.
 
 - A requested operation writes one request entry before it opens the operation's transaction.
 - It writes one response entry for each domain event it records, after that transaction commits.

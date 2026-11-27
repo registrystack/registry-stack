@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Every new audit journal line carries the writer's declared `posture`,
+  either `development` or `production`. `AuditWriter::open` and
+  `AuditWriter::from_line_sink` take the declaration. Their
+  `_without_posture` forms record production. Audit readers accept older
+  lines without the member and refuse malformed posture values.
+
 - `registry-platform-oidc` can refuse task authority that comes from a
   development peer. `TaskGrantStatusClient::new` and
   `TaskGrantStatusRegistry::activate` take a `PeerPolicy`. Under

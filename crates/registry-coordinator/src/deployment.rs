@@ -510,7 +510,7 @@ async fn open_named(
     } else {
         destination
     };
-    let audit = AuditWriter::open(destination)
+    let audit = AuditWriter::open_without_posture(destination)
         .await
         .map_err(audit_open_refusal)?;
     let security = StoreSecurity {
@@ -1081,8 +1081,10 @@ mod tests {
             AuditDestination::File(FileDestination::new(root.path().join("audit.jsonl")).unwrap())
                 .for_process("apply")
                 .unwrap();
-        let first = AuditWriter::open(destination.clone()).await.unwrap();
-        let error = match AuditWriter::open(destination.clone()).await {
+        let first = AuditWriter::open_without_posture(destination.clone())
+            .await
+            .unwrap();
+        let error = match AuditWriter::open_without_posture(destination.clone()).await {
             Ok(_) => panic!("a second writer must not acquire the same companion"),
             Err(error) => error,
         };
@@ -1093,7 +1095,9 @@ mod tests {
             Some("restore writable durable audit custody (sink-locked)")
         );
         drop(first);
-        let reopened = AuditWriter::open(destination).await.unwrap();
+        let reopened = AuditWriter::open_without_posture(destination)
+            .await
+            .unwrap();
         drop(reopened);
         root.close().unwrap();
     }

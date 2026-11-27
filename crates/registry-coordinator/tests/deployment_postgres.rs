@@ -1384,10 +1384,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                     database_id: "router-test".into(),
                     keys: StateKeys::new(1, BTreeMap::from([(1, state_key)]), admission_key)
                         .unwrap(),
-                    audit: AuditWriter::from_line_sink(Box::new(RefuseAcceptedResponse(
-                        attempts.clone(),
-                        "admit",
-                    ))),
+                    audit: AuditWriter::from_line_sink_without_posture(Box::new(
+                        RefuseAcceptedResponse(attempts.clone(), "admit"),
+                    )),
                     audit_profile: AuditProfile::production_from_secret_bytes(
                         zeroize::Zeroizing::new(fs::read(root_path.join("audit-key")).unwrap()),
                     )
@@ -1474,10 +1473,9 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                     database_id: "router-test".into(),
                     keys: StateKeys::new(1, BTreeMap::from([(1, state_key)]), admission_key)
                         .unwrap(),
-                    audit: AuditWriter::from_line_sink(Box::new(RefuseAcceptedResponse(
-                        status_attempts.clone(),
-                        "status",
-                    ))),
+                    audit: AuditWriter::from_line_sink_without_posture(Box::new(
+                        RefuseAcceptedResponse(status_attempts.clone(), "status"),
+                    )),
                     audit_profile: AuditProfile::production_from_secret_bytes(
                         zeroize::Zeroizing::new(fs::read(root_path.join("audit-key")).unwrap()),
                     )

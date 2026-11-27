@@ -145,7 +145,8 @@ rather than restarting, which can lose queued entries.
 
 ## Read what an entry establishes
 
-Each entry is one JSON line. New authorised operations use
+Each entry is one JSON line. New lines include a `posture` of `development` or `production`.
+Retained lines can omit this member. New authorised operations use
 `registry.evidence.audit/v3` or `registry.evidence.audit.request-batch/v3`;
 authorisation refusals keep `registry.evidence.audit.authorization-refusal/v2`.
 Retained authorised `/v2` entries remain readable history. Entries are not chained. The

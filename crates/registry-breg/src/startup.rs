@@ -1564,7 +1564,7 @@ async fn prepare_verified_package_with_key_source(
 /// refuses to start instead of interleaving entries.
 async fn open_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
     let profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
-    let writer = AuditWriter::open(config.audit().destination().clone())
+    let writer = AuditWriter::open_without_posture(config.audit().destination().clone())
         .await
         .map_err(|error| StartupError::AuditDestination(error.operator_description()))?;
     Ok(RegistryAudit::new(profile, writer))
@@ -1597,7 +1597,7 @@ fn check_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
         .map_err(|error| StartupError::AuditDestination(error.operator_description()))?;
     Ok(RegistryAudit::new(
         profile,
-        AuditWriter::from_line_sink(Box::new(RefuseEveryEntry)),
+        AuditWriter::from_line_sink_without_posture(Box::new(RefuseEveryEntry)),
     ))
 }
 

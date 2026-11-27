@@ -260,7 +260,9 @@ fn delegation() -> Delegation {
 fn audit() -> (ToolAuditLog, Buffer) {
     let buffer = Buffer::default();
     (
-        ToolAuditLog::new(AuditWriter::from_line_sink(Box::new(buffer.clone()))),
+        ToolAuditLog::new(AuditWriter::from_line_sink_without_posture(Box::new(
+            buffer.clone(),
+        ))),
         buffer,
     )
 }

@@ -222,7 +222,7 @@ async fn restricted_and_unrestricted_clients_audit_the_same_canonical_azp() {
 
     let captured = AuditCapture::default();
     let audit = DeliveryAudit::with_writer(
-        AuditWriter::from_line_sink(Box::new(captured.clone())),
+        AuditWriter::from_line_sink_without_posture(Box::new(captured.clone())),
         b"0123456789abcdef0123456789abcdef".to_vec(),
     )
     .expect("the audit profile loads");
@@ -264,7 +264,7 @@ async fn a_sub_only_offer_token_is_accepted_and_audited_without_inventing_a_clie
 
     let captured = AuditCapture::default();
     let audit = DeliveryAudit::with_writer(
-        AuditWriter::from_line_sink(Box::new(captured.clone())),
+        AuditWriter::from_line_sink_without_posture(Box::new(captured.clone())),
         b"0123456789abcdef0123456789abcdef".to_vec(),
     )
     .expect("the audit profile loads");

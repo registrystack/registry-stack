@@ -1180,7 +1180,7 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
         .await
         .unwrap();
     let audit = DocumentsAudit::new(
-        AuditWriter::from_line_sink(Box::new(FailingSink)),
+        AuditWriter::from_line_sink_without_posture(Box::new(FailingSink)),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))
@@ -2537,7 +2537,7 @@ async fn a_request_audit_failure_refuses_the_upload_and_the_download() {
 
 fn failing_audit() -> DocumentsAudit {
     DocumentsAudit::new(
-        AuditWriter::from_line_sink(Box::new(FailingSink)),
+        AuditWriter::from_line_sink_without_posture(Box::new(FailingSink)),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))
@@ -2752,7 +2752,9 @@ async fn a_response_audit_failure_after_commit_answers_unavailable_and_the_retry
         .await
         .expect("the runtime prepares")
         .with_audit(DocumentsAudit::new(
-            AuditWriter::from_line_sink(Box::new(FirstLineSink { kept: kept.clone() })),
+            AuditWriter::from_line_sink_without_posture(Box::new(FirstLineSink {
+                kept: kept.clone(),
+            })),
             AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                 b"documents-test-audit-key-not-a-secret".to_vec(),
             ))

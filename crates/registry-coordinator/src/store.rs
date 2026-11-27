@@ -719,7 +719,7 @@ impl Store {
             StoreSecurity {
                 database_id: namespace.to_owned(),
                 keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x22; 32])?,
-                audit: AuditWriter::from_line_sink(Box::new(std::io::sink())),
+                audit: AuditWriter::from_line_sink_without_posture(Box::new(std::io::sink())),
                 audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                     vec![0x33; 32],
                 ))

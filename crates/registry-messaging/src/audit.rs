@@ -187,7 +187,7 @@ pub(crate) mod tests {
 
     pub(crate) fn memory_journal() -> (Arc<MemorySink>, MessagingAudit) {
         let sink = Arc::new(MemorySink::default());
-        let writer = AuditWriter::from_line_sink(Box::new((*sink).clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new((*sink).clone()));
         (
             sink,
             MessagingAudit::new(writer, AuditKeyHasher::unkeyed_dev_only()),
@@ -201,7 +201,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         let audit = MessagingAudit::new(
-            AuditWriter::from_line_sink(Box::new(io::sink())),
+            AuditWriter::from_line_sink_without_posture(Box::new(io::sink())),
             profile.key_hasher(),
         );
         let identity = CallerIdentity {

@@ -162,7 +162,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
     let destination =
         FileDestination::new(dir.path().join("audit").join("audit.jsonl")).expect("absolute path");
     let path = destination.path().to_path_buf();
-    let writer = AuditWriter::open(AuditDestination::File(destination))
+    let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
         .await
         .expect("file destination opens");
     let correlation = "request-1";

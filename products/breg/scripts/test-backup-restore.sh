@@ -1031,7 +1031,7 @@ def entries(path):
     lines = Path(path).read_bytes().splitlines()
     parsed = [json.loads(line) for line in lines]
     for entry in parsed:
-        if set(entry) != {"schema", "eventId", "time", "phase", "correlation", "record"}:
+        if set(entry) != {"schema", "eventId", "time", "phase", "posture", "correlation", "record"}:
             raise SystemExit(f"{path} holds an entry of another shape")
     return parsed
 

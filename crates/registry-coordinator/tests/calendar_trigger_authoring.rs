@@ -230,7 +230,7 @@ impl Fixture {
                     [0x22; 32],
                 )
                 .unwrap(),
-                audit: AuditWriter::from_line_sink(Box::new(sink)),
+                audit: AuditWriter::from_line_sink_without_posture(Box::new(sink)),
                 audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                     vec![0x33; 32],
                 ))

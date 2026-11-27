@@ -33,6 +33,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use registry_platform_posture::Posture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -188,7 +189,7 @@ impl AuditEntry {
         &self.record
     }
 
-    fn to_line(&self) -> Result<String, AuditUnavailable> {
+    fn to_line(&self, posture: Posture) -> Result<String, AuditUnavailable> {
         let schema_valid = !self.schema.is_empty()
             && self.schema.len() <= MAX_SCHEMA_BYTES
             && self
@@ -213,6 +214,7 @@ impl AuditEntry {
             event_id: Uuid::new_v4().to_string(),
             time,
             phase: self.phase,
+            posture: posture.as_str(),
             correlation: &self.correlation,
             record,
         };
@@ -233,6 +235,7 @@ struct WireEntry<'a> {
     event_id: String,
     time: String,
     phase: AuditPhase,
+    posture: &'static str,
     correlation: &'a str,
     record: &'a Map<String, Value>,
 }
@@ -656,6 +659,7 @@ impl AuditDestination {
 /// The audit writer. Cheap to clone; clones share one destination.
 #[derive(Clone)]
 pub struct AuditWriter {
+    posture: Posture,
     inner: Arc<WriterInner>,
     open: Arc<OpenRequests>,
 }
@@ -816,7 +820,7 @@ impl std::fmt::Debug for AuditWriter {
 impl AuditWriter {
     /// Open the destination. The file destination takes a process-lifetime
     /// single-writer lock beside the active file and applies retention.
-    pub async fn open(destination: AuditDestination) -> Result<Self, AuditError> {
+    pub async fn open(destination: AuditDestination, posture: Posture) -> Result<Self, AuditError> {
         let inner = match destination {
             AuditDestination::File(file) => {
                 let opened = tokio::task::spawn_blocking(move || SegmentedFile::open(file))
@@ -828,9 +832,15 @@ impl AuditWriter {
             AuditDestination::Stderr => WriterInner::stream(Box::new(io::stderr())),
         };
         Ok(Self {
+            posture,
             inner: Arc::new(inner),
             open: Arc::default(),
         })
+    }
+
+    /// Open a destination that records the production posture.
+    pub async fn open_without_posture(destination: AuditDestination) -> Result<Self, AuditError> {
+        Self::open(destination, Posture::Production).await
     }
 
     /// A writer over an arbitrary line sink, with `stdout` semantics. For
@@ -840,11 +850,18 @@ impl AuditWriter {
     /// append waits for it on the Tokio timer: the runtime that appends needs
     /// its time driver.
     #[must_use]
-    pub fn from_line_sink(sink: Box<dyn Write + Send>) -> Self {
+    pub fn from_line_sink(sink: Box<dyn Write + Send>, posture: Posture) -> Self {
         Self {
+            posture,
             inner: Arc::new(WriterInner::stream(sink)),
             open: Arc::default(),
         }
+    }
+
+    /// Create a line-sink writer that records the production posture.
+    #[must_use]
+    pub fn from_line_sink_without_posture(sink: Box<dyn Write + Send>) -> Self {
+        Self::from_line_sink(sink, Posture::Production)
     }
 
     /// Append one entry. For the file destination this returns only after the
@@ -891,7 +908,7 @@ impl AuditWriter {
     }
 
     async fn write(&self, entry: &AuditEntry) -> Result<(), AuditUnavailable> {
-        let line = entry.to_line()?;
+        let line = entry.to_line(self.posture)?;
         match self.inner.as_ref() {
             WriterInner::File(file) => {
                 let file = Arc::clone(file);
@@ -934,7 +951,8 @@ impl AuditWriter {
         // The unfinished response must be writable before the request is:
         // a request accepted with a response it could never write would stay
         // unpaired.
-        AuditEntry::response(schema.clone(), correlation.clone(), unfinished.clone()).to_line()?;
+        AuditEntry::response(schema.clone(), correlation.clone(), unfinished.clone())
+            .to_line(self.posture)?;
         // The request is written and its handle registered in one task that
         // outlives a canceled caller. A caller that stops waiting drops the
         // finished handle with the task's output, which writes the
@@ -989,7 +1007,7 @@ impl AuditWriter {
 
     /// Write `entry` without waiting for the destination to accept it.
     fn append_detached(&self, entry: &AuditEntry) {
-        let line = match entry.to_line() {
+        let line = match entry.to_line(self.posture) {
             Ok(line) => line,
             Err(_) => {
                 tracing::error!("an unfinished response entry is malformed and was not written");
@@ -2260,7 +2278,48 @@ pub struct SealedSegment {
     pub path: PathBuf,
 }
 
+/// A decoded journal line. Historical lines can omit posture.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoredAuditEntry {
+    /// The product's audit record schema.
+    pub schema: String,
+    /// The writer-generated identifier for this entry.
+    pub event_id: String,
+    /// The writer-generated timestamp.
+    pub time: String,
+    /// Whether the entry records a request or response.
+    pub phase: AuditPhase,
+    /// The writer's declared posture, if the line records it.
+    #[serde(default, deserialize_with = "deserialize_posture")]
+    pub posture: Option<Posture>,
+    /// The product's request and response correlation.
+    pub correlation: String,
+    /// The product-owned record.
+    pub record: Value,
+}
+
+fn deserialize_posture<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Posture>, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Posture::parse(&value)
+        .map(Some)
+        .ok_or_else(|| serde::de::Error::custom("invalid audit posture"))
+}
+
 impl AuditSegments {
+    /// Decode a journal line from the active file or a sealed segment.
+    /// A present posture must be a recognized declaration.
+    pub fn parse_line(line: &[u8]) -> Result<StoredAuditEntry, AuditError> {
+        serde_json::from_slice(line).map_err(|_| {
+            AuditError::Io(io::Error::new(
+                ErrorKind::InvalidData,
+                "audit record is invalid",
+            ))
+        })
+    }
+
     /// The namespace of the active file at `path`.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
@@ -2634,10 +2693,9 @@ static TORN_RECOVERIES: StdMutex<Vec<(PathBuf, PathBuf, u64)>> = StdMutex::new(V
 /// Refuse an active file whose first entry was not produced by this writer,
 /// such as a leftover journal from the pre-simplification hash-chained
 /// writer. Every entry this writer appends carries `eventId`, `schema`,
-/// `time`, `phase`, and `correlation`; an old-format entry carries none of
-/// them. Only the first line is read, bounded to the largest entry this
-/// writer accepts, since a file this writer manages never mixes formats. A
-/// torn final line is not part of the first entry the check reads.
+/// `time`, `phase`, and `correlation`. Historical entries can omit posture.
+/// Only the first line is read, bounded to the largest entry this writer
+/// accepts. A torn final line is outside the check.
 fn require_current_entry_format(active: &File, torn: Option<&TornTail>) -> Result<(), AuditError> {
     let length = match torn {
         Some(torn) => torn.complete,
@@ -2653,20 +2711,25 @@ fn require_current_entry_format(active: &File, torn: Option<&TornTail>) -> Resul
         .read_exact_at(&mut buffer, 0)
         .map_err(AuditError::Io)?;
     let first_line = buffer.split(|&byte| byte == b'\n').next().unwrap_or(&[]);
-    let is_current_format = serde_json::from_slice::<Value>(first_line)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .is_some_and(|entry| {
-            entry.get("eventId").is_some_and(Value::is_string)
-                && entry.get("schema").is_some_and(Value::is_string)
-                && entry.get("time").is_some_and(Value::is_string)
-                && entry.get("correlation").is_some_and(Value::is_string)
-                && matches!(
-                    entry.get("phase").and_then(Value::as_str),
-                    Some("request" | "response")
-                )
-        });
-    if !is_current_format {
+    #[derive(Deserialize)]
+    struct CurrentEntryFormat {
+        #[serde(rename = "schema")]
+        _schema: String,
+        #[serde(rename = "eventId")]
+        _event_id: String,
+        #[serde(rename = "time")]
+        _time: String,
+        #[serde(rename = "phase")]
+        _phase: AuditPhase,
+        #[serde(rename = "correlation")]
+        _correlation: String,
+        #[serde(rename = "posture", default, deserialize_with = "deserialize_posture")]
+        _posture: Option<Posture>,
+    }
+
+    if !first_line.trim_ascii_start().starts_with(b"{")
+        || serde_json::from_slice::<CurrentEntryFormat>(first_line).is_err()
+    {
         return Err(AuditError::Io(io::Error::new(
             ErrorKind::InvalidData,
             "audit file's first entry is not in the format this writer produces; archive it and restart with a fresh path",
@@ -2971,6 +3034,7 @@ mod tests {
             .expect("open");
         file.sync_hook = Some(hook);
         AuditWriter {
+            posture: Posture::Production,
             inner: Arc::new(WriterInner::File(Arc::new(GroupCommitFile::new(file)))),
             open: Arc::default(),
         }
@@ -2985,7 +3049,9 @@ mod tests {
     }
 
     fn current_format_line(correlation: &str) -> String {
-        request(correlation).to_line().expect("line")
+        request(correlation)
+            .to_line(Posture::Production)
+            .expect("line")
     }
 
     /// Every name shaped like a sealed segment of `path`, oldest first.
@@ -3038,11 +3104,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_writers_record_their_posture() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path().to_owned();
+        let writer = AuditWriter::open(AuditDestination::File(destination), Posture::Development)
+            .await
+            .expect("open");
+        writer.append(request("explicit")).await.expect("write");
+        assert_eq!(lines(&path)[0]["posture"], "development");
+
+        let buffer = SharedBuffer::default();
+        let writer = AuditWriter::from_line_sink(Box::new(buffer.clone()), Posture::Production);
+        writer.append(request("explicit")).await.expect("write");
+        let bytes = buffer.0.lock().expect("buffer");
+        let entry: Value = serde_json::from_slice(&bytes).expect("json line");
+        assert_eq!(entry["posture"], "production");
+    }
+
+    #[test]
+    fn startup_refuses_a_malformed_posture_in_the_first_line() {
+        let directory = directory();
+        let destination = file_destination(&directory);
+        let path = destination.path();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().expect("parent"))
+            .expect("audit directory");
+        let line = current_format_line("request");
+        let duplicate = line.replace(
+            r#""posture":"production""#,
+            r#""posture":"staging","posture":"production""#,
+        );
+        let invalid = line.replace(r#""posture":"production""#, r#""posture":"staging""#);
+        fs::write(path, &invalid).expect("write malformed line");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("mode");
+        for content in [invalid, duplicate] {
+            fs::write(path, content).expect("write malformed line");
+            let error = destination.check_writable().expect_err("malformed posture");
+            assert!(
+                matches!(error, AuditError::Io(error) if error.kind() == ErrorKind::InvalidData)
+            );
+        }
+
+        let legacy = line.replace(r#""posture":"production","#, "");
+        fs::write(path, legacy).expect("write historical line");
+        destination
+            .check_writable()
+            .expect("historical line accepted");
+    }
+
+    #[test]
+    fn segment_lines_accept_declared_and_missing_posture() {
+        let directory = directory();
+        let active = directory.path().join("audit.jsonl");
+        let segments = AuditSegments::new(&active);
+        let mut entry = json!({
+            "schema": "registry.test.audit/v2",
+            "eventId": "event",
+            "time": "2024-01-01T00:00:00Z",
+            "phase": "request",
+            "correlation": "request",
+            "record": {}
+        });
+        let legacy = entry.to_string();
+        entry["posture"] = json!("development");
+        fs::write(
+            active.with_extension("jsonl.00000001"),
+            format!("{entry}\n{legacy}\n"),
+        )
+        .expect("write segment");
+
+        let sealed = segments.sealed(1).expect("list segment");
+        let contents = fs::read_to_string(&sealed[0].path).expect("read segment");
+        let postures: Vec<_> = contents
+            .lines()
+            .map(|line| {
+                AuditSegments::parse_line(line.as_bytes())
+                    .expect("parse line")
+                    .posture
+            })
+            .collect();
+        assert_eq!(postures, [Some(Posture::Development), None]);
+
+        for invalid in [json!("staging"), Value::Null, json!(1)] {
+            entry["posture"] = invalid;
+            let error =
+                AuditSegments::parse_line(entry.to_string().as_bytes()).expect_err("malformed");
+            assert!(
+                matches!(error, AuditError::Io(error) if error.kind() == ErrorKind::InvalidData)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn transitional_sink_writes_production_posture() {
+        let buffer = SharedBuffer::default();
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(buffer.clone()));
+        writer.append(request("transitional")).await.expect("write");
+        let bytes = buffer.0.lock().expect("buffer");
+        let entry: Value = serde_json::from_slice(&bytes).expect("json line");
+        assert_eq!(entry["posture"], "production");
+    }
+
+    #[tokio::test]
     async fn file_entries_carry_only_the_envelope_fields() {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         writer.append(request("req-1")).await.expect("request");
@@ -3067,6 +3237,7 @@ mod tests {
                     "correlation",
                     "eventId",
                     "phase",
+                    "posture",
                     "record",
                     "schema",
                     "time"
@@ -3100,7 +3271,7 @@ mod tests {
     /// later entry an interrupted write left, and return the accepted bytes.
     async fn seed_torn_tail(destination: &FileDestination, torn: &[u8]) -> Vec<u8> {
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination.clone()))
             .await
             .expect("open");
         writer.append(request("accepted")).await.expect("append");
@@ -3124,7 +3295,7 @@ mod tests {
         let torn = b"{\"schema\":\"registry.test.audit/v2\",\"corr";
         let accepted = seed_torn_tail(&destination, torn).await;
 
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("a torn final line is recovered at open");
         let side = AuditSegments::new(&path).torn_line();
@@ -3161,7 +3332,7 @@ mod tests {
         fs::write(&path, torn).expect("torn file");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
 
-        AuditWriter::open(AuditDestination::File(destination))
+        AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("a torn first line is recovered at open");
         assert_eq!(
@@ -3176,14 +3347,14 @@ mod tests {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination.clone()))
             .await
             .expect("open");
         writer.append(request("before")).await.expect("append");
         drop(writer);
         let before = fs::read(&path).expect("read before restart");
 
-        let _writer = AuditWriter::open(AuditDestination::File(destination))
+        let _writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("reopen complete stream");
         assert_eq!(fs::read(&path).expect("read after restart"), before);
@@ -3205,7 +3376,7 @@ mod tests {
         destination
             .check_writable()
             .expect_err("check refuses a side file holding other bytes");
-        let error = AuditWriter::open(AuditDestination::File(destination))
+        let error = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect_err("open refuses a side file holding other bytes");
         assert!(
@@ -3238,7 +3409,7 @@ mod tests {
         destination
             .check_writable()
             .expect("check accepts the copy");
-        AuditWriter::open(AuditDestination::File(destination))
+        AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open finishes the recovery");
         assert_eq!(fs::read(&side).expect("side file"), torn);
@@ -3256,7 +3427,7 @@ mod tests {
         destination
             .check_writable()
             .expect_err("check refuses a tail no write of this writer left");
-        let error = AuditWriter::open(AuditDestination::File(destination))
+        let error = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect_err("open refuses a tail no write of this writer left");
         assert_eq!(
@@ -3273,13 +3444,13 @@ mod tests {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination.clone()))
             .await
             .expect("open");
         writer.append(request("before")).await.expect("append");
         drop(writer);
 
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("reopen complete stream");
         writer
@@ -3368,7 +3539,7 @@ mod tests {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         let WriterInner::File(file) = writer.inner.as_ref() else {
@@ -3502,7 +3673,7 @@ mod tests {
             .build()
             .expect("runtime")
             .block_on(async {
-                let writer = AuditWriter::open(AuditDestination::File(destination))
+                let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
                     .await
                     .expect("open");
                 writer.append(request("req-1")).await.expect("append");
@@ -3594,7 +3765,7 @@ mod tests {
         let destination =
             FileDestination::new(unlistable.join("audit").join("audit.jsonl")).expect("absolute");
         let refused = destination.check_writable();
-        let opened = AuditWriter::open(AuditDestination::File(destination)).await;
+        let opened = AuditWriter::open_without_posture(AuditDestination::File(destination)).await;
         fs::set_permissions(&unlistable, fs::Permissions::from_mode(0o700)).expect("restore");
         opened.expect_err("the writer cannot sync the ancestor");
         refused.expect_err("ancestor cannot be listed");
@@ -3632,7 +3803,7 @@ mod tests {
             .build()
             .expect("runtime")
             .block_on(async {
-                let writer = AuditWriter::open(AuditDestination::File(destination))
+                let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
                     .await
                     .expect("open");
                 writer.append(request("req-1")).await.expect("append");
@@ -3678,7 +3849,7 @@ mod tests {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         writer.append(request("req-1")).await.expect("append");
@@ -3699,10 +3870,10 @@ mod tests {
     async fn a_second_writer_on_the_same_path_is_refused() {
         let directory = directory();
         let destination = file_destination(&directory);
-        let _first = AuditWriter::open(AuditDestination::File(destination.clone()))
+        let _first = AuditWriter::open_without_posture(AuditDestination::File(destination.clone()))
             .await
             .expect("first");
-        let second = AuditWriter::open(AuditDestination::File(destination))
+        let second = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect_err("second writer");
         // `role` is `None` for the service's own destination: whoever holds
@@ -3719,10 +3890,10 @@ mod tests {
         let destination = AuditDestination::File(file_destination(&directory))
             .for_process("caseworkctl")
             .expect("companion destination");
-        let _first = AuditWriter::open(destination.clone())
+        let _first = AuditWriter::open_without_posture(destination.clone())
             .await
             .expect("first companion writer");
-        let second = AuditWriter::open(destination)
+        let second = AuditWriter::open_without_posture(destination)
             .await
             .expect_err("second companion writer");
         // The lock is on the companion sibling file, so only another
@@ -3739,9 +3910,10 @@ mod tests {
     #[tokio::test]
     async fn invalid_entries_are_refused_without_stopping_the_writer() {
         let directory = directory();
-        let writer = AuditWriter::open(AuditDestination::File(file_destination(&directory)))
-            .await
-            .expect("open");
+        let writer =
+            AuditWriter::open_without_posture(AuditDestination::File(file_destination(&directory)))
+                .await
+                .expect("open");
         for entry in [
             AuditEntry::request("", "req", json!({})),
             AuditEntry::request("schema/v2", "", json!({})),
@@ -3769,7 +3941,7 @@ mod tests {
             .with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
             .expect("rotation");
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         let padding = "x".repeat(4096);
@@ -3861,7 +4033,7 @@ mod tests {
                 .expect("age file");
         }
 
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         assert!(!expired.exists(), "expired sealed segment kept");
@@ -3909,7 +4081,7 @@ mod tests {
             })
             .expect("age active file");
 
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         writer
@@ -3945,7 +4117,7 @@ mod tests {
         fs::write(&existing, "{}\n").expect("seed");
         fs::set_permissions(&existing, fs::Permissions::from_mode(0o600)).expect("mode");
 
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         let padding = "x".repeat(4096);
@@ -3970,7 +4142,7 @@ mod tests {
     #[tokio::test]
     async fn stream_destination_emits_one_json_line_per_entry() {
         let buffer = SharedBuffer::default();
-        let writer = AuditWriter::from_line_sink(Box::new(buffer.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(buffer.clone()));
         assert_eq!(writer.kind(), AuditDestinationKind::Stdout);
         writer.append(request("req-1")).await.expect("request");
         writer
@@ -3996,7 +4168,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failing_stream_refuses_the_append_and_every_later_one() {
-        let writer = AuditWriter::from_line_sink(Box::new(FailingSink));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(FailingSink));
         let first = writer.append(request("req-1")).await.expect_err("refused");
         assert_eq!(first.reason(), AuditUnavailableReason::WriteFailed);
         let second = writer.append(request("req-2")).await.expect_err("refused");
@@ -4032,7 +4204,7 @@ mod tests {
         let (entered, first_write) = std::sync::mpsc::channel();
         let (release, failure_gate) = std::sync::mpsc::channel();
         let writes = Arc::new(AtomicU64::new(0));
-        let writer = AuditWriter::from_line_sink(Box::new(FailOnce {
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(FailOnce {
             entered,
             release: failure_gate,
             writes: writes.clone(),
@@ -4115,7 +4287,7 @@ mod tests {
                 .build()
                 .expect("current-thread runtime");
             runtime.block_on(async move {
-                let writer = AuditWriter::from_line_sink(Box::new(BlockingSink {
+                let writer = AuditWriter::from_line_sink_without_posture(Box::new(BlockingSink {
                     entered,
                     release: write_released,
                 }));
@@ -4190,7 +4362,7 @@ mod tests {
             unreachable!()
         };
         let path = file.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(
             file.with_rotate_bytes(MIN_AUDIT_ROTATE_BYTES)
                 .expect("rotation"),
         ))
@@ -4353,7 +4525,9 @@ mod tests {
             companion.for_process("schedulingctl"),
             Ok(AuditDestination::Stderr)
         );
-        let companion_writer = AuditWriter::open(companion).await.expect("stderr");
+        let companion_writer = AuditWriter::open_without_posture(companion)
+            .await
+            .expect("stderr");
         assert_eq!(companion_writer.kind(), AuditDestinationKind::Stdout);
         for role in ["", "-x", "Bregctl", "a/b", "a.b", &"x".repeat(33)] {
             assert_eq!(
@@ -4363,10 +4537,13 @@ mod tests {
             );
         }
 
-        let _service_writer = AuditWriter::open(service.clone()).await.expect("service");
-        let tool_writer = AuditWriter::open(service.for_process("bregctl").expect("role"))
+        let _service_writer = AuditWriter::open_without_posture(service.clone())
             .await
-            .expect("a companion process opens its own file beside a running service");
+            .expect("service");
+        let tool_writer =
+            AuditWriter::open_without_posture(service.for_process("bregctl").expect("role"))
+                .await
+                .expect("a companion process opens its own file beside a running service");
         tool_writer
             .append(AuditEntry::response(
                 "test/v1",
@@ -4459,7 +4636,7 @@ mod tests {
         // Opening applies retention, which lists the directory.
         fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).expect("mode");
         let refused = destination.check_writable();
-        let opened = AuditWriter::open(AuditDestination::File(destination)).await;
+        let opened = AuditWriter::open_without_posture(AuditDestination::File(destination)).await;
         fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).expect("restore");
         opened.expect_err("the writer cannot list the directory");
         refused.expect_err("unlistable audit directory");
@@ -4528,7 +4705,7 @@ mod tests {
         let content = "{\"envelope_id\":\"01J000000000000000000000\"}\n{\"envelope_id\"";
         fs::write(&path, content).expect("old-format file");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
-        AuditWriter::open(AuditDestination::File(destination))
+        AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect_err("leftover journal with a torn tail");
         assert_eq!(fs::read_to_string(&path).expect("active file"), content);
@@ -4644,7 +4821,8 @@ mod tests {
             let destination =
                 FileDestination::new(shared.join("audit").join("audit.jsonl")).expect("absolute");
             let checked = destination.check_writable();
-            let opened = AuditWriter::open(AuditDestination::File(destination)).await;
+            let opened =
+                AuditWriter::open_without_posture(AuditDestination::File(destination)).await;
             if accepted {
                 checked.expect("sticky or group-writable ancestor");
                 opened.expect("sticky or group-writable ancestor");
@@ -4696,14 +4874,14 @@ mod tests {
                 .and_then(|handle| handle.set_modified(old))
                 .expect("age file");
         }
-        let first = AuditWriter::open(AuditDestination::File(destination.clone()))
+        let first = AuditWriter::open_without_posture(AuditDestination::File(destination.clone()))
             .await
             .expect("open");
         assert!(sealed_segments(&path).expect("sealed").is_empty());
         drop(first);
 
         // A second restart finds no sealed segment at all.
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("reopen");
         let padding = "x".repeat(4096);
@@ -4741,7 +4919,7 @@ mod tests {
             destination
                 .check_writable()
                 .expect_err("check refuses the sequence file");
-            AuditWriter::open(AuditDestination::File(destination))
+            AuditWriter::open_without_posture(AuditDestination::File(destination))
                 .await
                 .expect_err("open refuses the sequence file");
         }
@@ -4782,7 +4960,7 @@ mod tests {
         let third = seed_segment(&path, 3, 3);
         let fourth = seed_segment(&path, 4, 0);
 
-        let _writer = AuditWriter::open(AuditDestination::File(destination))
+        let _writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
 
@@ -4814,7 +4992,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
         refuse_retention(&path);
 
-        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination.clone()))
             .await
             .expect("a retention failure does not refuse open");
         assert!(expired.exists());
@@ -4835,7 +5013,7 @@ mod tests {
         drop(writer);
 
         allow_retention(&path);
-        let _writer = AuditWriter::open(AuditDestination::File(destination))
+        let _writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("reopen");
         assert!(
@@ -4877,7 +5055,7 @@ mod tests {
             .create(path.parent().expect("parent"))
             .expect("audit directory");
         seed_nearly_full_active(&path);
-        let writer = AuditWriter::open(AuditDestination::File(destination.clone()))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination.clone()))
             .await
             .expect("open");
         writer
@@ -4889,7 +5067,7 @@ mod tests {
         fs::remove_file(segment_path(&path, 1)).expect("ship the sealed segment");
 
         seed_nearly_full_active(&path);
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("reopen");
         writer
@@ -4920,7 +5098,7 @@ mod tests {
             .expect("audit directory");
         seed_nearly_full_active(&path);
         ship_on_seal(&path);
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
 
@@ -4943,13 +5121,13 @@ mod tests {
         let path = destination.path().to_path_buf();
         let parent = path.parent().expect("parent").to_path_buf();
         drop(
-            AuditWriter::open(AuditDestination::File(destination.clone()))
+            AuditWriter::open_without_posture(AuditDestination::File(destination.clone()))
                 .await
                 .expect("first open creates the lock and active file"),
         );
         forget_directory_syncs(&parent);
 
-        let _writer = AuditWriter::open(AuditDestination::File(destination))
+        let _writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("reopen");
         // A crash after creating the names but before the directory sync
@@ -4962,7 +5140,7 @@ mod tests {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         writer.append(request("req-1")).await.expect("append");
@@ -4982,7 +5160,7 @@ mod tests {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         writer.append(request("req-1")).await.expect("append");
@@ -5004,7 +5182,7 @@ mod tests {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         writer.append(request("req-1")).await.expect("append");
@@ -5051,7 +5229,7 @@ mod tests {
             })
             .expect("age other stream");
 
-        let _writer = AuditWriter::open(AuditDestination::File(destination))
+        let _writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         assert!(other.exists(), "another stream's active file deleted");
@@ -5277,7 +5455,7 @@ mod tests {
         let target = directory.path().join("elsewhere.jsonl");
         fs::write(&target, "").expect("target");
         std::os::unix::fs::symlink(&target, &path).expect("symlink");
-        AuditWriter::open(AuditDestination::File(destination))
+        AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect_err("symlinked active file");
     }
@@ -5296,7 +5474,7 @@ mod tests {
         // Every append reopens the lock for read to check it is still pinned,
         // so a write-only lock would stop the writer on its first entry.
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o200)).expect("mode");
-        AuditWriter::open(AuditDestination::File(destination))
+        AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect_err("write-only lock");
     }
@@ -5320,7 +5498,7 @@ mod tests {
         )
         .expect("old-format file");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode");
-        AuditWriter::open(AuditDestination::File(destination))
+        AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect_err("leftover hash-chained journal");
     }
@@ -5334,7 +5512,7 @@ mod tests {
     fn buffered() -> (AuditWriter, SharedBuffer) {
         let buffer = SharedBuffer::default();
         (
-            AuditWriter::from_line_sink(Box::new(buffer.clone())),
+            AuditWriter::from_line_sink_without_posture(Box::new(buffer.clone())),
             buffer,
         )
     }
@@ -5549,7 +5727,7 @@ mod tests {
         let directory = directory();
         let destination = file_destination(&directory);
         let path = destination.path().to_path_buf();
-        let writer = AuditWriter::open(AuditDestination::File(destination))
+        let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
             .await
             .expect("open");
         let (started, begun) = tokio::sync::oneshot::channel();
@@ -5616,7 +5794,7 @@ mod tests {
             .build()
             .expect("runtime");
         let result: Result<(), &str> = runtime.block_on(async move {
-            let writer = AuditWriter::open(AuditDestination::File(destination))
+            let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
                 .await
                 .expect("open");
             let _request = writer
@@ -5645,7 +5823,7 @@ mod tests {
             .build()
             .expect("runtime");
         let (writer, request) = runtime.block_on(async move {
-            let writer = AuditWriter::open(AuditDestination::File(destination))
+            let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
                 .await
                 .expect("open");
             let request = writer
@@ -5681,7 +5859,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_stopped_writer_refuses_the_request_and_writes_nothing() {
-        let writer = AuditWriter::from_line_sink(Box::new(FailingSink));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(FailingSink));
         assert!(writer
             .begin(
                 SCHEMA,
@@ -5762,7 +5940,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_request_canceled_while_its_entry_is_written_is_still_paired() {
         let sink = GatedSink::new();
-        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(sink.clone()));
         let begun = tokio::spawn({
             let writer = writer.clone();
             async move {
@@ -5787,7 +5965,7 @@ mod tests {
     async fn a_response_accepted_after_its_caller_left_is_the_only_answer() {
         let sink = GatedSink::new();
         sink.release();
-        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(sink.clone()));
         let request = writer
             .begin(
                 SCHEMA,
@@ -5817,7 +5995,7 @@ mod tests {
     async fn a_response_appended_after_its_caller_left_still_answers_the_request() {
         let sink = GatedSink::new();
         sink.release();
-        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(sink.clone()));
         let request = writer
             .begin(
                 SCHEMA,
@@ -5860,7 +6038,7 @@ mod tests {
     async fn a_request_dropped_while_an_appended_response_is_written_is_answered_once() {
         let sink = GatedSink::new();
         sink.release();
-        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(sink.clone()));
         let request = writer
             .begin(
                 SCHEMA,
@@ -5902,7 +6080,7 @@ mod tests {
     async fn an_appended_response_skips_a_request_whose_own_response_is_in_flight() {
         let sink = GatedSink::new();
         sink.release();
-        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(sink.clone()));
         let first = writer
             .begin(SCHEMA, "shared", json!({"n": 1}), unfinished())
             .await
@@ -5982,7 +6160,7 @@ mod tests {
     fn dropping_a_request_never_waits_on_a_stalled_stream() {
         let sink = GatedSink::new();
         sink.release();
-        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(sink.clone()));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -6008,7 +6186,7 @@ mod tests {
     async fn a_response_claimed_while_its_request_is_dropped_is_the_only_answer() {
         let sink = GatedSink::new();
         sink.release();
-        let writer = AuditWriter::from_line_sink(Box::new(sink.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(sink.clone()));
         let request = writer
             .begin(
                 SCHEMA,
@@ -6135,6 +6313,7 @@ mod tests {
         queue_lines: usize,
     ) -> AuditWriter {
         AuditWriter {
+            posture: Posture::Production,
             inner: Arc::new(WriterInner::Stream(LineStream::with_limits(
                 Box::new(sink),
                 deadline,

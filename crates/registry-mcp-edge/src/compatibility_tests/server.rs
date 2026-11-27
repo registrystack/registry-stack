@@ -67,7 +67,9 @@ fn gateway_core() -> Arc<GatewayCore> {
         ["unused".to_owned()],
     )
     .expect("binding");
-    let audit = ToolAuditLog::new(AuditWriter::from_line_sink(Box::new(io::sink())));
+    let audit = ToolAuditLog::new(AuditWriter::from_line_sink_without_posture(Box::new(
+        io::sink(),
+    )));
     Arc::new(
         GatewayCore::new(
             [binding],

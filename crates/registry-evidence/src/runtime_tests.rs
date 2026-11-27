@@ -3975,7 +3975,7 @@ async fn admitted_release_append_completes_and_returns_bytes_after_deadline() {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let release_started = Arc::new(Mutex::new(None));
     let audit = EvidenceAuditLog::with_writer(
-        AuditWriter::from_line_sink(Box::new(SlowDisclosureSink {
+        AuditWriter::from_line_sink_without_posture(Box::new(SlowDisclosureSink {
             bytes: Arc::clone(&captured),
             release_started: Arc::clone(&release_started),
             delay: Duration::from_millis(1_500),

@@ -7797,6 +7797,7 @@ version = "0.49.0"
 dependencies = [
  "hmac 0.13.0",
  "regex",
+ "registry-platform-posture",
  "rustix 1.1.6",
  "schemars",
  "serde",

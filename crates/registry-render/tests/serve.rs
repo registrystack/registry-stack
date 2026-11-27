@@ -1107,6 +1107,7 @@ fn a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation() {
                     "correlation",
                     "eventId",
                     "phase",
+                    "posture",
                     "record",
                     "schema",
                     "time"
