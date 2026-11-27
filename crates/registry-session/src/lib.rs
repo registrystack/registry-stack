@@ -12,3 +12,4 @@ pub mod clock;
 pub mod config;
 pub mod grants;
 pub mod store;
+pub mod wire;
