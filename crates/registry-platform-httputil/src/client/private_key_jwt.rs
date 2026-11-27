@@ -35,16 +35,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
-    read_bounded, validate_response_headers_without_peer_policy, FetchUrlError, FetchUrlPolicy,
-};
+use crate::{FetchUrlError, FetchUrlPolicy};
 use async_trait::async_trait;
 use chrono::Utc;
 use registry_platform_authcommon::client_assertion::{
     sign_client_assertion, ClientAssertionError, ClientAssertionRequest,
 };
 use registry_platform_crypto::PrivateJwk;
-use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, CONTENT_TYPE};
 use serde::{Deserialize, Deserializer};
 use tokio::sync::{Mutex, RwLock};
 use url::Url;
@@ -55,6 +53,7 @@ use super::{
         self, base_url_without_userinfo, transport_protects_the_credential, OutboundOptions,
     },
     token::{BearerToken, OAuthErrorCode, TokenError, TokenProvider},
+    token_endpoint::{self, Transport},
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
 };
 
@@ -734,29 +733,7 @@ impl PrivateKeyJwt {
         redirect_uri: &Url,
         code_verifier: &str,
     ) -> Result<RedeemedAuthorizationCode, TokenError> {
-        if code.is_empty()
-            || code.len() > MAXIMUM_AUTHORIZATION_CODE_BYTES
-            || !code.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(TokenError::Invalid {
-                reason: "the authorization code must be bounded non-empty visible ASCII",
-            });
-        }
-        // RFC 7636 section 4.1: 43 to 128 unreserved characters.
-        if !(43..=128).contains(&code_verifier.len())
-            || !code_verifier
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte))
-        {
-            return Err(TokenError::Invalid {
-                reason: "the code verifier must be 43 to 128 unreserved characters",
-            });
-        }
-        if redirect_uri.cannot_be_a_base() || redirect_uri.fragment().is_some() {
-            return Err(TokenError::Invalid {
-                reason: "the redirect URI must be an absolute URI without a fragment",
-            });
-        }
+        token_endpoint::check_redemption_inputs(code, redirect_uri, code_verifier)?;
         let acquired = self
             .acquire_for_grant(
                 self.clock.unix_seconds(),
@@ -1037,72 +1014,25 @@ impl PrivateKeyJwt {
             form.finish()
         });
 
-        let request = if let Some(policy) = &self.fetch_url_policy {
-            let validated = policy
-                .validate_dns_pinned_for_immediate_fetch_with_timeout(
-                    &self.token_endpoint,
-                    self.connect_timeout,
-                )
-                .await
-                .map_err(token_fetch_policy_failure)?;
-            validated
-                .immediate_post_with_outbound_options(
-                    self.request_timeout,
-                    self.connect_timeout,
-                    self.user_agent.as_deref(),
-                    self.trusted_root_certificates
-                        .as_deref()
-                        .map(|value| value.as_slice()),
-                )
-                .map_err(token_fetch_policy_failure)?
-        } else {
-            self.http.post(self.token_endpoint.clone())
-        };
-        let response = request
-            .header(CONTENT_TYPE, FORM_MEDIA_TYPE)
-            .header(ACCEPT, JSON_MEDIA_TYPE)
-            .body(body.as_str().to_owned())
-            .send()
-            .await
-            .map_err(|error| TokenError::Transport {
-                kind: outbound::send_failure_kind(&error),
-            })?;
-
-        let status = response.status().as_u16();
-        if validate_response_headers_without_peer_policy(response.headers()).is_err() {
-            return Err(TokenError::Protocol { status });
-        }
-        let media_type = exact_content_type(response.headers()).map(str::to_owned);
-        let body = match read_bounded(response, MAXIMUM_TOKEN_RESPONSE_BYTES).await {
-            // The response carries a credential, so the buffer it was read into is
-            // wiped when this exchange ends.
-            Ok(body) => Zeroizing::new(body),
-            // The status arrived before the body did, and for a refusal it is the
-            // whole of what this crate would have reported anyway.
-            Err(_) if !(200..300).contains(&status) => return Err(TokenError::Protocol { status }),
-            Err(error) => {
-                return Err(TokenError::Transport {
-                    kind: outbound::read_failure_kind(&error),
-                })
-            }
-        };
-
-        if !(200..300).contains(&status) {
-            return Err(declined(status, media_type.as_deref(), &body));
-        }
-        if status != 200
-            || !media_type
-                .as_deref()
-                .is_some_and(|value| essence(value).eq_ignore_ascii_case(JSON_MEDIA_TYPE))
-        {
-            return Err(TokenError::Protocol { status });
-        }
-        let Ok(issued) = serde_json::from_slice::<IssuedToken>(&body) else {
-            return Err(TokenError::Protocol { status });
-        };
-        if !issued.token_type.eq_ignore_ascii_case(BEARER_TOKEN_TYPE) {
-            return Err(TokenError::Protocol { status });
-        }
+        let answer = token_endpoint::post_form(
+            Transport {
+                http: &self.http,
+                fetch_url_policy: self.fetch_url_policy.as_ref(),
+                request_timeout: self.request_timeout,
+                connect_timeout: self.connect_timeout,
+                user_agent: self.user_agent.as_deref(),
+                trusted_root_certificates: self
+                    .trusted_root_certificates
+                    .as_deref()
+                    .map(|value| value.as_slice()),
+            },
+            &self.token_endpoint,
+            body,
+        )
+        .await?;
+        let status = answer.status;
+        let issued: IssuedToken = answer.into_token_response()?;
+        token_endpoint::require_bearer(&issued.token_type, status)?;
         if matches!(grant, Grant::Exchange(_))
             && issued.issued_token_type.as_deref() != Some(ACCESS_TOKEN_TYPE)
         {
@@ -1125,30 +1055,16 @@ impl PrivateKeyJwt {
                 return Err(TokenError::ScopeNarrowed);
             }
         }
+        let (lifetime_stated, expires_at) =
+            token_endpoint::lifetime_deadline(issued.expires_in, monotonic_now);
         Ok(AcquiredToken {
             // Moved rather than copied, so the credential ends up in the buffer
             // `BearerToken` wipes on drop.
             token: BearerToken::new(issued.access_token)?,
-            // Whether the issuer spoke about this credential's lifetime at all.
-            // Silence, an already-elapsed lifetime, and a null one all leave
-            // `expires_at` absent, and silence does not mean what the other two
-            // mean to a caller that holds a deadline of its own to fall back
-            // on. The outer `Option` is member presence, so an issuer that
-            // states `null` has spoken.
-            lifetime_stated: issued.expires_in.is_some(),
+            lifetime_stated,
             // A stated lifetime is what makes caching possible. Without one, or
             // with one already elapsed, the credential is used once and dropped.
-            // A lifetime longer than this provider will trust is clamped before
-            // it ever reaches the cache arithmetic below.
-            expires_at: issued
-                .expires_in
-                .flatten()
-                .filter(|seconds| *seconds > 0)
-                .map(|seconds| seconds.min(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS))
-                // What reaches this point is within
-                // 1..=MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, so the deadline is
-                // an instant at most a day ahead of the reading it is built on.
-                .map(|seconds| monotonic_now + Duration::from_secs(seconds.unsigned_abs())),
+            expires_at,
             // Only a code redemption hands an ID token to its caller; any other
             // grant's is dropped here, wiped with the response buffer.
             id_token: issued

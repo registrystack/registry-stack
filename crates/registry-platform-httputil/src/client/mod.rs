@@ -14,8 +14,11 @@ mod outbound;
 mod private_key_jwt;
 mod retry;
 mod token;
+mod token_endpoint;
 
-pub use client_secret::{ClientSecretClient, ClientSecretConfig, IssuedTokens, RefreshToken};
+pub use client_secret::{
+    ClientSecretClient, ClientSecretConfig, IssuedTokenParts, IssuedTokens, RefreshToken,
+};
 pub use exchange_authorization::{
     ExchangeAssertionSource, ExchangeAuthorization, ExchangeContext, FirstPartyAssertionSource,
     RemoteAssertionSource, SignedExchangeAssertion, UpstreamSubjectToken,

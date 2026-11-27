@@ -22,24 +22,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::{read_bounded, validate_response_headers_without_peer_policy, FetchUrlPolicy};
-use reqwest::header::{ACCEPT, CONTENT_TYPE};
+use crate::FetchUrlPolicy;
 
 use super::{
     outbound::{
         self, base_url_without_userinfo, transport_protects_the_credential, OutboundOptions,
     },
-    private_key_jwt::{
-        declined, essence, exact_content_type, present_value, token_fetch_policy_failure,
-        valid_resource_uri, AUTHORIZATION_CODE_GRANT_TYPE, BEARER_TOKEN_TYPE, FORM_MEDIA_TYPE,
-        JSON_MEDIA_TYPE, MAXIMUM_AUTHORIZATION_CODE_BYTES, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
-        MAXIMUM_TOKEN_RESPONSE_BYTES,
-    },
+    private_key_jwt::{present_value, valid_resource_uri, AUTHORIZATION_CODE_GRANT_TYPE},
     token::{BearerToken, TokenError, MAXIMUM_TOKEN_BYTES},
+    token_endpoint::{self, Transport},
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
 };
 
@@ -102,11 +97,42 @@ impl fmt::Debug for RefreshToken {
 ///
 /// The ID token is returned unverified. A caller that relies on it verifies it
 /// (issuer, audience, nonce, expiry) before reading any claim.
+///
+/// A refresh answer carries the rotated refresh token, which the caller must
+/// store. Hand everything over at once with [`IssuedTokens::into_parts`], so
+/// the refresh token is named or explicitly discarded.
+#[must_use = "a refresh answer carries the rotated refresh token"]
 pub struct IssuedTokens {
     access_token: BearerToken,
     expires_at: Option<Instant>,
+    lifetime_stated: bool,
     refresh_token: Option<RefreshToken>,
     id_token: Option<Zeroizing<String>>,
+}
+
+/// Every token of an [`IssuedTokens`], moved out together.
+#[must_use = "a refresh answer carries the rotated refresh token"]
+pub struct IssuedTokenParts {
+    pub access_token: BearerToken,
+    /// See [`IssuedTokens::expires_at`].
+    pub expires_at: Option<Instant>,
+    /// See [`IssuedTokens::lifetime_stated`].
+    pub lifetime_stated: bool,
+    pub refresh_token: Option<RefreshToken>,
+    /// The unverified ID token.
+    pub id_token: Option<Zeroizing<String>>,
+}
+
+impl fmt::Debug for IssuedTokenParts {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IssuedTokenParts")
+            .field("expires_at", &self.expires_at)
+            .field("lifetime_stated", &self.lifetime_stated)
+            .field("has_refresh_token", &self.refresh_token.is_some())
+            .field("has_id_token", &self.id_token.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl IssuedTokens {
@@ -115,18 +141,33 @@ impl IssuedTokens {
         &self.access_token
     }
 
-    /// Hand the access token to its keeper. It is moved, never copied.
-    #[must_use]
-    pub fn into_access_token(self) -> BearerToken {
-        self.access_token
+    /// Move every token out. Nothing is copied.
+    pub fn into_parts(self) -> IssuedTokenParts {
+        IssuedTokenParts {
+            access_token: self.access_token,
+            expires_at: self.expires_at,
+            lifetime_stated: self.lifetime_stated,
+            refresh_token: self.refresh_token,
+            id_token: self.id_token,
+        }
     }
 
     /// A monotonic deadline from the issuer's stated `expires_in`, clamped to
-    /// [`MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS`]. `None` when the issuer
-    /// stated no usable lifetime.
+    /// [`MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS`](super::MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS).
+    /// `None` when the issuer stated no usable lifetime: see
+    /// [`IssuedTokens::lifetime_stated`] for the two reasons.
     #[must_use]
     pub fn expires_at(&self) -> Option<Instant> {
         self.expires_at
+    }
+
+    /// Whether the issuer stated a lifetime at all, whatever it was. An absent
+    /// deadline beside `true` is an issuer calling the token already spent (a
+    /// zero, negative, or null `expires_in`), and beside `false` it is an issuer
+    /// saying nothing.
+    #[must_use]
+    pub fn lifetime_stated(&self) -> bool {
+        self.lifetime_stated
     }
 
     #[must_use]
@@ -158,6 +199,7 @@ impl fmt::Debug for IssuedTokens {
         formatter
             .debug_struct("IssuedTokens")
             .field("expires_at", &self.expires_at)
+            .field("lifetime_stated", &self.lifetime_stated)
             .field("has_refresh_token", &self.refresh_token.is_some())
             .field("has_id_token", &self.id_token.is_some())
             .finish_non_exhaustive()
@@ -263,7 +305,9 @@ impl ClientSecretConfig {
         self
     }
 
-    /// Trust these PEM roots, in addition to the outbound client's own rules.
+    /// Trust exactly these PEM roots. They replace the platform's roots rather
+    /// than adding to them, so an endpoint with a publicly issued certificate
+    /// is no longer reachable through this client.
     #[must_use]
     pub fn with_trusted_root_certificates(mut self, pem_bundle: impl Into<Vec<u8>>) -> Self {
         self.trusted_root_certificates = Some(Zeroizing::new(pem_bundle.into()));
@@ -348,29 +392,7 @@ impl ClientSecretClient {
         code_verifier: &str,
         resource: Option<&str>,
     ) -> Result<IssuedTokens, TokenError> {
-        if code.is_empty()
-            || code.len() > MAXIMUM_AUTHORIZATION_CODE_BYTES
-            || !code.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(TokenError::Invalid {
-                reason: "the authorization code must be bounded non-empty visible ASCII",
-            });
-        }
-        // RFC 7636 section 4.1: 43 to 128 unreserved characters.
-        if !(43..=128).contains(&code_verifier.len())
-            || !code_verifier
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte))
-        {
-            return Err(TokenError::Invalid {
-                reason: "the code verifier must be 43 to 128 unreserved characters",
-            });
-        }
-        if redirect_uri.cannot_be_a_base() || redirect_uri.fragment().is_some() {
-            return Err(TokenError::Invalid {
-                reason: "the redirect URI must be an absolute URI without a fragment",
-            });
-        }
+        token_endpoint::check_redemption_inputs(code, redirect_uri, code_verifier)?;
         check_resource(resource)?;
         let body = self.form(|form| {
             form.append_pair("grant_type", AUTHORIZATION_CODE_GRANT_TYPE);
@@ -390,6 +412,13 @@ impl ClientSecretClient {
     /// # Errors
     /// As [`Self::redeem_authorization_code`]; a refresh token the server no
     /// longer accepts is `Refused` with `InvalidGrant`.
+    ///
+    /// The issuer may rotate the refresh token: the caller must store the one
+    /// in the answer, because the presented one is spent. An answer with no
+    /// refresh token means the issuer did not rotate, so keep presenting the
+    /// one you sent (RFC 6749 section 6). Dropping the answer without taking
+    /// its refresh token loses the session at the next renewal, and an issuer
+    /// that treats reuse as theft records one.
     pub async fn refresh(
         &self,
         refresh_token: &RefreshToken,
@@ -425,37 +454,31 @@ impl ClientSecretClient {
                 })?;
         // The token fields lead and the client credentials follow, which is the
         // order RFC 7009 section 2.1 lists its own parameters in.
-        let mut form = url::form_urlencoded::Serializer::new(String::new());
-        form.append_pair("token", refresh_token.expose());
-        form.append_pair("token_type_hint", REFRESH_TOKEN_TYPE_HINT);
-        form.append_pair("client_id", &self.config.client_id);
-        form.append_pair("client_secret", &self.config.client_secret);
-        let body = Zeroizing::new(form.finish());
-        let answer = self.post(endpoint, &body).await?;
+        let body = self.form(|form| {
+            form.append_pair("token", refresh_token.expose());
+            form.append_pair("token_type_hint", REFRESH_TOKEN_TYPE_HINT);
+        });
+        let answer = self.post(endpoint, body).await?;
         // RFC 7009 section 2.2: the server answers 200 whether or not the
-        // token was known, so the body carries nothing to act on.
+        // token was known, so the body carries nothing to act on and is never
+        // read.
         if answer.status == 200 {
             return Ok(());
         }
-        if (200..300).contains(&answer.status) {
-            return Err(TokenError::Protocol {
-                status: answer.status,
-            });
-        }
-        Err(declined(
-            answer.status,
-            answer.media_type.as_deref(),
-            &answer.body,
-        ))
+        Err(answer.into_refusal())
     }
 
     /// The form of one token request: the grant's own fields, then the client
     /// credentials the `client_secret_post` method places in the body.
+    ///
+    /// The serializer's buffer grows by reallocation and leaves partial copies
+    /// in freed memory, so it starts large enough for any request this client
+    /// builds from bounded inputs short of a pathological one.
     fn form(
         &self,
         grant_fields: impl FnOnce(&mut url::form_urlencoded::Serializer<'_, String>),
     ) -> Zeroizing<String> {
-        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        let mut form = url::form_urlencoded::Serializer::new(String::with_capacity(4096));
         grant_fields(&mut form);
         form.append_pair("client_id", &self.config.client_id);
         form.append_pair("client_secret", &self.config.client_secret);
@@ -464,125 +487,88 @@ impl ClientSecretClient {
 
     /// Post a token request body and read the answer as a token response.
     async fn issue(&self, body: Zeroizing<String>) -> Result<IssuedTokens, TokenError> {
-        let answer = self.post(&self.config.token_endpoint, &body).await?;
+        let answer = self.post(&self.config.token_endpoint, body).await?;
         let status = answer.status;
-        if !(200..300).contains(&status) {
-            return Err(declined(status, answer.media_type.as_deref(), &answer.body));
-        }
-        if status != 200
-            || !answer
-                .media_type
-                .as_deref()
-                .is_some_and(|value| essence(value).eq_ignore_ascii_case(JSON_MEDIA_TYPE))
-        {
-            return Err(TokenError::Protocol { status });
-        }
-        let Ok(issued) = serde_json::from_slice::<IssuedToken>(&answer.body) else {
-            return Err(TokenError::Protocol { status });
-        };
-        if !issued.token_type.eq_ignore_ascii_case(BEARER_TOKEN_TYPE) {
-            return Err(TokenError::Protocol { status });
-        }
-        let monotonic_now = Instant::now();
+        let issued: IssuedToken = answer.into_token_response()?;
+        token_endpoint::require_bearer(&issued.token_type, status)?;
+        let (lifetime_stated, expires_at) =
+            token_endpoint::lifetime_deadline(issued.expires_in, Instant::now());
+        // A token the server sent that this client cannot use is the server's
+        // fault, not the caller's input, so it is a protocol failure.
+        let unusable = |_: TokenError| TokenError::Protocol { status };
         Ok(IssuedTokens {
             // Moved rather than copied, so each credential ends up in the
             // buffer its type wipes on drop.
-            access_token: BearerToken::new(issued.access_token)?,
-            // Silence, an already-elapsed lifetime, and a null one all leave
-            // the deadline absent. A longer lifetime than is trusted is
-            // clamped before the deadline arithmetic.
-            expires_at: issued
-                .expires_in
-                .flatten()
-                .filter(|seconds| *seconds > 0)
-                .map(|seconds| seconds.min(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS))
-                .map(|seconds| monotonic_now + Duration::from_secs(seconds.unsigned_abs())),
-            refresh_token: issued.refresh_token.map(RefreshToken::new).transpose()?,
-            id_token: issued.id_token.map(Zeroizing::new),
+            access_token: BearerToken::new(issued.access_token.into_inner()).map_err(unusable)?,
+            expires_at,
+            lifetime_stated,
+            refresh_token: issued
+                .refresh_token
+                .map(|token| RefreshToken::new(token.into_inner()))
+                .transpose()
+                .map_err(unusable)?,
+            id_token: issued.id_token.map(WipedString::into_zeroizing),
         })
     }
 
-    /// One form POST to `endpoint`, its response read within the token
-    /// response bound. The status, the one media type, and the body are what
-    /// the caller needs to decide between success and a refusal.
-    async fn post(&self, endpoint: &Url, body: &Zeroizing<String>) -> Result<Answer, TokenError> {
-        let request = if let Some(policy) = &self.config.fetch_url_policy {
-            let validated = policy
-                .validate_dns_pinned_for_immediate_fetch_with_timeout(
-                    endpoint,
-                    self.config.connect_timeout,
-                )
-                .await
-                .map_err(token_fetch_policy_failure)?;
-            validated
-                .immediate_post_with_outbound_options(
-                    self.config.request_timeout,
-                    self.config.connect_timeout,
-                    self.config.user_agent.as_deref(),
-                    self.config
-                        .trusted_root_certificates
-                        .as_deref()
-                        .map(|value| value.as_slice()),
-                )
-                .map_err(token_fetch_policy_failure)?
-        } else {
-            self.http.post(endpoint.clone())
-        };
-        let response = request
-            .header(CONTENT_TYPE, FORM_MEDIA_TYPE)
-            .header(ACCEPT, JSON_MEDIA_TYPE)
-            .body(body.as_str().to_owned())
-            .send()
-            .await
-            .map_err(|error| TokenError::Transport {
-                kind: outbound::send_failure_kind(&error),
-            })?;
-        let status = response.status().as_u16();
-        if validate_response_headers_without_peer_policy(response.headers()).is_err() {
-            return Err(TokenError::Protocol { status });
-        }
-        let media_type = exact_content_type(response.headers()).map(str::to_owned);
-        let body = match read_bounded(response, MAXIMUM_TOKEN_RESPONSE_BYTES).await {
-            // The response may carry a credential, so its buffer is wiped when
-            // the answer is dropped.
-            Ok(body) => Zeroizing::new(body),
-            // The status arrived before the body did, and for a refusal it is
-            // the whole of what would have been reported anyway.
-            Err(_) if !(200..300).contains(&status) => return Err(TokenError::Protocol { status }),
-            Err(error) => {
-                return Err(TokenError::Transport {
-                    kind: outbound::read_failure_kind(&error),
-                })
-            }
-        };
-        Ok(Answer {
-            status,
-            media_type,
+    async fn post(
+        &self,
+        endpoint: &Url,
+        body: Zeroizing<String>,
+    ) -> Result<token_endpoint::Answer, TokenError> {
+        token_endpoint::post_form(
+            Transport {
+                http: &self.http,
+                fetch_url_policy: self.config.fetch_url_policy.as_ref(),
+                request_timeout: self.config.request_timeout,
+                connect_timeout: self.config.connect_timeout,
+                user_agent: self.config.user_agent.as_deref(),
+                trusted_root_certificates: self
+                    .config
+                    .trusted_root_certificates
+                    .as_deref()
+                    .map(|value| value.as_slice()),
+            },
+            endpoint,
             body,
-        })
+        )
+        .await
     }
 }
 
-/// What the server answered, before it is read as a token response or a
-/// refusal.
-struct Answer {
-    status: u16,
-    media_type: Option<String>,
-    body: Zeroizing<Vec<u8>>,
+/// A string member of a response that is wiped when dropped, so a token this
+/// client rejects on any path is not left behind in freed memory. The JSON
+/// reader's own scratch buffer for escaped strings is out of reach.
+struct WipedString(Zeroizing<String>);
+
+impl WipedString {
+    fn into_inner(mut self) -> String {
+        std::mem::take(&mut *self.0)
+    }
+
+    fn into_zeroizing(self) -> Zeroizing<String> {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for WipedString {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|value| Self(Zeroizing::new(value)))
+    }
 }
 
 /// The success response of RFC 6749 section 5.1, in the members this client
 /// uses.
 #[derive(Deserialize)]
 struct IssuedToken {
-    access_token: String,
+    access_token: WipedString,
     token_type: String,
     /// Member presence outside, stated value inside, so a stated `null` is
     /// kept apart from silence.
     #[serde(default, deserialize_with = "present_value")]
     expires_in: Option<Option<i64>>,
-    refresh_token: Option<String>,
-    id_token: Option<String>,
+    refresh_token: Option<WipedString>,
+    id_token: Option<WipedString>,
 }
 
 fn check_resource(resource: Option<&str>) -> Result<(), TokenError> {
@@ -612,7 +598,13 @@ mod tests {
     };
 
     use super::*;
-    use crate::client::OAuthErrorCode;
+    use crate::client::{
+        private_key_jwt::{
+            MAXIMUM_AUTHORIZATION_CODE_BYTES, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
+            MAXIMUM_TOKEN_RESPONSE_BYTES,
+        },
+        OAuthErrorCode,
+    };
 
     const CLIENT_ID: &str = "web-client";
     const SECRET_SENTINEL: &str = "secret-sentinel-0f3a";
@@ -669,6 +661,24 @@ mod tests {
         (requests[0].url.query().map(str::to_owned), form)
     }
 
+    /// The secret travels in the form body alone: no `Authorization` header
+    /// (the `client_secret_basic` method) and no header value carrying it.
+    async fn assert_secret_only_in_the_body(server: &MockServer) {
+        let requests = server
+            .received_requests()
+            .await
+            .expect("the mock server records its requests");
+        for request in &requests {
+            assert!(request.headers.get("authorization").is_none());
+            for (_, value) in request.headers.iter() {
+                assert!(!value
+                    .as_bytes()
+                    .windows(SECRET_SENTINEL.len())
+                    .any(|w| w == SECRET_SENTINEL.as_bytes()));
+            }
+        }
+    }
+
     fn field<'a>(form: &'a [(String, String)], name: &str) -> Option<&'a str> {
         form.iter()
             .find(|(candidate, _)| candidate == name)
@@ -719,7 +729,8 @@ mod tests {
         assert!(tokens.id_token().is_none());
         assert_eq!(
             tokens
-                .into_access_token()
+                .into_parts()
+                .access_token
                 .authorization_header_value()
                 .to_str()
                 .unwrap(),
@@ -727,6 +738,7 @@ mod tests {
         );
         let (query, form) = only_request(&server).await;
         assert_eq!(query, None);
+        assert_secret_only_in_the_body(&server).await;
         assert_eq!(
             names(&form),
             [
@@ -756,7 +768,7 @@ mod tests {
         )
         .await;
 
-        client_for(&server)
+        let _tokens = client_for(&server)
             .redeem_authorization_code("synthetic-code", &redirect_uri(), VERIFIER, None)
             .await
             .expect("the code is redeemed");
@@ -831,6 +843,7 @@ mod tests {
         );
         let (query, form) = only_request(&server).await;
         assert_eq!(query, None);
+        assert_secret_only_in_the_body(&server).await;
         assert_eq!(
             names(&form),
             [
@@ -1001,6 +1014,7 @@ mod tests {
 
         let (query, form) = only_request(&server).await;
         assert_eq!(query, None);
+        assert_secret_only_in_the_body(&server).await;
         assert_eq!(
             names(&form),
             ["client_id", "client_secret", "token", "token_type_hint"]
@@ -1178,5 +1192,326 @@ mod tests {
                 assert!(!rendered.contains(sentinel), "{rendered}");
             }
         }
+    }
+
+    fn assert_send<T: Send>(_: &T) {}
+
+    #[test]
+    fn every_public_future_is_send() {
+        let config = ClientSecretConfig::new(
+            Url::parse("https://issuer.example.org/token").unwrap(),
+            CLIENT_ID,
+            secret(),
+        )
+        .unwrap()
+        .with_revocation_endpoint(Url::parse("https://issuer.example.org/revoke").unwrap())
+        .unwrap();
+        let client = ClientSecretClient::new(config).unwrap();
+        let refresh = RefreshToken::new(REFRESH_SENTINEL).unwrap();
+        let redirect = redirect_uri();
+
+        assert_send(&client.redeem_authorization_code("code", &redirect, VERIFIER, None));
+        assert_send(&client.refresh(&refresh, None));
+        assert_send(&client.revoke_refresh_token(&refresh));
+    }
+
+    #[tokio::test]
+    async fn a_refresh_answer_without_a_new_refresh_token_names_none() {
+        let server = serving(
+            "/token",
+            issued(
+                json!({"access_token": ACCESS_SENTINEL, "token_type": "Bearer", "expires_in": 60}),
+            ),
+        )
+        .await;
+
+        let parts = client_for(&server)
+            .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+            .await
+            .expect("the refresh succeeds")
+            .into_parts();
+
+        assert!(parts.refresh_token.is_none());
+        assert!(parts.expires_at.is_some());
+        assert!(parts.lifetime_stated);
+    }
+
+    #[tokio::test]
+    async fn into_parts_hands_back_every_token_at_once() {
+        let server = serving(
+            "/token",
+            issued(json!({
+                "access_token": ACCESS_SENTINEL,
+                "token_type": "Bearer",
+                "expires_in": 60,
+                "refresh_token": NEW_REFRESH_SENTINEL,
+                "id_token": ID_SENTINEL,
+            })),
+        )
+        .await;
+
+        let parts = client_for(&server)
+            .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+            .await
+            .expect("the refresh succeeds")
+            .into_parts();
+
+        assert_eq!(parts.refresh_token.unwrap().expose(), NEW_REFRESH_SENTINEL);
+        assert_eq!(parts.id_token.unwrap().as_str(), ID_SENTINEL);
+        let rendered = format!("{:?}", parts.access_token);
+        assert!(!rendered.contains(ACCESS_SENTINEL));
+    }
+
+    #[tokio::test]
+    async fn a_lifetime_that_is_not_positive_leaves_no_deadline_but_is_stated() {
+        for expires_in in [
+            json!(0),
+            json!(-3600),
+            json!(i64::MIN),
+            serde_json::Value::Null,
+        ] {
+            let server = serving(
+                "/token",
+                issued(json!({
+                    "access_token": ACCESS_SENTINEL,
+                    "token_type": "Bearer",
+                    "expires_in": expires_in,
+                })),
+            )
+            .await;
+
+            let tokens = client_for(&server)
+                .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+                .await
+                .expect("the answer is a token response");
+
+            assert!(tokens.expires_at().is_none(), "{expires_in}");
+            assert!(tokens.lifetime_stated(), "{expires_in}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_lifetime_is_not_stated() {
+        let server = serving(
+            "/token",
+            issued(json!({"access_token": ACCESS_SENTINEL, "token_type": "Bearer"})),
+        )
+        .await;
+
+        let tokens = client_for(&server)
+            .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+            .await
+            .expect("the answer is a token response");
+
+        assert!(tokens.expires_at().is_none());
+        assert!(!tokens.lifetime_stated());
+    }
+
+    #[tokio::test]
+    async fn a_201_token_answer_is_a_protocol_failure() {
+        let server = serving(
+            "/token",
+            ResponseTemplate::new(201).set_body_json(json!({
+                "access_token": ACCESS_SENTINEL,
+                "token_type": "Bearer",
+            })),
+        )
+        .await;
+
+        let error = client_for(&server)
+            .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+            .await
+            .expect_err("only a 200 is a token answer");
+
+        assert_eq!(error, TokenError::Protocol { status: 201 });
+    }
+
+    #[tokio::test]
+    async fn a_verifier_with_a_reserved_character_is_refused_before_any_request() {
+        let server = serving(
+            "/token",
+            issued(json!({"access_token": ACCESS_SENTINEL, "token_type": "Bearer"})),
+        )
+        .await;
+        let client = client_for(&server);
+        for bad in ["+", "=", " ", "/"] {
+            let verifier = format!("{}{bad}", &VERIFIER[..42]);
+            assert_eq!(verifier.len(), 43);
+            let error = client
+                .redeem_authorization_code("synthetic-code", &redirect_uri(), &verifier, None)
+                .await
+                .expect_err("the verifier is outside the unreserved set");
+            assert!(matches!(error, TokenError::Invalid { .. }), "{error:?}");
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unusable_token_in_the_answer_is_a_protocol_failure() {
+        for body in [
+            json!({"access_token": ACCESS_SENTINEL, "token_type": "Bearer", "refresh_token": "has space"}),
+            json!({"access_token": "has space", "token_type": "Bearer"}),
+            json!({"access_token": ACCESS_SENTINEL, "token_type": "Bearer", "refresh_token": ""}),
+            json!({"access_token": "", "token_type": "Bearer"}),
+        ] {
+            let server = serving("/token", issued(body)).await;
+
+            let error = client_for(&server)
+                .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+                .await
+                .expect_err("the answer carries an unusable token");
+
+            assert_eq!(error, TokenError::Protocol { status: 200 });
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dns_pinned_client_posts_each_request_to_its_own_endpoint() {
+        let server = MockServer::start().await;
+        for route in ["/token", "/revoke"] {
+            Mock::given(method("POST"))
+                .and(path(route))
+                .respond_with(if route == "/token" {
+                    issued(json!({"access_token": ACCESS_SENTINEL, "token_type": "Bearer"}))
+                } else {
+                    ResponseTemplate::new(200)
+                })
+                .mount(&server)
+                .await;
+        }
+        let base = Url::parse(&server.uri()).unwrap();
+        let config = ClientSecretConfig::new(base.join("token").unwrap(), CLIENT_ID, secret())
+            .unwrap()
+            .with_revocation_endpoint(base.join("revoke").unwrap())
+            .unwrap()
+            .with_fetch_url_policy(FetchUrlPolicy::https_or_loopback());
+        let client = ClientSecretClient::new(config).unwrap();
+
+        let _tokens = client
+            .redeem_authorization_code("synthetic-code", &redirect_uri(), VERIFIER, None)
+            .await
+            .expect("the approved loopback endpoint issues a token");
+        client
+            .revoke_refresh_token(&RefreshToken::new(REFRESH_SENTINEL).unwrap())
+            .await
+            .expect("the approved loopback endpoint revokes");
+
+        let requests = server.received_requests().await.unwrap();
+        let paths: Vec<&str> = requests.iter().map(|request| request.url.path()).collect();
+        assert_eq!(paths, ["/token", "/revoke"]);
+        assert_secret_only_in_the_body(&server).await;
+    }
+
+    #[tokio::test]
+    async fn a_strict_fetch_policy_refuses_a_loopback_endpoint_without_a_request() {
+        let server = serving("/token", ResponseTemplate::new(200)).await;
+        let base = Url::parse(&server.uri()).unwrap();
+        let config = ClientSecretConfig::new(base.join("token").unwrap(), CLIENT_ID, secret())
+            .unwrap()
+            .with_revocation_endpoint(base.join("revoke").unwrap())
+            .unwrap()
+            .with_fetch_url_policy(FetchUrlPolicy::strict());
+        let client = ClientSecretClient::new(config).unwrap();
+
+        let refused = client
+            .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+            .await
+            .expect_err("strict policy refuses loopback");
+        assert!(
+            matches!(refused, TokenError::Configuration { .. }),
+            "{refused:?}"
+        );
+        let refused = client
+            .revoke_refresh_token(&RefreshToken::new(REFRESH_SENTINEL).unwrap())
+            .await
+            .expect_err("strict policy refuses loopback");
+        assert!(
+            matches!(refused, TokenError::Configuration { .. }),
+            "{refused:?}"
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_200_revocation_with_an_oversized_body_is_still_success() {
+        let padding = "a".repeat(usize::try_from(MAXIMUM_TOKEN_RESPONSE_BYTES).unwrap() + 1);
+        let server = serving(
+            "/revoke",
+            ResponseTemplate::new(200).set_body_string(padding),
+        )
+        .await;
+
+        client_for(&server)
+            .revoke_refresh_token(&RefreshToken::new(REFRESH_SENTINEL).unwrap())
+            .await
+            .expect("a 200 is success whatever its body");
+    }
+
+    #[tokio::test]
+    async fn a_200_revocation_whose_body_stalls_is_still_success() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            // The request is read, then the answer starts and stalls.
+            let mut request = [0_u8; 4096];
+            let _read = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        let base = Url::parse(&format!("http://{address}/")).unwrap();
+        let config = ClientSecretConfig::new(base.join("token").unwrap(), CLIENT_ID, secret())
+            .unwrap()
+            .with_revocation_endpoint(base.join("revoke").unwrap())
+            .unwrap()
+            .with_request_timeout(Duration::from_millis(500));
+        let client = ClientSecretClient::new(config).unwrap();
+
+        client
+            .revoke_refresh_token(&RefreshToken::new(REFRESH_SENTINEL).unwrap())
+            .await
+            .expect("a 200 is success whatever happens to its body");
+        serve.abort();
+    }
+
+    #[tokio::test]
+    async fn a_stalled_200_token_answer_is_a_timeout() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _read = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n{")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        let base = Url::parse(&format!("http://{address}/")).unwrap();
+        let config = ClientSecretConfig::new(base.join("token").unwrap(), CLIENT_ID, secret())
+            .unwrap()
+            .with_request_timeout(Duration::from_millis(500));
+        let client = ClientSecretClient::new(config).unwrap();
+
+        let error = client
+            .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+            .await
+            .expect_err("a token answer that stalls is not a token");
+
+        assert_eq!(
+            error,
+            TokenError::Transport {
+                kind: crate::client::TransportKind::Timeout
+            }
+        );
+        serve.abort();
     }
 }
