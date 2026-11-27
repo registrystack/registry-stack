@@ -759,3 +759,21 @@ fn a_typo_in_the_person_audience_is_reported_as_unused_not_as_a_duplicate() {
         "identity.person-audience.unused"
     );
 }
+
+#[test]
+fn a_member_scope_never_takes_a_standard_scope_name() {
+    for name in ["openid", "profile", "email", "phone", "address", "roles"] {
+        let member = person_member("documents", name);
+        assert_eq!(
+            refusal(person_merge(vec![breg_like(), member], Some(PERSON))),
+            "identity.person-audience.standard-scope-name",
+            "{name}"
+        );
+    }
+    // A product on its own audience is not bound by the rule.
+    let own = person_member("documents", "profile").replace(PERSON, "urn:documents:example");
+    assert!(person_merge(vec![breg_like(), own], Some(PERSON)).is_ok());
+    // Names that merely contain one are fine.
+    let namespaced = person_member("documents", "profile:read");
+    assert!(person_merge(vec![breg_like(), namespaced], Some(PERSON)).is_ok());
+}

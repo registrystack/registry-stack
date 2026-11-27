@@ -894,6 +894,8 @@ pub fn merge(documents: Vec<IdentityFacts>) -> Result<MergedFacts, ToolingError>
 const CASEWORK: &str = "casework";
 /// The one member that may check task grants.
 const REGISTER: &str = "breg";
+/// Scope names ThunderID passes into a token with no role check.
+const STANDARD_SCOPE_NAMES: [&str; 6] = ["openid", "profile", "email", "phone", "address", "roles"];
 /// The only products that may share the person audience: the ones a person
 /// calls from a page.
 const PERSON_AUDIENCE_PRODUCTS: [&str; 2] = ["breg", "documents"];
@@ -1091,6 +1093,19 @@ fn check_person_member(
             "a member admits every client. List the clients the product admits.",
             format!("{location}/allowedClients"),
         ));
+    }
+    for (index, profile) in facts.access_profiles.iter().enumerate() {
+        if profile
+            .scopes
+            .iter()
+            .any(|scope| STANDARD_SCOPE_NAMES.contains(&scope.as_str()))
+        {
+            return Err(refuse(
+                "identity.person-audience.standard-scope-name",
+                "a member scope is spelled like a standard scope name, which the issuer puts into a token without checking a role. Rename the scope, for example with the product's prefix.",
+                format!("{location}/accessProfiles/{index}"),
+            ));
+        }
     }
     // A product's own profiles may repeat a scope; another member may not.
     for (index, profile) in facts.access_profiles.iter().enumerate() {

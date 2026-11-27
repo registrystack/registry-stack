@@ -252,7 +252,7 @@ resolves no secret.
   issuer, so only the register checks task grants here
   (`...task-grant-member`); it lists its clients rather than `unrestricted`
   (`...unrestricted-member`); and it states no scope name another member
-  states (`...shared-scope`). No exchange may name the person audience as its
+  states (`...shared-scope`), and none of its scopes is spelled like a standard scope name (`openid`, `profile`, `email`, `phone`, `address`, `roles`), which ThunderID puts into a token with no role check (`...standard-scope-name`). The generator emits no application `scopeClaims`. No exchange may name the person audience as its
   bootstrap resource (`...bootstrap-audience`), a declared `personAudience`
   that no product uses is refused (`...unused`), and one that is not an
   absolute URI is `identity.person-audience.invalid`. On a shared audience
