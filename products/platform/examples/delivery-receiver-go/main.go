@@ -126,7 +126,7 @@ func main() {
 			log.Fatal(err)
 		}
 		if bytes.Equal(key, previous) {
-			log.Fatal("-previous-key: invalid-key: key bytes must differ from -key")
+			log.Fatal("-previous-key holds the same bytes as -key. To rotate, write 32 new random bytes to the file -key names and keep the old bytes in the file -previous-key names.")
 		}
 		keys = append(keys, previous)
 	}

@@ -22,7 +22,14 @@ func TestCommittedVectors(t *testing.T) {
 	if err := json.Unmarshal(data, &vectors); err != nil {
 		t.Fatal(err)
 	}
+	if len(vectors) < 16 {
+		t.Fatalf("got %d shared vectors, want at least 16", len(vectors))
+	}
+	hasPreviousKey := false
 	for _, v := range vectors {
+		if v.PreviousKeyHex != nil && *v.PreviousKeyHex != "" {
+			hasPreviousKey = true
+		}
 		t.Run(v.Name, func(t *testing.T) {
 			decode := func(s string) []byte {
 				key, err := hex.DecodeString(s)
@@ -45,6 +52,9 @@ func TestCommittedVectors(t *testing.T) {
 				t.Errorf("got %v, want %v", got, want)
 			}
 		})
+	}
+	if !hasPreviousKey {
+		t.Error("shared vectors contain no previous-key vector")
 	}
 }
 

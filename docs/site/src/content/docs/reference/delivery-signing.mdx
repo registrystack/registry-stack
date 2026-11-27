@@ -28,6 +28,7 @@ This contract applies to these senders:
 | --- | --- |
 | Method | `POST` |
 | `content-type` | `application/json` |
+| `accept` | `application/json` |
 | `webhook-id` | The event ID in the body, reused on every retry and operator replay |
 | `webhook-timestamp` | The attempt time in Unix seconds |
 | `webhook-signature` | `v1,<base64>` entries separated by one space, current key first, with two entries while a previous key is configured |
@@ -50,7 +51,7 @@ Every product reads the key file as 32 to 64 exact bytes, without trimming or ba
 Generate a file with 64 hexadecimal characters:
 
 ```sh
-openssl rand -hex 32 | tr -d '\n' > webhook.key
+(umask 077; openssl rand -hex 32 | tr -d '\n' > webhook.key)
 ```
 
 Plain `openssl rand -hex 32 > webhook.key` writes 65 bytes: 64 hexadecimal characters and a newline.
@@ -58,22 +59,32 @@ The sender refuses that length at startup and names the trailing newline.
 A file within the length limit may end in a newline.
 Use the same file on the receiver because the newline is part of the key.
 Products refuse key files that start with `whsec_`.
+Existing key files must be readable by their owner only.
+
+## Use a separate key for each destination
 
 Set the current key file with `hmacSha256KeyRef` and the optional previous file with
 `previousHmacSha256KeyRef`. Use a different key for each destination.
 If two destinations share key bytes, the sender refuses to start and names both settings.
+The signature covers the webhook ID, the timestamp and the body but not the URL, so a delivery
+signed with a key two destinations share could be replayed to the other one.
+
+```text
+<first path> and <second path> resolve to the same key bytes. Give <second path> its own key by writing 32 new random bytes to another secret and referencing it there.
+```
 
 {/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs DeliveryKey, distinct_delivery_keys(). */}
 
 ## Verify, in five steps
 
-1. Require exactly one value each for `webhook-id`, `webhook-timestamp`, and `webhook-signature`.
-2. Require a canonical decimal timestamp within the [delivery window](#the-window-and-clocks).
+1. Require exactly one value each for `webhook-id`, `webhook-timestamp`, `webhook-signature`, and
+   `content-type`. Require the content type to be `application/json`.
+2. Require a canonical decimal timestamp.
 3. Verify the signature over the raw body bytes before parsing. Compare the signature in constant
    time.
-4. Parse the authenticated body.
-5. Require `webhook-id` to equal `id` in a registry event envelope or `eventId` in a Casework
-   completion wake.
+4. Check that the timestamp is within the [delivery window](#the-window-and-clocks).
+5. Parse the authenticated body. Require `webhook-id` to equal `id` in a registry event envelope
+   or `eventId` in a Casework completion wake.
 
 {/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs verify(), MAX_SIGNATURE_ENTRIES;
     crates/registry-platform-hooks/src/receiver.rs verify_hook_delivery(). */}
@@ -111,28 +122,28 @@ Without a store, the timestamp window bounds how long someone can replay a captu
     products/platform/examples/delivery-receiver-go/main_test.go TestRepeatedIDIsProcessedOnce(),
     TestAChangedBodyUnderTheSameIDIsRefused(). */}
 
-## Rotation, three restarts, no missed delivery
+## Rotate delivery keys
 
 1. On the sender, copy the current key file to `<name>.previous`.
-   Set `previousHmacSha256KeyRef` to the copy, write new bytes to the original file, and restart
-   the sender.
+   Set `previousHmacSha256KeyRef` to the copy and write new bytes to the original file.
+   Keep the file mode owner-only and restart the sender.
    It signs with both keys, current first, and re-signs retained retries at send time.
 2. On the receiver, copy the current key file to `<name>.previous` and configure it as the
    previous key.
    Write the same new bytes to the original file and restart the receiver so it accepts either key.
 3. Remove `previousHmacSha256KeyRef` and restart the sender.
-   Then remove the previous key from your receiver configuration so the receiver uses only the
-   current key.
+   Then remove the previous key from your receiver configuration and restart or reload the
+   receiver so it uses only the current key. The Go example reads its key files at startup.
 
 Keep the path in `hmacSha256KeyRef` throughout rotation.
 The sender refuses to start if the previous and current keys contain the same bytes.
 
+```text
+<previous path> holds the same bytes as <current path>. To rotate, write 32 new random bytes to the secret <current path> references and keep the old bytes behind <previous path>.
+```
+
 {/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs DeliveryKey, sign(), verify();
     crates/registry-platform-hooks/src/delivery/service.rs delivery_header_values(). */}
-
-## Development deliveries
-
-This section follows a later change.
 
 ## Helpers
 

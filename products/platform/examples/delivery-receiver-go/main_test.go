@@ -4,9 +4,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -112,5 +114,32 @@ func TestASixtyFiveByteKeyFileEndingInANewlineIsRefusedNamingTheNewline(t *testi
 	if err == nil || !strings.Contains(err.Error(), "-key") ||
 		!strings.Contains(err.Error(), "65") || !strings.Contains(err.Error(), "newline") {
 		t.Fatalf("expected flag, length and trailing newline diagnostic, got %v", err)
+	}
+}
+
+func TestIdenticalPreviousKeyNamesRotationSteps(t *testing.T) {
+	if len(os.Args) > 1 && os.Args[len(os.Args)-1] == "receiver-startup" {
+		os.Args = []string{os.Args[0], "-listen", "127.0.0.1:-1", "-key", "current.key", "-previous-key", "previous.key"}
+		log.SetFlags(0)
+		main()
+		return
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"current.key", "previous.key"} {
+		if err := os.WriteFile(filepath.Join(dir, name), testKey, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestIdenticalPreviousKeyNamesRotationSteps$", "receiver-startup")
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 1 {
+		t.Fatalf("expected receiver to exit with status 1, got %v", err)
+	}
+	message := strings.TrimSpace(string(output))
+	const want = "-previous-key holds the same bytes as -key. To rotate, write 32 new random bytes to the file -key names and keep the old bytes in the file -previous-key names."
+	if message != want {
+		t.Fatalf("got %q, want %q", message, want)
 	}
 }
