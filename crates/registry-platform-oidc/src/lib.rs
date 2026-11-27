@@ -8,7 +8,9 @@
 mod access_token_algorithm;
 mod authorization_claims;
 mod diagnostics;
+mod static_jwks;
 pub use diagnostics::{AuthenticationDiagnostics, AuthenticationStage};
+pub use static_jwks::{public_jwks_document, StaticJwksError};
 #[doc(hidden)]
 pub use tracing as __tracing;
 pub mod task_grant;
@@ -470,26 +472,21 @@ impl fmt::Debug for JwksFetcher {
 
 /// Parse an operator-supplied static JWKS document for
 /// [`JwksFetcher::new_static`]: a non-empty key set of RSA or elliptic-curve
-/// keys, each with a non-empty `kid` no other key in the set repeats. A
-/// symmetric key or an unnamed key is refused here, at startup, rather than
-/// when a token first selects it.
+/// public keys, each with a non-empty `kid` no other key in the set repeats.
+/// A symmetric key, a private-key member or an unnamed key is refused here,
+/// at startup, rather than when a token first selects it. The rule on members
+/// is [`public_jwks_document`]. An OKP key passes that rule and is refused
+/// here with [`OidcError::InvalidJwk`].
 pub fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, OidcError> {
-    let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| OidcError::Parse)?;
-    if jwks.keys.is_empty() {
-        return Err(OidcError::EmptyKeySet);
-    }
-    let mut kids = BTreeSet::new();
-    let all_named_asymmetric = jwks.keys.iter().all(|key| {
+    let document = public_jwks_document(bytes)?;
+    let jwks: JwkSet = serde_json::from_value(document).map_err(|_| OidcError::Parse)?;
+    let all_asymmetric = jwks.keys.iter().all(|key| {
         matches!(
             key.algorithm,
             AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
-        ) && key
-            .common
-            .key_id
-            .as_deref()
-            .is_some_and(|kid| !kid.is_empty() && kids.insert(kid))
+        )
     });
-    if all_named_asymmetric {
+    if all_asymmetric {
         Ok(jwks)
     } else {
         Err(OidcError::InvalidJwk)
@@ -1798,6 +1795,8 @@ pub enum OidcError {
     InvalidJwk,
     #[error("key set contains no usable keys")]
     EmptyKeySet,
+    #[error("static key set refused: {0}")]
+    StaticKeySet(#[from] StaticJwksError),
     #[error("token is expired")]
     TokenExpired,
     #[error("token is not yet valid")]
@@ -4588,6 +4587,15 @@ mod tests {
     }
 
     #[test]
+    fn a_static_key_set_with_unknown_public_members_loads() {
+        let keys = parse_static_jwks(
+            br#"{"issuer":"x","keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB","ext":true,"x5c":["AA"],"x5t":"a","x5t#S256":"b","x5u":"https://x.example/c","use":"enc","future":1}]}"#,
+        )
+        .expect("unknown public members are ignored");
+        assert_eq!(keys.keys.len(), 1);
+    }
+
+    #[test]
     fn a_static_key_set_requires_unique_named_asymmetric_keys() {
         let keys = parse_static_jwks(
             br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"EC","kid":"two","crv":"P-256","x":"f83OJ3D2xF4k1JQWctzS0r8uXH6Gz-l4WfXccj5WHv0","y":"x_FEzRu9dVvZt2pSuGQgH7u9tZxU7I5oUJu-4G8Azjo"}]}"#,
@@ -4596,34 +4604,43 @@ mod tests {
         assert_eq!(keys.keys.len(), 2);
 
         for (reason, invalid, expected) in [
-            ("no keys member", br#"{}"#.as_slice(), "parse"),
-            ("not JSON", b"not-json", "parse"),
-            ("an empty key set", br#"{"keys":[]}"#, "empty"),
+            ("no keys member", br#"{}"#.as_slice(), "static"),
+            ("not JSON", b"not-json", "static"),
+            ("an empty key set", br#"{"keys":[]}"#, "static"),
             (
                 "a symmetric key",
                 br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#,
-                "jwk",
+                "static",
             ),
             (
                 "a key without kid",
                 br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#,
-                "jwk",
+                "static",
             ),
             (
                 "an empty kid",
                 br#"{"keys":[{"kty":"RSA","kid":"","n":"AQAB","e":"AQAB"}]}"#,
-                "jwk",
+                "static",
             ),
             (
                 "a repeated kid",
                 br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
+                "static",
+            ),
+            (
+                "a private member",
+                br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB","d":"AA"}]}"#,
+                "static",
+            ),
+            (
+                "an OKP key",
+                br#"{"keys":[{"kty":"OKP","kid":"one","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#,
                 "jwk",
             ),
         ] {
             let error = parse_static_jwks(invalid).expect_err(reason);
             let kind = match error {
-                OidcError::Parse => "parse",
-                OidcError::EmptyKeySet => "empty",
+                OidcError::StaticKeySet(_) => "static",
                 OidcError::InvalidJwk => "jwk",
                 other => panic!("{reason}: unexpected {other:?}"),
             };

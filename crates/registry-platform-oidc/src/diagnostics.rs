@@ -64,6 +64,7 @@ impl OidcError {
             | Self::Parse
             | Self::InvalidJwk
             | Self::EmptyKeySet
+            | Self::StaticKeySet(_)
             | Self::MissingIssuer
             | Self::ConflictingEndpointConfiguration
             | Self::InsecureHttpRequiresOptIn
