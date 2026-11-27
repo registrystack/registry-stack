@@ -613,7 +613,9 @@ must decide (`requiredScopes`, `rowBoundaries`, `allowedClients`) is required
 and takes the sentinel `unrestricted` in place of the list. A member that only
 narrows further (`requiredPurposes`, `requesterClients`) takes no sentinel:
 omit it when nothing is added, and the format registry records its omission as
-open. An enumerable set (Scheduling
+open. A format whose governed package names the clients may also accept the
+keyword `from-package` for `allowedClients`, meaning the package's requester
+clients. The member stays required and omission stays refused. An enumerable set (Scheduling
 `channels`) takes no sentinel: its open choice is every member listed, and
 `[]` is refused.
 

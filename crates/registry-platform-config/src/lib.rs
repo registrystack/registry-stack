@@ -23,13 +23,14 @@ use sha2::{Digest, Sha256};
 #[cfg(feature = "schema")]
 pub use blocks::url_hook_destinations_schema;
 pub use blocks::{
-    describe_secret_failure, is_sha256_label, url_hook_destinations, AttachmentVerifierConfig,
-    AttemptTimeoutMilliseconds, AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind,
-    DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig, JwksSource,
-    ListenerBind, ListenerConfig, ListenerNetworkExposure, MetricsListenerConfig,
-    ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, PackageDigestMismatch,
-    PrivateListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination,
-    UrlHookDestinationConfig, DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS,
+    describe_secret_failure, is_sha256_label, url_hook_destinations, AdmittedClients,
+    AttachmentVerifierConfig, AttemptTimeoutMilliseconds, AuditKeyConfig, ConfigBlockError,
+    ConfigBlockErrorKind, DatabaseConfig, EnvironmentSecretProviderConfig,
+    FileSecretProviderConfig, JwksSource, ListenerBind, ListenerConfig, ListenerNetworkExposure,
+    MetricsListenerConfig, ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig,
+    OidcPackageClientsConfig, PackageClients, PackageClientsError, PackageConfig,
+    PackageDigestMismatch, PrivateListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig,
+    TlsTermination, UrlHookDestinationConfig, DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS,
     DEFAULT_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, DEFAULT_HOOK_MAXIMUM_ATTEMPTS,
     DEFAULT_TASK_GRANT_STATUS_PATH, DEFAULT_TASK_GRANT_STATUS_SCOPE,
     MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,

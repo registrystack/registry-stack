@@ -787,6 +787,235 @@ impl OidcClientsConfig {
     }
 }
 
+const FROM_PACKAGE: &str = "from-package";
+
+/// How `allowedClients` is written where the governed package names the
+/// clients (CFG-EMPTY-2): the keyword `from-package`, the keyword
+/// `unrestricted`, or a list of at least one client. The member stays
+/// required and an empty list is refused. A runtime resolves the value with
+/// [`PackageClients::resolve`] before it builds a token verifier.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PackageClients {
+    /// Admit exactly the clients the package's access profiles name.
+    FromPackage,
+    /// Admit a token from every client the issuer verifies. A runtime decides
+    /// whether that is acceptable in production.
+    Unrestricted,
+    /// Admit the listed clients, which must cover every package client.
+    Listed(Vec<String>),
+}
+
+/// The keywords `allowedClients` takes beside a list.
+enum PackageClientsKeyword {
+    FromPackage,
+    Unrestricted,
+}
+
+fn package_clients_refused<E: serde::de::Error>() -> E {
+    registry_platform_yaml::Invalid::expected(
+        "from-package, unrestricted, or a list of at least one OAuth client",
+        "Write from-package to admit the package's requester clients, list the OAuth clients whose access tokens are admitted, or write unrestricted to admit every client the issuer verifies.",
+    )
+    .into_error()
+}
+
+impl<'de> Deserialize<'de> for PackageClientsKeyword {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            FROM_PACKAGE => Ok(Self::FromPackage),
+            UNRESTRICTED => Ok(Self::Unrestricted),
+            _ => Err(package_clients_refused()),
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for PackageClientsKeyword {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PackageClientsKeyword".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "string", "enum": [FROM_PACKAGE, UNRESTRICTED]})
+    }
+}
+
+/// The authored shape of [`PackageClients`], so the schema and the reader
+/// agree on the two forms.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(untagged))]
+enum OidcPackageAllowedClients {
+    /// A keyword.
+    Keyword(PackageClientsKeyword),
+    /// Admit a token only from a listed client.
+    Listed(ListedClients),
+}
+
+registry_platform_yaml::shape_union!(OidcPackageAllowedClients { scalar => Keyword, list => Listed });
+
+impl<'de> Deserialize<'de> for PackageClients {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(
+            match OidcPackageAllowedClients::deserialize(deserializer)? {
+                OidcPackageAllowedClients::Keyword(PackageClientsKeyword::FromPackage) => {
+                    Self::FromPackage
+                }
+                OidcPackageAllowedClients::Keyword(PackageClientsKeyword::Unrestricted) => {
+                    Self::Unrestricted
+                }
+                OidcPackageAllowedClients::Listed(ListedClients(clients)) => Self::Listed(clients),
+            },
+        )
+    }
+}
+
+impl Serialize for PackageClients {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::FromPackage => serializer.serialize_str(FROM_PACKAGE),
+            Self::Unrestricted => serializer.serialize_str(UNRESTRICTED),
+            Self::Listed(clients) => clients.serialize(serializer),
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for PackageClients {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "OidcPackageAllowedClients".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        OidcPackageAllowedClients::json_schema(generator)
+    }
+}
+
+/// The OAuth clients a runtime admits access tokens for when the governed
+/// package names its requester clients, and the assertion authorities each
+/// client may exchange a subject token from, written under
+/// `authentication.oidc` beside the issuer. Runtimes whose package does not
+/// name clients keep [`OidcClientsConfig`].
+// A product's `authentication.oidc` block embeds this with
+// `#[serde(flatten)]`, as it does `OidcClientsConfig`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+pub struct OidcPackageClientsConfig {
+    /// The OAuth clients whose access tokens are admitted: `from-package` for
+    /// the package's requester clients, `unrestricted` for every client the
+    /// issuer verifies, or a list of at least one distinct client that covers
+    /// the package's requester clients.
+    pub allowed_clients: PackageClients,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// with the meaning and bounds of `OidcClientsConfig::assertion_issuers`.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "non_empty_assertion_issuers"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "assertion_issuers_schema"))]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+impl OidcPackageClientsConfig {
+    /// The bounds of [`OidcClientsConfig::check`] on `assertionIssuers`.
+    pub fn check(&self, field: &str) -> Result<(), ConfigBlockError> {
+        OidcClientsConfig {
+            allowed_clients: Vec::new(),
+            assertion_issuers: self.assertion_issuers.clone(),
+        }
+        .check(field)
+    }
+}
+
+/// A non-empty, sorted list of the clients a token verifier admits. It is the
+/// only value a runtime passes to a verifier built from [`PackageClients`], so
+/// an unresolved keyword cannot reach it as the empty list, which a verifier
+/// reads as "every client".
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdmittedClients(Vec<String>);
+
+impl AdmittedClients {
+    /// The sorted, de-duplicated clients, or `None` when there are none.
+    #[must_use]
+    pub fn new(clients: Vec<String>) -> Option<Self> {
+        let clients: BTreeSet<String> = clients.into_iter().collect();
+        if clients.is_empty() {
+            None
+        } else {
+            Some(Self(clients.into_iter().collect()))
+        }
+    }
+
+    #[must_use]
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn into_vec(self) -> Vec<String> {
+        self.0
+    }
+}
+
+/// Why [`PackageClients::resolve`] produced no admitted clients. Client
+/// identifiers are not secrets.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum PackageClientsError {
+    /// `allowedClients` is `unrestricted`, which this resolution never turns
+    /// into a list.
+    #[error("allowedClients is unrestricted and admits no resolved list of clients")]
+    Unrestricted,
+    /// The resolved list has no client: the package names none, or the list
+    /// is empty.
+    #[error("allowedClients resolves to no client")]
+    Empty,
+    /// The explicit list leaves out a client the package names.
+    #[error("allowedClients does not list the package client {0}")]
+    Missing(String),
+}
+
+impl PackageClients {
+    /// The clients to admit, given the requester clients of every access
+    /// profile of the loaded package. `FromPackage` is the sorted union of
+    /// `package_clients`. `Listed` is returned when it covers every package
+    /// client, and refused naming the first missing one otherwise. Extra
+    /// clients in a list stay admitted. `Unrestricted` and an empty result are
+    /// errors: the runtime decides what `Unrestricted` means for it.
+    pub fn resolve(
+        &self,
+        package_clients: &[String],
+    ) -> Result<AdmittedClients, PackageClientsError> {
+        match self {
+            Self::Unrestricted => Err(PackageClientsError::Unrestricted),
+            Self::FromPackage => {
+                AdmittedClients::new(package_clients.to_vec()).ok_or(PackageClientsError::Empty)
+            }
+            Self::Listed(listed) => {
+                let admitted =
+                    AdmittedClients::new(listed.clone()).ok_or(PackageClientsError::Empty)?;
+                let missing = package_clients
+                    .iter()
+                    .filter(|client| !admitted.0.contains(client))
+                    .min();
+                match missing {
+                    Some(client) => Err(PackageClientsError::Missing(client.clone())),
+                    None => Ok(admitted),
+                }
+            }
+        }
+    }
+}
+
 /// The package a runtime serves: `root` is the absolute package directory,
 /// and `expectedDigest`, when set, pins the package digest the runtime must
 /// find there. The package digest is the digest of the package's
