@@ -494,6 +494,31 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertFalse(any(name.startswith("adapter") for name, _ in images))
 
+    def test_adapter_image_bins_join_only_from_the_image_first_release(self) -> None:
+        with mock.patch.object(
+            MODULE.release_roster, "ADAPTER_IMAGE_FIRST_RELEASE", (0, 49, 0)
+        ):
+            rosters_048, images_048 = MODULE.rosters("0.48.0")
+            rosters_049, images_049 = MODULE.rosters("0.49.0")
+        self.assertFalse(any(name.startswith("adapter") for name, _ in images_048))
+        self.assertEqual(
+            [
+                ("adapter", "adapter-v0.49.0-linux-amd64"),
+                ("adapterctl", "adapterctl-v0.49.0-linux-amd64"),
+            ],
+            [entry for entry in images_049 if entry[0].startswith("adapter")],
+        )
+        # The binaries ship on their own gate, so the shard rosters match.
+        self.assertEqual(
+            {key: [n.replace("0.48.0", "0.49.0") for n in names] for key, names in rosters_048.items()},
+            rosters_049,
+        )
+        _, images_held = MODULE.rosters("0.49.0")
+        self.assertEqual(
+            [entry for entry in images_049 if not entry[0].startswith("adapter")],
+            images_held,
+        )
+
     def test_core_recipe_builds_each_adapter_binary_in_its_own_invocation(self) -> None:
         # Cargo unifies features within one invocation, so each binary keeps
         # its own build to retain its product's feature boundary.
@@ -516,7 +541,11 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             )
         )
         self.assertNotIn("adapter-job", block)
-        self.assertNotIn("dist/image-bin", block)
+        # Image staging sits behind its own gate, inside the same block.
+        self.assertIn('if [[ "${include_adapter_image}" -eq 1 ]]; then', block)
+        staging = block.split('if [[ "${include_adapter_image}" -eq 1 ]]; then', 1)[1]
+        self.assertIn("cp target/release/adapter dist/image-bin/adapter", staging)
+        self.assertIn("cp target/release/adapterctl dist/image-bin/adapterctl", staging)
 
     def test_no_shard_carries_the_document_store_while_it_is_held_out(self) -> None:
         # The Document Store is held out by DOCUMENTS_FIRST_RELEASE and has no

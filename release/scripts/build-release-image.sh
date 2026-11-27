@@ -24,11 +24,23 @@ release_image_context="${RELEASE_IMAGE_CONTEXT:-${repo_root}}"
 created_builder=false
 
 case "${name}" in
-  discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging|coordinator)
+  discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging|coordinator|adapter)
     dockerfile="${repo_root}/release/docker/Dockerfile.${name}"
     ;;
   *)
     echo "unsupported release image: ${name}" >&2
+    exit 2
+    ;;
+esac
+
+# Images build natively for one platform per invocation. amd64 is the release
+# default. An arm64 image is built on an arm64 host from arm64 binaries staged
+# in dist/image-bin, never through emulation.
+release_image_platform="${RELEASE_IMAGE_PLATFORM-linux/amd64}"
+case "${release_image_platform}" in
+  linux/amd64 | linux/arm64) ;;
+  *)
+    echo "RELEASE_IMAGE_PLATFORM must be linux/amd64 or linux/arm64, got: ${release_image_platform}" >&2
     exit 2
     ;;
 esac
@@ -164,7 +176,7 @@ mkdir -p "$(dirname -- "${metadata_file}")"
 cd -- "${release_image_context}"
 docker buildx build \
   --builder "${release_buildx_builder}" \
-  --platform linux/amd64 \
+  --platform "${release_image_platform}" \
   --file "${dockerfile}" \
   --tag "${image}" \
   "${provenance_args[@]}" \
