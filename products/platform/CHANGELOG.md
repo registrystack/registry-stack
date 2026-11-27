@@ -158,6 +158,15 @@
   feature, and authcommon does not depend on httpsec. Alert on the counter,
   not on the log line.
 
+- A scope refusal's `request refused` line can name what the operator
+  declared: `record_refusal!(.., declared = Some(&scope))` takes a
+  `registry_platform_authcommon::DeclaredScope` and writes `scope_claim`, and
+  `required_scope` and `access_profile` when they were declared. The values
+  come from the runtime configuration or the reviewed package, never from the
+  caller's token, and the line carries them only when the failed check is
+  `scope`. Each value is cut to 128 bytes. Products attach it to the refusal
+  answer's extensions, which are never written to the response.
+
 - A token whose header `alg` does not fit the key its `kid` names, or whose
   `kid` names an encryption key such as an RSA-OAEP `use: enc` key, now fails
   as `OidcError::AlgorithmNotAllowed` (`token-algorithm`) instead of
