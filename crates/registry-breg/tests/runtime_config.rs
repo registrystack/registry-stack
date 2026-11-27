@@ -2068,7 +2068,7 @@ fn review_authority_completion_recipient_accepts_the_shared_byte_bound() {
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let recipient = "x".repeat(256);
     let valid = format!(
-        "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    tokenRef: secret:file/opaque-review-token\n    completionTokenRef: secret:file/review-completion-token\n    completionRecipient: {recipient}\n"
+        "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    tokenRef: secret:file/opaque-review-token\n    completion:\n      hmacSha256KeyRef: secret:file/review-completion-key\n      recipientBinding: {recipient}\n"
     );
     parse_runtime_config_with_env(&valid, env_lookup)
         .expect("a completion recipient at the shared byte bound is accepted");
@@ -4908,6 +4908,232 @@ fn event_destination_digest_is_deterministic_across_yaml_map_order() {
 }
 
 #[test]
+fn a_destination_key_of_31_bytes_names_its_path_and_length() {
+    assert_destination_key_error(&[b'a'; 31], "31 bytes");
+}
+
+#[test]
+fn a_65_byte_destination_key_ending_in_a_newline_names_the_newline() {
+    let mut key = [b'a'; 65];
+    key[64] = b'\n';
+    assert_destination_key_error(&key, "65 bytes (trailing newline: true)");
+}
+
+fn assert_destination_key_error(key: &[u8], expected: &str) {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", key);
+    let binding = event_destination_binding(
+        "case-operations",
+        "https://events.example/",
+        "/hooks/registry",
+        "secret:file/event-hmac-key",
+        4_000,
+        4,
+    );
+    let runtime = parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &binding),
+        env_lookup,
+    )
+    .expect("valid destination configuration");
+    let error = runtime
+        .activate_event_destinations(&compiled_webhooks(&[("case-operations", 5_000, 5)]))
+        .expect_err("invalid key length")
+        .to_string();
+    assert!(
+        error.contains("destinations.hooks.case-operations.hmacSha256KeyRef"),
+        "{error}"
+    );
+    assert!(error.contains(expected), "{error}");
+}
+
+fn destination_key_config(id: &str) -> String {
+    event_destination_binding(
+        id,
+        "https://events.example/",
+        "/hooks/registry",
+        "secret:file/event-hmac-key",
+        4_000,
+        4,
+    )
+}
+
+fn previous_destination_key(binding: &str, reference: &str) -> String {
+    binding.replace(
+        "      deliveryCeilings:",
+        &format!("      previousHmacSha256KeyRef: {reference}\n      deliveryCeilings:"),
+    )
+}
+
+#[test]
+fn two_destinations_sharing_key_bytes_are_refused_naming_both_paths() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[1; 32]);
+    let config = format!(
+        "{}{}",
+        destination_key_config("alpha"),
+        destination_key_config("bravo")
+    );
+    let runtime = parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &config),
+        env_lookup,
+    )
+    .unwrap();
+    let error = runtime
+        .activate_event_destinations(&compiled_webhooks(&[
+            ("alpha", 5000, 5),
+            ("bravo", 5000, 5),
+        ]))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "destinations.hooks.alpha.hmacSha256KeyRef and destinations.hooks.bravo.hmacSha256KeyRef resolve to the same key bytes. Give destinations.hooks.bravo.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there.");
+}
+
+#[test]
+fn a_previous_destination_key_equal_to_the_current_key_is_refused() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[1; 32]);
+    fixture.write_secret("previous", &[1; 32]);
+    let config = previous_destination_key(&destination_key_config("alpha"), "secret:file/previous");
+    let runtime = parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &config),
+        env_lookup,
+    )
+    .unwrap();
+    let error = runtime
+        .activate_event_destinations(&compiled_webhooks(&[("alpha", 5000, 5)]))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "destinations.hooks.alpha.previousHmacSha256KeyRef holds the same bytes as destinations.hooks.alpha.hmacSha256KeyRef. To rotate, write 32 new random bytes to the secret destinations.hooks.alpha.hmacSha256KeyRef references and keep the old bytes behind destinations.hooks.alpha.previousHmacSha256KeyRef.");
+}
+
+#[test]
+fn an_explicit_null_previous_destination_key_is_refused() {
+    let fixture = RuntimeFixture::new();
+    let config = previous_destination_key(&destination_key_config("alpha"), "null");
+    assert!(parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &config),
+        env_lookup,
+    )
+    .is_err());
+}
+
+#[test]
+fn a_previous_destination_key_leaves_the_binding_digest_unchanged() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[1; 32]);
+    fixture.write_secret("previous", &[2; 32]);
+    let compiled = compiled_webhooks(&[("alpha", 5000, 5)]);
+    let binding = destination_key_config("alpha");
+    let activate = |config: &str| {
+        parse_runtime_config_with_env(
+            &runtime_with_event_destinations(&fixture, config),
+            env_lookup,
+        )
+        .unwrap()
+        .activate_event_destinations(&compiled)
+        .unwrap()
+    };
+    let first = activate(&binding);
+    let second = activate(&previous_destination_key(&binding, "secret:file/previous"));
+    assert_eq!(first.binding_digest(), second.binding_digest());
+    assert_eq!(
+        first.lookup("alpha").unwrap().binding_digest(),
+        second.lookup("alpha").unwrap().binding_digest()
+    );
+}
+
+fn completion_binding(id: &str, recipient: &str) -> String {
+    format!("{}    completion:\n      recipientBinding: {recipient}\n      hmacSha256KeyRef: secret:file/review-key\n", review_authority_binding(id))
+}
+
+#[test]
+fn a_completion_token_names_its_replacement() {
+    let fixture = RuntimeFixture::new();
+    let raw = format!(
+        "{}reviewAuthorities:\n{}    completionTokenRef: secret:file/old-token\n",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        review_authority_binding("casework")
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup)
+        .unwrap_err()
+        .render_human(None);
+    assert!(
+        error.contains("Replace completionTokenRef with completion.hmacSha256KeyRef."),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_completion_recipient_names_its_replacement() {
+    let fixture = RuntimeFixture::new();
+    let raw = format!(
+        "{}reviewAuthorities:\n{}    completionRecipient: registry\n",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        review_authority_binding("casework")
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup)
+        .unwrap_err()
+        .render_human(None);
+    assert!(
+        error.contains("Move completionRecipient to completion.recipientBinding."),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_completion_block_without_a_key_is_refused() {
+    let fixture = RuntimeFixture::new();
+    let raw = format!(
+        "{}reviewAuthorities:\n{}    completion:\n      recipientBinding: registry\n",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        review_authority_binding("casework")
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup)
+        .unwrap_err()
+        .render_human(None);
+    assert!(error.contains("hmacSha256KeyRef"), "{error}");
+}
+
+#[test]
+fn a_completion_key_equal_to_a_destination_key_is_refused_naming_both_paths() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[1; 32]);
+    fixture.write_secret("review-key", &[1; 32]);
+    fixture.write_secret("review-token", b"outgoing-review-token");
+    let raw = format!(
+        "{}reviewAuthorities:\n{}",
+        runtime_with_event_destinations(&fixture, &destination_key_config("alpha")),
+        completion_binding("casework", "registry")
+    );
+    let compiled = compiled_webhooks(&[("alpha", 5000, 5)]);
+    let runtime = parse_runtime_config_with_env(&raw, env_lookup).unwrap();
+    let reviews = runtime.activate_review_authorities(&compiled).unwrap();
+    let error = runtime
+        .activate_event_destinations_with_review_authorities(&compiled, reviews.as_deref())
+        .unwrap_err();
+    assert_eq!(error.to_string(), "destinations.hooks.alpha.hmacSha256KeyRef and reviewAuthorities.casework.completion.hmacSha256KeyRef resolve to the same key bytes. Give reviewAuthorities.casework.completion.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there.");
+}
+
+#[test]
+fn two_authorities_sharing_a_recipient_binding_are_refused() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("review-token", b"outgoing-review-token");
+    fixture.write_secret("review-key", &[1; 32]);
+    let raw = format!(
+        "{}reviewAuthorities:\n{}{}",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        completion_binding("casework-a", "registry"),
+        completion_binding("casework-b", "registry")
+    );
+    let compiled = compiled_webhooks(&[]);
+    let runtime = parse_runtime_config_with_env(&raw, env_lookup).unwrap();
+    let error = runtime
+        .activate_review_authorities(&compiled)
+        .err()
+        .expect("duplicate recipient refused")
+        .to_string();
+    assert!(error.contains("reviewAuthorities.casework-a.completion.recipientBinding and reviewAuthorities.casework-b.completion.recipientBinding"), "{error}");
+}
+
+#[test]
 fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
     const SECRET_CANARY: &str = "event-secret-reference-canary";
 
@@ -4943,7 +5169,14 @@ fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
         let error = config
             .activate_event_destinations(&compiled)
             .expect_err("missing secret refused");
-        assert_eq!(error, EventDestinationActivationError::Secret);
+        if tls.is_empty() {
+            assert!(matches!(
+                error,
+                EventDestinationActivationError::SigningKeyUnavailable { .. }
+            ));
+        } else {
+            assert_eq!(error, EventDestinationActivationError::Secret);
+        }
         assert!(!format!("{error:?} {error}").contains(SECRET_CANARY));
     }
 
@@ -4964,12 +5197,12 @@ fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
         env_lookup,
     )
     .expect("oversized secret ref parses");
-    assert_eq!(
+    assert!(matches!(
         oversized
             .activate_event_destinations(&compiled)
             .expect_err("oversized secret refused by the shared loader"),
-        EventDestinationActivationError::Secret
-    );
+        EventDestinationActivationError::SigningKeyUnavailable { .. }
+    ));
 
     #[cfg(unix)]
     {
@@ -4996,12 +5229,12 @@ fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
             env_lookup,
         )
         .expect("unsafe secret ref parses");
-        assert_eq!(
+        assert!(matches!(
             unsafe_file
                 .activate_event_destinations(&compiled)
                 .expect_err("unsafe secret file refused by the shared loader"),
-            EventDestinationActivationError::Secret
-        );
+            EventDestinationActivationError::SigningKeyUnavailable { .. }
+        ));
     }
 }
 

@@ -34,7 +34,7 @@ pub(crate) enum ApplyLifecycleError {
         found: String,
     },
     Uninitialized,
-    EventDestinations,
+    EventDestinations(String),
     FieldEncryptionConfiguration,
     FieldEncryptionCustody,
     DatabaseConfiguration,
@@ -291,9 +291,19 @@ fn execute(
         .map(|_| config.secret_resolver())
         .transpose()
         .map_err(|_| ApplyLifecycleError::FieldEncryptionConfiguration)?;
+    let review_authorities = if matches!(mode, LifecycleMode::Apply) {
+        config
+            .activate_review_authorities(target.registry())
+            .map_err(ApplyLifecycleError::RuntimeConfig)?
+    } else {
+        None
+    };
     let activated_event_destinations = config
-        .activate_event_destinations(target.registry())
-        .map_err(|_| ApplyLifecycleError::EventDestinations)?;
+        .activate_event_destinations_with_review_authorities(
+            target.registry(),
+            review_authorities.as_deref(),
+        )
+        .map_err(|error| ApplyLifecycleError::EventDestinations(error.to_string()))?;
     let event_destination_compatibility = activated_event_destinations.compatibility_inventory();
 
     let DatabaseAccess {
@@ -342,9 +352,14 @@ fn execute(
     // Planning never activates service bindings or performs Review HTTP. The
     // Apply proof uses only already accepted immutable Request/Result reads.
     let proposal_compatibility = match (mode, current_identity.as_ref()) {
-        (LifecycleMode::Apply, Some(current)) => runtime.block_on(
-            prepare_proposal_compatibility(&config, &connection, current, &target),
-        )?,
+        (LifecycleMode::Apply, Some(current)) => {
+            runtime.block_on(prepare_proposal_compatibility(
+                &connection,
+                current,
+                &target,
+                review_authorities.as_deref(),
+            ))?
+        }
         _ => None,
     };
     let backup_evidence = backup_arguments
@@ -441,15 +456,12 @@ fn execute(
 }
 
 async fn prepare_proposal_compatibility(
-    config: &RuntimeConfig,
     connection: &ConnectionConfig,
     current: &ExpectedRegistryIdentity,
     target: &VerifiedPackage,
+    authorities: Option<&registry_breg::review_store::ReviewAuthorityRegistry>,
 ) -> Result<Option<ProposalActivationCompatibilityInventory>, ApplyLifecycleError> {
-    let Some(authorities) = config
-        .activate_review_authorities(target.registry())
-        .map_err(ApplyLifecycleError::RuntimeConfig)?
-    else {
+    let Some(authorities) = authorities else {
         if target.registry().actions().actions.iter().any(|action| matches!(
             &action.execution,
             registry_breg::model::CompiledActionExecution::Proposal { proposal }
@@ -466,7 +478,7 @@ async fn prepare_proposal_compatibility(
         &pool,
         current,
         target,
-        &authorities,
+        authorities,
         std::time::Duration::from_secs(30),
     )
     .await

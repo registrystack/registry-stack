@@ -961,7 +961,7 @@ struct ProposalRetentionArgs {
 
 #[derive(Debug, Subcommand)]
 enum HookCommand {
-    /// Render one deterministic exact CloudEvents request with synthetic values.
+    /// Render one deterministic Standard Webhooks request with synthetic values.
     Sample(HookSampleArgs),
     /// List bounded value-free delivery metadata, including superseded bindings.
     List(HookListArgs),
@@ -5453,6 +5453,13 @@ fn hook_lifecycle_failure(command: &'static str, error: HookLifecycleError) -> F
             DiagnosticArtifact::HookSample,
             SuggestedAction::SelectHookEvent,
         ),
+        HookLifecycleError::EventDestinations(ref reason) => (
+            "hook.operation.refused",
+            "destinations.hooks",
+            reason.as_str(),
+            DiagnosticArtifact::HookOperations,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         HookLifecycleError::Operator => (
             "hook.operation.refused",
             "hook",
@@ -7314,10 +7321,10 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             DiagnosticArtifact::PackageActivation,
             SuggestedAction::VerifyMigrationAuthority,
         ),
-        ApplyLifecycleError::EventDestinations => (
+        ApplyLifecycleError::EventDestinations(ref reason) => (
             "apply.hook-destinations.refused",
             "destinations.hooks",
-            "the event destination bindings were refused",
+            reason.as_str(),
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),

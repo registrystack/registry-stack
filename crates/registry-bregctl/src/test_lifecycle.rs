@@ -1177,7 +1177,6 @@ bindings:
             EventDestinationActivationError::InvalidBinding,
             EventDestinationActivationError::DeliveryCeilingWidening,
             EventDestinationActivationError::Secret,
-            EventDestinationActivationError::InvalidSigningMaterial,
             EventDestinationActivationError::InvalidTlsMaterial,
         ] {
             cases.push((

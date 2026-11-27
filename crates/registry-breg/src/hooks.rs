@@ -156,6 +156,8 @@ pub enum HookOperatorError {
     /// not secrets, so the refusal names them.
     #[error("{0}")]
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
+    #[error("{0}")]
+    EventDestinations(crate::event_destination::EventDestinationActivationError),
     #[error("hook operator request is unavailable")]
     Unavailable,
 }
@@ -225,7 +227,7 @@ impl HookOperatorService {
         let destinations = Arc::new(
             config
                 .activate_event_destinations(startup.package().registry())
-                .map_err(|_| HookOperatorError::Unavailable)?,
+                .map_err(HookOperatorError::EventDestinations)?,
         );
         let audit = RegistryAudit::open_companion(&config)
             .await

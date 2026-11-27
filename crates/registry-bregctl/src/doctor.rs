@@ -264,6 +264,13 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             &format!("the audit destination was refused: {reason}"),
         );
     }
+    if let StartupError::EventDestinations(reason) = error {
+        return diagnostic(
+            "startup.hook-destinations.refused",
+            "destinations.hooks",
+            &reason,
+        );
+    }
     let (code, path, message) = match error {
         StartupError::RuntimeConfig(_) => {
             unreachable!("startup_refusal reports every runtime configuration diagnostic")
@@ -376,11 +383,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "authentication",
             "the project names clients in requesterClients, trusted actors, or consent recipients that authentication.oidc.allowedClients does not list; list each of them in allowedClients, because the keyword unrestricted lists none",
         ),
-        StartupError::EventDestinations => (
-            "startup.hook-destinations.refused",
-            "destinations.hooks",
-            "the event destination bindings were refused",
-        ),
+        StartupError::EventDestinations(_) => unreachable!("handled above"),
         StartupError::RetainedHookBindings { .. } => {
             unreachable!("retained hook binding diagnostics return before the generic mapping")
         }
@@ -498,7 +501,9 @@ mod tests {
             StartupError::Cursor,
             StartupError::Oidc,
             StartupError::Authentication,
-            StartupError::EventDestinations,
+            StartupError::EventDestinations(
+                "the event destination bindings were refused".to_owned(),
+            ),
             StartupError::FieldEncryption,
             StartupError::FieldEncryptionCustody,
             StartupError::ReviewBindings,
@@ -753,7 +758,9 @@ mod tests {
                 "authentication",
             ),
             (
-                StartupError::EventDestinations,
+                StartupError::EventDestinations(
+                    "the event destination bindings were refused".to_owned(),
+                ),
                 "startup.hook-destinations.refused",
                 "destinations.hooks",
             ),

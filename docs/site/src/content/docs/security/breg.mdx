@@ -60,9 +60,16 @@ access profile or a Record type changes through a new package applied under the 
 credential. A webhook destination's endpoint and secret change in the runtime file and apply at
 restart.
 
+Each hook destination and review authority's completion receiver has its own signing key. Startup
+refuses shared key bytes and identifies both configuration paths. The recipient binding selects the
+authority's key, which authenticates the Standard Webhooks signature. BReg stores one completion
+per authority and `webhook-id`. An accepted completion only makes a result lookup due.
+
 {/* Evidence: products/breg/generated/facility/generated/openapi.json, paths;
     crates/registry-breg/src/startup.rs, production startup verifies the package once,
-    before any listener binds. */}
+    before any listener binds;
+    crates/registry-breg/src/event_destination.rs, distinct_delivery_keys();
+    crates/registry-breg/src/review_store.rs, verify_completion(), receive_completion(). */}
 
 ### In-process refresh worker
 

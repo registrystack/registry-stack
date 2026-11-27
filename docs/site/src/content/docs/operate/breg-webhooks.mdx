@@ -211,6 +211,7 @@ destinations:
       dnsFamily: dual-stack-strict
       allowedPrivateCidrs: []
       hmacSha256KeyRef: secret:file/contact-events-key
+      # previousHmacSha256KeyRef: secret:file/contact-events-key.previous
       classificationCeiling: internal
       deliveryCeilings:
         attemptTimeoutMilliseconds: 1000
@@ -236,7 +237,7 @@ Some values need a decision:
 
 `bregctl --format json explain events <project>` shows what the package compiled for each
 delivery: by default five attempts of five seconds each, retried after 1, 2, 4, and 8 seconds, then
-a dead letter. Retries keep the event id and idempotency key. Any `2xx` response acknowledges a
+a dead letter. Retries and replays keep the event id, sent as `webhook-id`. Any `2xx` response acknowledges a
 delivery; redirects, timeouts, and every other response are retried. The
 [configuration reference](../../reference/breg-configuration/) lists every key, including
 `retention.hookPayloadRetentionDays`.
@@ -244,7 +245,7 @@ delivery; redirects, timeouts, and every other response are retried. The
 Run `bregctl doctor` after every change to this block. It opens each binding, key file included,
 before the runtime starts.
 
-{/* Evidence: crates/registry-breg/src/event_destination.rs, EventDestinations::activate()
+{/* Evidence: crates/registry-breg/src/event_destination.rs, ActivatedEventDestinationRegistry::activate()
     (InventoryMismatch, DeliveryCeilingWidening), RawEventDestinationConfig, digest_value() for
     the tls keys; crates/registry-platform-httputil/src/destination.rs,
     origin_uses_localhost_namespace();
@@ -252,7 +253,7 @@ before the runtime starts.
     crates/registry-breg/src/hooks.rs;
     crates/registry-bregctl/src/doctor.rs, startup.hook-destinations.refused. */}
 
-## Provision the shared key
+## Provision one key per destination
 
 Generate the HMAC-SHA-256 key as an owner-only file in the runtime's secret directory, as the user
 that runs `breg`:
@@ -261,12 +262,19 @@ that runs `breg`:
 (umask 077; openssl rand -hex 32 | tr -d '\n' > /var/lib/breg/secrets/contact-events-key)
 ```
 
-Give the receiver the same bytes through its own secret store. BReg signs with the file's bytes
-exactly as written, so the receiver loads the 64 characters as its key and does not decode them.
-The key must be at least 32 bytes, and the file a regular file owned by the user that runs `breg`
-with mode `0400` or `0600`; `doctor` and startup refuse anything else.
+Give this destination's receiver the same file through its secret store. BReg uses the 32 to 64
+key bytes exactly as written. The recipe produces 64 hexadecimal characters that the receiver
+loads directly as its key. Use a regular file owned by the user that runs `breg`, with mode `0400`
+or `0600`. Startup refuses a key reused across destinations or with a review completion and names
+both configuration paths.
 
-{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs, MIN_HMAC_SHA256_KEY_BYTES;
+To rotate a key, write new bytes behind the existing `hmacSha256KeyRef` and reference the old bytes
+with `previousHmacSha256KeyRef`. During rotation, BReg signs with both keys. Remove the previous
+reference once the receiver has the new key.
+
+{/* Evidence: crates/registry-breg/src/event_destination.rs, resolve_delivery_keys(), digest_value();
+    crates/registry-breg/tests/runtime_config.rs, a_previous_destination_key_leaves_the_binding_digest_unchanged,
+    a_completion_key_equal_to_a_destination_key_is_refused_naming_both_paths;
     crates/registry-platform-config/src/secrets.rs, read_secret_file() and judge_file(). */}
 
 ## Build the receiver against a sample
@@ -283,19 +291,11 @@ Built the sample delivery. The canonical request follows.
   event  contact-created-v1
 
 POST <configured-hook-request-target> HTTP/1.1
-Accept: application/json
-Content-Type: application/json
-Idempotency-Key: sha256:0000000000000000000000000000000000000000000000000000000000000000
-X-Registry-Delivery-Attempt: 1
-X-Registry-Delivery-Time: 2026-01-01T00:00:00Z
-X-Registry-Event-Generation: 1
-X-Registry-Signature: v1=<computed-at-delivery>
-ce-dataschema: urn:breg:event-schema:local-directory:contact:contact-created-v1:sha256:644104a736a00be2962cf3682f869cc1a6d17b101a2d747927302dddb49d9f34
-ce-id: 00000000-0000-4000-8000-000000000001
-ce-source: urn:registrystack:registry:local-directory:instance:<configured-instance>
-ce-specversion: 1.0
-ce-time: 2026-01-01T00:00:00Z
-ce-type: contact-created-v1
+accept: application/json
+content-type: application/json
+webhook-id: 00000000-0000-4000-8000-000000000001
+webhook-signature: v1,<computed-at-delivery>
+webhook-timestamp: 1767225600
 
 {"causation":{"hop":0,"root":"00000000-0000-4000-8000-000000000001"},"data":{"packageRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","recordId":"00000000-0000-4000-8000-000000000002","recordType":"contact","revision":1,"trigger":"created","values":{"name":"x"}},"dataschema":"urn:breg:event-schema:local-directory:contact:contact-created-v1:sha256:644104a736a00be2962cf3682f869cc1a6d17b101a2d747927302dddb49d9f34","id":"00000000-0000-4000-8000-000000000001","source":"urn:registrystack:registry:local-directory:instance:<configured-instance>","subject":{"recordReference":"hmac-sha256:0000000000000000000000000000000000000000000000000000000000000002","recordRevision":1},"time":"2026-01-01T00:00:00Z","type":"contact-created-v1"}
 ```
@@ -307,25 +307,19 @@ document with the method, request target, headers, body, and canonical body.
 
 The receiver should:
 
-1. Verify `X-Registry-Signature` against the exact request bytes, in the signing-input order the
-   [API reference](../../reference/breg-api/#events-and-webhooks) defines.
-2. Check `X-Registry-Delivery-Time` for freshness. The Node, Python and Rust verifiers the client
-   packages ship refuse a delivery time more than 300 seconds from the receiver clock, either way,
-   with the code `stale-delivery`. A receiver that sets no window gets that default. Pass
-   `maxSkewSeconds` (Python `max_skew_seconds`, 1 to 3600) for another window, or
-   `callerEnforcedFreshness: true` (Python `caller_enforced_freshness=True`) to bound the time
-   yourself. Coordinator's own receiver stays at 30 seconds until its signed delivery format
-   changes, which is stricter than the verifier we ship and safe to run beside it.
-3. Read the Record type from `data.recordType` and the record from `data.recordId`, and order
-   events for one record by `data.revision`.
-4. Deduplicate by `Idempotency-Key`, and answer `2xx` only after it has durably recorded the event.
+1. Verify `webhook-signature` over `webhook-id.webhook-timestamp.body` using the exact body bytes.
+   See the [delivery signing reference](../../reference/delivery-signing/).
+2. Check that `webhook-timestamp` is within 300 seconds of the receiver clock in either direction.
+3. Read the Record type from `data.recordType` and the record from `data.recordId`. Use
+   `data.revision` to order events for one record.
+4. Deduplicate by `webhook-id` and answer `2xx` after recording the event durably.
+
+The [client API reference](../../reference/client-api/) describes the client verifiers.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, HookSampleArgs and hook_sample();
     crates/registry-bregctl/src/hook_lifecycle.rs, sample() and synthetic_field_value();
-    crates/registry-breg/src/hooks.rs;
-    crates/registry-breg-client/src/hook.rs BRegHookFreshness, verify_hook_delivery_at;
-    crates/registry-platform-hooks/src/receiver.rs DEFAULT_DELIVERY_SKEW;
-    crates/registry-coordinator/src/event_trigger.rs DELIVERY_SKEW. */}
+    crates/registry-platform-crypto/src/delivery_signature.rs, verify(), DELIVERY_TOLERANCE;
+    crates/registry-platform-hooks/src/receiver.rs, verify_hook_delivery(). */}
 
 ## Settle local hooks before go-live
 
@@ -485,10 +479,10 @@ Queued the delivery for replay.
   generation   2
 ```
 
-Replay keeps the event id and issues a new generation and idempotency key. If you are not sure
-whether the receiver acted on an earlier attempt, check its state before replaying. A replay whose
+Replay keeps the event id. A receiver that already recorded that `webhook-id` acknowledges it
+without acting again. Use replay for deliveries the receiver never recorded. A replay whose
 generation is stale, whose payload has expired, or whose destination is no longer bound is refused
-with `hook.operation.refused`; list again and use the current generation.
+with `hook.operation.refused`. List again and use the current generation.
 
 ### Discard deliveries pinned to an old binding
 
@@ -539,4 +533,4 @@ When `doctor` or a webhook command refuses, look up its diagnostic code in
   delivery end to end on a local registry.
 - [Author a registry project](../../configure/breg/) for the Record types that declare events.
 - [Base Registry Engine API reference](../../reference/breg-api/#events-and-webhooks) for the
-  delivery request, the signing input, and the CloudEvents headers.
+  delivery request, the signing input, and the signed headers.

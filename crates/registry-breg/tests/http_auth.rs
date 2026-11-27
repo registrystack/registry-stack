@@ -30,7 +30,10 @@ use registry_breg::review_store::{
     ReviewAuthorityClient, ReviewAuthorityRegistry, ReviewCompletionReceiver,
 };
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
-use registry_platform_crypto::PrivateJwk;
+use registry_platform_crypto::{
+    delivery_signature::{sign, DeliveryKey, DeliveryKeys},
+    PrivateJwk,
+};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     access_token_typ_set, ActorKind, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError,
@@ -525,31 +528,51 @@ async fn review_completion_authentication_refusals_use_the_registered_problem() 
     .expect("test connection configuration is valid")
     .build_pool()
     .expect("test pool builds");
-    let review_client = ReviewClient::new(ReviewClientConfig::new(
-        "https://review.example.invalid/"
-            .parse()
-            .expect("reserved HTTPS URL"),
-    ))
-    .expect("review client builds");
-    let authority = Arc::new(
-        ReviewAuthorityClient::new(
-            "casework-a".to_owned(),
-            review_client,
-            Arc::new(
-                registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
-                    .expect("outgoing token is valid"),
-            ),
-            "producer-profile".to_owned(),
-            "producer-a".to_owned(),
-            7,
-            Some(Zeroizing::new("completion-secret".to_owned())),
-            Some("registry-a".to_owned()),
+    let review_client = || {
+        ReviewClient::new(ReviewClientConfig::new(
+            "https://review.example.invalid/"
+                .parse()
+                .expect("reserved HTTPS URL"),
+        ))
+        .expect("review client builds")
+    };
+    let keys = |current, previous: Option<u8>| {
+        DeliveryKeys::new(
+            DeliveryKey::new(&[current; 32]).unwrap(),
+            previous.map(|byte| DeliveryKey::new(&[byte; 32]).unwrap()),
         )
-        .expect("review authority is valid"),
-    );
+        .unwrap()
+    };
+    let make_authority = |id: &str, recipient: &str, key| {
+        Arc::new(
+            ReviewAuthorityClient::new(
+                id.to_owned(),
+                review_client(),
+                Arc::new(
+                    registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())
+                        .expect("outgoing token is valid"),
+                ),
+                "producer-profile".to_owned(),
+                "producer-a".to_owned(),
+                7,
+                Some(key),
+                Some(recipient.to_owned()),
+            )
+            .expect("review authority is valid"),
+        )
+    };
     let authorities = Arc::new(
-        ReviewAuthorityRegistry::new(BTreeMap::from([("casework-a".to_owned(), authority)]))
-            .expect("review authority registry is valid"),
+        ReviewAuthorityRegistry::new(BTreeMap::from([
+            (
+                "casework-a".to_owned(),
+                make_authority("casework-a", "registry-a", keys(1, Some(2))),
+            ),
+            (
+                "casework-b".to_owned(),
+                make_authority("casework-b", "registry-b", keys(3, None)),
+            ),
+        ]))
+        .expect("review authority registry is valid"),
     );
     let receiver = Arc::new(ReviewCompletionReceiver::new(pool.clone(), authorities));
     let service = Arc::new(
@@ -564,105 +587,183 @@ async fn review_completion_authentication_refusals_use_the_registered_problem() 
     );
     let app = authenticated_router(service, authenticator);
 
-    let mut missing = Request::builder()
-        .method("POST")
-        .uri("/v1/review-completions")
-        .body(Body::empty())
-        .expect("missing-credential request");
-    missing.headers_mut().insert(
-        "registry-recipient-binding",
-        HeaderValue::from_static("registry-a"),
+    let event = "00000000-0000-4000-8000-000000000001";
+    let request = |recipient: Option<&str>,
+                   id,
+                   offset: i64,
+                   signing_keys: Option<DeliveryKeys>,
+                   content_type,
+                   body: Vec<u8>| {
+        let timestamp = chrono::Utc::now().timestamp().checked_add(offset).unwrap() as u64;
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/review-completions")
+            .header("webhook-id", id)
+            .header("webhook-timestamp", timestamp.to_string())
+            .header("content-type", content_type);
+        if let Some(recipient) = recipient {
+            builder = builder.header("registry-recipient-binding", recipient);
+        }
+        if let Some(keys) = signing_keys {
+            builder = builder.header(
+                "webhook-signature",
+                sign(&keys, id, timestamp, &body).unwrap(),
+            );
+        }
+        builder.body(Body::from(body)).unwrap()
+    };
+    let body = || {
+        serde_json::to_vec(&json!({
+            "type": "review.completed",
+            "eventId": event,
+            "requestId": "00000000-0000-4000-8000-000000000002",
+            "resultId": "00000000-0000-4000-8000-000000000003",
+            "completedAt": chrono::Utc::now(),
+        }))
+        .unwrap()
+    };
+    let valid = |offset, key| {
+        request(
+            Some("registry-a"),
+            event,
+            offset,
+            Some(key),
+            "application/json",
+            body(),
+        )
+    };
+    let mut duplicate = valid(0, keys(1, None));
+    duplicate.headers_mut().append(
+        "webhook-signature",
+        HeaderValue::from_static("v1,duplicate-canary"),
     );
-    let mut malformed = Request::builder()
-        .method("POST")
-        .uri("/v1/review-completions")
-        .body(Body::empty())
-        .expect("malformed-credential request");
+    let mut malformed = valid(0, keys(1, None));
     malformed.headers_mut().insert(
-        AUTHORIZATION,
-        HeaderValue::from_static("Basic malformed-canary"),
+        "webhook-timestamp",
+        HeaderValue::from_static("malformed-canary"),
     );
-    malformed.headers_mut().insert(
-        "registry-recipient-binding",
-        HeaderValue::from_static("registry-a"),
-    );
-    let mut invalid = Request::builder()
-        .method("POST")
-        .uri("/v1/review-completions")
-        .body(Body::empty())
-        .expect("invalid-credential request");
-    invalid.headers_mut().insert(
-        AUTHORIZATION,
-        HeaderValue::from_static("Bearer invalid-credential-canary"),
-    );
-    invalid.headers_mut().insert(
-        "registry-recipient-binding",
-        HeaderValue::from_static("registry-a"),
-    );
-    let mut wrong_recipient = Request::builder()
-        .method("POST")
-        .uri("/v1/review-completions")
-        .body(Body::empty())
-        .expect("wrong-recipient request");
-    wrong_recipient.headers_mut().insert(
-        AUTHORIZATION,
-        HeaderValue::from_static("Bearer completion-secret"),
-    );
-    wrong_recipient.headers_mut().insert(
-        "registry-recipient-binding",
-        HeaderValue::from_static("wrong-recipient-canary"),
-    );
-    let mut admitted = Request::builder()
-        .method("POST")
-        .uri("/v1/review-completions")
-        .body(Body::empty())
-        .expect("admitted-credential request");
-    admitted.headers_mut().insert(
-        AUTHORIZATION,
-        HeaderValue::from_static("Bearer completion-secret"),
-    );
-    admitted.headers_mut().insert(
-        "registry-recipient-binding",
-        HeaderValue::from_static("registry-a"),
-    );
-
+    use registry_platform_authcommon::RefusalNote;
     let code = ProblemCode::AuthenticationRefused;
-    assert!(ProblemCode::ALL.contains(&code));
-    for request in [missing, malformed, invalid, wrong_recipient] {
-        let response = app.clone().oneshot(request).await.expect("router responds");
+    for (request, check) in [
+        (
+            request(
+                None,
+                event,
+                0,
+                Some(keys(1, None)),
+                "application/json",
+                body(),
+            ),
+            "delivery-signature",
+        ),
+        (
+            request(
+                Some("wrong-recipient-canary"),
+                event,
+                0,
+                Some(keys(1, None)),
+                "application/json",
+                body(),
+            ),
+            "delivery-signature",
+        ),
+        (
+            request(
+                Some("registry-a"),
+                event,
+                0,
+                None,
+                "application/json",
+                body(),
+            ),
+            "delivery-signature",
+        ),
+        (
+            request(Some("registry-a"), event, 0, None, "text/plain", body()),
+            "delivery-signature",
+        ),
+        (duplicate, "delivery-signature"),
+        (valid(0, keys(4, None)), "delivery-signature"),
+        (valid(0, keys(3, None)), "delivery-signature"),
+        (valid(-301, keys(1, None)), "delivery-freshness"),
+        (malformed, "delivery-freshness"),
+    ] {
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response
+                .extensions()
+                .get::<RefusalNote>()
+                .map(|note| note.check.as_str()),
+            Some(check)
+        );
         assert_eq!(response.status().as_u16(), code.status());
+        assert_eq!(
+            response.headers()["www-authenticate"],
+            r#"Registry-Signature scheme="standard-webhooks", version="v1""#,
+        );
         let problem = body_json(response).await;
         assert_eq!(problem["code"], code.code());
         assert_eq!(problem["type"], code.type_uri());
         assert_eq!(problem["title"], code.title());
         assert_eq!(problem["status"], code.status());
         assert_eq!(problem["detail"], code.description());
-        let rendered = problem.to_string();
-        for canary in [
-            "malformed-canary",
-            "invalid-credential-canary",
-            "wrong-recipient-canary",
-        ] {
-            assert!(!rendered.contains(canary));
-        }
+        assert!(!problem.to_string().contains("canary"));
     }
-    let admitted = app
-        .oneshot(admitted)
-        .await
-        .expect("router admits the configured callback credential");
-    let unsupported = ProblemCode::UnsupportedMediaType;
-    assert_eq!(admitted.status().as_u16(), unsupported.status());
-    let problem = body_json(admitted).await;
-    assert_eq!(problem["code"], unsupported.code());
-    assert_eq!(problem["type"], unsupported.type_uri());
-    assert_eq!(problem["title"], unsupported.title());
-    assert_eq!(problem["status"], unsupported.status());
-    assert_eq!(problem["detail"], unsupported.description());
-    assert_eq!(
-        pool.status().size,
-        0,
-        "review-completion admission opened PostgreSQL"
-    );
+    assert_eq!(pool.status().size, 0);
+    for (request, expected) in [
+        (
+            request(
+                Some("registry-a"),
+                event,
+                0,
+                Some(keys(1, None)),
+                "text/plain",
+                body(),
+            ),
+            415,
+        ),
+        (
+            request(
+                Some("registry-a"),
+                "another-event",
+                0,
+                Some(keys(1, None)),
+                "application/json",
+                body(),
+            ),
+            400,
+        ),
+        (
+            request(
+                Some("registry-a"),
+                event,
+                0,
+                Some(keys(1, None)),
+                "application/json",
+                vec![b'a'; 2049],
+            ),
+            413,
+        ),
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(request)
+                .await
+                .unwrap()
+                .status()
+                .as_u16(),
+            expected
+        );
+    }
+    // Unix seconds on the wire are compared against the receiver's subsecond clock.
+    for (offset, previous) in [(-299, None), (300, None), (0, Some(2))] {
+        let response = app
+            .clone()
+            .oneshot(valid(offset, keys(1, previous)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
 }
 
 #[tokio::test]

@@ -181,10 +181,10 @@
     "status": 401,
     "wwwAuthenticate": null
   },
-  "review-completion-with-an-unparseable-bearer": {
+  "review-completion-expired-signature": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -193,12 +193,12 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
   },
-  "review-completion-with-two-authorization-headers": {
+  "review-completion-malformed-timestamp": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -207,12 +207,12 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
   },
-  "review-completion-without-authorization": {
+  "review-completion-with-two-signatures": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -221,12 +221,12 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
   },
   "review-completion-without-recipient": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -235,12 +235,12 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
   },
-  "review-completion-wrong-credential": {
+  "review-completion-without-signature": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -249,12 +249,26 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
+  },
+  "review-completion-wrong-key": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
   },
   "review-completion-wrong-recipient": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -263,7 +277,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
   },
   "tampered-signature": {
     "body": {

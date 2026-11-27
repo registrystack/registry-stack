@@ -6234,6 +6234,20 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
     assert_eq!(generated_compiled_operation_ids, compiled_operation_ids);
     let review_completion = &value["paths"]["/v1/review-completions"]["post"];
     assert_eq!(review_completion["operationId"], "receiveReviewCompletion");
+    assert_eq!(
+        review_completion["security"],
+        json!([{"reviewCompletion": []}])
+    );
+    assert_eq!(
+        value["components"]["securitySchemes"]["reviewCompletion"]["name"],
+        "webhook-signature"
+    );
+    assert_eq!(review_completion["parameters"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        review_completion["responses"]["401"]["headers"]["WWW-Authenticate"]["schema"]["const"],
+        r#"Registry-Signature scheme="standard-webhooks", version="v1""#
+    );
+    assert!(review_completion["responses"].get("413").is_some());
     assert!(review_completion.get("x-registry-recordType").is_none());
     assert_eq!(
         value["components"]["securitySchemes"]["bearerAuth"],

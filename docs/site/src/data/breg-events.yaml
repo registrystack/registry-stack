@@ -10,29 +10,21 @@
   title: Webhook request headers
   columns: [Header, Format or value, Meaning]
   rows:
-    - ['`Accept`', '`application/json`', 'Accepted response media type.']
-    - ['`Content-Type`', '`application/json`', 'Canonical JSON event data.']
-    - ['`ce-specversion`', '`1.0`', 'CloudEvents version.']
-    - ['`ce-id`', 'UUID', 'Captured event identity; unchanged by retry or replay.']
-    - ['`ce-source`', '`urn:registrystack:registry:<registry-id>:instance:<instance-id>`', 'Registry instance identity.']
-    - ['`ce-type`', 'Captured event type', 'Configured record event ID or native `proposal.<transition>` event type.']
-    - ['`ce-time`', 'RFC 3339 timestamp', 'Mutation capture time; unchanged by retry or replay.']
-    - ['`ce-dataschema`', '`urn:breg:event-schema:<registry-id>:<record-type-id>:<event-id>:sha256:<digest>`', 'Record payload schema identity and fingerprint; Proposal events use `https://id.registrystack.org/contracts/breg/proposal-event/v1`.']
-    - ['`Idempotency-Key`', '`sha256:<digest>`', 'Opaque key for deduplicating automatic retries.']
-    - ['`X-Registry-Event-Generation`', 'Positive integer, initially `1`', 'Increments on operator replay.']
-    - ['`X-Registry-Delivery-Attempt`', 'Positive integer, initially `1`', 'Attempt number within the generation.']
-    - ['`X-Registry-Delivery-Time`', 'RFC 3339 timestamp', 'Current attempt time; used for receiver freshness checks.']
-    - ['`X-Registry-Signature`', '`v1=<base64url-without-padding>`', 'HMAC-SHA-256 signature over the versioned signing input.']
+    - ['`accept`', '`application/json`', 'Accepted response media type.']
+    - ['`content-type`', '`application/json`', 'Canonical JSON event envelope.']
+    - ['`webhook-id`', 'UUID', 'Captured event identity. Retries and replays preserve it.']
+    - ['`webhook-timestamp`', 'Unix seconds', 'Time of this delivery attempt, used for freshness checks.']
+    - ['`webhook-signature`', '`v1,<base64>`', 'Standard Webhooks signature entries in key order, separated by a space during rotation.']
 - id: envelope
   title: Required event envelope fields
   columns: [Field, Type, Meaning]
   rows:
-    - ['`id`', 'UUID string', 'Captured event identity; equals `ce-id`.']
-    - ['`type`', 'String', 'Record events: the authored hook ID. Proposal events: `proposal.<transition>`. Equals `ce-type`.']
-    - ['`source`', '`urn:registrystack:registry:<registry-id>:instance:<instance-id>`', 'Registry instance identity; equals `ce-source`.']
-    - ['`time`', 'RFC 3339 timestamp, UTC, whole milliseconds', 'Mutation capture time; equals `ce-time`.']
+    - ['`id`', 'UUID string', 'Captured event identity. Equals `webhook-id`.']
+    - ['`type`', 'String', 'Record events: the authored hook ID. Proposal events: `proposal.<transition>`.']
+    - ['`source`', '`urn:registrystack:registry:<registry-id>:instance:<instance-id>`', 'Registry instance identity.']
+    - ['`time`', 'RFC 3339 timestamp, UTC, whole milliseconds', 'Mutation capture time.']
     - ['`subject`', 'Closed Record or Proposal subject object', 'Record events use `recordReference` and `recordRevision`; the reference is `hmac-sha256:<64-hex>`, never the raw record id. Proposal events use `proposalReference` and `proposalRevision`; the reference is the Proposal path `/v1/proposals/<proposal-id>`. Each revision is the resource revision the change produced.']
-    - ['`dataschema`', '`urn:breg:event-schema:<registry-id>:<record-type-id>:<event-id>:sha256:<digest>`', 'Captured payload schema identity; equals `ce-dataschema`. Proposal events use their dedicated closed schema.']
+    - ['`dataschema`', '`urn:breg:event-schema:<registry-id>:<record-type-id>:<event-id>:sha256:<digest>`', 'Captured payload schema identity. Proposal events use their dedicated closed schema.']
     - ['`data`', 'Object', 'The captured event data, described below.']
     - ['`causation`', 'Object with `root`, `hop`, and optional `parent`', 'Chain position. A captured registry mutation is a root event: `root` equals `id`, `hop` is 0, and `parent` is absent.']
 - id: payload
@@ -78,9 +70,9 @@
     - ['Event ID, source, type, time, and schema', 'Unchanged', 'Unchanged']
     - ['Body and captured package revision', 'Unchanged', 'Unchanged']
     - ['Generation', 'Unchanged', 'Incremented']
-    - ['Idempotency key', 'Unchanged', 'New key']
+    - ['`webhook-id`', 'Unchanged', 'Unchanged']
     - ['Attempt number', 'Incremented', 'First send is `1`']
-    - ['Delivery time and signature', 'New for the attempt', 'New for the attempt']
+    - ['`webhook-timestamp` and `webhook-signature`', 'New for the attempt', 'New for the attempt']
     - ['Payload expiry', 'Unchanged', 'Unchanged']
 - id: states
   title: Delivery states
@@ -95,7 +87,7 @@
   title: Hook list entry fields
   columns: [Field, Type, Meaning]
   rows:
-    - ['`eventId`', 'UUID string', 'Captured event ID; matches `ce-id`.']
+    - ['`eventId`', 'UUID string', 'Captured event ID. Matches `webhook-id`.']
     - ['`deliveryId`', 'String', 'Compiled delivery identifier used for replay.']
     - ['`generation`', 'Positive integer', 'Current generation used as `--expected-generation`.']
     - ['`state`', '`pending`, `dead-lettered`, or `expired`', 'Reported delivery state.']

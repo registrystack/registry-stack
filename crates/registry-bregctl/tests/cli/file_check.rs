@@ -421,8 +421,9 @@ reviewAuthorities:
     producerId: registry-producer
     recoveryDays: 7
     client: facility-operator
-    completionTokenRef: secret:file/completion-token
-    completionRecipient: registry-breg
+    completion:
+      hmacSha256KeyRef: secret:file/completion-key
+      recipientBinding: registry-breg
 ",
         scratch.path().join("no-secrets-here").display()
     );
@@ -437,14 +438,14 @@ reviewAuthorities:
     for (planted, code) in [
         (
             clients.replace(
-                "secret:file/completion-token",
+                "secret:file/completion-key",
                 &format!("secret:vault/{MARKER}"),
             ),
             "config.invalid-value",
         ),
         (
             clients.replace(
-                "secret:file/completion-token",
+                "secret:file/completion-key",
                 &format!("secret:env/{}", MARKER.replace('-', "_")),
             ),
             "breg.dev-clients.refused",

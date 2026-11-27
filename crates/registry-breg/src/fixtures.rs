@@ -3794,11 +3794,25 @@ impl SchemaTestRuntime {
                 .cursor_codec()
                 .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Cursor))?,
         );
-        let event_destinations = Arc::new(config.activate_event_destinations(&registry).map_err(
-            |error| {
-                FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::EventDestinations(error))
-            },
-        )?);
+        // A reviewed submission records its pending authority delivery in the
+        // same transaction, so the rehearsal activates the operator's review
+        // authority bindings exactly as the server does. No review worker runs
+        // here: the rehearsal never contacts the authority.
+        let review_authorities = config.activate_review_authorities(&registry).map_err(|_| {
+            FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::ReviewAuthorities)
+        })?;
+        let event_destinations = Arc::new(
+            config
+                .activate_event_destinations_with_review_authorities(
+                    &registry,
+                    review_authorities.as_deref(),
+                )
+                .map_err(|error| {
+                    FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::EventDestinations(
+                        error,
+                    ))
+                })?,
+        );
         let authenticator = Arc::new(
             RegistryAuthenticator::new(
                 &registry,
@@ -3859,13 +3873,6 @@ impl SchemaTestRuntime {
         let evidence = config
             .activate_evidence(&registry)
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Evidence))?;
-        // A reviewed submission records its pending authority delivery in the
-        // same transaction, so the rehearsal activates the operator's review
-        // authority bindings exactly as the server does. No review worker runs
-        // here: the rehearsal never contacts the authority.
-        let review_authorities = config.activate_review_authorities(&registry).map_err(|_| {
-            FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::ReviewAuthorities)
-        })?;
         #[cfg(feature = "wasm")]
         let wasm_runtime = crate::wasm_runtime::install_configured(*config.wasm_execution())
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::WasmExecution))?;

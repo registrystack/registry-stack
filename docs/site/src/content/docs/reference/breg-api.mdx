@@ -906,16 +906,12 @@ transition always carries the same event identity.
 
 ### Signature
 
-`X-Registry-Signature` is `v1=` followed by the unpadded base64url HMAC-SHA-256 of the signing
-input, under a key of at least 32 bytes. The signing input is the bytes `breg-webhook-signature-v1`
-followed by these fields in order, each as an unsigned 64-bit big-endian length and then its bytes:
-the version `1.0`, `ce-id`, `ce-source`, `ce-type`, `ce-time`, `ce-dataschema`,
-`X-Registry-Event-Generation`, `X-Registry-Delivery-Attempt`, `X-Registry-Delivery-Time`, the method,
-the request target (the destination's configured path), `Content-Type`, `Idempotency-Key`, and the
-exact body. The body is at most 1 MiB and the other fields together at most 32 KiB.
+BReg signs `webhook-id.webhook-timestamp.body` using Standard Webhooks, with the exact body bytes.
+Each `webhook-signature` entry starts with `v1,` followed by the base64 HMAC-SHA-256 digest.
+The current key's entry comes first. During rotation the previous key adds a second entry
+separated by a space. Each destination has its own key of 32 to 64 exact bytes.
 
-Compare in constant time, then check the expected source, type, schema, and the freshness of
-`X-Registry-Delivery-Time`, not of `ce-time`, before accepting durably.
+See the [delivery signing reference](../delivery-signing/) for verification and freshness rules.
 
 ### Delivery, retry, and replay
 
@@ -937,7 +933,7 @@ generation; discard stops future attempts and cannot undo an earlier acceptance.
     crates/registry-breg/src/mutation/proposal.rs, reference = format!("/v1/proposals/{proposal_id}");
     crates/registry-breg/src/outbox.rs, capture_envelope();
     crates/registry-breg/src/event_destination.rs, RawEventDestinationConfig path and request_target();
-    crates/registry-platform-crypto/src/delivery_signature.rs, signing_input(), sign_v1(), MIN_HMAC_SHA256_KEY_BYTES, MAX_BODY_BYTES, MAX_METADATA_BYTES;
+    crates/registry-platform-crypto/src/delivery_signature.rs, sign(), verify(), MIN_HMAC_SHA256_KEY_BYTES, MAX_HMAC_SHA256_KEY_BYTES;
     crates/registry-platform-httputil/src/destination.rs;
     products/breg/generated/event-schemas/proposal-lifecycle.schema.json;
     crates/registry-bregctl/src/lib.rs, HookCommand. */}

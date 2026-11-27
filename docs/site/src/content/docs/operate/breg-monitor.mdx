@@ -490,7 +490,9 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
 | `apply.migration.failed` | The apply failed mid-maintenance. | Retry the same target, or run `migration reconcile`. |
 | `apply.hook-destinations.refused` | Destinations and bindings do not match. | Compare `destinations.hooks` with `bregctl explain events`. |
-| `startup.hook-destinations.refused` | A destination binding was refused. | Check the key file, the origin, and `allowedPrivateCidrs`. |
+| `startup.hook-destinations.refused` | A destination binding was refused. For key failures, the message names the key path. | Follow the action in the message or check the origin and `allowedPrivateCidrs`. |
+| `breg.runtime.invalid-delivery-key` | A review authority completion key could not be resolved or failed the key policy. | Correct the key reference or supply the exact bytes as the message directs. |
+| `breg.runtime.duplicate-completion-recipient` | Two review authority completion blocks select the same recipient. | Give each authority a distinct `completion.recipientBinding`. |
 | `startup.hook.retained-bindings` | Pending deliveries need a removed binding. | Restore it until `hook list` shows them drained. |
 | `startup.instance-id.pending-deliveries` | Pending deliveries carry the previous `identity.instanceId`. | Restore it until they drain. |
 | `migration.review.*` | The reviewed migration directory was refused. | See [write a reviewed migration descriptor](../breg-changes/#write-a-reviewed-migration-descriptor). |

@@ -2602,7 +2602,7 @@
       "protocol": "id.registrystack.org/protocols/review/v1"
     }
   ],
-  "revision": "sha256:e79873067041f4addc70ab7004fcef3bb0cf5993d5af8fec884c017b3150c257",
+  "revision": "sha256:6f46b3d4772cb4a85cd3e339da974eaaa130926f9571aa07cd1a1eac6c831079",
   "statisticalDatasets": [],
   "version": "0.1.0"
 }

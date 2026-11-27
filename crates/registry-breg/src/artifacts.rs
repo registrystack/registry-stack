@@ -2742,8 +2742,8 @@ pub(crate) fn append_review_completion_openapi(
             "post": {
                 "operationId": "receiveReviewCompletion",
                 "summary": "Receive a Casework review completion",
-                "description": "Available when a review authority configures a completion token and recipient binding.",
-                "security": [{"bearerAuth": []}],
+                "description": "Available when a review authority configures a completion block.",
+                "security": [{"reviewCompletion": []}],
                 "parameters": [
                     {
                         "name": "Registry-Recipient-Binding",
@@ -2752,11 +2752,23 @@ pub(crate) fn append_review_completion_openapi(
                         "schema": {"type": "string", "minLength": 1, "maxLength": 256}
                     },
                     {
-                        "name": "Idempotency-Key",
+                        "name": "webhook-id",
                         "in": "header",
                         "required": true,
                         "description": "Must equal eventId.",
                         "schema": {"type": "string", "format": "uuid"}
+                    },
+                    {
+                        "name": "webhook-timestamp",
+                        "in": "header",
+                        "required": true,
+                        "schema": {"type": "string", "pattern": "^[0-9]+$"}
+                    },
+                    {
+                        "name": "webhook-signature",
+                        "in": "header",
+                        "required": true,
+                        "schema": {"type": "string"}
                     }
                 ],
                 "requestBody": {
@@ -2769,8 +2781,16 @@ pub(crate) fn append_review_completion_openapi(
                 },
                 "responses": {
                     "204": {"description": "Completion accepted or already recorded."},
-                    "400": {"description": "The completion or idempotency binding is invalid."},
-                    "401": {"description": "The completion authority could not be authenticated."},
+                    "400": {"description": "The completion is invalid or eventId differs from webhook-id."},
+                    "401": {
+                        "description": "The completion authority could not be authenticated.",
+                        "headers": {
+                            "WWW-Authenticate": {
+                                "schema": {"type": "string", "const": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""}
+                            }
+                        }
+                    },
+                    "413": {"description": "The completion body exceeds 2048 bytes."},
                     "415": {"description": "The request is not application/json."},
                     "503": {"description": "The completion could not be durably recorded."}
                 }
@@ -2828,6 +2848,12 @@ pub(crate) fn openapi_components(
                 "type": "http",
                 "scheme": "bearer",
                 "bearerFormat": "JWT"
+            },
+            "reviewCompletion": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "webhook-signature",
+                "description": "The review authority's configured completion key verifies the Standard Webhooks signature."
             }
         },
         "schemas": schemas

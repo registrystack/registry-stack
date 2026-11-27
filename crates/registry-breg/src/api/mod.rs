@@ -90,8 +90,8 @@ const MAX_RAW_QUERY_BYTES: usize = 16 * 1024;
 const MAX_FILTER_CLAUSES: usize = 32;
 const MAX_IN_VALUES: usize = 100;
 const MAX_REVIEW_COMPLETION_BODY_BYTES: usize = 2048;
-const REVIEW_COMPLETION_RECIPIENT_HEADER: &str = "registry-recipient-binding";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
+const REVIEW_COMPLETION_RECIPIENT_HEADER: &str = "registry-recipient-binding";
 
 /// Construct the low-level route set for callers that already hold verified
 /// claims. Production network listeners must use [`authenticated_router`].
@@ -313,26 +313,35 @@ async fn review_completion(
     let Some(receiver) = service.review_completions.as_ref() else {
         return concealed(FailedCheck::Visibility);
     };
-    let token = match crate::auth::bearer_token(&headers) {
-        Ok(token) => token,
-        Err(check) => return review_completion_refused(check),
+    let Some(recipient) = single_header(&headers, REVIEW_COMPLETION_RECIPIENT_HEADER)
+        .filter(|recipient| receiver.contains_recipient(recipient))
+    else {
+        return review_completion_refused(FailedCheck::DeliverySignature);
     };
-    let recipient = match recipient_binding(&headers) {
-        Ok(recipient) => recipient,
-        Err(check) => return review_completion_refused(check),
+    let (Some(id), Some(timestamp), Some(signature)) = (
+        single_header(&headers, "webhook-id"),
+        single_header(&headers, "webhook-timestamp"),
+        single_header(&headers, "webhook-signature"),
+    ) else {
+        return review_completion_refused(FailedCheck::DeliverySignature);
     };
-    let Some((authority, recovery_days)) = receiver.authority(token, recipient) else {
-        return review_completion_refused(FailedCheck::SharedSecret);
+    let Ok(body) = to_bytes(body, MAX_REVIEW_COMPLETION_BODY_BYTES).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     };
+    let content = registry_platform_crypto::delivery_signature::SignedContent {
+        id,
+        timestamp,
+        signature,
+        body: &body,
+    };
+    let (authority, recovery_days) =
+        match receiver.verify_completion(recipient, content, std::time::SystemTime::now()) {
+            Ok(authority) => authority,
+            Err(check) => return review_completion_refused(check),
+        };
     if !single_content_type(&headers, "application/json") {
         return unsupported_media_type();
     }
-    let Some(idempotency_key) = single_header(&headers, IDEMPOTENCY_KEY_HEADER) else {
-        return invalid_request();
-    };
-    let Ok(body) = bounded_body_to(body, MAX_REVIEW_COMPLETION_BODY_BYTES).await else {
-        return invalid_request();
-    };
     let Ok(value) = parse_json_strict(&body) else {
         return invalid_request();
     };
@@ -340,7 +349,7 @@ async fn review_completion(
     else {
         return invalid_request();
     };
-    if idempotency_key != completion.event_id.to_string()
+    if id != completion.event_id.to_string()
         || completion.event_id.is_nil()
         || completion.request_id.is_nil()
         || completion.result_id.is_nil()
@@ -351,7 +360,7 @@ async fn review_completion(
     if !completion_timestamp_is_acceptable(completion.completed_at, now, recovery_days) {
         return invalid_request();
     }
-    match receiver.receive(&authority, &completion).await {
+    match receiver.receive(authority, &completion).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(MutationError::InvalidRequest | MutationError::PreconditionFailed) => invalid_request(),
         Err(_) => unavailable(),
@@ -385,21 +394,15 @@ mod review_completion_tests {
     }
 }
 
-/// The recipient the completion names, or the check the header failed: absent
-/// is a missing credential, repeated or unreadable is a malformed one.
-fn recipient_binding(headers: &HeaderMap) -> Result<&str, FailedCheck> {
-    let mut values = headers.get_all(REVIEW_COMPLETION_RECIPIENT_HEADER).iter();
-    let Some(value) = values.next() else {
-        return Err(FailedCheck::CredentialMissing);
-    };
-    if values.next().is_some() {
-        return Err(FailedCheck::CredentialMalformed);
-    }
-    value.to_str().map_err(|_| FailedCheck::CredentialMalformed)
-}
-
 fn review_completion_refused(check: FailedCheck) -> Response {
-    refusal_problem(ProblemCode::AuthenticationRefused, check)
+    let mut response = refusal_problem(ProblemCode::AuthenticationRefused, check);
+    response.headers_mut().insert(
+        axum::http::header::WWW_AUTHENTICATE,
+        axum::http::HeaderValue::from_static(
+            r#"Registry-Signature scheme="standard-webhooks", version="v1""#,
+        ),
+    );
+    response
 }
 
 async fn health() -> Response {

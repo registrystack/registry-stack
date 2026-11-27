@@ -6,15 +6,15 @@ use anyhow::{bail, Context, Result};
 use axum::{
     body::{to_bytes, Body},
     extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     routing::post,
     Router,
 };
 use registry_breg::model::{CompiledEventDelivery, CompiledRegistry};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_hooks::{
-    receiver::{verify_delivery, DeliveryFreshness, SignedDelivery},
-    EnvelopeLimits, EventSubject, HookEnvelope,
+    receiver::{verify_hook_delivery, DeliveryFreshness, HookDelivery},
+    DeliveryKey, DeliveryKeys, EventSubject, HookEnvelope,
 };
 use serde_json::{json, Value};
 use std::{
@@ -41,7 +41,7 @@ pub(super) struct Receiver {
 
 struct Inbox {
     root: PathBuf,
-    key: Zeroizing<Vec<u8>>,
+    keys: BTreeMap<String, DeliveryKeys>,
     deliveries: BTreeMap<(String, String), Delivery>,
 }
 
@@ -152,12 +152,21 @@ impl Receiver {
         deliveries: BTreeMap<(String, String), Delivery>,
     ) -> Result<Self> {
         private::check(root, true)?;
-        // Runtime secret:file resolution uses the exact file bytes as the HMAC
-        // key. Generated base64url text is key material, not a transport encoding
-        // for the receiver to decode independently.
-        let key = Zeroizing::new(private::read(&root.join("secrets/webhook-key"), 64 * 1024)?);
-        if key.len() < 32 {
-            bail!("local webhook key must contain at least 32 bytes");
+        let mut keys = BTreeMap::new();
+        for delivery in deliveries.values() {
+            for destination in std::iter::once(&delivery.destination_id)
+                .chain(delivery.matching.iter().map(|(_, destination)| destination))
+            {
+                if let std::collections::btree_map::Entry::Vacant(entry) =
+                    keys.entry(destination.clone())
+                {
+                    let path = super::config::inbox_key_path(root, destination);
+                    let bytes = Zeroizing::new(private::read(&path, 64 * 1024)?);
+                    let key = DeliveryKey::new(&bytes)
+                        .with_context(|| format!("invalid local inbox key for {destination}"))?;
+                    entry.insert(DeliveryKeys::new(key, None).expect("one validated key"));
+                }
+            }
         }
         {
             let _lock = storage_lock(root)?;
@@ -180,7 +189,7 @@ impl Receiver {
         };
         let inbox = Arc::new(Inbox {
             root: root.to_path_buf(),
-            key,
+            keys,
             deliveries,
         });
         let (stop, stopped) = oneshot::channel();
@@ -233,11 +242,30 @@ async fn receive(
     else {
         return (StatusCode::BAD_REQUEST, "invalid local webhook request");
     };
-    let Ok((mut record, document)) = verify(&inbox.key, &parts.headers, &body) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "local webhook verification refused",
-        );
+    let refused = (
+        StatusCode::UNAUTHORIZED,
+        "local webhook verification refused",
+    );
+    let freshness = DeliveryFreshness::default_at(SystemTime::now());
+    let Some((destination, verified)) = inbox.keys.iter().find_map(|(destination, keys)| {
+        let request = HookDelivery {
+            headers: parts
+                .headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+            body: &body,
+            keys,
+        };
+        verify_hook_delivery(request, freshness)
+            .ok()
+            .map(|verified| (destination, verified))
+    }) else {
+        return refused;
+    };
+    let source = verified.envelope.source.clone();
+    let data_schema = verified.envelope.dataschema.clone();
+    let Ok((mut record, document)) = receipt(verified.envelope) else {
+        return refused;
     };
     let Some(delivery) = inbox.deliveries.get(&(
         record["eventType"].as_str().unwrap_or_default().to_owned(),
@@ -255,31 +283,31 @@ async fn receive(
     // Validate the complete body against the same generated contract that
     // supplies its signed schema identity, including nullable projected fields
     // and the closed request metadata on lifecycle events.
-    if header(&parts.headers, "ce-dataschema").ok() != Some(delivery.data_schema.as_str())
-        || header(&parts.headers, "ce-source").ok() != Some(delivery.source.as_str())
+    if data_schema != delivery.data_schema
+        || source != delivery.source
         || !delivery.schema.is_valid(&document)
     {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "local webhook verification refused",
-        );
+        return refused;
     }
-    if delivery.matching.is_empty() {
-        record["deliveryId"] = Value::String(delivery.id.clone());
-        record["destinationId"] = Value::String(delivery.destination_id.clone());
-    } else {
-        // The signed transport identifies the event, not its subscription.
-        // Keep the candidate subscriptions instead of guessing which sent it.
-        let matching = std::iter::once((&delivery.id, &delivery.destination_id))
-            .chain(
-                delivery
-                    .matching
-                    .iter()
-                    .map(|(id, destination)| (id, destination)),
-            )
-            .map(|(id, destination)| json!({"deliveryId":id,"destinationId":destination}))
-            .collect::<Vec<_>>();
-        record["matchingDeliveries"] = json!(matching);
+    let matching = std::iter::once((&delivery.id, &delivery.destination_id))
+        .chain(
+            delivery
+                .matching
+                .iter()
+                .map(|(id, destination)| (id, destination)),
+        )
+        .filter(|(_, candidate)| *candidate == destination)
+        .collect::<Vec<_>>();
+    record["destinationId"] = json!(destination);
+    match matching.as_slice() {
+        [] => return refused,
+        [(id, _)] => record["deliveryId"] = json!(id),
+        _ => {
+            record["matchingDeliveries"] = json!(matching
+                .into_iter()
+                .map(|(id, destination)| json!({"deliveryId":id,"destinationId":destination}))
+                .collect::<Vec<_>>());
+        }
     }
     match append(&inbox.root, &record) {
         Ok(()) => (StatusCode::NO_CONTENT, ""),
@@ -288,30 +316,6 @@ async fn receive(
             "local event storage unavailable: verify owner-only permissions and the 16 MiB inbox bound",
         ),
     }
-}
-
-fn header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str> {
-    let mut values = headers.get_all(name).iter();
-    let value = values
-        .next()
-        .context("webhook metadata is missing")?
-        .to_str()
-        .map_err(|_| anyhow::anyhow!("webhook metadata must be ASCII"))?;
-    if values.next().is_some()
-        || value.is_empty()
-        || value.len() > 1024
-        || !value.bytes().all(|byte| byte.is_ascii_graphic())
-    {
-        bail!("webhook metadata is ambiguous or exceeds its bound");
-    }
-    Ok(value)
-}
-
-fn positive(value: &str) -> Result<u64> {
-    if value.starts_with('0') || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        bail!("webhook counter is invalid");
-    }
-    value.parse().context("webhook counter exceeds its bound")
 }
 
 fn digest(value: &str) -> bool {
@@ -323,59 +327,17 @@ fn digest(value: &str) -> bool {
     })
 }
 
-fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)> {
-    // Authenticity is the shared Version 1 receiver's reading; what follows is
-    // this inbox's local policy over the verified attributes.
-    let verified = verify_delivery(
-        SignedDelivery {
-            method: "POST",
-            request_target: "/events",
-            headers: headers
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.as_bytes())),
-            body,
-            key,
-        },
-        DeliveryFreshness::Within {
-            now: SystemTime::now(),
-            skew: Duration::from_secs(30),
-        },
-    )
-    .map_err(|error| anyhow::anyhow!("webhook verification refused: {error}"))?;
-    if verified.content_type != "application/json"
-        || header(headers, "accept")? != "application/json"
-        || body.is_empty()
-    {
-        bail!("webhook profile is invalid");
-    }
+fn receipt(envelope: HookEnvelope) -> Result<(Value, Value)> {
     let event_id =
-        uuid::Uuid::parse_str(verified.id).context("webhook event identity is invalid")?;
-    if event_id.to_string() != verified.id {
+        uuid::Uuid::parse_str(&envelope.id).context("webhook event identity is invalid")?;
+    if event_id.to_string() != envelope.id {
         bail!("webhook event identity must be canonical");
-    }
-    let event_time =
-        OffsetDateTime::parse(verified.time, &Rfc3339).context("webhook event time is invalid")?;
-    let generation = positive(verified.generation)?;
-    let attempt = positive(verified.attempt)?;
-    let idempotency_key = verified.idempotency_key;
-    if !digest(idempotency_key) {
-        bail!("webhook idempotency key is invalid");
-    }
-    let envelope = HookEnvelope::from_canonical_bytes(body, &EnvelopeLimits::default())
-        .map_err(|_| anyhow::anyhow!("webhook envelope is invalid"))?;
-    if envelope.id != verified.id
-        || envelope.event_type != verified.event_type
-        || envelope.source != verified.source
-        || envelope.dataschema != verified.data_schema
-        || envelope.time != event_time
-    {
-        bail!("webhook envelope does not match its signed delivery attributes");
     }
     let data = envelope.data;
     let object = data
         .as_object()
         .context("webhook envelope data must be an object")?;
-    let registry = verified
+    let registry = envelope
         .source
         .strip_prefix("urn:registrystack:registry:")
         .and_then(|source| source.split_once(":instance:"))
@@ -399,7 +361,7 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
             bail!("webhook Proposal event subject shape is invalid");
         };
         if !SCHEMA.is_valid(&data)
-            || verified.event_type
+            || envelope.event_type
                 != format!(
                     "proposal.{}",
                     data["transition"].as_str().unwrap_or_default()
@@ -411,9 +373,9 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         {
             bail!("webhook Proposal event data shape is invalid");
         }
-        let record = json!({"eventId":verified.id,"eventType":verified.event_type,"actionId":data["actionId"],
+        let record = json!({"eventId":envelope.id,"eventType":envelope.event_type,"actionId":data["actionId"],
             "trigger":"proposal-lifecycle","transition":data["transition"],"deliveryId":null,
-            "idempotencyKey":idempotency_key,"generation":generation,"attempt":attempt,"status":"received",
+            "webhookId":envelope.id,"status":"received",
             "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data});
         return Ok((record, data));
     }
@@ -458,19 +420,18 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         data["recordType"]
             .as_str()
             .context("webhook entity is invalid")?,
-        verified.event_type
+        envelope.event_type
     );
-    if !verified
-        .data_schema
+    if !envelope
+        .dataschema
         .strip_prefix(&prefix)
         .is_some_and(digest)
     {
         bail!("webhook schema does not match event metadata");
     }
     let record = json!({
-        "eventId":verified.id,"eventType":verified.event_type,"recordType":data["recordType"],
-        "trigger":data["trigger"],"deliveryId":null,"idempotencyKey":idempotency_key,
-        "generation":generation,"attempt":attempt,"status":"received",
+        "eventId":envelope.id,"eventType":envelope.event_type,"recordType":data["recordType"],
+        "trigger":data["trigger"],"deliveryId":null,"webhookId":envelope.id,"status":"received",
         "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data["values"]
     });
     Ok((record, data))
@@ -584,9 +545,7 @@ pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
                             | "trigger"
                             | "deliveryId"
                             | "destinationId"
-                            | "idempotencyKey"
-                            | "generation"
-                            | "attempt"
+                            | "webhookId"
                             | "status"
                             | "receivedAt"
                     )
@@ -601,22 +560,12 @@ pub(super) fn report(root: &Path, include_payload: bool) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderMap;
     use axum::http::HeaderValue;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use hmac::{Hmac, KeyInit, Mac};
-    use sha2::Sha256;
+    use registry_platform_crypto::delivery_signature;
+    use registry_platform_hooks::EnvelopeLimits;
 
-    const SIGNED_HEADERS: [&str; 9] = [
-        "ce-specversion",
-        "ce-id",
-        "ce-source",
-        "ce-type",
-        "ce-time",
-        "ce-dataschema",
-        "x-registry-event-generation",
-        "x-registry-delivery-attempt",
-        "x-registry-delivery-time",
-    ];
     use registry_breg::{
         compiler::{compile_project, CompileProfile},
         contract::{parse_project_json, EventTrigger},
@@ -665,10 +614,18 @@ mod tests {
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         private::directory(&root.path().join("secrets")).unwrap();
         private::create(
-            &root.path().join("secrets/webhook-key"),
+            &root.path().join("secrets/inbox-key-local-hook"),
             URL_SAFE_NO_PAD.encode([7; 32]).as_bytes(),
         )
         .unwrap();
+        private::create(
+            &root.path().join("secrets/inbox-key-second-hook"),
+            URL_SAFE_NO_PAD.encode([8; 32]).as_bytes(),
+        )
+        .unwrap();
+        delivery
+            .matching
+            .push(("test-second-delivery".to_owned(), "second-hook".to_owned()));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -681,38 +638,21 @@ mod tests {
         (root, port, receiver)
     }
 
-    /// The capture instant the delivery headers and the envelope share. Whole
-    /// milliseconds, the precision the envelope's wire form spells.
     const EVENT_TIME: &str = "2026-01-01T00:00:00.123Z";
+    const EVENT_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const EVENT_SOURCE: &str = "urn:registrystack:registry:example:instance:local";
+    const EVENT_SCHEMA_PREFIX: &str =
+        "urn:breg:event-schema:example:record:record-created-v1:sha256:";
 
-    fn event_headers(attempt: u64, generation: u64) -> HeaderMap {
-        let now = OffsetDateTime::now_utc().format(&Rfc3339).unwrap();
+    fn event_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
-        for (name, value) in [
-            ("accept", "application/json".into()),
-            ("content-type", "application/json".into()),
-            ("ce-specversion", "1.0".into()),
-            ("ce-id", "00000000-0000-4000-8000-000000000001".into()),
-            (
-                "ce-source",
-                "urn:registrystack:registry:example:instance:local".into(),
-            ),
-            ("ce-type", "record-created-v1".into()),
-            ("ce-time", EVENT_TIME.to_owned()),
-            (
-                "ce-dataschema",
-                format!(
-                    "urn:breg:event-schema:example:record:record-created-v1:sha256:{}",
-                    "0".repeat(64)
-                ),
-            ),
-            ("x-registry-event-generation", generation.to_string()),
-            ("x-registry-delivery-attempt", attempt.to_string()),
-            ("x-registry-delivery-time", now),
-            ("idempotency-key", format!("sha256:{}", "1".repeat(64))),
-        ] {
-            headers.insert(name, HeaderValue::from_str(&value).unwrap());
-        }
+        headers.insert("accept", HeaderValue::from_static("application/json"));
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        headers.insert("webhook-id", HeaderValue::from_static(EVENT_ID));
+        headers.insert(
+            "webhook-timestamp",
+            HeaderValue::from_str(&OffsetDateTime::now_utc().unix_timestamp().to_string()).unwrap(),
+        );
         headers
     }
 
@@ -725,37 +665,28 @@ mod tests {
         })
     }
 
-    /// The canonical envelope bytes a delivery with `headers` would carry.
-    fn envelope_bytes(headers: &HeaderMap, data: Value) -> Vec<u8> {
-        envelope_bytes_with_subject(headers, data, EventSubject::record("0".repeat(63) + "2", 1))
-    }
-
-    fn envelope_bytes_with_subject(
-        headers: &HeaderMap,
-        data: Value,
-        subject: EventSubject,
-    ) -> Vec<u8> {
+    fn envelope(data: Value) -> HookEnvelope {
         HookEnvelope {
-            id: headers["ce-id"].to_str().unwrap().to_owned(),
-            event_type: headers["ce-type"].to_str().unwrap().to_owned(),
-            source: headers["ce-source"].to_str().unwrap().to_owned(),
-            time: OffsetDateTime::parse(headers["ce-time"].to_str().unwrap(), &Rfc3339).unwrap(),
-            subject,
-            dataschema: headers["ce-dataschema"].to_str().unwrap().to_owned(),
+            id: EVENT_ID.to_owned(),
+            event_type: "record-created-v1".to_owned(),
+            source: EVENT_SOURCE.to_owned(),
+            time: OffsetDateTime::parse(EVENT_TIME, &Rfc3339).unwrap(),
+            subject: EventSubject::record("0".repeat(63) + "2", 1),
+            dataschema: format!("{EVENT_SCHEMA_PREFIX}{}", "0".repeat(64)),
             data,
-            causation: registry_platform_hooks::Causation::root(headers["ce-id"].to_str().unwrap()),
+            causation: registry_platform_hooks::Causation::root(EVENT_ID),
         }
-        .to_canonical_bytes(&EnvelopeLimits::default())
-        .unwrap()
     }
 
-    fn signed(attempt: u64, generation: u64) -> (HeaderMap, Vec<u8>) {
-        signed_data(attempt, generation, event_data())
+    fn signed() -> (HeaderMap, Vec<u8>) {
+        signed_envelope(envelope(event_data()))
     }
 
-    fn signed_data(attempt: u64, generation: u64, data: Value) -> (HeaderMap, Vec<u8>) {
-        let mut headers = event_headers(attempt, generation);
-        let body = envelope_bytes(&headers, data);
+    fn signed_envelope(envelope: HookEnvelope) -> (HeaderMap, Vec<u8>) {
+        let mut headers = event_headers();
+        let body = envelope
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .unwrap();
         sign(&mut headers, &body);
         (headers, body)
     }
@@ -765,32 +696,21 @@ mod tests {
     }
 
     fn sign_with_key(headers: &mut HeaderMap, body: &[u8], key: &[u8]) {
-        // Independently construct the documented wire message, like the demo
-        // verifier, rather than calling the receiver's verification routine.
-        let mut input = b"breg-webhook-signature-v1".to_vec();
-        for value in SIGNED_HEADERS
-            .iter()
-            .map(|name| headers[*name].as_bytes())
-            .chain([
-                b"POST".as_slice(),
-                b"/events".as_slice(),
-                b"application/json".as_slice(),
-                headers["idempotency-key"].as_bytes(),
-                body,
-            ])
-        {
-            input.extend_from_slice(&(value.len() as u64).to_be_bytes());
-            input.extend_from_slice(value);
-        }
-        let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
-        mac.update(&input);
+        let keys = DeliveryKeys::new(DeliveryKey::new(key).unwrap(), None).unwrap();
+        let signature = delivery_signature::sign(
+            &keys,
+            headers["webhook-id"].to_str().unwrap(),
+            headers["webhook-timestamp"]
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap(),
+            body,
+        )
+        .unwrap();
         headers.insert(
-            "x-registry-signature",
-            HeaderValue::from_str(&format!(
-                "v1={}",
-                URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
-            ))
-            .unwrap(),
+            "webhook-signature",
+            HeaderValue::from_str(&signature).unwrap(),
         );
     }
 
@@ -817,10 +737,10 @@ mod tests {
     }
 
     #[test]
-    fn signed_receipts_preserve_attempts_and_generation_and_redact_values() {
+    fn signed_receipts_record_the_webhook_id_and_destination_and_redact_values() {
         let (root, port, receiver) = fixture();
-        for (attempt, generation) in [(1, 1), (2, 1), (1, 2)] {
-            let (headers, body) = signed(attempt, generation);
+        for _ in 0..3 {
+            let (headers, body) = signed();
             assert_eq!(request(port, headers, body), 204);
         }
         assert!(!receiver.exited());
@@ -831,8 +751,7 @@ mod tests {
             .contains("00000000-0000-4000-8000-000000000002"));
         let records = metadata["deliveries"].as_array().unwrap();
         assert_eq!(records.len(), 3);
-        assert_eq!(records[1]["attempt"], 2);
-        assert_eq!(records[2]["generation"], 2);
+        assert!(records.iter().all(|record| record["webhookId"] == EVENT_ID));
         assert_eq!(records[0]["status"], "received");
         assert_eq!(
             records[0]["deliveryId"],
@@ -863,13 +782,40 @@ mod tests {
     }
 
     #[test]
+    fn a_delivery_is_attributed_to_the_destination_whose_key_verifies() {
+        let (root, port, _receiver) = fixture();
+        let (mut headers, body) = signed();
+        sign_with_key(
+            &mut headers,
+            &body,
+            URL_SAFE_NO_PAD.encode([8; 32]).as_bytes(),
+        );
+        assert_eq!(request(port, headers, body), 204);
+        let metadata = report(root.path(), false).unwrap();
+        assert_eq!(metadata["deliveries"][0]["destinationId"], "second-hook");
+        assert_eq!(
+            metadata["deliveries"][0]["deliveryId"],
+            "test-second-delivery"
+        );
+    }
+
+    #[test]
+    fn a_delivery_no_destination_key_verifies_is_refused_and_not_recorded() {
+        let (root, port, _receiver) = fixture();
+        let (mut headers, body) = signed();
+        sign_with_key(&mut headers, &body, &[9; 32]);
+        assert_eq!(request(port, headers, body), 401);
+        assert_eq!(report(root.path(), false).unwrap()["deliveries"], json!([]));
+    }
+
+    #[test]
     fn configured_raw_key_bytes_match_runtime_and_decoded_key_is_refused() {
         let (root, port, _receiver) = fixture();
-        let key = private::read(&root.path().join("secrets/webhook-key"), 128).unwrap();
-        let (mut headers, body) = signed(1, 1);
+        let key = private::read(&root.path().join("secrets/inbox-key-local-hook"), 128).unwrap();
+        let (mut headers, body) = signed();
         sign_with_key(&mut headers, &body, &key);
         assert_eq!(request(port, headers, body), 204);
-        let (mut headers, body) = signed(2, 1);
+        let (mut headers, body) = signed();
         let decoded = URL_SAFE_NO_PAD.decode(&key).unwrap();
         sign_with_key(&mut headers, &body, &decoded);
         assert_eq!(request(port, headers, body), 401);
@@ -885,23 +831,24 @@ mod tests {
     #[test]
     fn tampered_stale_duplicate_and_noncanonical_packets_are_refused() {
         let (root, port, _receiver) = fixture();
-        let (headers, mut body) = signed(1, 1);
+        let (headers, mut body) = signed();
         body.push(b' ');
         assert_eq!(request(port, headers, body), 401);
-        let (mut headers, body) = signed(1, 1);
-        headers.insert("x-registry-delivery-attempt", HeaderValue::from_static("2"));
+        let (mut headers, body) = signed();
+        headers.insert("webhook-timestamp", HeaderValue::from_static("1"));
         assert_eq!(request(port, headers, body), 401);
-        let (mut headers, body) = signed(1, 1);
-        headers.append("ce-type", HeaderValue::from_static("record-created-v1"));
+        let (mut headers, body) = signed();
+        headers.append("webhook-id", HeaderValue::from_static(EVENT_ID));
         assert_eq!(request(port, headers, body), 401);
-        let (mut headers, body) = signed(1, 1);
+        let (mut headers, body) = signed();
         headers.insert(
-            "x-registry-delivery-time",
-            HeaderValue::from_static("2020-01-01T00:00:00Z"),
+            "webhook-timestamp",
+            HeaderValue::from_str(&(OffsetDateTime::now_utc().unix_timestamp() - 301).to_string())
+                .unwrap(),
         );
         sign(&mut headers, &body);
         assert_eq!(request(port, headers, body), 401);
-        let (mut headers, mut body) = signed(1, 1);
+        let (mut headers, mut body) = signed();
         body.push(b' ');
         sign(&mut headers, &body);
         assert_eq!(request(port, headers, body), 401);
@@ -920,28 +867,24 @@ mod tests {
             "extra projection",
             "missing projection",
         ] {
-            let mut headers = event_headers(1, 1);
-            let mut data = event_data();
+            let mut delivery = envelope(event_data());
             match change {
-                "trigger" => data["trigger"] = json!("patched"),
+                "trigger" => delivery.data["trigger"] = json!("patched"),
                 "schema" => {
-                    headers.insert(
-                        "ce-dataschema",
-                        HeaderValue::from_str(&format!(
-                            "urn:breg:event-schema:example:record:record-created-v1:sha256:{}",
-                            "f".repeat(64)
-                        ))
-                        .unwrap(),
-                    );
+                    delivery.dataschema = format!("{EVENT_SCHEMA_PREFIX}{}", "f".repeat(64))
                 }
-                "extra projection" => data["values"]["undeclared"] = json!("extra-value-canary"),
+                "extra projection" => {
+                    delivery.data["values"]["undeclared"] = json!("extra-value-canary")
+                }
                 "missing projection" => {
-                    data["values"].as_object_mut().unwrap().remove("label");
+                    delivery.data["values"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("label");
                 }
                 _ => unreachable!(),
             }
-            let body = envelope_bytes(&headers, data);
-            sign(&mut headers, &body);
+            let (headers, body) = signed_envelope(delivery);
             assert_eq!(request(port, headers, body), 401, "{change}");
             assert_eq!(
                 report(root.path(), true).unwrap()["deliveries"],
@@ -949,7 +892,7 @@ mod tests {
                 "{change}"
             );
         }
-        let (headers, body) = signed(1, 1);
+        let (headers, body) = signed();
         assert_eq!(request(port, headers, body), 204);
         assert_eq!(
             report(root.path(), false).unwrap()["deliveries"]
@@ -963,7 +906,7 @@ mod tests {
     #[test]
     fn a_pre_envelope_body_is_refused_and_never_recorded() {
         let (root, port, _receiver) = fixture();
-        let mut headers = event_headers(1, 1);
+        let mut headers = event_headers();
         let body = canonicalize_json(&event_data()).unwrap();
         sign(&mut headers, &body);
         assert_eq!(
@@ -975,36 +918,27 @@ mod tests {
     }
 
     #[test]
-    fn an_envelope_that_disagrees_with_its_signed_attributes_is_refused() {
+    fn an_envelope_that_disagrees_with_its_webhook_id_is_refused() {
         let (root, port, _receiver) = fixture();
-        let mut headers = event_headers(1, 1);
-        let mut other = event_headers(1, 1);
-        other.insert(
-            "ce-source",
-            HeaderValue::from_static("urn:registrystack:registry:example:instance:other"),
+        let (mut headers, body) = signed();
+        headers.insert(
+            "webhook-id",
+            HeaderValue::from_static("00000000-0000-4000-8000-000000000003"),
         );
-        let body = envelope_bytes(&other, event_data());
         sign(&mut headers, &body);
-        assert_eq!(
-            request(port, headers, body),
-            401,
-            "an envelope source that differs from the signed header is refused"
-        );
+        assert_eq!(request(port, headers, body), 401);
         assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
     }
 
     #[test]
     fn signed_source_must_match_the_configured_registry_instance() {
         let (root, port, _receiver) = fixture();
-        let (mut headers, body) = signed(1, 1);
-        headers.insert(
-            "ce-source",
-            HeaderValue::from_static("urn:registrystack:registry:example:instance:other"),
-        );
-        sign(&mut headers, &body);
+        let mut delivery = envelope(event_data());
+        delivery.source = "urn:registrystack:registry:example:instance:other".to_owned();
+        let (headers, body) = signed_envelope(delivery);
         assert_eq!(request(port, headers, body), 401);
         assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
-        let (headers, body) = signed(1, 1);
+        let (headers, body) = signed();
         assert_eq!(request(port, headers, body), 204);
         assert_eq!(
             report(root.path(), false).unwrap()["deliveries"]
@@ -1020,7 +954,7 @@ mod tests {
         let (root, port, _receiver) = fixture();
         let mut data = event_data();
         data["values"]["label"] = Value::Null;
-        let (headers, body) = signed_data(1, 1, data);
+        let (headers, body) = signed_envelope(envelope(data));
         assert_eq!(request(port, headers, body), 204);
         assert_eq!(
             report(root.path(), true).unwrap()["deliveries"][0]["payload"],
@@ -1039,11 +973,11 @@ mod tests {
             for value in invalid {
                 let mut data = event_data();
                 data["values"]["label"] = value;
-                let (headers, body) = signed_data(1, 1, data);
+                let (headers, body) = signed_envelope(envelope(data));
                 assert_eq!(request(port, headers, body), 401);
                 assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
             }
-            let (headers, body) = signed(1, 1);
+            let (headers, body) = signed();
             assert_eq!(request(port, headers, body), 204);
         }
     }
@@ -1053,11 +987,11 @@ mod tests {
         let (root, port, _receiver) = fixture();
         let path = root.path().join("events.jsonl");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        let (headers, body) = signed(1, 1);
+        let (headers, body) = signed();
         assert_eq!(request(port, headers, body), 503);
         assert!(report(root.path(), false).is_err());
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        let (headers, body) = signed(2, 1);
+        let (headers, body) = signed();
         assert_eq!(request(port, headers, body), 204);
         OpenOptions::new()
             .write(true)
@@ -1065,7 +999,7 @@ mod tests {
             .unwrap()
             .set_len(MAX_STORAGE)
             .unwrap();
-        let (headers, body) = signed(1, 2);
+        let (headers, body) = signed();
         assert_eq!(request(port, headers, body), 503);
         assert_eq!(fs::metadata(&path).unwrap().len(), MAX_STORAGE);
     }
@@ -1105,8 +1039,8 @@ mod tests {
                     }));
             }
         });
-        for attempt in 1..=5 {
-            let (headers, body) = signed(attempt, 1);
+        for _ in 0..5 {
+            let (headers, body) = signed();
             assert_eq!(request(port, headers, body), 204);
         }
         reader.join().unwrap();
@@ -1122,9 +1056,9 @@ mod tests {
     #[test]
     fn clearing_received_payloads_is_idempotent_and_preserves_local_keys() {
         let (root, port, receiver) = fixture();
-        let key_path = root.path().join("secrets/webhook-key");
+        let key_path = root.path().join("secrets/inbox-key-local-hook");
         let key = private::read(&key_path, 128).unwrap();
-        let (headers, body) = signed(1, 1);
+        let (headers, body) = signed();
         assert_eq!(request(port, headers, body), 204);
         drop(receiver);
         assert_eq!(
@@ -1162,51 +1096,37 @@ mod tests {
 
     #[test]
     fn native_proposal_receipts_verify_the_fixed_contract_and_exact_transition() {
-        let mut headers = event_headers(1, 1);
-        headers.insert("ce-type", HeaderValue::from_static("proposal.submitted"));
-        headers.insert(
-            "ce-dataschema",
-            HeaderValue::from_static(registry_breg::proposal_hooks::PROPOSAL_EVENT_SCHEMA),
-        );
         let data = json!({"actionId":"correct-name","actionRevision":format!("sha256:{}","a".repeat(64)),
             "proposalId":"00000000-0000-4000-8000-000000000002","submissionVersion":1,"revision":1,
             "fromState":"draft","state":"submitted","transition":"submitted","effectDigest":null,
             "authorityKind":"caller","systemApplyGrantRevision":null,"turn":"official"});
-        let key = URL_SAFE_NO_PAD.encode([7; 32]);
-        let proposal_subject =
+        let proposal = |data, subject| HookEnvelope {
+            event_type: "proposal.submitted".to_owned(),
+            dataschema: registry_breg::proposal_hooks::PROPOSAL_EVENT_SCHEMA.to_owned(),
+            subject,
+            ..envelope(data)
+        };
+        let subject =
             EventSubject::proposal("/v1/proposals/00000000-0000-4000-8000-000000000002", 1);
-        let body = envelope_bytes_with_subject(&headers, data.clone(), proposal_subject.clone());
-        sign(&mut headers, &body);
-        let (record, projection) = verify(key.as_bytes(), &headers, &body).unwrap();
+        let (record, projection) = receipt(proposal(data.clone(), subject.clone())).unwrap();
         assert_eq!(record["actionId"], "correct-name");
         assert!(record.get("recordType").is_none());
         assert_eq!(projection, data);
         for member in ["input", "context", "attachments", "actor"] {
             let mut widened = data.clone();
             widened[member] = json!("private-canary");
-            let body = envelope_bytes_with_subject(&headers, widened, proposal_subject.clone());
-            sign(&mut headers, &body);
-            assert!(verify(key.as_bytes(), &headers, &body).is_err());
+            assert!(receipt(proposal(widened, subject.clone())).is_err());
         }
-        let retired = envelope_bytes(&headers, data.clone());
-        sign(&mut headers, &retired);
-        assert!(
-            verify(key.as_bytes(), &headers, &retired).is_err(),
-            "a Proposal event cannot retain the Record subject family"
-        );
-        let mismatched = envelope_bytes_with_subject(
-            &headers,
+        assert!(receipt(proposal(
             data.clone(),
-            EventSubject::proposal("/v1/proposals/00000000-0000-4000-8000-000000000003", 1),
-        );
-        sign(&mut headers, &mismatched);
-        assert!(
-            verify(key.as_bytes(), &headers, &mismatched).is_err(),
-            "a Proposal subject must name the event data's Proposal"
-        );
-        headers.insert("ce-type", HeaderValue::from_static("proposal.applied"));
-        let body = envelope_bytes_with_subject(&headers, data, proposal_subject);
-        sign(&mut headers, &body);
-        assert!(verify(key.as_bytes(), &headers, &body).is_err());
+            EventSubject::record("0".repeat(63) + "2", 1)
+        ))
+        .is_err());
+        let mismatched =
+            EventSubject::proposal("/v1/proposals/00000000-0000-4000-8000-000000000003", 1);
+        assert!(receipt(proposal(data.clone(), mismatched)).is_err());
+        let mut applied = proposal(data, subject);
+        applied.event_type = "proposal.applied".to_owned();
+        assert!(receipt(applied).is_err());
     }
 }

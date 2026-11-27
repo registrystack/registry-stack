@@ -1353,6 +1353,10 @@
           "pattern": "^/[\\x20-\\x22\\x24\\x26-\\x3E\\x40-\\x5B\\x5D-\\x7E]*$",
           "type": "string"
         },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Optional previous signing key during rotation."
+        },
         "tls": {
           "$ref": "#/$defs/RawEventDestinationTlsConfig",
           "description": "Optional private CA and client identity secret references for HTTPS."
@@ -1869,13 +1873,9 @@
     "RawReviewAuthorityConfig": {
       "additionalProperties": false,
       "properties": {
-        "completionRecipient": {
-          "description": "The logical recipient the review authority names in each completion\nnotification. Written together with `completionTokenRef`; omitted, no\ncompletion notification is accepted and the registry polls for\nresults.",
-          "type": "string"
-        },
-        "completionTokenRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "The bearer token the review authority presents when it notifies this\nregistry that a review completed. Written together with\n`completionRecipient`; omitted, no completion notification is\naccepted and the registry polls for results."
+        "completion": {
+          "$ref": "#/$defs/RawReviewCompletionConfig",
+          "description": "Standard Webhooks authentication for review completion notifications.\nOmit this block to poll for results without notifications."
         },
         "endpoint": {
           "type": "string"
@@ -1906,6 +1906,25 @@
         "profile",
         "producerId",
         "recoveryDays"
+      ],
+      "type": "object"
+    },
+    "RawReviewCompletionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "hmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "recipientBinding": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "recipientBinding",
+        "hmacSha256KeyRef"
       ],
       "type": "object"
     },

@@ -9,6 +9,9 @@ use registry_breg::literal_text::{
     LiteralText, WRITE_THE_VALUE, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
 };
 use registry_platform_config::{SecretProvidersConfig, SecretReference};
+use registry_platform_crypto::delivery_signature::{
+    distinct_delivery_keys, DeliveryKey, DeliveryKeyError,
+};
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
     Severity,
@@ -20,7 +23,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 use zeroize::Zeroizing;
 
@@ -82,7 +85,15 @@ pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
         },
         RemovedKey {
             pointer: "/reviewAuthorities/*/completionTokenFile",
-            replacement: "Use `completionTokenRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+            replacement: "Use `completion.hmacSha256KeyRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/reviewAuthorities/*/completionTokenRef",
+            replacement: "Replace completionTokenRef with completion.hmacSha256KeyRef. Casework signs review completions with Standard Webhooks.",
+        },
+        RemovedKey {
+            pointer: "/reviewAuthorities/*/completionRecipient",
+            replacement: "Move completionRecipient to completion.recipientBinding.",
         },
         RemovedKey {
             pointer: "/issuer/interactiveApplications/*/clientSecretFile",
@@ -294,9 +305,41 @@ pub(super) struct LocalReviewAuthority {
     /// into the private runtime secret tree and is never written to this file.
     pub client: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completion_token_ref: Option<SecretReference>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completion_recipient: Option<String>,
+    pub completion: Option<LocalReviewCompletion>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalReviewCompletion {
+    pub recipient_binding: String,
+    pub hmac_sha256_key_ref: SecretReference,
+    #[serde(
+        default,
+        deserialize_with = "present_key_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
+}
+
+fn present_key_reference<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<SecretReference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    SecretReference::deserialize(deserializer).map(Some)
+}
+
+impl LocalReviewCompletion {
+    fn references(&self) -> impl Iterator<Item = (&'static str, &'static str, &SecretReference)> {
+        std::iter::once(("hmacSha256KeyRef", "key", &self.hmac_sha256_key_ref)).chain(
+            self.previous_hmac_sha256_key_ref
+                .as_ref()
+                .map(|reference| ("previousHmacSha256KeyRef", "previous-key", reference)),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -531,7 +574,6 @@ const ASSERTION_KEY_BYTES: usize = 16 * 1024;
 const CLIENT_SECRET_BYTES: usize = 1024;
 const PASSWORD_BYTES: usize = 1024;
 const HMAC_KEY_BYTES: usize = 1024;
-const COMPLETION_TOKEN_BYTES: usize = 4096;
 const EVIDENCE_TOKEN_BYTES: usize = 16 * 1024;
 const EVIDENCE_DOCUMENT_BYTES: usize = 64 * 1024;
 
@@ -811,6 +853,59 @@ pub(crate) fn check(document: &Document) -> Result<Vec<Diagnostic>, Report> {
     })
 }
 
+fn delivery_secret(
+    clients: &Clients,
+    secrets: Secrets,
+    member: &str,
+    reference: &SecretReference,
+) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    if secrets == Secrets::Declared {
+        return secret(clients, secrets, member, reference, HMAC_KEY_BYTES);
+    }
+    let providers = clients.secret_providers.as_ref().with_context(|| {
+        format!("{member} names a secret, but the clients file declares no secretProviders")
+    })?;
+    let resolver = providers.resolver().map_err(|_| {
+        anyhow::anyhow!(
+            "secretProviders cannot resolve {member}; declare a configured secret provider"
+        )
+    })?;
+    let value = resolver
+        .resolve_binary_reference(reference)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{member} could not be resolved: {error}. {}",
+                error.suggested_action()
+            )
+        })?;
+    Ok(Some(Zeroizing::new(value.expose_secret().to_vec())))
+}
+
+fn checked_delivery_key(
+    clients: &Clients,
+    secrets: Secrets,
+    path: &str,
+    reference: &SecretReference,
+) -> Result<Option<DeliveryKey>> {
+    delivery_secret(clients, secrets, path, reference)?
+        .map(|bytes| {
+            DeliveryKey::new(&bytes).map_err(|error| {
+                let action = match error {
+                    DeliveryKeyError::SecretText => {
+                        "Supply the exact key bytes without the whsec_ encoding."
+                    }
+                    _ => "Supply 32 to 64 exact key bytes.",
+                };
+                anyhow::anyhow!(
+                    "{path} has {} bytes (trailing newline: {}). {action}",
+                    bytes.len(),
+                    bytes.ends_with(b"\n"),
+                )
+            })
+        })
+        .transpose()
+}
+
 fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
     if let Some(providers) = &clients.secret_providers {
         providers.check().map_err(|error| {
@@ -965,6 +1060,8 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             );
         }
     }
+    let mut delivery_keys = Vec::new();
+    let mut completion_recipients = BTreeMap::new();
     for (id, authority) in &clients.review_authorities {
         let endpoint = reqwest::Url::parse(&authority.endpoint)
             .context("local review authority endpoint must be an exact loopback HTTP URL")?;
@@ -995,30 +1092,33 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
                 "local review authorities need bounded IDs, exact loopback endpoints, producer bindings, recovery windows, and declared clients"
             );
         }
-        match (
-            &authority.completion_token_ref,
-            &authority.completion_recipient,
-        ) {
-            (None, None) => (),
-            (Some(reference), Some(recipient))
-                if !recipient.trim().is_empty()
-                    && recipient.len() <= 128
-                    && !recipient.chars().any(char::is_control) =>
-            {
-                let token = secret(
-                    &clients,
-                    secrets,
-                    &format!("reviewAuthorities.{id}.completionTokenRef"),
-                    reference,
-                    COMPLETION_TOKEN_BYTES,
-                )?;
-                if token.is_some_and(|token| !token.iter().all(|byte| byte.is_ascii_graphic())) {
-                    bail!("local review completion tokens must be bounded visible ASCII");
+        if let Some(completion) = &authority.completion {
+            let block = format!("reviewAuthorities.{id}.completion");
+            if !registry_breg::review_store::valid_completion_recipient(
+                &completion.recipient_binding,
+            ) {
+                bail!("{block}.recipientBinding must contain 1 to 256 visible ASCII characters");
+            }
+            if let Some(first) = completion_recipients.insert(&completion.recipient_binding, id) {
+                bail!("reviewAuthorities.{first}.completion.recipientBinding and {block}.recipientBinding select the same completion recipient");
+            }
+            let start = delivery_keys.len();
+            for (member, _, reference) in completion.references() {
+                let path = format!("{block}.{member}");
+                if let Some(key) = checked_delivery_key(&clients, secrets, &path, reference)? {
+                    delivery_keys.push((path, key));
                 }
             }
-            _ => bail!(
-                "local review completionTokenRef and completionRecipient must be declared together"
-            ),
+            if let [(current, current_key), (previous, previous_key)] = &delivery_keys[start..] {
+                if distinct_delivery_keys([
+                    (current.as_str(), current_key),
+                    (previous.as_str(), previous_key),
+                ])
+                .is_err()
+                {
+                    bail!("{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}.");
+                }
+            }
         }
     }
     for (id, provider) in &clients.evidence_providers {
@@ -1266,17 +1366,18 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
         )?;
     }
     for (id, destination) in &clients.destinations.hooks {
-        let key = secret(
-            &clients,
-            secrets,
-            &format!("destinations.hooks.{id}.hmacSha256KeyRef"),
-            &destination.hmac_sha256_key_ref,
-            HMAC_KEY_BYTES,
-        )?;
-        if key.is_some_and(|key| key.len() < 32) {
-            bail!("local event destination {id} needs at least 32 HMAC key bytes");
+        let path = format!("destinations.hooks.{id}.hmacSha256KeyRef");
+        if let Some(key) =
+            checked_delivery_key(&clients, secrets, &path, &destination.hmac_sha256_key_ref)?
+        {
+            delivery_keys.push((path, key));
         }
     }
+    distinct_delivery_keys(delivery_keys.iter().map(|(path, key)| (path.as_str(), key)))
+        .map_err(|error| anyhow::anyhow!(
+            "{} and {} resolve to the same key bytes. Give {} its own key by writing 32 new random bytes to another secret and referencing it there.",
+            error.first(), error.second(), error.second(),
+        ))?;
     let mut seeds = BTreeSet::new();
     for seed in &clients.seed {
         if !identifier(&seed.id)
@@ -1443,12 +1544,13 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         )?;
     }
     for (id, destination) in &clients.destinations.hooks {
-        let key = resolve_secret(
+        let key = delivery_secret(
             clients,
+            Secrets::Resolve,
             &format!("destinations.hooks.{id}.hmacSha256KeyRef"),
             &destination.hmac_sha256_key_ref,
-            HMAC_KEY_BYTES,
-        )?;
+        )?
+        .expect("resolve mode returns the secret");
         private::create(&root.join("secrets").join(format!("webhook-{id}")), &key)?;
     }
     for (id, provider) in &clients.evidence_providers {
@@ -1474,19 +1576,22 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             let bytes = Zeroizing::new(private::read(&source, maximum)?);
             private::create(&root.join("secrets").join(name), &bytes)?;
         }
-        if let Some(reference) = &authority.completion_token_ref {
-            let bytes = resolve_secret(
-                clients,
-                &format!("reviewAuthorities.{id}.completionTokenRef"),
-                reference,
-                COMPLETION_TOKEN_BYTES,
-            )?;
-            private::create(
-                &root
-                    .join("secrets")
-                    .join(format!("review-completion-{id}-token")),
-                &bytes,
-            )?;
+        if let Some(completion) = &authority.completion {
+            for (member, suffix, reference) in completion.references() {
+                let bytes = delivery_secret(
+                    clients,
+                    Secrets::Resolve,
+                    &format!("reviewAuthorities.{id}.completion.{member}"),
+                    reference,
+                )?
+                .expect("resolve mode returns the secret");
+                private::create(
+                    &root
+                        .join("secrets")
+                        .join(format!("review-completion-{id}-{suffix}")),
+                    &bytes,
+                )?;
+            }
         }
     }
 
@@ -1518,9 +1623,6 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         getrandom::fill(bytes.as_mut()).context("cannot generate local secret")?;
         let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref()));
         private::create(&root.join("secrets").join(filename), encoded.as_bytes())?;
-    }
-    if state.webhook_port.is_some() {
-        webhook_secret(root)?;
     }
     let password = Zeroizing::new(uuid::Uuid::new_v4().simple().to_string());
     private::create(
@@ -2075,7 +2177,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
     }
     let destinations = if state.webhook_port.is_some() || !clients.destinations.hooks.is_empty() {
         if let Some(port) = state.webhook_port {
-            event_destinations(&compiled, port)
+            event_destinations(root, &compiled, port)?
         } else {
             external_event_destinations(&compiled, &clients.destinations.hooks)?
         }
@@ -2226,10 +2328,12 @@ fn local_review_authorities(state: &State, clients: &Clients) -> BTreeMap<String
                     "scopes": client.scopes,
                 }
             });
-            if let Some(recipient) = &authority.completion_recipient {
-                binding["completionTokenRef"] =
-                    json!(format!("secret:file/review-completion-{id}-token"));
-                binding["completionRecipient"] = json!(recipient);
+            if let Some(completion) = &authority.completion {
+                let mut block = json!({"recipientBinding": completion.recipient_binding});
+                for (member, suffix, _) in completion.references() {
+                    block[member] = json!(format!("secret:file/review-completion-{id}-{suffix}"));
+                }
+                binding["completion"] = block;
             }
             (id.clone(), binding)
         })
@@ -2304,16 +2408,29 @@ pub(super) fn external_event_destinations(
     }).collect()))
 }
 
-pub(super) fn webhook_secret(root: &Path) -> Result<()> {
+pub(super) fn inbox_key_path(root: &Path, destination_id: &str) -> PathBuf {
+    root.join("secrets")
+        .join(format!("inbox-key-{destination_id}"))
+}
+
+fn ensure_inbox_key(root: &Path, destination_id: &str) -> Result<()> {
+    let path = inbox_key_path(root, destination_id);
+    if path.try_exists()? {
+        return Ok(());
+    }
     let mut bytes = Zeroizing::new([0u8; 32]);
     getrandom::fill(bytes.as_mut()).context("cannot generate local webhook secret")?;
     let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref()));
-    private::create(&root.join("secrets/webhook-key"), encoded.as_bytes())
+    private::create(&path, encoded.as_bytes())
 }
 
 /// Use the same compiled inventory as `explain events`. Shared destinations
 /// use the tightest attempt ceilings and the highest projected classification.
-fn event_destinations(compiled: &registry_breg::CompiledRegistry, port: u16) -> Value {
+fn event_destinations(
+    root: &Path,
+    compiled: &registry_breg::CompiledRegistry,
+    port: u16,
+) -> Result<Value> {
     let mut destinations = BTreeMap::new();
     for delivery in &compiled.event_deliveries().deliveries {
         // A local handler holds a reviewed program instead of a destination
@@ -2330,15 +2447,16 @@ fn event_destinations(compiled: &registry_breg::CompiledRegistry, port: u16) -> 
         *timeout = (*timeout).min(delivery.attempt_timeout_ms);
         *attempts = (*attempts).min(delivery.maximum_attempts);
     }
-    Value::Object(destinations.into_iter().map(|(id, (classification, timeout, attempts))| {
-        (id.clone(), json!({
+    destinations.into_iter().map(|(id, (classification, timeout, attempts))| {
+        ensure_inbox_key(root, id)?;
+        Ok((id.clone(), json!({
             "origin":format!("http://127.0.0.1:{port}"),"path":"/events",
             "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
-            "allowedPrivateCidrs":[],"hmacSha256KeyRef":"secret:file/webhook-key",
+            "allowedPrivateCidrs":[],"hmacSha256KeyRef":format!("secret:file/inbox-key-{id}"),
             "classificationCeiling":classification,
             "deliveryCeilings":{"attemptTimeoutMilliseconds":timeout,"maximumAttempts":attempts}
-        }))
-    }).collect())
+        })))
+    }).collect::<Result<_>>().map(Value::Object)
 }
 
 pub(super) fn write_yaml(path: &Path, value: &Value) -> Result<()> {

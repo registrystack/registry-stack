@@ -665,8 +665,7 @@ seed:
         );
         assert_eq!(receipt["destinationId"], destination);
         assert_eq!(receipt["status"], "received");
-        assert!(receipt["generation"].as_u64().unwrap() > 0);
-        assert_eq!(receipt["attempt"], 1);
+        assert_eq!(receipt["webhookId"], receipt["eventId"]);
     }
     let payloads = session.success(&[
         "dev",
@@ -772,11 +771,7 @@ seed:
                     && receipt["deliveryId"] == delivery["deliveryId"]
             })
             .expect("replay has an authenticated receipt for the same event");
-        assert_eq!(
-            receipt["generation"].as_u64().unwrap(),
-            delivery["generation"].as_u64().unwrap() + 1
-        );
-        assert_eq!(receipt["attempt"], 1);
+        assert_eq!(receipt["webhookId"], delivery["eventId"]);
         assert_eq!(receipt["status"], "received");
     }
     // The operator queue also omits leased attempts. Check the durable terminal
@@ -786,7 +781,7 @@ seed:
         report["deliveries"].as_array().unwrap().is_empty()
     });
     let receipts_before = fs::read(&inbox).unwrap();
-    let webhook_key = fs::read(dev.join("secrets/webhook-key")).unwrap();
+    let webhook_key = fs::read(dev.join("secrets/inbox-key-receiver-a")).unwrap();
     let assertion_key = fs::read(dev.join("credentials/operator/assertion-key.jwk")).unwrap();
     session.stop();
     assert!(std::net::TcpStream::connect(receiver_address).is_err());
@@ -798,7 +793,7 @@ seed:
         assert_eq!(retained[field], state[field]);
     }
     assert!(std::net::TcpStream::connect(receiver_address).is_ok());
-    assert!(fs::read(dev.join("secrets/webhook-key")).unwrap() == webhook_key);
+    assert!(fs::read(dev.join("secrets/inbox-key-receiver-a")).unwrap() == webhook_key);
     assert!(fs::read(dev.join("credentials/operator/assertion-key.jwk")).unwrap() == assertion_key);
     assert_eq!(fs::read(&inbox).unwrap(), receipts_before);
     assert_eq!(events(), recovered);
