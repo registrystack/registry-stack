@@ -19,6 +19,8 @@ Crypto primitives shared by registry services.
 - Version 1 hook delivery signing and receiver verification, including input
   bounds, signature-version checks, constant-time comparison, and
   receiver-selected delivery-time skew.
+- Standard Webhooks symmetric delivery signing and verification with exact
+  key bytes, key rotation, and a two-sided freshness window.
 - HMAC-SHA256 tags and legacy-interoperability HMAC-SHA1 verification in
   `mac`, with constant-time verification that refuses a tag of the wrong
   length, and a constant-time byte comparison for shared secrets such as URL
@@ -273,6 +275,31 @@ interoperability and security policy.
   wire input. Receivers pass the HTTP method, request target, content type,
   delivery headers, and body exactly as received, and choose a bounded accepted
   delivery-time skew for their deployment.
+
+## Standard Webhooks delivery signatures
+
+`delivery_signature::sign` produces the `webhook-signature` header for the
+Standard Webhooks 1.0.0 symmetric scheme. HMAC-SHA-256
+covers `<webhook-id>.<webhook-timestamp>.<body>`, using the exact HTTP body
+bytes (up to 1 MiB). The ID is 1 to 256 visible ASCII bytes excluding periods.
+The timestamp is unsigned Unix seconds in canonical decimal.
+
+`DeliveryKey::new` takes 32 to 64 raw bytes, refuses `whsec_` text, and
+zeroizes the stored key on drop. A 64-character hex key file supplies 64
+ASCII bytes. A trailing newline would make that file 65 bytes and fail
+validation. `DeliveryKeys::new` accepts a current key and an optional
+distinct previous key. Signatures are `v1,<padded standard base64>`, joined
+by one space, with the current key first when rotating.
+
+Receivers pass the three header values and raw body as `SignedContent`.
+Pass `DELIVERY_TOLERANCE` to `verify` to authenticate the delivery with a
+300-second window in either direction. Up to four signature
+entries are accepted. A malformed `v1` entry invalidates the header, and
+a valid tag under either configured key is sufficient. Callers using
+`verify_authenticity` enforce freshness themselves. Callers also own
+destination binding and replay handling, including deduplication by webhook ID.
+
+[Standard Webhooks 1.0.0 specification](https://github.com/standard-webhooks/standard-webhooks/blob/libraries/v1.3.0/spec/standard-webhooks.md)
 
 ## Testing
 

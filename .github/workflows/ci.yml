@@ -124,6 +124,11 @@ jobs:
         with:
           version: "0.11.16"
 
+      # Our signatures are what an independent Standard Webhooks receiver computes.
+      # Platform owns this gate. Remove it when the shared crate stops signing deliveries.
+      - name: Test Standard Webhooks signature vectors
+        run: uv run --no-project --with standardwebhooks==1.3.0 python -m unittest products/platform/scripts/test_standard_webhooks_vectors.py
+
       - name: Test CI classifier
         run: uv run --no-project --with PyYAML==6.0.2 python .github/scripts/test_ci_changes.py
 

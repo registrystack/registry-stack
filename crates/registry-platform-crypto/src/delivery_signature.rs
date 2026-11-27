@@ -10,14 +10,19 @@
 //! The signing domain and the length-prefixed field order below are wire
 //! bytes that deployed receivers already verify, so they keep their Version
 //! 1 spelling whatever the Rust names around them are.
+//!
+//! Standard Webhooks symmetric signatures use the separate `sign` and
+//! `verify` entry points and authenticate the ID, timestamp, and exact body.
 
 use std::time::{Duration, SystemTime};
 
+use base64::engine::general_purpose::STANDARD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use sha2::Sha256;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use zeroize::Zeroizing;
 
 /// The Version 1 signing domain, as deployed receivers verify it.
 ///
@@ -449,5 +454,327 @@ mod tests {
         let mut oversized = fields();
         oversized.id = &oversized_id;
         assert_eq!(sign_v1(KEY, oversized), Err(SigningError::InputTooLarge));
+    }
+}
+
+/// The Standard Webhooks symmetric signature version.
+pub const SIGNATURE_VERSION: &str = "v1";
+pub const MAX_HMAC_SHA256_KEY_BYTES: usize = 64;
+pub const MAX_WEBHOOK_ID_BYTES: usize = 256;
+pub const MAX_SIGNATURE_ENTRIES: usize = 4;
+/// Recommended freshness window in both directions.
+pub const DELIVERY_TOLERANCE: Duration = Duration::from_secs(300);
+
+const STANDARD_WEBHOOKS_TAG_ENCODED_BYTES: usize = 44;
+
+/// Validated exact key bytes for Standard Webhooks, zeroized on drop.
+pub struct DeliveryKey(Zeroizing<Vec<u8>>);
+
+impl DeliveryKey {
+    pub fn new(bytes: &[u8]) -> Result<Self, DeliveryKeyError> {
+        if bytes.starts_with(b"whsec_") {
+            return Err(DeliveryKeyError::SecretText);
+        }
+        let length = bytes.len();
+        if length < MIN_HMAC_SHA256_KEY_BYTES {
+            return Err(DeliveryKeyError::TooShort { length });
+        }
+        if length > MAX_HMAC_SHA256_KEY_BYTES {
+            return Err(DeliveryKeyError::TooLong {
+                length,
+                trailing_newline: bytes.ends_with(b"\n"),
+            });
+        }
+        Ok(Self(Zeroizing::new(bytes.to_vec())))
+    }
+}
+
+impl std::fmt::Debug for DeliveryKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
+}
+
+/// Standard Webhooks keys in signing order, with an optional rotation key.
+#[derive(Debug)]
+pub struct DeliveryKeys {
+    current: DeliveryKey,
+    previous: Option<DeliveryKey>,
+}
+
+impl DeliveryKeys {
+    pub fn new(
+        current: DeliveryKey,
+        previous: Option<DeliveryKey>,
+    ) -> Result<Self, DeliveryKeyError> {
+        if previous
+            .as_ref()
+            .is_some_and(|key| crate::constant_time_eq(&current.0, &key.0))
+        {
+            return Err(DeliveryKeyError::PreviousEqualsCurrent);
+        }
+        Ok(Self { current, previous })
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &DeliveryKey> {
+        std::iter::once(&self.current).chain(self.previous.iter())
+    }
+}
+
+/// A Standard Webhooks key policy refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum DeliveryKeyError {
+    #[error("the delivery key is {length} bytes. The minimum is {MIN_HMAC_SHA256_KEY_BYTES}")]
+    TooShort { length: usize },
+    #[error(
+        "the delivery key is {length} bytes. The maximum is {MAX_HMAC_SHA256_KEY_BYTES}{}",
+        if *trailing_newline { " (the last byte is a newline)" } else { "" }
+    )]
+    TooLong {
+        length: usize,
+        trailing_newline: bool,
+    },
+    #[error("the delivery key starts with whsec_. Supply the exact key bytes")]
+    SecretText,
+    #[error("the previous delivery key equals the current delivery key")]
+    PreviousEqualsCurrent,
+}
+
+impl DeliveryKeyError {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::TooShort { .. } => "key-too-short",
+            Self::TooLong { .. } => "key-too-long",
+            Self::SecretText => "key-is-secret-text",
+            Self::PreviousEqualsCurrent => "previous-key-equals-current",
+        }
+    }
+}
+
+/// Two configuration labels that refer to the same delivery key bytes.
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[error("delivery keys at {first:?} and {second:?} share the same bytes")]
+pub struct DuplicateDeliveryKey {
+    first: String,
+    second: String,
+}
+
+impl DuplicateDeliveryKey {
+    pub const fn code(&self) -> &'static str {
+        "key-repeated"
+    }
+}
+
+/// Refuse exact key reuse among the supplied configuration labels.
+pub fn distinct_delivery_keys<'a>(
+    keys: impl IntoIterator<Item = (&'a str, &'a DeliveryKey)>,
+) -> Result<(), DuplicateDeliveryKey> {
+    let mut seen: Vec<(&str, &DeliveryKey)> = Vec::new();
+    for (label, key) in keys {
+        if let Some((first, _)) = seen
+            .iter()
+            .find(|(_, prior)| crate::constant_time_eq(&prior.0, &key.0))
+        {
+            return Err(DuplicateDeliveryKey {
+                first: (*first).to_owned(),
+                second: label.to_owned(),
+            });
+        }
+        seen.push((label, key));
+    }
+    Ok(())
+}
+
+/// Value-free failure while signing or verifying Standard Webhooks content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum DeliverySignatureError {
+    #[error("the webhook ID is invalid")]
+    InvalidId,
+    #[error("the webhook timestamp is invalid")]
+    InvalidTimestamp,
+    #[error("the webhook timestamp is outside the allowed delivery window")]
+    StaleDelivery,
+    #[error("the webhook signature header is malformed")]
+    MalformedSignature,
+    #[error("the webhook signature header contains no supported version")]
+    UnsupportedVersion,
+    #[error("the webhook signature does not match")]
+    SignatureMismatch,
+    #[error("the webhook body exceeds {MAX_BODY_BYTES} bytes")]
+    BodyTooLarge,
+}
+
+impl DeliverySignatureError {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidId => "invalid-id",
+            Self::InvalidTimestamp => "invalid-timestamp",
+            Self::StaleDelivery => "stale-delivery",
+            Self::MalformedSignature => "malformed-signature",
+            Self::UnsupportedVersion => "unsupported-version",
+            Self::SignatureMismatch => "signature-mismatch",
+            Self::BodyTooLarge => "body-too-large",
+        }
+    }
+}
+
+/// Exact values from the Standard Webhooks headers and HTTP body.
+#[derive(Clone, Copy)]
+pub struct SignedContent<'a> {
+    pub id: &'a str,
+    pub timestamp: &'a str,
+    pub signature: &'a str,
+    pub body: &'a [u8],
+}
+
+/// Produce a Standard Webhooks signature header with the current key first.
+pub fn sign(
+    keys: &DeliveryKeys,
+    id: &str,
+    timestamp: u64,
+    body: &[u8],
+) -> Result<String, DeliverySignatureError> {
+    validate_standard_webhooks_input(id, body)?;
+    let timestamp = timestamp.to_string();
+    let mut signature = String::new();
+    for key in keys.iter() {
+        if !signature.is_empty() {
+            signature.push(' ');
+        }
+        let mac = standard_webhooks_mac(&key.0, id, &timestamp, body);
+        signature.push_str(SIGNATURE_VERSION);
+        signature.push(',');
+        STANDARD.encode_string(mac.finalize().into_bytes(), &mut signature);
+    }
+    Ok(signature)
+}
+
+/// Authenticate the delivery and enforce the receiver's two-sided clock window.
+pub fn verify(
+    keys: &DeliveryKeys,
+    content: SignedContent<'_>,
+    now: SystemTime,
+    tolerance: Duration,
+) -> Result<u64, DeliverySignatureError> {
+    let timestamp = verify_authenticity(keys, content)?;
+    let delivery_nanos = i128::from(timestamp) * 1_000_000_000;
+    if delivery_nanos.abs_diff(system_time_unix_nanos(now)) > tolerance.as_nanos() {
+        return Err(DeliverySignatureError::StaleDelivery);
+    }
+    Ok(timestamp)
+}
+
+/// Authenticate the exact delivery bytes and return the parsed Unix timestamp.
+/// The caller must enforce freshness before using the delivery.
+pub fn verify_authenticity(
+    keys: &DeliveryKeys,
+    content: SignedContent<'_>,
+) -> Result<u64, DeliverySignatureError> {
+    validate_standard_webhooks_input(content.id, content.body)?;
+    let timestamp = parse_webhook_timestamp(content.timestamp)?;
+    let tags = parse_standard_webhooks_header(content.signature)?;
+    for key in keys.iter() {
+        let mac = standard_webhooks_mac(&key.0, content.id, content.timestamp, content.body);
+        if tags.iter().any(|tag| mac.clone().verify_slice(tag).is_ok()) {
+            return Ok(timestamp);
+        }
+    }
+    Err(DeliverySignatureError::SignatureMismatch)
+}
+
+fn validate_standard_webhooks_input(id: &str, body: &[u8]) -> Result<(), DeliverySignatureError> {
+    if id.is_empty()
+        || id.len() > MAX_WEBHOOK_ID_BYTES
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'.')
+    {
+        return Err(DeliverySignatureError::InvalidId);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(DeliverySignatureError::BodyTooLarge);
+    }
+    Ok(())
+}
+
+fn parse_webhook_timestamp(timestamp: &str) -> Result<u64, DeliverySignatureError> {
+    if timestamp.is_empty()
+        || timestamp.len() > 20
+        || (timestamp.len() > 1 && timestamp.starts_with('0'))
+        || !timestamp.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(DeliverySignatureError::InvalidTimestamp);
+    }
+    timestamp
+        .parse()
+        .map_err(|_| DeliverySignatureError::InvalidTimestamp)
+}
+
+fn parse_standard_webhooks_header(
+    header: &str,
+) -> Result<Vec<[u8; HMAC_SHA256_BYTES]>, DeliverySignatureError> {
+    let malformed = DeliverySignatureError::MalformedSignature;
+    let mut tags = Vec::new();
+    for (index, entry) in header.split(' ').enumerate() {
+        if index == MAX_SIGNATURE_ENTRIES {
+            return Err(malformed);
+        }
+        let (version, value) = entry.split_once(',').ok_or(malformed)?;
+        if version.is_empty() || value.is_empty() {
+            return Err(malformed);
+        }
+        if version != SIGNATURE_VERSION {
+            continue;
+        }
+        if value.len() != STANDARD_WEBHOOKS_TAG_ENCODED_BYTES {
+            return Err(malformed);
+        }
+        // STANDARD requires canonical padding and zero unused bits.
+        let mut tag = [0; HMAC_SHA256_BYTES];
+        if STANDARD
+            .decode_slice(value, &mut tag)
+            .map_err(|_| malformed)?
+            != tag.len()
+        {
+            return Err(malformed);
+        }
+        tags.push(tag);
+    }
+    if tags.is_empty() {
+        return Err(DeliverySignatureError::UnsupportedVersion);
+    }
+    Ok(tags)
+}
+
+fn standard_webhooks_mac(key: &[u8], id: &str, timestamp: &str, body: &[u8]) -> HmacSha256 {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts keys of any length");
+    mac.update(id.as_bytes());
+    mac.update(b".");
+    mac.update(timestamp.as_bytes());
+    mac.update(b".");
+    mac.update(body);
+    mac
+}
+
+#[cfg(test)]
+mod standard_webhooks_tests {
+    use super::*;
+
+    #[test]
+    fn sign_matches_the_published_standard_webhooks_vector() {
+        let key = base64::engine::general_purpose::STANDARD
+            .decode("MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw")
+            .unwrap();
+        let mac = standard_webhooks_mac(
+            &key,
+            "msg_p5jXN8AQM9LWM0D4loKWxJek",
+            "1614265330",
+            br#"{"test": 2432232314}"#,
+        );
+        let tag = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+        assert_eq!(
+            format!("{SIGNATURE_VERSION},{tag}"),
+            "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+        );
     }
 }
