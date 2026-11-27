@@ -6098,7 +6098,7 @@
       "description": "Report of the shared `provision` command that creates a product's PostgreSQL roles, database, schemas and extensions.",
       "source": {
         "path": "crates/registry-platform-provision/src/cli.rs",
-        "sha256": "43ad277b6695e1ceff8bdf6b917f19e19531a2fa954d4a8283367615bf3f17b7"
+        "sha256": "152dfe5949fc2c35a374b18409a8d19b0da0f967ebff3758ab0d17982af8ace7"
       },
       "artifact": {
         "path": "crates/registry-platform-provision/schema/provision-report.schema.json",

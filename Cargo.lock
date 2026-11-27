@@ -6156,6 +6156,7 @@ dependencies = [
  "registry-platform-buildinfo",
  "registry-platform-config",
  "registry-platform-httputil",
+ "registry-platform-provision",
  "registry-platform-script",
  "registry-platform-yaml",
  "registry-record",
@@ -6164,7 +6165,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-postgres",
  "tokio-rustls",
+ "uuid",
  "zeroize",
 ]
 
