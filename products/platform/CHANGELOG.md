@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `registry-platform-posture`, a `std`-only crate, holds `Posture`,
+  `PostureSource`, `DeclaredPosture`, `PostureError` and
+  `declared_from`/`declared`, which read the `--posture` flag and the
+  `REGISTRY_STACK_POSTURE` variable. Unset means production. A value that is
+  not a posture, or a flag and variable that disagree, is refused before any
+  file is read. No product reads it yet.
+
+- `registry-platform-yaml` exports `DEVELOPMENT_ONLY`, `GatedSite` and
+  `gated_site()`, which let a development-only value learn its pointer and
+  position while the reader decodes it: exact for a node, and the holding
+  mapping with `exact: false` under `#[serde(flatten)]`.
+
 - `registry-platform-httpsec` implements authcommon's `RefusalTraceId` for
   `TraceId` behind the opt-in `refusal-trace-id` feature, not `server`. A
   service that only serves HTTP no longer links `registry-platform-authcommon`
