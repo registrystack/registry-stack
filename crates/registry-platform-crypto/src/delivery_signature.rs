@@ -353,7 +353,10 @@ impl DeliveryKeyError {
 
 /// Two configuration labels that refer to the same delivery key bytes.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
-#[error("delivery keys at {first:?} and {second:?} share the same bytes")]
+#[error(
+    "{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 \
+     new random bytes to another secret and referencing it there."
+)]
 pub struct DuplicateDeliveryKey {
     first: String,
     second: String,

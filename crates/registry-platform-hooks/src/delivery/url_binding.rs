@@ -50,7 +50,7 @@ pub enum UrlHookActivationError {
         reason: SecretError,
     },
     /// The resolved key bytes violate the signing key policy.
-    #[error("Destination {destination} member {member} has {length} bytes (trailing newline: {trailing_newline}). {}", signing_key_action(.reason))]
+    #[error("{}", invalid_signing_key_message(.destination, .member, *.length, *.trailing_newline, .reason))]
     InvalidSigningKey {
         destination: String,
         member: &'static str,
@@ -59,7 +59,10 @@ pub enum UrlHookActivationError {
         reason: DeliveryKeyError,
     },
     /// Two destination members resolve to the same key bytes.
-    #[error("destination keys {first} and {second} share the same bytes. Configure distinct keys")]
+    #[error(
+        "{first} and {second} resolve to the same key bytes. Give {second} its own key by writing \
+         32 new random bytes to another secret and referencing it there."
+    )]
     RepeatedSigningKey { first: String, second: String },
 }
 
@@ -219,16 +222,32 @@ fn resolve_delivery_key(
     Ok((key, length, trailing_newline))
 }
 
-fn signing_key_action(reason: &DeliveryKeyError) -> &'static str {
-    match reason {
+fn invalid_signing_key_message(
+    destination: &str,
+    member: &str,
+    length: usize,
+    trailing_newline: bool,
+    reason: &DeliveryKeyError,
+) -> String {
+    let action = match reason {
         DeliveryKeyError::TooShort { .. } | DeliveryKeyError::TooLong { .. } => {
             "Supply 32 to 64 exact key bytes."
         }
         DeliveryKeyError::SecretText => "Supply the exact key bytes without the whsec_ encoding.",
         DeliveryKeyError::PreviousEqualsCurrent => {
-            "Configure a previous key distinct from the current key."
+            let previous = format!("{destination}.{PREVIOUS_KEY_MEMBER}");
+            let current = format!("{destination}.{CURRENT_KEY_MEMBER}");
+            return format!(
+                "{previous} holds the same bytes as {current}. To rotate, write 32 new random \
+                 bytes to the secret {current} references and keep the old bytes behind \
+                 {previous}."
+            );
         }
-    }
+    };
+    format!(
+        "Destination {destination} member {member} has {length} bytes (trailing newline: \
+         {trailing_newline}). {action}"
+    )
 }
 
 fn inventory_digest(

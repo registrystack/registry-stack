@@ -99,6 +99,15 @@ fn a_bad_rotation_key_names_its_member_without_printing_key_bytes() {
             }
         );
         assert!(!error.to_string().contains("whsec_test_value"));
+        if expected == DeliveryKeyError::PreviousEqualsCurrent {
+            assert_eq!(
+                error.to_string(),
+                "events.previousHmacSha256KeyRef holds the same bytes as \
+                 events.hmacSha256KeyRef. To rotate, write 32 new random bytes to the secret \
+                 events.hmacSha256KeyRef references and keep the old bytes behind \
+                 events.previousHmacSha256KeyRef."
+            );
+        }
     }
 }
 
@@ -172,6 +181,18 @@ fn two_destinations_sharing_a_key_are_refused_naming_both() {
             }
         );
         assert!(!error.to_string().contains("hook-key"));
+        let (first_label, second_label) = (
+            format!("events.{}", member(first_previous)),
+            format!("mirror.{}", member(second_previous)),
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "{first_label} and {second_label} resolve to the same key bytes. Give \
+                 {second_label} its own key by writing 32 new random bytes to another secret \
+                 and referencing it there."
+            )
+        );
     }
 }
 

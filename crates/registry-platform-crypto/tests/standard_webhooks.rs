@@ -357,8 +357,11 @@ fn distinct_delivery_keys_names_both_paths() {
     .unwrap_err();
     assert_eq!(error.code(), "key-repeated");
     let message = error.to_string();
-    assert!(message.contains("one.current"));
-    assert!(message.contains("two.previous"));
+    assert_eq!(
+        message,
+        "one.current and two.previous resolve to the same key bytes. Give two.previous its own \
+         key by writing 32 new random bytes to another secret and referencing it there."
+    );
     assert!(!message.contains(&"x".repeat(32)));
 }
 
