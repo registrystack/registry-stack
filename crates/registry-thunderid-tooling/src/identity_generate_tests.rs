@@ -91,13 +91,18 @@ fn a_deployment_renders_every_output_file() {
     assert_eq!(agents.len(), 3, "one agent per machine client");
     for expected in [
         "deployment.yaml",
+        "front-gateway/envoy.yaml",
         "identity-receipt.json",
         "registry-schema/agent-type.yaml",
         "resources/resources.yaml",
     ] {
         assert!(paths.contains(&expected), "missing {expected}");
     }
-    assert_eq!(paths.len(), 7);
+    assert_eq!(paths.len(), 8);
+    assert_eq!(
+        text(&generated, crate::front_gateway::FILE),
+        crate::front_gateway::render(&crate::version::ThunderIdPin::load().unwrap().version)
+    );
     assert!(text(&generated, "deployment.yaml").contains("public_url: https://id.registry.example"));
 }
 

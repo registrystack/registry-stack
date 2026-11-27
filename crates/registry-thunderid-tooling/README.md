@@ -319,6 +319,8 @@ resolves no secret.
   `registry-schema/agents/`, and `identity-receipt.json` (input digests, client
   id to `sub`, user id to `sub`, the ThunderID pin, required environment variable names).
   Secrets render as `{{.NAME}}` placeholders; nothing secret is written.
+- The output also holds `front-gateway/envoy.yaml`, the front gateway in front
+  of ThunderID (see below).
 - Identifiers use the crate's `local::agent_id` and scope-tree formulas seeded
   by the issuer, so output is byte-identical across runs.
 
@@ -332,3 +334,40 @@ The facts and deployment formats have generated JSON Schemas in
 `identity-deployment.schema.json`), written by the same
 `tooling-schemas` example with `--features schema`. Their examples are
 in `products/platform/examples/identity`.
+
+## Front gateway
+
+`front_gateway::render` writes `front-gateway/envoy.yaml`, a static Envoy
+configuration that is the only way in to ThunderID. The identity generator
+adds it to every output. Browsers and pages reach the gateway on port 8080, and
+it forwards to the provider at `thunderid:8090`, plain HTTP on the private
+network they share (`http_only: true`). The provider must publish no host port:
+put any TLS terminator or shared address in front of the gateway, never of the
+provider. Operators reach the admin API and the console on the provider's
+internal name.
+
+- People cannot change their own user record through the identity provider's
+  self-service API; administrators manage it. `PUT`, `PATCH` and `DELETE` on
+  `/users/me`, with or without a trailing slash, and on every path under it,
+  answer a fixed `403` `application/problem+json` body of type
+  `https://id.registrystack.org/problems/registry-platform/identity/self-service-edit-refused`.
+  These routes come first and match in any letter case.
+- A request that carries `x-http-method-override`, `x-method-override` or
+  `x-http-method` answers `403` of type
+  `https://id.registrystack.org/problems/registry-platform/identity/method-override-refused`,
+  on every path. ThunderID 1.0.1 and 1.1.0 read none of these headers.
+- Paths are normalised (`normalize_path`, `merge_slashes`), and a path with an
+  escaped slash is refused (`path_with_escaped_slashes_action: REJECT_REQUEST`).
+- Only these pass: `/oauth2/` (except dynamic client registration under
+  `/oauth2/dcr`), `/.well-known/`, `/flow/`, the sign-in page under `/gate/`,
+  `GET /design/resolve`, the `/i18n/languages` list and its `resolve` paths,
+  `GET` and `OPTIONS` on `/users/me` and `/users/me/meta`, and `POST` and
+  `OPTIONS` on `/users/me/update-credentials`, which changes only credential
+  fields the user type declares. Every other path answers `404`. The list
+  comes from ThunderID's unauthenticated paths (`publicPaths` in
+  `backend/internal/system/security/permissions.go`): the sign-in page runs
+  before any token exists, so every call it makes is to one of them.
+  ThunderID's router is case-sensitive and takes no path prefix.
+
+The problem types are exported by `examples/problem-catalog.rs` and registered
+in `products/identifiers`.

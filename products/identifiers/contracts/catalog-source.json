@@ -13,6 +13,16 @@
       "cargoExample": "problem-catalog"
     },
     {
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-platform/",
+      "sourcePath": "crates/registry-thunderid-tooling/src/front_gateway.rs",
+      "exporterPath": "crates/registry-thunderid-tooling/examples/problem-catalog.rs",
+      "cargoPackage": "registry-thunderid-tooling",
+      "cargoExample": "problem-catalog"
+    },
+    {
       "owner": "discovery",
       "status": "active",
       "compatibilityLine": "v1alpha1",
@@ -104,6 +114,18 @@
     }
   ],
   "referenceExclusions": [
+    {
+      "path": "crates/registry-thunderid-tooling/src/front_gateway.rs",
+      "uri": "https://id.registrystack.org/problems/registry-platform/identity/",
+      "classification": "identifier-prefix",
+      "reason": "This constant constructs the exact front gateway problem types exported by ProblemKind::ALL; the prefix itself is not an emitted type URI. problemSources names the platform parent because each public code already carries the identity namespace."
+    },
+    {
+      "path": "crates/registry-thunderid-tooling/src/front_gateway_tests.rs",
+      "uri": "https://id.registrystack.org/problems/registry-platform/identity/",
+      "classification": "fixture",
+      "reason": "The front gateway tests append the expected problem suffix to this template prefix. Each complete front gateway problem type is exported by ProblemKind::ALL and registered in the catalog."
+    },
     {
       "path": "crates/registry-session/src/wire.rs",
       "uri": "https://id.registrystack.org/problems/registry-platform/session/",

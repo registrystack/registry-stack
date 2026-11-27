@@ -29,6 +29,7 @@ pub mod bootstrap;
 pub mod check;
 pub mod container;
 pub mod description;
+pub mod front_gateway;
 #[cfg(feature = "session")]
 pub mod grant;
 #[cfg(feature = "session")]

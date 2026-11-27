@@ -1799,6 +1799,10 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         "deployment.yaml".to_owned(),
         deployment_yaml(&facts.issuer, &pin).into_bytes(),
     );
+    files.insert(
+        crate::front_gateway::FILE.to_owned(),
+        crate::front_gateway::render(&pin.version).into_bytes(),
+    );
 
     let required_environment = deployment.required_environment();
     let mut inputs_receipt = json!({

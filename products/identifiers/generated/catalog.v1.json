@@ -3966,6 +3966,44 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/problems/registry-platform/identity/method-override-refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Method override not accepted",
+      "description": "The identity provider's front gateway does not accept a request that carries a header asking to replace its HTTP method.",
+      "source": {
+        "path": "crates/registry-thunderid-tooling/src/front_gateway.rs",
+        "sha256": "523c04e70324cea3d0fc484f35e89338739eacfe73a6e045cde17793fdd33654"
+      },
+      "problem": {
+        "code": "identity.method-override-refused",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/identity/self-service-edit-refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "User record changes are managed by administrators",
+      "description": "People cannot change their own user record through the identity provider's self-service API; administrators manage it. Reading the record and changing a password remain available.",
+      "source": {
+        "path": "crates/registry-thunderid-tooling/src/front_gateway.rs",
+        "sha256": "523c04e70324cea3d0fc484f35e89338739eacfe73a6e045cde17793fdd33654"
+      },
+      "problem": {
+        "code": "identity.self-service-edit-refused",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/problems/registry-platform/session/busy",
       "kind": "problem",
       "status": "active",

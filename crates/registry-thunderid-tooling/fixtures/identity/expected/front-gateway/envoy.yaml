@@ -1,0 +1,330 @@
+# Generated for ThunderID 1.0.1 by the Registry Stack identity generator.
+#
+# The front gateway is the only way in to the identity provider. Browsers
+# and pages reach it on port 8080; it forwards to the provider at
+# thunderid:8090 on the private network they share. The provider
+# must publish no host port: run it with no published port, and put any
+# TLS terminator or shared address in front of this gateway, not of the
+# provider.
+#
+# People cannot change their own user record through the identity
+# provider's self-service API; administrators manage it. PUT, PATCH and
+# DELETE on /users/me and every path under it answer a fixed 403 problem.
+# Reading the record and changing a password pass.
+#
+# Only the sign-in page, its flow, design and text, the OAuth 2.0 and
+# OpenID Connect endpoints and the self-service reads are routed. The
+# admin API and the console are not: operators reach them on the
+# provider's internal name. Every other path answers 404.
+static_resources:
+  listeners:
+  - name: thunderid_front
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 8080
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: thunderid_front
+          normalize_path: true
+          merge_slashes: true
+          path_with_escaped_slashes_action: REJECT_REQUEST
+          route_config:
+            name: thunderid_front
+            virtual_hosts:
+            - name: thunderid
+              domains: ["*"]
+              routes:
+              - name: refuse-x-http-method-override
+                match:
+                  prefix: "/"
+                  headers:
+                  - name: x-http-method-override
+                    present_match: true
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/method-override-refused","title":"Method override not accepted","status":403,"code":"identity.method-override-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: refuse-x-method-override
+                match:
+                  prefix: "/"
+                  headers:
+                  - name: x-method-override
+                    present_match: true
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/method-override-refused","title":"Method override not accepted","status":403,"code":"identity.method-override-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: refuse-x-http-method
+                match:
+                  prefix: "/"
+                  headers:
+                  - name: x-http-method
+                    present_match: true
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/method-override-refused","title":"Method override not accepted","status":403,"code":"identity.method-override-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: refuse-put-self-service-record
+                match:
+                  path: "/users/me"
+                  case_sensitive: false
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: PUT
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/self-service-edit-refused","title":"User record changes are managed by administrators","status":403,"code":"identity.self-service-edit-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: refuse-put-self-service-under-record
+                match:
+                  prefix: "/users/me/"
+                  case_sensitive: false
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: PUT
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/self-service-edit-refused","title":"User record changes are managed by administrators","status":403,"code":"identity.self-service-edit-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: refuse-patch-self-service-record
+                match:
+                  path: "/users/me"
+                  case_sensitive: false
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: PATCH
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/self-service-edit-refused","title":"User record changes are managed by administrators","status":403,"code":"identity.self-service-edit-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: refuse-patch-self-service-under-record
+                match:
+                  prefix: "/users/me/"
+                  case_sensitive: false
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: PATCH
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/self-service-edit-refused","title":"User record changes are managed by administrators","status":403,"code":"identity.self-service-edit-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: refuse-delete-self-service-record
+                match:
+                  path: "/users/me"
+                  case_sensitive: false
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: DELETE
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/self-service-edit-refused","title":"User record changes are managed by administrators","status":403,"code":"identity.self-service-edit-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: refuse-delete-self-service-under-record
+                match:
+                  prefix: "/users/me/"
+                  case_sensitive: false
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: DELETE
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: '{"type":"https://id.registrystack.org/problems/registry-platform/identity/self-service-edit-refused","title":"User record changes are managed by administrators","status":403,"code":"identity.self-service-edit-refused"}'
+                response_headers_to_add:
+                - header:
+                    key: content-type
+                    value: application/problem+json
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                - header:
+                    key: cache-control
+                    value: no-store
+                  append_action: OVERWRITE_IF_EXISTS_OR_ADD
+              - name: not-routed-client-registration
+                match:
+                  prefix: "/oauth2/dcr"
+                direct_response:
+                  status: 404
+              - name: oauth2
+                match:
+                  prefix: "/oauth2/"
+                route:
+                  cluster: thunderid
+              - name: well-known
+                match:
+                  prefix: "/.well-known/"
+                route:
+                  cluster: thunderid
+              - name: flow
+                match:
+                  prefix: "/flow/"
+                route:
+                  cluster: thunderid
+              - name: sign-in-page
+                match:
+                  prefix: "/gate/"
+                route:
+                  cluster: thunderid
+              - name: sign-in-design
+                match:
+                  path: "/design/resolve"
+                route:
+                  cluster: thunderid
+              - name: sign-in-text
+                match:
+                  safe_regex:
+                    regex: '^/i18n/languages(/[^/]+/translations(/ns/[^/]+/keys/[^/]+)?/resolve)?$'
+                route:
+                  cluster: thunderid
+              - name: self-service-record-get
+                match:
+                  path: "/users/me"
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: GET
+                route:
+                  cluster: thunderid
+              - name: self-service-record-options
+                match:
+                  path: "/users/me"
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: OPTIONS
+                route:
+                  cluster: thunderid
+              - name: self-service-meta-get
+                match:
+                  path: "/users/me/meta"
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: GET
+                route:
+                  cluster: thunderid
+              - name: self-service-meta-options
+                match:
+                  path: "/users/me/meta"
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: OPTIONS
+                route:
+                  cluster: thunderid
+              - name: self-service-password-post
+                match:
+                  path: "/users/me/update-credentials"
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: POST
+                route:
+                  cluster: thunderid
+              - name: self-service-password-options
+                match:
+                  path: "/users/me/update-credentials"
+                  headers:
+                  - name: ":method"
+                    string_match:
+                      exact: OPTIONS
+                route:
+                  cluster: thunderid
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+  - name: thunderid
+    type: STRICT_DNS
+    connect_timeout: 5s
+    load_assignment:
+      cluster_name: thunderid
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: thunderid
+                port_value: 8090

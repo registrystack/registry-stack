@@ -187,6 +187,7 @@ fn generate_writes_the_tree_and_drives_the_product_cli_publicly() {
     let files = tree(&workspace.path("out"));
     for expected in [
         "deployment.yaml",
+        "front-gateway/envoy.yaml",
         "identity-receipt.json",
         "registry-schema/agent-type.yaml",
     ] {
@@ -417,6 +418,7 @@ fn stdout_carries_paths_and_counts_only() {
         assert!(!stdout.contains(name), "{stdout}");
     }
     assert!(stdout.contains("identity-receipt.json"), "{stdout}");
+    assert!(stdout.contains("front-gateway/envoy.yaml"), "{stdout}");
 }
 
 #[test]
