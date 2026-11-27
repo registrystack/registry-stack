@@ -32,35 +32,34 @@ Messaging needs no broker or cache, and connects to no database but its own.
 
 ## Install the binaries
 
-Choose a tag, normally the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest), download
-`messaging-<tag>-linux-amd64` and `messagingctl-<tag>-linux-amd64`, and authenticate both with
+Each release publishes `messaging` and `messagingctl` for Linux amd64, Linux arm64, and macOS
+arm64, with an installer. Choose a tag, normally the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), and
+authenticate the assets with
 [Verify a release](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
-Install the pair from one tag:
+Linux assets are executables named `<binary>-<tag>-linux-<arch>`. macOS assets are `.tar.gz`
+bundles that carry the executable, its AWS-LC-FIPS libraries, and notices.
+Install the pair from one tag with the release-pinned installer:
 
 ```sh
-tag="${TAG:?set TAG to the release you verified}"
-mkdir -p ~/.local/bin
-for binary in messaging messagingctl; do
-  install -m 0755 "${binary}-${tag}-linux-amd64" "$HOME/.local/bin/${binary}"
-done
-export PATH="$HOME/.local/bin:$PATH"
+bash messaging-<tag>-install.sh
 messaging --version
 messagingctl --version
 ```
 
-For another platform, build both from a checkout with
-`cargo build --release --locked -p registry-messaging -p registry-messagingctl`.
+The installer puts both binaries in `~/.local/bin`. Set `MESSAGING_INSTALL_DIR` to change that.
+Neither path needs a Rust toolchain.
+
+{/* Evidence: release/scripts/release_roster.py ADDITIONAL_PLATFORM_BUILDS and ADDITIONAL_INSTALLERS;
+    crates/registry-messaging/install.sh MESSAGING_INSTALL_DIR. */}
 
 The image `ghcr.io/registrystack/messaging:<tag>` carries both binaries and runs
 `messaging --runtime-config /etc/registry-messaging/runtime.yaml serve`. Mount the package, runtime
 file, and secrets read-only, give the audit path writable storage, and deploy by digest.
 
-{/* Evidence: release/docker/Dockerfile.messaging; release v0.41.0 assets. */}
+{/* Evidence: release/docker/Dockerfile.messaging; release/scripts/build-release-image.sh. */}
 
-Each release publishes the `messaging` and `messagingctl` binaries for Linux amd64 only, checked
-against the release `SHA256SUMS`, and the container image for linux/amd64 only. There is no
-Messaging installer and no Linux arm64 or macOS build of either binary. The unified clients carry
+The container image is published for linux/amd64 only. The unified clients carry
 a `messaging` namespace: `@registrystack/client` on npm (Linux x64 and arm64 with glibc, macOS
 arm64) and `registry-stack-client` on PyPI (manylinux x86_64 and aarch64, macOS arm64).
 
