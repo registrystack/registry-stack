@@ -30,6 +30,7 @@ pub fn schema_documents() -> Result<BTreeMap<&'static str, String>, serde_json::
     runtime["properties"]["apiVersion"]["const"] = json!(RUNTIME_API_VERSION);
     runtime["properties"]["kind"]["const"] = json!(RUNTIME_KIND);
     set_audit_destination_constraints(&mut runtime);
+    set_rewrite_slash_constraints(&mut runtime);
     let mut rendered = serde_json::to_string_pretty(&runtime)?;
     rendered.push('\n');
     Ok([(RUNTIME_SCHEMA_FILE, rendered)].into())
@@ -50,6 +51,18 @@ fn set_audit_destination_constraints(schema: &mut Value) {
         {"required": ["retentionDays"]}
     ]}});
     audit["else"] = json!({"required": ["path"]});
+}
+
+/// A route's prefix and its upstream's `prefixRewrite` both end with `/`, or
+/// neither does, as the reader requires.
+fn set_rewrite_slash_constraints(schema: &mut Value) {
+    let rewrite_ends = |pattern: &str| json!({"properties": {"upstream": {"properties": {"prefixRewrite": {"pattern": pattern}}}}});
+    for route in ["ModuleConfig", "PageConfig"] {
+        let route = &mut schema["$defs"][route];
+        route["if"] = json!({"properties": {"prefix": {"pattern": "/$"}}});
+        route["then"] = rewrite_ends("/$");
+        route["else"] = rewrite_ends("[^/]$");
+    }
 }
 
 pub(crate) fn route_prefix_schema(_generator: &mut SchemaGenerator) -> Schema {
@@ -243,6 +256,60 @@ mod tests {
         assert!(reader_accepts(&text));
         assert!(validator().is_valid(&as_json(&text)));
         assert!(validator().is_valid(&as_json(&document())));
+    }
+
+    #[test]
+    fn a_prefix_and_its_rewrite_are_judged_alike_by_schema_and_reader() {
+        let validator = validator();
+        let fixture = include_str!("../tests/gateway/runtime.yaml");
+        assert!(reader_accepts(fixture));
+        assert!(validator.is_valid(&as_json(fixture)));
+        for (from, to, accepted) in [
+            (
+                "prefixRewrite: /functions/v1/renew\n",
+                "prefixRewrite: /functions/v1/renew/\n",
+                false,
+            ),
+            (
+                "prefixRewrite: /functions/v1/\n",
+                "prefixRewrite: /functions/v1\n",
+                false,
+            ),
+            (
+                "prefixRewrite: /functions/v1/renew\n",
+                "prefixRewrite: /\n",
+                false,
+            ),
+            (
+                "prefixRewrite: /functions/v1/\n",
+                "prefixRewrite: /\n",
+                true,
+            ),
+            (
+                "prefixRewrite: /functions/v1/renew\n",
+                "prefixRewrite: /v2/renew\n",
+                true,
+            ),
+            (
+                "      cluster: pages\n",
+                "      cluster: pages\n      prefixRewrite: /app\n",
+                false,
+            ),
+            (
+                "      cluster: pages\n",
+                "      cluster: pages\n      prefixRewrite: /app/\n",
+                true,
+            ),
+        ] {
+            let text = fixture.replacen(from, to, 1);
+            assert_ne!(text, fixture, "{to}");
+            assert_eq!(reader_accepts(&text), accepted, "reader: {to}");
+            assert_eq!(
+                validator.is_valid(&as_json(&text)),
+                accepted,
+                "schema: {to}"
+            );
+        }
     }
 
     #[test]

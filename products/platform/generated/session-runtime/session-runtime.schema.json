@@ -321,6 +321,24 @@
     "ModuleConfig": {
       "additionalProperties": false,
       "description": "One product a page calls, reached under one path prefix.",
+      "else": {
+        "properties": {
+          "upstream": {
+            "properties": {
+              "prefixRewrite": {
+                "pattern": "[^/]$"
+              }
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "prefix": {
+            "pattern": "/$"
+          }
+        }
+      },
       "properties": {
         "audience": {
           "$ref": "#/$defs/ModuleAudience",
@@ -355,11 +373,40 @@
         "prefix",
         "audience"
       ],
+      "then": {
+        "properties": {
+          "upstream": {
+            "properties": {
+              "prefixRewrite": {
+                "pattern": "/$"
+              }
+            }
+          }
+        }
+      },
       "type": "object"
     },
     "PageConfig": {
       "additionalProperties": false,
       "description": "A page route: pages under the prefix need a session of one kind.",
+      "else": {
+        "properties": {
+          "upstream": {
+            "properties": {
+              "prefixRewrite": {
+                "pattern": "[^/]$"
+              }
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "prefix": {
+            "pattern": "/$"
+          }
+        }
+      },
       "properties": {
         "prefix": {
           "description": "The path prefix the pages sit under: it starts with `/`. Ending with\n`/`, it holds the paths below it; without, also that exact path.",
@@ -381,6 +428,17 @@
         "prefix",
         "signIn"
       ],
+      "then": {
+        "properties": {
+          "upstream": {
+            "properties": {
+              "prefixRewrite": {
+                "pattern": "/$"
+              }
+            }
+          }
+        }
+      },
       "type": "object"
     },
     "PrivateListenerConfig": {

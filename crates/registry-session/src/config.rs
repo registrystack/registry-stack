@@ -1501,6 +1501,7 @@ fn route_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
         }
         seen.push(bare);
     }
+    rewrite_findings(config, findings);
     for (index, module) in config.modules.iter().enumerate() {
         if config.modules[..index]
             .iter()
@@ -1519,6 +1520,48 @@ fn route_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
                 &format!("/modules/{index}/audience"),
                 "the module takes the person audience, but personAudience is not declared",
                 "Declare personAudience, or write the module's own audience as an absolute URI.",
+            ));
+        }
+    }
+}
+
+/// A prefix and its rewrite both end with `/`, or neither does: the gateway
+/// swaps one for the other, so `/a/b` with `/v1/` turns `/a/b/x` into
+/// `/v1//x`, and `/a/b/` with `/v1` turns it into `/v1x`. A rewrite of `/`
+/// therefore needs a prefix that ends with `/`.
+fn rewrite_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
+    let routes = config
+        .modules
+        .iter()
+        .enumerate()
+        .map(|(index, module)| {
+            (
+                format!("/modules/{index}"),
+                &module.prefix,
+                &module.upstream,
+            )
+        })
+        .chain(
+            config
+                .pages
+                .iter()
+                .enumerate()
+                .map(|(index, page)| (format!("/pages/{index}"), &page.prefix, &page.upstream)),
+        );
+    for (pointer, prefix, upstream) in routes {
+        let Some(rewrite) = upstream
+            .as_ref()
+            .and_then(|upstream| upstream.prefix_rewrite.as_ref())
+        else {
+            continue;
+        };
+        if prefix.ends_with('/') != rewrite.as_str().ends_with('/') {
+            findings.push(Finding::new(
+                "platform.session-runtime.prefix-rewrite-slash-mismatch",
+                &format!("{pointer}/upstream/prefixRewrite"),
+                "the prefix and its prefixRewrite disagree on the closing /, so the gateway \
+                 would write paths such as //x or /v1x",
+                "End both with /, or neither; a rewrite of / needs a prefix that ends with /.",
             ));
         }
     }
@@ -2483,6 +2526,74 @@ audit:
             &document().replace("/staff/", "/apply/"),
             &code("duplicate-prefix"),
             "/pages/1/prefix",
+        );
+    }
+
+    #[test]
+    fn a_prefix_and_its_rewrite_that_disagree_on_the_closing_slash_are_refused() {
+        let fixture = include_str!("../tests/gateway/runtime.yaml");
+        // A bare prefix with a rewrite that ends in `/` turns /a/b/x into //x.
+        refused(
+            &fixture.replace(
+                "prefixRewrite: /functions/v1/renew\n",
+                "prefixRewrite: /functions/v1/renew/\n",
+            ),
+            &code("prefix-rewrite-slash-mismatch"),
+            "/modules/3/upstream/prefixRewrite",
+        );
+        // A prefix that ends in `/` with a bare rewrite turns /a/b/x into /a/bx.
+        refused(
+            &fixture.replace(
+                "prefixRewrite: /functions/v1/\n",
+                "prefixRewrite: /functions/v1\n",
+            ),
+            &code("prefix-rewrite-slash-mismatch"),
+            "/modules/2/upstream/prefixRewrite",
+        );
+        refused(
+            &fixture.replacen(
+                "      cluster: pages\n",
+                "      cluster: pages\n      prefixRewrite: /app\n",
+                1,
+            ),
+            &code("prefix-rewrite-slash-mismatch"),
+            "/pages/0/upstream/prefixRewrite",
+        );
+    }
+
+    #[test]
+    fn a_prefix_and_its_rewrite_that_agree_on_the_closing_slash_are_accepted() {
+        let fixture = include_str!("../tests/gateway/runtime.yaml");
+        assert_eq!(findings_of(fixture), []);
+        for (from, to) in [
+            ("prefixRewrite: /functions/v1/\n", "prefixRewrite: /v2/\n"),
+            (
+                "prefixRewrite: /functions/v1/renew\n",
+                "prefixRewrite: /v2/renew\n",
+            ),
+            (
+                "      cluster: pages\n",
+                "      cluster: pages\n      prefixRewrite: /app/\n",
+            ),
+        ] {
+            let text = fixture.replacen(from, to, 1);
+            assert_ne!(text, fixture, "{to}");
+            assert_eq!(findings_of(&text), [], "{to}");
+        }
+    }
+
+    #[test]
+    fn a_rewrite_to_the_root_needs_a_prefix_that_ends_with_a_slash() {
+        let fixture = include_str!("../tests/gateway/runtime.yaml");
+        assert_eq!(
+            findings_of(&fixture.replace("prefixRewrite: /functions/v1/\n", "prefixRewrite: /\n")),
+            []
+        );
+        // /api/functions/renew/x would become //x.
+        refused(
+            &fixture.replace("prefixRewrite: /functions/v1/renew\n", "prefixRewrite: /\n"),
+            &code("prefix-rewrite-slash-mismatch"),
+            "/modules/3/upstream/prefixRewrite",
         );
     }
 

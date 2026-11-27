@@ -14,6 +14,14 @@
   own `/session/` routes. A host route's 503 is unchanged.
   Splice both generated local-reply mappers first, in their generated order,
   and rerun `gateway envoy --verify-assembled`.
+- The session runtime refuses a module or page whose `prefix` and
+  `upstream.prefixRewrite` disagree on the closing `/`, with
+  `platform.session-runtime.prefix-rewrite-slash-mismatch`: `/a/b` with
+  `/v1/` would turn `/a/b/x` into `/v1//x`. A rewrite of `/` needs a prefix
+  that ends with `/`. The runtime schema states the same rule.
+  `--verify-assembled` also refuses a host `prefix` route that reaches a
+  prefix without a closing `/` through a query, such as
+  `/API/functions/renew?`.
 
 - Add `registry-session`, a source-build-only supporting service beside an
   Envoy gateway. It holds a person's access and refresh tokens on the server,

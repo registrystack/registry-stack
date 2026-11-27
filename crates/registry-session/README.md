@@ -86,7 +86,9 @@ without a closing `/` holds its own path and the paths below it at a segment
 boundary: `/functions/v1/renew` holds `/functions/v1/renew` and
 `/functions/v1/renew/x`, not `/functions/v1/renewal`. The generated route
 matches it with `path_separated_prefix`. `/a/b` and `/a/b/` count as the same
-prefix, so one file may not hold both.
+prefix, so one file may not hold both. A prefix and its `upstream.prefixRewrite`
+both end with `/` or neither does, so `/` rewrites only a prefix that ends with
+`/` (`platform.session-runtime.prefix-rewrite-slash-mismatch`).
 
 ## Build and test
 
