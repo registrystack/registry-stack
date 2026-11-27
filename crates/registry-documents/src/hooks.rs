@@ -748,10 +748,13 @@ fn signing_material_refusal(error: &UrlHookActivationError) -> String {
             trailing_newline,
             reason,
         } => match reason.code() {
-            "previous-key-equals-current" => shared_signing_key_refusal(
-                &format!("{destination}.hmacSha256KeyRef"),
-                &format!("{destination}.{member}"),
-            ),
+            "previous-key-equals-current" => {
+                let current = format!("destinations.hooks.{destination}.hmacSha256KeyRef");
+                let previous = format!("destinations.hooks.{destination}.{member}");
+                format!(
+                    "`{previous}` holds the same bytes as `{current}`. To rotate, write 32 new random bytes to the secret `{current}` references and keep the old bytes behind `{previous}`."
+                )
+            }
             "key-is-secret-text" => format!(
                 "destinations.hooks.{destination}.{member}: the delivery key starts with whsec_. Supply the exact key bytes without the whsec_ encoding."
             ),
