@@ -1549,9 +1549,14 @@ impl MutationTransaction {
                             document.header.submission_version,
                         )
                         .await?;
-                        if policy.attachments.iter().any(|(slot, definition)| {
-                            definition.required && !attachments.contains_key(slot)
-                        }) || attachments
+                        if let Some((slot, _)) =
+                            policy.attachments.iter().find(|(slot, definition)| {
+                                definition.required && !attachments.contains_key(slot.as_str())
+                            })
+                        {
+                            return Err(MutationError::AttachmentRequired { slot: slot.clone() });
+                        }
+                        if attachments
                             .keys()
                             .any(|slot| !policy.attachments.contains_key(slot))
                         {
@@ -3631,6 +3636,30 @@ impl MutationTransaction {
             },
             _ => false,
         };
+        let required_attachment_missing = if document.header.state == "draft" {
+            let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+                return Err(MutationError::Unavailable);
+            };
+            if proposal.attachments.values().any(|slot| slot.required) {
+                // Storage decides whether a slot is empty, including when this
+                // caller may write the slot without reading its metadata.
+                let metadata = crate::attachment_store::metadata(
+                    tx,
+                    &document.action_id,
+                    document.proposal_id,
+                    document.header.submission_version,
+                )
+                .await?;
+                proposal
+                    .attachments
+                    .iter()
+                    .any(|(id, slot)| slot.required && !metadata.contains_key(id))
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         let retry_available = document.header.state == "submitted"
             && crate::review_store::submission_work_is_retryable(
                 tx,
@@ -3698,6 +3727,7 @@ impl MutationTransaction {
                     document.header.state == "draft"
                         && document.blocked_reason.is_none()
                         && review_available
+                        && !required_attachment_missing
                 }
                 ProposalOperation::Revise => {
                     document.header.state == "submitted"
@@ -3828,6 +3858,9 @@ impl MutationTransaction {
                         .unwrap_or((LinkReason::InvalidInput, LinkRecovery::CorrectInput));
                     link["availability"]["reason"] = json!(reason);
                     link["availability"]["recovery"] = json!(recovery);
+                } else if operation == ProposalOperation::Submit && required_attachment_missing {
+                    link["availability"]["reason"] = json!(LinkReason::AttachmentRequired);
+                    link["availability"]["recovery"] = json!(LinkRecovery::CorrectInput);
                 } else if !review_available {
                     link["availability"]["reason"] = json!(LinkReason::DependencyOutage);
                     link["availability"]["recovery"] = json!(LinkRecovery::Retry);

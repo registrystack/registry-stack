@@ -604,6 +604,20 @@ exact content digest; changed content needs a new submission and fresh review.
     crates/registry-breg-client/src/proposal.rs;
     products/breg/examples/facility/registry.yaml. */}
 
+Before Submit, follow the Proposal's attachment upload links to fill its required slots.
+An empty required slot makes Submit unavailable with `attachment-required` and recovery `correct-input`.
+A direct Submit answers `422 attachment.required`, with `fieldPath` naming `/attachments/<slotId>`.
+After an upload, the updated Submit link reflects the stored file even if your profile cannot read the slot's value.
+
+The generated OpenAPI declares `application/problem+json` bodies for every documented error response on Proposal routes.
+These include lifecycle commands, submission reads, review and task-grant context, and file routes.
+The shared problem schema includes the problem code and optional field location.
+
+{/* Evidence: crates/registry-breg/tests/proposal_status_contract.rs every_proposal_error_response_declares_its_problem_body;
+    crates/registry-breg/tests/support/proposal_required_attachment.rs;
+    crates/registry-breg/src/proposal_artifacts.rs append_problem_codes;
+    crates/registry-breg/src/problem.rs AttachmentRequired. */}
+
 ### Proposal additions
 
 Follow the Add link at `additions.<slotId>.links.add` to upload a supporting file during an open review.

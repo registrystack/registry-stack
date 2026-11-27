@@ -29,6 +29,7 @@ pub enum ProblemCode {
     AttachmentContentType,
     AttachmentDigestMismatch,
     AttachmentLimitReached,
+    AttachmentRequired,
     AttachmentSlotWriteOnce,
     AttachmentTooLarge,
     AuthenticationRefused,
@@ -77,6 +78,7 @@ impl ProblemCode {
         Self::AttachmentContentType,
         Self::AttachmentDigestMismatch,
         Self::AttachmentLimitReached,
+        Self::AttachmentRequired,
         Self::AttachmentSlotWriteOnce,
         Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
@@ -130,6 +132,7 @@ impl ProblemCode {
         Self::AttachmentContentType,
         Self::AttachmentDigestMismatch,
         Self::AttachmentLimitReached,
+        Self::AttachmentRequired,
         Self::AttachmentSlotWriteOnce,
         Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
@@ -175,6 +178,7 @@ impl ProblemCode {
             Self::AttachmentContentType => "attachment.content-type",
             Self::AttachmentDigestMismatch => "attachment.digest-mismatch",
             Self::AttachmentLimitReached => "attachment.limit-reached",
+            Self::AttachmentRequired => "attachment.required",
             Self::AttachmentSlotWriteOnce => "attachment.slot-write-once",
             Self::AttachmentTooLarge => "attachment.too-large",
             Self::AuthenticationRefused => "authentication.refused",
@@ -246,6 +250,7 @@ impl ProblemCode {
             Self::AttachmentContentType | Self::UnsupportedMediaType => 415,
             Self::ActionRefused
             | Self::AttachmentDigestMismatch
+            | Self::AttachmentRequired
             | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
             Self::ActionHandlerFailed | Self::StatisticalDatasetDomainViolation => 500,
@@ -306,6 +311,7 @@ impl ProblemCode {
             }
             Self::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
             Self::AttachmentLimitReached => "The supporting document slot has reached its file limit.",
+            Self::AttachmentRequired => "The required attachment slot is empty.",
             Self::AuthenticationRefused => "The bearer token or delivery signature was not accepted.",
             Self::ExternalViewIncomplete => {
                 "The external view's indexed coverage is incomplete for this request."

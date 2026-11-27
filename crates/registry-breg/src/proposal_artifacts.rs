@@ -2,6 +2,7 @@
 //! First-class Proposal operations derived from the compiled Action policies.
 use super::*;
 use crate::model::{CompiledActionExecution, ProposalOperation};
+use crate::problem::ProblemCode;
 
 pub(crate) fn append_proposal_openapi(
     paths: &mut Map<String, Value>,
@@ -22,6 +23,8 @@ pub(crate) fn append_proposal_openapi(
     // Every record slot is write-once, so applying a Proposal that promotes
     // a file can meet a slot an earlier write already filled.
     let mut apply_may_fill_written_slot = false;
+    let mut submit_problems = BTreeSet::new();
+    let mut submit_refusals = BTreeMap::new();
     for action in &actions.actions {
         let CompiledActionExecution::Proposal { proposal } = &action.execution else {
             continue;
@@ -59,6 +62,21 @@ pub(crate) fn append_proposal_openapi(
                 && action_may_refuse_write(action, entities, &grant.profile_id);
             apply_may_fill_written_slot |=
                 permitted(ProposalOperation::Apply) && !proposal.promotions.is_empty();
+            if permitted(ProposalOperation::Submit) {
+                if proposal.attachments.values().any(|slot| slot.required) {
+                    submit_problems.insert(ProblemCode::AttachmentRequired);
+                }
+                if let Some(handler) = &action.handler {
+                    submit_problems.insert(ProblemCode::ActionHandlerFailed);
+                    if !handler.refusals.is_empty() {
+                        submit_problems.insert(ProblemCode::ActionRefused);
+                        submit_refusals.extend(handler.refusals.clone());
+                    }
+                }
+                if !action.evidence.is_empty() || !action.commit_evidence.is_empty() {
+                    submit_problems.insert(ProblemCode::ActionEvidenceFailed);
+                }
+            }
             let document_fields = proposal
                 .review_context
                 .as_ref()
@@ -160,7 +178,7 @@ pub(crate) fn append_proposal_openapi(
                     document["requestBody"] = json!({"required":true,"content":content});
                     document["responses"]["400"] =
                         json!({"description":"Empty file body (`request.invalid`)"});
-                    document["responses"]["409"] = json!({"description":"The slot count limit was reached (`attachment.limit-reached`), the Proposal was rejected (`proposal.rejected`), or the idempotency key is bound to different bytes (`idempotency.conflict`)"});
+                    document["responses"]["409"] = json!({"description":"The slot count limit was reached (`attachment.limit-reached`), the Proposal was rejected (`proposal.rejected`), or the idempotency key is bound to different bytes (`idempotency.key-reused`)"});
                     document["responses"]["413"] = json!({"description":"The file exceeds maximumBytes (`attachment.too-large`)"});
                     document["responses"]["415"] = json!({"description":"The slot does not accept this media type (`attachment.content-type`)"});
                     merge_operation(paths, path, "post", document);
@@ -268,9 +286,11 @@ pub(crate) fn append_proposal_openapi(
         } else if method == "post" {
             if operation == ProposalOperation::Apply && apply_may_refuse_write {
                 document["responses"]["403"] = json!({"description":"The application writes outside what the selected access profile may write: a disclosure condition binds it on a record type the plan patches (`write.outside-boundary`)"});
+                append_problem_codes(&mut document, &[ProblemCode::WriteOutsideBoundary]);
             }
             if operation == ProposalOperation::Apply && apply_may_fill_written_slot {
                 document["responses"]["409"] = json!({"description":"The Proposal was rejected, the idempotency key was reused with a different request, or the plan promotes a file into a record slot that already holds one (`attachment.slot-write-once`)"});
+                append_problem_codes(&mut document, &[ProblemCode::AttachmentSlotWriteOnce]);
             }
             let schema = match operation {
                 ProposalOperation::Apply => proposal_apply_input_schema(),
@@ -284,6 +304,22 @@ pub(crate) fn append_proposal_openapi(
             };
             document["requestBody"] =
                 json!({"required":true,"content":{"application/json":{"schema":schema}}});
+            if operation == ProposalOperation::Submit {
+                append_problem_codes(
+                    &mut document,
+                    &submit_problems.iter().copied().collect::<Vec<_>>(),
+                );
+                if !submit_refusals.is_empty() {
+                    let examples = &mut document["responses"]["422"]["content"]
+                        ["application/problem+json"]["examples"];
+                    for (code, label) in &submit_refusals {
+                        let mut example =
+                            problem_example("422", ProblemCode::ActionRefused.code(), label);
+                        example["refusalCode"] = json!(code);
+                        examples[code] = json!({"value":example});
+                    }
+                }
+            }
         }
         if operation == ProposalOperation::Get {
             let mut submission = operation_document(
@@ -399,6 +435,7 @@ fn merge_operation(
     method: &str,
     mut operation: Value,
 ) {
+    append_operation_problems(&mut operation, method);
     let entry = paths.entry(path).or_insert_with(|| json!({}));
     if let Some(current) = entry.get(method) {
         let profiles = current["x-registry-accessProfiles"]
@@ -432,8 +469,103 @@ fn merge_operation(
                 }
             }
         }
+        // Profile-specific Actions can contribute different refusal codes.
+        // Preserve every response and example when the shared route is merged.
+        for (status, previous) in current["responses"].as_object().expect("responses") {
+            if status.starts_with('2') {
+                continue;
+            }
+            let responses = operation["responses"].as_object_mut().expect("responses");
+            if let Some(next) = responses.get_mut(status) {
+                if let Some(examples) =
+                    previous["content"]["application/problem+json"]["examples"].as_object()
+                {
+                    next["content"]["application/problem+json"]["examples"]
+                        .as_object_mut()
+                        .expect("problem examples")
+                        .extend(examples.clone());
+                }
+            } else {
+                responses.insert(status.clone(), previous.clone());
+            }
+        }
     }
     entry[method] = operation;
+}
+
+fn append_problem_codes(operation: &mut Value, codes: &[ProblemCode]) {
+    for code in codes {
+        let status = code.status().to_string();
+        let response = operation["responses"]
+            .as_object_mut()
+            .expect("responses")
+            .entry(status.clone())
+            .or_insert_with(|| json!({"description":"Problem response"}));
+        response["headers"] = json!({"traceparent":traceparent_header("Trace context for this problem response."),"Cache-Control":no_store_header()});
+        let content = response
+            .as_object_mut()
+            .expect("response")
+            .entry("content")
+            .or_insert_with(|| json!({}));
+        let problem = content
+            .as_object_mut()
+            .expect("content")
+            .entry("application/problem+json")
+            .or_insert_with(
+                || json!({"schema":{"$ref":"#/components/schemas/Problem"},"examples":{}}),
+            );
+        let mut example = problem_example(&status, code.code(), code.description());
+        if *code == ProblemCode::AttachmentRequired {
+            example["fieldPath"] = json!("/attachments/file");
+        } else if *code == ProblemCode::ActionRefused {
+            // The caller adds examples using the Action's declared codes and labels.
+            continue;
+        }
+        problem["examples"][code.code()] = json!({"value":example});
+    }
+}
+
+fn append_operation_problems(operation: &mut Value, method: &str) {
+    let id = operation["operationId"].as_str().expect("operation id");
+    let attachment = id.starts_with("proposals.attachments.");
+    let addition = id.starts_with("proposals.additions.");
+    let mutation = method != "get" && id != "proposals.get-task-grant-context";
+    let mut codes = vec![
+        ProblemCode::RequestInvalid,
+        ProblemCode::AuthenticationRefused,
+        ProblemCode::ResourceNotFound,
+        ProblemCode::PreconditionFailed,
+        ProblemCode::ServiceUnavailable,
+        ProblemCode::RequestTimeout,
+    ];
+    if method != "get" {
+        codes.push(ProblemCode::UnsupportedMediaType);
+    }
+    if mutation {
+        codes.extend([
+            ProblemCode::MutationConflict,
+            ProblemCode::IdempotencyConflict,
+            ProblemCode::IdempotencyExpired,
+            ProblemCode::ProposalRejected,
+            ProblemCode::PreconditionRequired,
+        ]);
+    }
+    if id == "proposals.get-submission" {
+        codes.push(ProblemCode::ProposalSubmissionExpired);
+    }
+    if id == "proposals.submit" || id == "proposals.apply" {
+        codes.push(ProblemCode::ActionGuardFailed);
+    }
+    if method == "patch" && attachment || method == "post" && addition {
+        codes.extend([
+            ProblemCode::AttachmentTooLarge,
+            ProblemCode::AttachmentContentType,
+        ]);
+    }
+    if method == "post" && addition {
+        codes.push(ProblemCode::AttachmentLimitReached);
+    }
+    append_problem_codes(operation, &codes);
 }
 
 fn append_addition_download_path(paths: &mut Map<String, Value>, profiles: &BTreeSet<String>) {

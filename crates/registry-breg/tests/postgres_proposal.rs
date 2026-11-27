@@ -13,6 +13,9 @@ mod proposal_additions;
 #[path = "support/proposal_status.rs"]
 mod proposal_status;
 
+#[path = "support/proposal_required_attachment.rs"]
+mod proposal_required_attachment;
+
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};

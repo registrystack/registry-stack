@@ -2884,6 +2884,7 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         || extensions.reason_code.is_some()
             != (code == BRegProblemCode::StatisticalDatasetVersionWithdrawn)
         || extensions.guard_reason.is_some() && code != BRegProblemCode::ActionGuardFailed
+        || code == BRegProblemCode::AttachmentRequired && extensions.field_path.is_none()
         || code == BRegProblemCode::ActionRefused
             && !crate::error::bounded_refusal_label(&document.detail)
         || (code == BRegProblemCode::StatisticalDatasetReleaseRefused
@@ -2951,6 +2952,7 @@ fn valid_statistics_reason_code(value: &str) -> bool {
 /// The closed forms a Base Registry Engine problem location takes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BRegProblemPath {
+    AttachmentSlot,
     EvidenceAlias,
     ActionInputField,
     ActionRequest,
@@ -2970,6 +2972,7 @@ enum BRegProblemPath {
 impl BRegProblemPath {
     fn permits(self, code: BRegProblemCode) -> bool {
         match self {
+            Self::AttachmentSlot => code == BRegProblemCode::AttachmentRequired,
             Self::EvidenceAlias => code == BRegProblemCode::ActionEvidenceFailed,
             Self::ActionInputField => matches!(
                 code,
@@ -3145,6 +3148,19 @@ fn parse_constraint_violation(
 }
 
 fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
+    if path.strip_prefix("/attachments/").is_some_and(|slot| {
+        !slot.is_empty()
+            && slot.len() <= 64
+            && slot
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_lowercase())
+            && slot.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+    }) {
+        return Some(BRegProblemPath::AttachmentSlot);
+    }
     if valid_evidence_problem_path(path) {
         return Some(BRegProblemPath::EvidenceAlias);
     }

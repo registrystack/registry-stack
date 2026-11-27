@@ -2096,6 +2096,8 @@ fn problem_response(code: BRegProblemCode) -> MockResponse {
     });
     if code == BRegProblemCode::ActionRefused {
         body["refusalCode"] = json!(REFUSAL_CODE);
+    } else if code == BRegProblemCode::AttachmentRequired {
+        body["fieldPath"] = json!("/attachments/support");
     } else if code == BRegProblemCode::StatisticalDatasetReleaseRefused {
         body["refusalCode"] = json!("period-not-ended");
     } else if code == BRegProblemCode::StatisticalDatasetVersionWithdrawn {
@@ -2147,6 +2149,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::AttachmentLimitReached => {
             "The supporting document slot has reached its file limit."
         }
+        Code::AttachmentRequired => "The required attachment slot is empty.",
         Code::AttachmentSlotWriteOnce => {
             "The record attachment slot already holds a file and is write-once."
         }

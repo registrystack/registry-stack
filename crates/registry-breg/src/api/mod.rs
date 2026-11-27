@@ -5809,6 +5809,19 @@ fn mutation_problem_response(error: MutationError) -> Response {
         }
         MutationError::AttachmentTooLarge => fixed_problem(ProblemCode::AttachmentTooLarge),
         MutationError::AttachmentLimitReached => fixed_problem(ProblemCode::AttachmentLimitReached),
+        MutationError::AttachmentRequired { slot } => {
+            let problem = ProblemCode::AttachmentRequired;
+            crate::correlation::problem_response_with_field_path(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                problem.title(),
+                problem.description(),
+                problem.code(),
+                format!(
+                    "/attachments/{}",
+                    slot.replace('~', "~0").replace('/', "~1")
+                ),
+            )
+        }
         MutationError::AttachmentContentType => fixed_problem(ProblemCode::AttachmentContentType),
         MutationError::AttachmentDigestMismatch => {
             fixed_problem(ProblemCode::AttachmentDigestMismatch)

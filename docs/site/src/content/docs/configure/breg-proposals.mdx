@@ -355,6 +355,23 @@ When Revise is the recovery, the Retry link reports the same reason instead of `
     crates/registry-breg/src/problem.rs action.guard_failed;
     crates/registry-breg/src/review_store.rs review-ended. */}
 
+### Complete required attachment slots
+
+Upload a file into each required attachment slot before submitting the Proposal.
+BReg makes the Submit link unavailable while any required slot is empty.
+The link names `attachment-required` with recovery `correct-input`.
+BReg checks storage even when your profile may upload to a slot but cannot read its value.
+
+A direct Submit request with an empty required slot answers `422 attachment.required`.
+Its `fieldPath` names the slot, such as `/attachments/supporting-document`.
+Upload the missing file and follow the available Submit link in the updated Proposal.
+You do not need to infer availability from attachment values.
+
+{/* Evidence: crates/registry-breg/tests/support/proposal_required_attachment.rs
+    submit_names_an_empty_required_attachment_and_recovers_after_upload,
+    submit_checks_required_attachments_the_writer_cannot_read;
+    crates/registry-breg/src/problem.rs AttachmentRequired. */}
+
 ### Whose turn it is
 
 Every Proposal document and lifecycle event carries a derived `turn`:

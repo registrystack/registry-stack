@@ -122,6 +122,7 @@ proposal_wire_values!(ProposalAvailabilityReason {
     AlreadyApplied => "already-applied",
     LimitReached => "limit-reached",
     ApplicationPending => "application-pending",
+    AttachmentRequired => "attachment-required",
 });
 
 proposal_wire_values!(ProposalLinkRecovery {

@@ -43,6 +43,7 @@ pub enum BRegAvailabilityReason {
     AlreadyApplied,
     LimitReached,
     ApplicationPending,
+    AttachmentRequired,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2323,6 +2324,7 @@ fn valid_availability(
                     | (Reason::PackageChanged, Recovery::Rebase)
                     | (Reason::DependencyOutage, Recovery::Retry)
                     | (Reason::InvalidInput, Recovery::CorrectInput)
+                    | (Reason::AttachmentRequired, Recovery::CorrectInput)
             ),
             (false, _, _) => false,
         }
@@ -2330,6 +2332,7 @@ fn valid_availability(
             || match (availability.reason, availability.recovery) {
                 (Some(Reason::AlreadyApplied), _) => state == State::Applied,
                 (Some(Reason::ApplicationPending), _) => state == State::Submitted,
+                (Some(Reason::AttachmentRequired), _) => state == State::Draft,
                 (Some(Reason::ReviewRejected), Some(Recovery::ReceiptOnly)) => {
                     state == State::Rejected
                 }

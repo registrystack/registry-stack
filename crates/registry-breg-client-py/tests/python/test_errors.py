@@ -26,6 +26,7 @@ TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 TRACEPARENT = f"00-{TRACE_ID}-00f067aa0ba902b7-01"
 MISSING_RECORD_ID = "00000000-0000-4000-8000-000000000001"
 OUTSIDE_WRITE_BOUNDARY_ID = "00000000-0000-4000-8000-000000000403"
+REQUIRED_ATTACHMENT_ID = "00000000-0000-4000-8000-000000000423"
 EXTENDED_UNKNOWN_PROBLEM_ID = "00000000-0000-4000-8000-000000000003"
 UNKNOWN_PROBLEM_STATUSES = {
     "00000000-0000-4000-8000-000000000422": 422,
@@ -58,6 +59,15 @@ class _ProblemHandler(BaseHTTPRequestHandler):
                 "detail": "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
                 "code": "write.outside-boundary",
                 "traceId": TRACE_ID,
+            }
+        elif record_id == REQUIRED_ATTACHMENT_ID:
+            status = 422
+            document = {
+                "type": "https://id.registrystack.org/problems/registry-breg/attachment/required",
+                "title": "Unprocessable Entity", "status": 422,
+                "detail": "The required attachment slot is empty.",
+                "code": "attachment.required", "traceId": TRACE_ID,
+                "fieldPath": "/attachments/support",
             }
         else:
             status = UNKNOWN_PROBLEM_STATUSES.get(record_id, 422)
@@ -124,6 +134,16 @@ class ProblemKindTests(unittest.TestCase):
         self.assertIsNone(error.guard_reason)
         self.assertIs(error.outcome_unknown, False)
         self.assertNotIn("row boundary", str(error))
+
+    def test_required_attachment_refusal_preserves_its_slot_location(self) -> None:
+        with self.assertRaises(BaseRegistryClientError) as raised:
+            self.client.get_record("companies", REQUIRED_ATTACHMENT_ID)
+        error = raised.exception
+        self.assertEqual(error.kind, "problem")
+        self.assertEqual(error.status, 422)
+        self.assertEqual(error.code, "attachment.required")
+        self.assertEqual(error.field_path, "/attachments/support")
+        self.assertFalse(error.outcome_unknown)
 
     def test_unknown_problem_codes_fall_back_to_http_status_semantics(self) -> None:
         for record_id, status in UNKNOWN_PROBLEM_STATUSES.items():

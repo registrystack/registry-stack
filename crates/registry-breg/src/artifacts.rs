@@ -4566,6 +4566,16 @@ fn problem_schema() -> Value {
         },
         "allOf": [
             {
+                "if": {"properties": {"code": {"const": "attachment.required"}}},
+                "then": {
+                    "required": ["fieldPath"],
+                    "properties": {
+                        "status": {"const": 422},
+                        "fieldPath": {"type":"string","pattern":"^/attachments/[a-z][a-z0-9_-]{0,63}$"}
+                    }
+                }
+            },
+            {
                 "if": {"properties": {"code": {"const": write_outside_boundary.code()}}},
                 "then": {
                     "propertyNames": {"enum": [
@@ -5043,6 +5053,32 @@ fn canonicalization_error() -> Diagnostic {
 #[cfg(test)]
 mod problem_contract_tests {
     use super::*;
+
+    #[test]
+    fn required_attachment_problem_contract_names_a_slot() {
+        let schema = problem_schema();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        let code = crate::problem::ProblemCode::AttachmentRequired;
+        let mut body = problem_example("422", code.code(), code.description());
+        assert!(
+            !validator.is_valid(&body),
+            "a required slot refusal must identify the slot"
+        );
+        body["fieldPath"] = json!("/attachments/support");
+        assert!(validator.is_valid(&body));
+        for invalid in [
+            "/input/support",
+            "/attachments",
+            "/attachments/support/bytes",
+            "/attachments/UPPER",
+        ] {
+            body["fieldPath"] = json!(invalid);
+            assert!(!validator.is_valid(&body), "{invalid}");
+        }
+    }
 
     #[test]
     fn application_reason_contract_is_optional_bounded_and_closed() {

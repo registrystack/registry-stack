@@ -2438,6 +2438,8 @@ pub enum MutationError {
     AttachmentSlotWriteOnce,
     #[error("the supporting document slot has reached its file limit")]
     AttachmentLimitReached,
+    #[error("the required attachment slot is empty")]
+    AttachmentRequired { slot: String },
     /// A file is larger than its attachment slot's `maximumBytes`.
     #[error("the file is larger than the attachment slot accepts")]
     AttachmentTooLarge,
@@ -2525,6 +2527,7 @@ impl MutationError {
             | Self::AttachmentSlotWriteOnce
             | Self::AttachmentTooLarge
             | Self::AttachmentLimitReached
+            | Self::AttachmentRequired { .. }
             | Self::AttachmentContentType
             | Self::AttachmentDigestMismatch
             | Self::IdempotencyConflict

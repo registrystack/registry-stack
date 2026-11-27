@@ -51,6 +51,12 @@
   refused. To migrate, write the store's or verifier's own IPv4 or native
   IPv6 address, or a name that answers one.
 
+- Proposal routes declare problem bodies in generated OpenAPI. Submit with an
+  empty required attachment slot answers `422 attachment.required`, naming the
+  slot in `fieldPath`. Its link is unavailable with `attachment-required` and
+  recovery `correct-input`, including for write-only slots. Uploading the file
+  enables Submit. Update BReg clients for the added code and availability reason.
+
 - BREAKING: Proposal documents serve the closed display `status` from the same rule as
   `turn`. Revise and Rebase preserve approved and processing submissions:
   their unavailable links name `application-pending` with recovery `refresh`,
