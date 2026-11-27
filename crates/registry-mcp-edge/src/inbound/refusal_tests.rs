@@ -201,13 +201,14 @@ impl Run {
         (app, server): &(Router, Arc<ResourceServer>),
         headers: Headers,
     ) {
-        let answer = summarise(
+        let mut answer = summarise(
             app.clone()
                 .oneshot(request(headers))
                 .await
                 .expect("response"),
         )
         .await;
+        settle_retry_after(&mut answer);
         self.record(name, server, answer);
     }
 
@@ -226,6 +227,22 @@ impl Run {
         self.answers.insert(name, answer);
         self.counted.insert(name, counted);
     }
+}
+
+/// The limiter holds one request per minute, so the delay it advertises is
+/// the minute less however long the fixture took between its two requests,
+/// rounded up. Any delay from one to sixty seconds is recorded as sixty so a
+/// slow runner does not change the frozen answer.
+fn settle_retry_after(answer: &mut Value) {
+    let Some(header) = answer["headers"].get_mut("retry-after") else {
+        return;
+    };
+    let seconds: u64 = header
+        .as_str()
+        .and_then(|text| text.parse().ok())
+        .expect("retry-after is whole seconds");
+    assert!((1..=60).contains(&seconds), "retry-after {seconds}");
+    *header = Value::from("60");
 }
 
 /// One name per refusal the edge can answer, with the answer it gives.
@@ -475,6 +492,12 @@ async fn a_refusal_writes_one_line_with_its_check_and_no_caller_value() {
         .collect();
     assert_eq!(lines.len(), 1, "{text}");
     assert!(lines[0].contains("\"failed_check\":\"scope\""), "{text}");
+    // The line names what the operator declared, never the token's scopes.
+    assert!(lines[0].contains("\"scope_claim\":\"scope\""), "{text}");
+    assert!(
+        lines[0].contains(&format!("\"required_scope\":\"{SCOPE}\"")),
+        "{text}"
+    );
     for canary in [token.as_str(), "citizen-canary", CLIENT, "openid"] {
         assert!(!text.contains(canary), "{canary} reached the log: {text}");
     }
@@ -485,7 +508,39 @@ async fn the_admit_fault_line_is_due_once_per_window() {
     let auth = authorization().await;
     let (_, server) = application(&auth, auth.jwks_uri(), 100);
     let start = std::time::Instant::now();
-    assert!(server.admit_fault_due(start));
-    assert!(!server.admit_fault_due(start + Duration::from_secs(59)));
-    assert!(server.admit_fault_due(start + Duration::from_secs(61)));
+    assert_eq!(server.admit_fault_due(start), Some(0));
+    assert_eq!(
+        server.admit_fault_due(start + Duration::from_secs(30)),
+        None
+    );
+    assert_eq!(
+        server.admit_fault_due(start + Duration::from_secs(59)),
+        None
+    );
+    assert_eq!(
+        server.admit_fault_due(start + Duration::from_secs(61)),
+        Some(2)
+    );
+    assert_eq!(
+        server.admit_fault_due(start + Duration::from_secs(130)),
+        Some(0)
+    );
+}
+
+#[test]
+fn a_retry_after_from_one_to_sixty_seconds_is_frozen_as_sixty() {
+    for seconds in ["1", "59", "60"] {
+        let mut answer = json!({"headers": {"retry-after": seconds}});
+        settle_retry_after(&mut answer);
+        assert_eq!(answer["headers"]["retry-after"], "60");
+    }
+    let mut none = json!({"headers": {}});
+    settle_retry_after(&mut none);
+    assert_eq!(none, json!({"headers": {}}));
+}
+
+#[test]
+#[should_panic(expected = "retry-after 61")]
+fn a_retry_after_beyond_the_refill_period_is_refused() {
+    settle_retry_after(&mut json!({"headers": {"retry-after": "61"}}));
 }

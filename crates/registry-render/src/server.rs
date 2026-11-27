@@ -28,14 +28,14 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
 use registry_platform_authcommon::{
-    parse_bearer_token, validate_api_key_entropy, BearerParseError, FailedCheck, RefusalNote,
-    RefusalRecorder, MIN_API_KEY_ENTROPY_BYTES,
+    parse_bearer_token, validate_api_key_entropy, BearerParseError, DeclaredScope, FailedCheck,
+    RefusalNote, RefusalRecorder, MIN_API_KEY_ENTROPY_BYTES,
 };
 use registry_platform_canonical_json::parse_json_preserving_integers;
 use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder};
 
 use crate::audit::{RenderAudit, RenderAuditEvent};
-use crate::auth::{RENDER_SCOPE, SEAL_SCOPE};
+use crate::auth::{RENDER_SCOPE, SCOPE_CLAIM, SEAL_SCOPE};
 use crate::bundle::Bundle;
 use crate::hash::sha256_label;
 use crate::metrics::{Metrics, Operation, METRICS_PATH};
@@ -506,7 +506,12 @@ async fn require_bearer(
                 problem = problem.with_public_detail(SEAL_SCOPE_GUIDANCE);
             }
             let (path, headers) = (request.uri().path(), request.headers());
-            return refuse_access(&service, path, headers, &problem, &caller, check).await;
+            let mut response =
+                refuse_access(&service, path, headers, &problem, &caller, check).await;
+            if check == FailedCheck::Scope {
+                response.extensions_mut().insert(declared_scope(scope));
+            }
+            return response;
         }
     };
     // The legacy API key never seals. The runtime already refuses a signing
@@ -559,9 +564,16 @@ async fn refuse_access(
 /// A refusal answer with the check that refused the caller in its response
 /// extensions, which are never serialized.
 fn refusal_response(problem: &RenderProblem, trace: Option<&str>, check: FailedCheck) -> Response {
-    let mut response = problem_response(problem, trace);
+    let mut response = problem_answer(problem, trace);
     response.extensions_mut().insert(RefusalNote::new(check));
     response
+}
+
+/// The values the operator declared for a scope refusal: the claim Render
+/// reads scopes from and the scope the route requires. Nothing here comes
+/// from the caller's token.
+fn declared_scope(required_scope: &str) -> DeclaredScope {
+    DeclaredScope::new(SCOPE_CLAIM).with_required_scope(required_scope)
 }
 
 /// Count each refusal answer under its check and write the admitted log line.
@@ -573,12 +585,18 @@ async fn record_refusals(
 ) -> Response {
     let response = next.run(request).await;
     if let Some(note) = response.extensions().get::<RefusalNote>() {
+        let declared = response.extensions().get::<DeclaredScope>();
         match registry_platform_httpsec::response_trace_id(response.headers()) {
             Ok(trace) => {
-                registry_platform_authcommon::record_refusal!(refusals, *note, trace_id = trace);
+                registry_platform_authcommon::record_refusal!(
+                    refusals,
+                    *note,
+                    trace_id = trace,
+                    declared = declared
+                );
             }
             Err(_) => {
-                registry_platform_authcommon::record_refusal!(refusals, *note);
+                registry_platform_authcommon::record_refusal!(refusals, *note, declared = declared);
             }
         }
     }
@@ -757,9 +775,24 @@ fn route_template(path: &str) -> &'static str {
     }
 }
 
+/// An answer that is not a refusal of the caller. A 401 or 403 goes through
+/// `refusal_response` so it carries the check that refused the caller: a
+/// refusal status that arrives here has no check to count, which a debug
+/// build refuses outright and a release build logs.
+fn problem_response(problem: &RenderProblem, trace: Option<&str>) -> Response {
+    if matches!(problem.kind.http_status(), 401 | 403) {
+        debug_assert!(false, "a refusal was built without its failed check");
+        tracing::error!(
+            code = problem.kind.http_code(),
+            "a refusal was answered without its failed check"
+        );
+    }
+    problem_answer(problem, trace)
+}
+
 /// HTTP callers receive fixed, value-free guidance. Operator diagnostics stay
 /// with the local CLI and audit boundary; the problem code identifies recovery.
-fn problem_response(problem: &RenderProblem, trace: Option<&str>) -> Response {
+fn problem_answer(problem: &RenderProblem, trace: Option<&str>) -> Response {
     let mut context = registry_platform_httpsec::TraceContext::server_created();
     if let Some(trace_id) =
         trace.and_then(|value| registry_platform_httpsec::TraceId::parse(value).ok())
@@ -2985,7 +3018,7 @@ mod tests {
                 Mode::Oidc,
                 Method::GET,
                 "/v1/documents",
-                token_header(serde_json::json!({"scope":"other"})),
+                token_header(serde_json::json!({"scope":"canary-token-scope"})),
                 "scope",
             ),
             RefusalCase::new(
@@ -3099,6 +3132,7 @@ mod tests {
             "canary-wrong-key-0123456789abcdef0123456789",
             "canary-invalid-token",
             "canary-principal",
+            "canary-token-scope",
             CANARY_CLIENT,
         ];
         for RefusalCase {
@@ -3160,6 +3194,22 @@ mod tests {
             assert_eq!(fields["decision"], "refused", "{name}");
             assert_eq!(fields["failed_check"], check, "{name}");
             assert_eq!(fields["trace_id"], trace.as_str(), "{name}");
+            // A scope refusal names the values the operator declared. Every
+            // other check names none.
+            if check == "scope" {
+                assert_eq!(fields["scope_claim"], "scope", "{name}");
+                let required = if uri.starts_with("/v1/seal/") {
+                    SEAL_SCOPE
+                } else {
+                    RENDER_SCOPE
+                };
+                assert_eq!(fields["required_scope"], required, "{name}");
+                assert!(fields.get("access_profile").is_none(), "{name}");
+            } else {
+                for field in ["scope_claim", "required_scope", "access_profile"] {
+                    assert!(fields.get(field).is_none(), "{name}: {field}");
+                }
+            }
             for canary in canaries {
                 assert!(!written.contains(canary), "{name}: {written}");
             }
@@ -3182,6 +3232,35 @@ mod tests {
                 "{}",
                 check.as_str()
             );
+        }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal was built without its failed check")]
+    fn a_refusal_status_without_its_check_is_not_built() {
+        for kind in [
+            ProblemKind::Unauthorized,
+            ProblemKind::Forbidden,
+            ProblemKind::SealClientNotAllowed,
+        ] {
+            let _ = problem_response(&RenderProblem::new(kind, "no check"), None);
+        }
+    }
+
+    #[test]
+    fn a_refusal_with_its_check_is_built_without_the_guard() {
+        for kind in [
+            ProblemKind::Unauthorized,
+            ProblemKind::Forbidden,
+            ProblemKind::SealClientNotAllowed,
+        ] {
+            let response = refusal_response(
+                &RenderProblem::new(kind, "with check"),
+                None,
+                FailedCheck::Operation,
+            );
+            assert!(response.extensions().get::<RefusalNote>().is_some());
         }
     }
 }

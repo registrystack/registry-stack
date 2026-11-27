@@ -68,7 +68,7 @@ use crate::idempotent::{
 };
 use crate::journal::{self, JournalEvent};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
-use registry_platform_authcommon::{FailedCheck, RefusalNote};
+use registry_platform_authcommon::{DeclaredScope, FailedCheck, RefusalNote};
 
 const REQUEST_ID_HEADER: &str = "x-registry-request-id";
 const WRITE_REQUEST_DIGEST_DOMAIN: &[u8] = b"registry-adapter:write-request:v2\0";
@@ -647,7 +647,7 @@ async fn answer_async_status(
         metadata.profile_operation(),
         metadata.record_type(),
     ) {
-        return refuse_call(
+        let response = refuse_call(
             state,
             operation,
             &caller,
@@ -658,6 +658,13 @@ async fn answer_async_status(
             Some(check),
         )
         .await;
+        return with_declared_scope(
+            response,
+            check,
+            &state.loaded.project,
+            metadata.profile_operation(),
+            metadata.record_type(),
+        );
     }
     let event = |kind: &'static str, detail: Option<Value>, at: SystemTime| {
         (
@@ -1244,7 +1251,7 @@ async fn answer(
         operation.operation.as_str(),
         operation.record_type.as_str(),
     ) {
-        return refuse_call(
+        let response = refuse_call(
             state,
             operation,
             &caller,
@@ -1255,6 +1262,13 @@ async fn answer(
             Some(check),
         )
         .await;
+        return with_declared_scope(
+            response,
+            check,
+            &state.loaded.project,
+            operation.operation.as_str(),
+            operation.record_type.as_str(),
+        );
     }
     if !effective_contract_matches(headers, &state.effective_contract.digest) {
         return refuse_contract_pin(state, operation, &caller, &request_id).await;
@@ -3480,6 +3494,74 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, FailedCheck> {
     Ok(token)
 }
 
+/// Guard for every answer built from a status and an optional failed check:
+/// a 401 or 403 names the check that refused the caller. One that arrives
+/// without it has nothing to count, which a debug build refuses outright and a
+/// release build logs.
+pub(crate) fn require_refusal_check(status: StatusCode, check: Option<FailedCheck>) {
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) && check.is_none() {
+        debug_assert!(false, "a refusal was built without its failed check");
+        tracing::error!(
+            status = status.as_u16(),
+            "a refusal was answered without its failed check"
+        );
+    }
+}
+
+/// The claim the verifier reads a caller's scopes from.
+pub(crate) const SCOPE_CLAIM: &str = "scope";
+
+/// The values the operator declared for a scope refusal of the operation on
+/// the record type: the scope claim, and the access profile that names the
+/// operation and record type with the scopes it requires. When no profile or
+/// more than one names them, only the claim is declared. Nothing here comes
+/// from the caller's token.
+fn declared_scope(project: &AdapterProject, operation: &str, record_type: &str) -> DeclaredScope {
+    let mut naming = project.access_profiles.iter().filter(|profile| {
+        profile.operations.iter().any(|id| id.as_str() == operation)
+            && profile
+                .record_types
+                .iter()
+                .any(|name| name.as_str() == record_type)
+    });
+    let declared = DeclaredScope::new(SCOPE_CLAIM);
+    match (naming.next(), naming.next()) {
+        (Some(profile), None) => {
+            let declared = declared.with_access_profile(profile.id.as_str());
+            if profile.scopes.is_empty() {
+                declared
+            } else {
+                declared.with_required_scope(
+                    profile
+                        .scopes
+                        .iter()
+                        .map(|scope| scope.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            }
+        }
+        _ => declared,
+    }
+}
+
+/// Attach the declared scope values to a scope refusal, for the recording
+/// layer. Any other refusal is returned as it is.
+fn with_declared_scope(
+    mut response: Response,
+    check: FailedCheck,
+    project: &AdapterProject,
+    operation: &str,
+    record_type: &str,
+) -> Response {
+    if check == FailedCheck::Scope {
+        response
+            .extensions_mut()
+            .insert(declared_scope(project, operation, record_type));
+    }
+    response
+}
+
 /// Mark a response as the refusal of `check`, for the recording layer.
 fn noted(mut response: Response, check: FailedCheck) -> Response {
     response.extensions_mut().insert(RefusalNote::new(check));
@@ -4657,6 +4739,7 @@ async fn refuse_call(
     status: StatusCode,
     check: Option<FailedCheck>,
 ) -> Response {
+    require_refusal_check(status, check);
     let profile = state.loaded.problems();
     tracing::warn!(
         class = class.class(),
@@ -5310,6 +5393,63 @@ mod generated_properties;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal was built without its failed check")]
+    fn a_forbidden_answer_without_its_check_is_not_built() {
+        require_refusal_check(StatusCode::FORBIDDEN, None);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal was built without its failed check")]
+    fn an_unauthorized_answer_without_its_check_is_not_built() {
+        require_refusal_check(StatusCode::UNAUTHORIZED, None);
+    }
+
+    #[test]
+    fn answers_with_a_check_or_that_are_not_caller_refusals_are_built() {
+        require_refusal_check(StatusCode::FORBIDDEN, Some(FailedCheck::Scope));
+        require_refusal_check(StatusCode::NOT_FOUND, None);
+        require_refusal_check(StatusCode::NOT_ACCEPTABLE, None);
+    }
+
+    #[test]
+    fn a_scope_refusal_declares_the_claim_and_the_profile_that_names_the_operation() {
+        let project = example_project(json!(["records.read"]));
+        let named = declared_scope(&project, "records-get", "person");
+        assert_eq!(named.scope_claim(), "scope");
+        assert_eq!(named.required_scope(), Some("records.read"));
+        assert_eq!(named.access_profile(), Some("records-reader"));
+        // No profile names the operation, so only the claim is declared.
+        let unnamed = declared_scope(&project, "records-purge", "person");
+        assert_eq!(unnamed.scope_claim(), "scope");
+        assert_eq!(unnamed.required_scope(), None);
+        assert_eq!(unnamed.access_profile(), None);
+    }
+
+    #[test]
+    fn only_a_scope_refusal_carries_declared_values() {
+        let project = example_project(json!(["records.read"]));
+        let answer = || StatusCode::FORBIDDEN.into_response();
+        let scope = with_declared_scope(
+            answer(),
+            FailedCheck::Scope,
+            &project,
+            "records-get",
+            "person",
+        );
+        assert!(scope.extensions().get::<DeclaredScope>().is_some());
+        let operation = with_declared_scope(
+            answer(),
+            FailedCheck::Operation,
+            &project,
+            "records-get",
+            "person",
+        );
+        assert!(operation.extensions().get::<DeclaredScope>().is_none());
+    }
 
     fn lookup_filters(value: &str) -> serde_json::Map<String, Value> {
         json!({"selector": "by-record-id", "values": {"record-id": value}})

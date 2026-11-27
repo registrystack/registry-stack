@@ -167,6 +167,9 @@
   `scope`. Each value is cut to 128 bytes. Products attach it to the refusal
   answer's extensions, which are never written to the response.
 
+- The MCP edge's scope refusal line names the configured scope claim and the
+  required scopes, never the token's own scopes. No answer changes.
+
 - A token whose header `alg` does not fit the key its `kid` names, or whose
   `kid` names an encryption key such as an RSA-OAEP `use: enc` key, now fails
   as `OidcError::AlgorithmNotAllowed` (`token-algorithm`) instead of

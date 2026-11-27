@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A scope refusal on the facade and the payment routes now writes the scope
+  claim name, the scope the operation requires and the access profile or
+  payment connection it applies to on its `request refused` line. The values
+  come from the deployment's configuration and never from the caller's token.
+  No answer changes.
+- A static key set that the facade refuses at startup states the rule it
+  broke, so the operator can correct the document without reading the source.
 - BREAKING: an Adapter job whose runtime document names a plain `http://`
   endpoint by host name must now list the address range that host resolves to
   in `allowedPrivateCidrs`. An omitted or empty list admits no private
