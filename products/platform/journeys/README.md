@@ -4,7 +4,7 @@ This folder holds the tables behind three acceptance journeys and a static check
 of those tables. A journey walks one product from nothing to a first
 authenticated call, or from a development run to a production start, using only
 what a reader of the documentation has. The tables say where each journey stops
-for each product today and which milestone removes the stop.
+for each product today and which change removes the stop.
 
 ## The three journeys
 
@@ -61,7 +61,7 @@ journey run replaces it with the code the run saw and sets `observed`. A
 harness failure, such as a container that did not start, is never a row.
 
 A journey run in ratchet mode succeeds when every cell matches the table. A
-milestone that fixes a cell deletes the row in the same commit and adds the
+change that fixes a cell deletes the row in the same commit and adds the
 cell to `passes`. A fix that is not recorded fails the run, and so does a new
 failure that the table does not list.
 
@@ -84,7 +84,7 @@ It checks that:
   thresholds, and the full reader-time model
 - the concept list has unique, well-formed entries
 - every journey and product cell appears exactly once, every step belongs to its
-  journey, every code is valid, every failure row names a listed milestone,
+  journey, every code is valid, every failure row names a listed change,
   and every row records its basis and a reason
 - journey scripts, when they exist, call none of `openssl`, `mkcert`, `keytool`,
   `psql`, `docker build` or `docker exec`, outside `lib-assists.sh`, and the

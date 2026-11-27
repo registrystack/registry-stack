@@ -1,12 +1,12 @@
 # The ratchet table of the acceptance journeys: where each journey stops for
-# each product on `main`, and which milestone removes the stop.
+# each product on `main`, and which change removes the stop.
 #
 # A cell is one journey and one product. Every cell of the journeys and products
 # in this folder appears exactly once, as an expected failure or as unreached,
 # or in `passes` once a cell passes. A cell fails at its first failing step with
 # one code. In ratchet mode a journey exits 0 when every cell equals this table.
 # A cell that fails differently, or no longer fails while still listed, fails
-# the run. A milestone that fixes a cell deletes its row in the same commit and
+# the run. A change that fixes a cell deletes its row in the same commit and
 # adds the cell to `passes`.
 #
 # basis: predicted    inferred from reading code. The first journey run on
@@ -47,16 +47,15 @@ journeyCodeSuffixes:
   attach: [issuer-refused]
 authenticationStages: [header, algorithm, token-type, key, signature, issuer, audience, time, client, scope, profile, unavailable]
 
-# Milestones of the plan that can remove a row.
-milestones: [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14, M15, M16]
+# Changes that can remove a row.
+changes: [posture, rstack-dev-products, caller-contract]
 
 expectedFailures:
   - journey: own-provider
     product: breg
     step: database.provision
     code: journey.needs.hand-written-sql
-    finding: X13
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
     reason: "prepare and issuer pass (bregctl check accepts the Keycloak issuer with RS256). bregctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
@@ -64,8 +63,7 @@ expectedFailures:
     product: casework
     step: database.provision
     code: journey.needs.hand-written-sql
-    finding: X13
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
     reason: "prepare and issuer pass (caseworkctl check). caseworkctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
@@ -73,8 +71,7 @@ expectedFailures:
     product: messaging
     step: database.provision
     code: journey.needs.hand-written-sql
-    finding: X13
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
     reason: "prepare and issuer pass (messagingctl check). messagingctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
@@ -82,8 +79,7 @@ expectedFailures:
     product: scheduling
     step: database.provision
     code: journey.needs.hand-written-sql
-    finding: X13
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
     reason: "prepare and issuer pass (schedulingctl check). schedulingctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
@@ -91,8 +87,7 @@ expectedFailures:
     product: documents
     step: database.provision
     code: journey.needs.hand-written-sql
-    finding: X13
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
     reason: "prepare and issuer pass (documentsctl check). documentsctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
@@ -100,8 +95,7 @@ expectedFailures:
     product: coordinator
     step: database.provision
     code: journey.needs.hand-written-sql
-    finding: X13
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
     reason: "prepare and issuer pass (coordinatorctl check, with the deployment block written by hand). coordinatorctl provision is refused with coordinator.cli.usage (unrecognized command), so roles, the database and grants are made by hand."
@@ -109,8 +103,7 @@ expectedFailures:
     product: adapter
     step: database.provision
     code: journey.needs.hand-written-sql
-    finding: X13
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
     reason: "prepare and issuer pass (adapterctl check of the facade-recovery example with the breg-records profile). adapterctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
@@ -118,17 +111,15 @@ expectedFailures:
     product: evidence
     step: issuer
     code: product.evidence.bundle.invalid-authentication
-    finding: X1
-    removedBy: M1
+    removedBy: posture
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "evidencectl check refuses the local target (outer code evidence.target.publication-invalid): the local profile takes only a canonical 127.0.0.1 HTTP origin with a port, and a Keycloak issuer carries the /realms/<realm> path, so any such issuer needs allowInsecureHttp: true. The loopback transport class of M1 (A2) removes the URL-shape rule. Behind it the call is predicted to stop at token-type, because Keycloak sends typ JWT."
+    reason: "evidencectl check refuses the local target (outer code evidence.target.publication-invalid): the local profile takes only a canonical 127.0.0.1 HTTP origin with a port, and a Keycloak issuer carries the /realms/<realm> path, so any such issuer needs allowInsecureHttp: true. The loopback transport class of the posture change removes the URL-shape rule. Behind it the call is predicted to stop at token-type, because Keycloak sends typ JWT."
   - journey: own-provider
     product: render
     step: call
     code: product.render.unauthorized
-    finding: G3
-    removedBy: M7
+    removedBy: caller-contract
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
     reason: "No database. Start, ready and the client-credentials token pass (RS256, audience urn:example:render, scope render:render, client portal). POST /v1/render/letter answers 401 with problem render.unauthorized. Render logs no authentication stage, so the code is the problem code. Inferred cause: the token type fixed at at+jwt (registry-render/src/auth.rs:71 on main) against Keycloak's typ JWT."
@@ -137,8 +128,7 @@ expectedFailures:
     product: breg
     step: plan
     code: journey.needs.hand-written-plan
-    finding: FH-4
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "bregctl init writes a project with no dev.yaml. rstack dev check refuses it with rstack.dev.check-unavailable (cannot read dev.yaml), so the only way forward is a plan the reader writes."
@@ -146,7 +136,7 @@ expectedFailures:
     product: casework
     step: plan
     code: journey.needs.hand-written-plan
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "caseworkctl init writes casework.yaml with no dev.yaml. rstack dev check refuses it with rstack.dev.check-unavailable. Its own next step tells the reader to write a dev.yaml plan."
@@ -154,8 +144,7 @@ expectedFailures:
     product: messaging
     step: keep
     code: journey.keep.state-lost
-    finding: FH-3
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "init ships a dev.yaml and the run reaches call (HTTP 202). After rstack dev stop and a second rstack dev start of the same project, the message the first run accepted answers HTTP 404, because every start draws fresh databases."
@@ -163,7 +152,7 @@ expectedFailures:
     product: evidence
     step: plan
     code: journey.needs.hand-written-plan
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "evidencectl init --profile local --transport sqlite-extract writes a project with no dev.yaml, so rstack dev check refuses it with rstack.dev.check-unavailable. The attach step is not reached."
@@ -171,7 +160,7 @@ expectedFailures:
     product: scheduling
     step: plan
     code: product.config.unknown-variant
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "init succeeds and writes no dev.yaml. A hand-written dev.yaml naming scheduling is refused with config.unknown-variant at /products/0/product: expected one of breg, casework, evidence, messaging."
@@ -179,7 +168,7 @@ expectedFailures:
     product: documents
     step: plan
     code: product.config.unknown-variant
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "init succeeds and writes no dev.yaml. A hand-written dev.yaml naming documents is refused with config.unknown-variant at /products/0/product: expected one of breg, casework, evidence, messaging."
@@ -187,7 +176,7 @@ expectedFailures:
     product: coordinator
     step: plan
     code: product.config.unknown-variant
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "init succeeds and writes no dev.yaml. A hand-written dev.yaml naming coordinator is refused with config.unknown-variant at /products/0/product: expected one of breg, casework, evidence, messaging."
@@ -195,7 +184,7 @@ expectedFailures:
     product: render
     step: plan
     code: product.config.unknown-variant
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "init succeeds and writes no dev.yaml. A hand-written dev.yaml naming render is refused with config.unknown-variant at /products/0/product: expected one of breg, casework, evidence, messaging."
@@ -203,7 +192,7 @@ expectedFailures:
     product: adapter
     step: init
     code: product.adapterctl.usage-invalid
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "adapterctl has no init command. adapterctl --format json init DIR is refused with adapterctl.usage-invalid (unrecognized subcommand), so there is no starter project to plan from."
@@ -211,7 +200,7 @@ expectedFailures:
     product: discovery
     step: init
     code: product.discovery.usage.invalid-arguments
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
     reason: "discoveryctl has no init command. discoveryctl init DIR is refused with discovery.usage.invalid-arguments (unrecognized subcommand), so there is no starter project to plan from."
@@ -220,7 +209,7 @@ expectedFailures:
     product: breg
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -228,7 +217,7 @@ expectedFailures:
     product: casework
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -236,7 +225,7 @@ expectedFailures:
     product: messaging
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -244,7 +233,7 @@ expectedFailures:
     product: evidence
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -252,7 +241,7 @@ expectedFailures:
     product: scheduling
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -260,7 +249,7 @@ expectedFailures:
     product: documents
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -268,7 +257,7 @@ expectedFailures:
     product: coordinator
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -276,7 +265,7 @@ expectedFailures:
     product: adapter
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -284,7 +273,7 @@ expectedFailures:
     product: render
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
@@ -292,7 +281,7 @@ expectedFailures:
     product: discovery
     step: input
     code: journey.promote.no-input
-    removedBy: M4
+    removedBy: rstack-dev-products
     basis: observed
     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The own-provider cell of discovery is unreached (it verifies no token and keeps no database), so there are no files to promote."
@@ -422,8 +411,8 @@ unreached:
 #     product: scheduling
 #     step: refusals
 #     code: journey.promote.nothing-refused
-#     removedBy: M6
+#     removedBy: posture
 #     basis: observed
 #     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), promote run 20261127025000-816f on own-provider run 20261127024425-265d (assisted: sql, certificate, token-type, mapper)"
-#     reason: "The assisted Scheduling cell reached T1. Started with no development declaration, schedulingctl check (which has no --production flag) lists no refusal and the server starts and answers /readyz, so zero refusals are listed. No shared posture exists on main, so nothing can refuse. The count becomes meaningful at M1 with M6."
+#     reason: "The assisted Scheduling cell reached T1. Started with no development declaration, schedulingctl check (which has no --production flag) lists no refusal and the server starts and answers /readyz, so zero refusals are listed. No shared posture exists on main, so nothing can refuse. The count becomes meaningful once the posture change lands."
 passes: []

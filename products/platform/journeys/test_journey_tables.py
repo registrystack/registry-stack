@@ -223,15 +223,15 @@ class ExpectedFailures(unittest.TestCase):
         for kind, row in self.rows:
             self.assertTrue(row["reason"].strip(), f"{kind} {cell(row)}")
 
-    def test_failure_rows_name_a_code_and_the_milestone_that_removes_them(self):
-        milestones = set(self.data["milestones"])
+    def test_failure_rows_name_a_code_and_the_change_that_removes_them(self):
+        changes = set(self.data["changes"])
         for row in self.data["expectedFailures"]:
             self.assertEqual(
-                set(row) - {"finding", "observedOn"},
+                set(row) - {"observedOn"},
                 {"journey", "product", "step", "code", "removedBy", "basis", "reason"},
                 cell(row),
             )
-            self.assertIn(row["removedBy"], milestones, cell(row))
+            self.assertIn(row["removedBy"], changes, cell(row))
             self.assertTrue(self.code_is_valid(row["code"]), f"{cell(row)}: {row['code']}")
 
     def test_unreached_rows_have_no_code(self):
