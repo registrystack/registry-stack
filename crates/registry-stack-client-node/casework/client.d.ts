@@ -269,7 +269,7 @@ export type ReviewCancelResponse =
 export interface ReviewPageQuery { cursor?: Uuid; limit?: SafeInteger }
 export type ReviewTaskOwnership = 'assigned-to-me' | 'unclaimed'
 export type ReviewTaskSort = 'due' | 'subject' | 'reference'
-export type ReviewTaskMarker = 'waiting' | 'answered'
+export type ReviewTaskMarker = 'waiting' | 'answered' | 'expired'
 export interface ReviewStaffingPageQuery { queue?: string; ownership?: ReviewTaskOwnership; marker?: ReviewTaskMarker; reference?: string; sort?: ReviewTaskSort; cursor?: Uuid; limit?: SafeInteger }
 /** A subject selector is absent or names every component of its immutable binding. */
 export type ReviewStaffingQuery = ReviewStaffingPageQuery & (
@@ -375,7 +375,7 @@ export interface ReviewClockOccurrence {
   clockId: string
   requestId: Uuid
   correlation: ReviewClockCorrelation
-  state: 'running' | 'completed' | 'cancelled' | 'source-facts-missing'
+  state: 'running' | 'paused' | 'completed' | 'cancelled' | 'source-facts-missing'
   policyDigest: ContentDigest
   anchorAt: string
   dueAt?: string
@@ -399,14 +399,16 @@ export interface ReviewAccountabilityRecord {
   occurredAt: string; retainedUntil: string
   decisionReceipt?: ReviewDecisionReceipt
 }
-export interface ReviewStagePolicy { id: string; label?: string; publicProgressCode?: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; outcomes?: ReadonlyArray<string>; negativeDecisions?: 'settle' | 'advise'; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
+export interface ReviewStageAsksPolicy { answerWithin?: ElapsedDuration; onDue?: 'return-to-reviewer'; pauseClocks?: boolean }
+export interface ReviewStagePolicy { id: string; label?: string; publicProgressCode?: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; outcomes?: ReadonlyArray<string>; negativeDecisions?: 'settle' | 'advise'; asks?: ReviewStageAsksPolicy; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
 export interface ReviewRetentionPolicy { terminalRetentionDays: SafeInteger; accountabilityRetentionDays: SafeInteger }
 export interface ReviewContextContract { id: string; revision: ContentDigest; schemaDigest: ContentDigest }
 export type ReviewContextPolicy = { mode: 'submitted' } | { mode: 'current-source'; provider: string; contract: ReviewContextContract }
 export type ReviewContextCapability = 'human-display' | 'service-status' | 'task-grant-context' | 'routing-context'
 export interface ReviewContextProviderPolicy { id: string; capabilities: ReadonlyArray<ReviewContextCapability>; sourceNamespace: string; deploymentRef: string; serviceProfiles?: Partial<Record<ReviewContextCapability, string>> }
-export interface ReviewPolicy { id: string; label?: string; version: string; purpose: 'approval' | 'answer'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }> }
+export interface ReviewPolicy { id: string; label?: string; version: string; purpose: 'approval' | 'answer'; resubmission?: 'first-stage' | 'resume-at-returning-stage'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }> }
 export interface ReviewPolicyClosure {
+  resubmission?: 'first-stage' | 'resume-at-returning-stage'
   identity: PolicyBinding
   label?: string
   purpose: 'approval' | 'answer'
