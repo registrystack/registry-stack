@@ -204,11 +204,79 @@ fn an_unresolved_reference_never_decodes_to_an_empty_list() {
     // The reader expands references before typed decoding. A path that
     // reaches the typed model without it must be refused, because an empty
     // list means every row.
+    serde_json::from_value::<RegistryProject>(inline())
+        .expect("the same project written inline decodes, so only the reference is refused");
     let value = by_reference();
     let decoded = serde_json::from_value::<RegistryProject>(value);
+    let error = decoded.expect_err("a reference that reaches the typed model is refused");
     assert!(
-        decoded.is_err(),
-        "a reference that reaches the typed model is refused"
+        error.to_string().contains("a row boundary set reference"),
+        "the typed model names the unexpanded reference: {error}"
+    );
+}
+
+/// A structured field whose schema literal holds a mapping shaped like a
+/// reference. The shape is schema data here, not a row reach.
+fn with_reference_shaped_literal(mut value: Value, name: &str) -> Value {
+    value["recordTypes"]["entry"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"payload","type":"structured","maximumBytes":256,"classification":"internal",
+          "schema":{"type":"object","additionalProperties":false,
+                    "const":{"rowBoundaries":{"rowBoundarySet": name}}}}));
+    value
+}
+
+#[test]
+fn a_reference_shaped_schema_literal_is_data_and_never_a_reference() {
+    const LITERAL: &str = "/recordTypes/entry/fields/2/schema/const";
+    for (declared, name) in [(false, "no-such-set"), (true, SET)] {
+        let mut value = with_reference_shaped_literal(inline(), name);
+        if declared {
+            value["rowBoundarySets"] = json!({ SET: [boundary()] });
+        }
+        let parsed = read(&value).expect("a schema literal is not a row boundary reference");
+        let written = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            written.pointer(LITERAL),
+            Some(&json!({"rowBoundaries":{"rowBoundarySet": name}})),
+            "the literal is kept as written (set declared: {declared})"
+        );
+    }
+}
+
+#[test]
+fn a_reference_shaped_schema_literal_beside_a_real_reference_stays_unchanged() {
+    let value = with_reference_shaped_literal(by_reference(), SET);
+    let parsed = read(&value).expect("references and literals read together");
+    let written = serde_json::to_value(&parsed).unwrap();
+    assert_eq!(
+        written.pointer("/recordTypes/entry/fields/2/schema/const"),
+        Some(&json!({"rowBoundaries":{"rowBoundarySet": SET}}))
+    );
+    assert_eq!(
+        written.pointer("/accessProfiles/reader/permissions/records/0/rowBoundaries"),
+        Some(&json!([boundary()]))
+    );
+}
+
+#[test]
+fn a_module_profile_takes_the_reference_where_it_writes_its_reach() {
+    let module = serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule",
+        "id":"extra","version":"1",
+        "rowBoundarySets":{ SET: [boundary()] },
+        "extendRecordTypes":{"entry": {"accessProfiles":{"auditor":{
+            "principalClaim":"registry_principal","requiredScopes":"unrestricted",
+            "operations":["get"],"readableFields":["code"],
+            "rowBoundaries": reference()}}}}
+    }))
+    .unwrap();
+    let parsed = parse_module_yaml(&module).expect("a module profile reaches its own set");
+    let written = serde_json::to_value(&parsed).unwrap();
+    assert_eq!(
+        written.pointer("/extendRecordTypes/entry/accessProfiles/auditor/rowBoundaries"),
+        Some(&json!([boundary()]))
     );
 }
 
