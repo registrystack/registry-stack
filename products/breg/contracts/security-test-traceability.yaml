@@ -280,3 +280,7 @@ traceability:
   # Live review additions retain exact context disclosure: crates/registry-breg/tests/support/proposal_additions.rs::additions_reviewer_reads_live_files_under_the_exact_context_binding
   # Shared addition references survive until exact detail erasure: crates/registry-breg/tests/support/proposal_additions.rs::additions_keep_shared_blobs_live_until_their_retention_erases_them
   # Added event, hook selection and minimized audit: crates/registry-breg/tests/support/proposal_additions.rs::additions_emit_a_value_free_event_and_enqueue_the_selected_hook
+  - {"id":"BREG-SEC-225","state":"enforced","negativeId":"BREG-NEG-225","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_additions_authority.rs","name":"additions_require_add_even_when_the_caller_holds_edit_or_get"}}
+  - {"id":"BREG-SEC-226","state":"enforced","negativeId":"BREG-NEG-226","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_additions.rs","name":"additions_reviewer_reads_live_files_under_the_exact_context_binding"}}
+  - {"id":"BREG-SEC-227","state":"enforced","negativeId":"BREG-NEG-227","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_additions.rs","name":"additions_leave_the_frozen_manifest_unchanged_and_apply_still_succeeds"}}
+  - {"id":"BREG-SEC-228","state":"enforced","negativeId":"BREG-NEG-228","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_additions.rs","name":"additions_keep_shared_blobs_live_until_their_retention_erases_them"}}

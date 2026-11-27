@@ -364,11 +364,16 @@ Reviewer downloads instead require the declared review-context field and its exa
 BReg rechecks current disclosure before releasing verified bytes under the reviewer's own token.
 Proposal detail erasure counts and erases addition references with attachment references.
 The shared blob store retains bytes while either kind of live reference needs them.
+BReg trusts the declared media type within the slot's permitted types.
+Downloads use attachment disposition and `nosniff` to limit browser interpretation.
+Each addition occupies a place for the submission's lifetime because this release has no removal operation.
 
 {/* Evidence: crates/registry-breg/src/mutation/proposal.rs ensure_additions_open;
     crates/registry-breg/src/postgres/proposal.rs proposal_attachment_download;
     crates/registry-breg/src/attachment_store.rs;
-    crates/registry-breg/tests/support/proposal_additions.rs. */}
+    crates/registry-breg/tests/support/proposal_additions.rs;
+    crates/registry-breg/tests/support/proposal_additions_authority.rs;
+    products/breg/contracts/security-invariant-matrix.yaml BREG-SEC-225, BREG-SEC-226, BREG-SEC-227, BREG-SEC-228. */}
 
 ### One-call writes
 

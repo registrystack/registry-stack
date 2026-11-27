@@ -51,6 +51,16 @@
   refused. To migrate, write the store's or verifier's own IPv4 or native
   IPv6 address, or a name that answers one.
 
+- Proposal hooks without a `transitions` filter also receive `added`
+  (`proposal.added`). Existing receivers must accept that event or configure
+  an explicit transition filter.
+- Declaring or changing an `additions` slot changes the Action revision.
+  Previously submitted Proposals must Rebase and Submit again for fresh review.
+  Additions require required review. Each accepted file consumes a count place
+  for its submission, and this release has no addition removal operation.
+  BReg trusts the declared media type as for other attachments and serves
+  downloads as attachments with `nosniff`.
+
 - Proposal Actions can declare one bounded `additions` slot for supporting files
   during an open review. The independent `add` grant uses `writableAttachments`.
   Get uses `readableAttachments`. Each addition changes the Proposal ETag while

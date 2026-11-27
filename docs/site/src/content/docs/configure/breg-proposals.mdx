@@ -656,6 +656,8 @@ The facility template combines supporting-document display with current Record a
 ## Accept supporting files during review
 
 Declare `additions` when your applicant or an authorised officer needs to supply files after Submit.
+Configure required review before declaring this slot.
+BReg refuses an additions slot with `review.type: none` (`breg.addition.review-required`).
 BReg keeps these files beside the current submission.
 An addition changes the Proposal revision and ETag while preserving its submission version and frozen effect digest.
 
@@ -674,6 +676,14 @@ execution:
 You can declare one additions slot with a limit of 1 to 32 files per submission.
 Give it an ID distinct from every attachment slot.
 The byte and media-type rules match attachment slots.
+Each accepted file consumes one place for that submission.
+This release offers no operation to remove an addition.
+BReg trusts the declared media type as it does for other attachments.
+Downloads use `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
+
+Declaring or changing the slot changes the Action revision.
+An existing submitted Proposal needs Rebase, then Submit, before the changed slot accepts files.
+BReg withdraws the previous review and starts review for the rebased submission.
 
 Grant `add` and list the slot in `writableAttachments` to allow uploads.
 Grant `get` and list it in `readableAttachments` to disclose its files and download links.
@@ -710,6 +720,8 @@ Revise starts a submission version with no additions.
 Use the `added` hook transition to observe the value-free `proposal.added` event.
 
 {/* Evidence: crates/registry-breg/src/contract.rs AdditionSlotSource;
+    crates/registry-breg/src/immediate_actions.rs breg.addition.review-required, definition_revision;
+    crates/registry-breg/src/api/attachments.rs;
     crates/registry-breg/src/mutation/proposal/additions.rs append_additions;
     crates/registry-breg/src/mutation/proposal/context_projection.rs;
     crates/registry-breg/tests/support/proposal_additions.rs;

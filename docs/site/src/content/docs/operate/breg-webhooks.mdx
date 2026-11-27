@@ -91,6 +91,14 @@ there is no supported outbox consumer API.
 A Proposal lifecycle hook is declared on the Action under `execution.proposal.hooks`, selects native
 transitions, and uses its own value-free event schema; it is separate from Record field
 projections.
+If you omit `transitions`, BReg matches every Proposal transition.
+This includes `added` and its `proposal.added` event.
+Your existing receiver must accept this event when its hook has no transition filter.
+Set an explicit `transitions` list if your receiver accepts only selected events.
+
+{/* Evidence: crates/registry-breg/src/proposal_hooks.rs matching_transitions;
+    crates/registry-breg/tests/proposal_hooks.rs additions_hooks_select_added_by_default_and_by_explicit_transition. */}
+
 A module may add hooks to an existing Record type, and it cannot replace an event another module
 owns.
 
