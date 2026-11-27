@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The
+  POST carries `webhook-id`, `webhook-timestamp` and `webhook-signature`, an
+  HMAC-SHA-256 over the id, the timestamp and the exact body. It no longer
+  sends the Version 1 headers or `Idempotency-Key`. A retry or a replay keeps
+  the same `webhook-id`, so a receiver treats it as the delivery's identity.
+  Each hook destination names its own key with `hmacSha256KeyRef`, 32 to 64
+  bytes. To rotate, keep the old bytes behind `previousHmacSha256KeyRef` and
+  write new bytes behind the current reference. BReg then sends both
+  signatures, the current one first. `bregctl hook sample` renders a Standard
+  Webhooks request.
+
+- BREAKING: a review authority that sends completion notifications declares a
+  `completion` block with its own key, and BReg authenticates each notification
+  with Standard Webhooks. The `Registry-Recipient-Binding` header only selects
+  the authority's key. BReg refuses a timestamp more than 300 seconds from its
+  clock and keeps one completion per authority and `webhook-id` for the
+  authority's recovery window. A first `bregctl apply` now needs the review
+  authority credentials and completion key files to resolve.
+
+- BREAKING: startup, `bregctl doctor`, `bregctl plan` and `bregctl hook drain`,
+  `list`, `replay` and `discard` refuse a key whose bytes equal another
+  destination's or review authority's key, previous keys included. The refusal names both paths and
+  says how to give the second one its own key. A previous key equal to its own
+  current key gets its own refusal with the rotation order.
+
+- `bregctl dev` writes a separate delivery key for each compiled destination.
+  Its inbox records a delivery once per destination and `webhook-id`, so a
+  retry adds no row. A development session from before per-destination keys is
+  refused before the receiver starts, with the advice to run
+  `bregctl dev stop --remove` and start again.
+
 - A `rowBoundarySets` member declares a named list of row boundaries once
   per project or module file. A grant, an Action or Proposal target, or a
   Record type's `accessRequirements` writes
