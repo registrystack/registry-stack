@@ -105,7 +105,7 @@ fn guard_project(readable: &[&str], offset: Option<(&str, i32)>) -> Value {
                 "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
-                    "ownership":"caller","targets":[{"recordType":"target",
+                    "ownership":"caller","readableInputs":["target","value","minimum"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     if let Some((member, offset)) = offset {
         source["project"]["timezone"] = json!("UTC");

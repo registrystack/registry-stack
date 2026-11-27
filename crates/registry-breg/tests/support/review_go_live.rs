@@ -604,6 +604,10 @@ async fn rollback_does_not_revive_cancelled_review_or_application() {
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let (package, active) = proposal_activation::activate_with_compatibility(
         &fixture,
         &fixture.registry,
@@ -706,6 +710,10 @@ async fn late_approval_after_rollback(finish_cancellation: bool, automatic: bool
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let (package, active) = proposal_activation::activate_with_compatibility(
         &fixture,
         &fixture.registry,
@@ -1166,6 +1174,10 @@ async fn failed_review_stays_withdrawn_after_rollback(accepted: bool) {
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let (package, active) = proposal_activation::activate_with_compatibility(
         &fixture,
         &fixture.registry,
@@ -1352,6 +1364,10 @@ async fn activated_automatic_proposal_preserves_requester_recovery(rollback: boo
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let (mut package, mut active) = proposal_activation::activate_with_compatibility(
         &fixture,
         &fixture.registry,
@@ -1744,6 +1760,10 @@ async fn activation_statement_counts(extra_pending: usize) -> Vec<(String, i64)>
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let project = parse_project_json(&serde_json::to_vec(&successor).unwrap()).unwrap();
     let candidate = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let (mut admin, task) = fixture.database.connect_admin().await;

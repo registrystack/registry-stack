@@ -162,15 +162,15 @@ fn record_source() -> Value {
                             {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
                             {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]}],
                     "proposals":[{"action":"rename","operations":["get","list","edit","submit","apply"],
-                        "ownership":"caller","readableAttachments":["support"],"writableAttachments":["support"],
+                        "ownership":"caller","readableInputs":["target","value"],"readableAttachments":["support"],"writableAttachments":["support"],
                         "targets":[{"recordType":"application","rowBoundaries":jurisdiction_boundary()}]},
                         {"action":"enrol","operations":["get","list","edit","submit"],
-                            "ownership":"caller","readableAttachments":["document","note"],
+                            "ownership":"caller","readableInputs":["name","jurisdiction","programme"],"readableAttachments":["document","note"],
                             "writableAttachments":["document","note"],"targets":[
                                 {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
                                 {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]},
                         {"action":"amend","operations":["get","list","edit","submit","apply"],
-                            "ownership":"caller","readableAttachments":["document"],
+                            "ownership":"caller","readableInputs":["target","name","jurisdiction","programme"],"readableAttachments":["document"],
                             "writableAttachments":["document"],"targets":[
                                 {"recordType":"programme","rowBoundaries":jurisdiction_boundary()},
                                 {"recordType":"application","rowBoundaries":jurisdiction_boundary()}]}]}},
@@ -2700,6 +2700,7 @@ fn paired_promotion_source() -> Value {
         .unwrap()
         .push(json!({"action":"pair",
         "operations":["get","list","edit","submit","apply"],"ownership":"caller",
+        "readableInputs":["name","jurisdiction","programme"],
         "readableAttachments":["first","second"],"writableAttachments":["first","second"],
         "targets":targets}));
     source

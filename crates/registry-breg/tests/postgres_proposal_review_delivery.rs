@@ -2533,6 +2533,8 @@ async fn a_handoff_refusal_is_named_only_while_the_refused_submission_is_current
     let mut source = registry_source(json!(policy()));
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "submit", "revise", "cancel"]);
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
+        json!(["target", "value"]);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let bindings = authority.registry.clone();

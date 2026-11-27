@@ -89,6 +89,7 @@ fn writes_source() -> Value {
                 "operations": lifecycle, "targets": targets}),
         ]);
     }
+    crate::fixture::grant_readable_inputs(&mut source);
     source
 }
 
@@ -1170,6 +1171,7 @@ fn residence_source() -> Value {
                 "operations": proposal_lifecycle(), "targets": targets}),
         ]);
     }
+    crate::fixture::grant_readable_inputs(&mut source);
     source
 }
 

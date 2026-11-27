@@ -71,7 +71,7 @@ fn overlapping_default_proposal_grants_are_refused_naming_both_profiles() {
 
 #[test]
 fn default_proposal_grants_with_disjoint_operations_compile() {
-    compile(&project(json!(["edit"]), json!(["get"])))
+    compile(&project(json!(["submit"]), json!(["get"])))
         .expect("disjoint default operations are legal");
 }
 

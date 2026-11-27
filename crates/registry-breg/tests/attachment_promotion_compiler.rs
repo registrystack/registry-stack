@@ -45,7 +45,7 @@ fn source() -> Value {
                     "actions":[{"action":"amend","operations":["start"],"targets":[
                         {"recordType":"application","rowBoundaries":"unrestricted"}]}],
                     "proposals":[{"action":"amend","operations":["get","list","edit","submit","apply"],
-                        "ownership":"caller","readableAttachments":["document"],
+                        "ownership":"caller","readableInputs":["target","name"],"readableAttachments":["document"],
                         "writableAttachments":["document"],"targets":[
                             {"recordType":"application","rowBoundaries":"unrestricted"}]}]}}}})
 }

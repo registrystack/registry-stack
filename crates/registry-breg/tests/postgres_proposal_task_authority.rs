@@ -120,6 +120,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                         "action":"correct-name",
                         "operations":["get","edit","submit","retry","cancel","apply"],
                         "ownership":"caller",
+                        "readableInputs":["target","value"],
                         "targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]
                     }]
                 }
@@ -141,6 +142,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                         "action":"correct-name",
                         "operations":["get","edit","submit","cancel"],
                         "ownership":"caller",
+                        "readableInputs":["target","value"],
                         "targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]
                     }]
                 }

@@ -123,7 +123,7 @@ fn registry_source(automatic: bool) -> Value {
                 "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
-                    "ownership":"caller","readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
+                    "ownership":"caller","readableInputs":["target","value"],"readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     source
 }
@@ -145,6 +145,8 @@ async fn holder_identity_is_a_draft_value_but_submit_authority_remains_server_ow
         .remove("mutationPolicy");
     source["recordTypes"]["target"]["fields"][1]["id"] = json!("applicant");
     source["actions"]["correct-name"]["inputs"][0] = json!({"id":"applicant","type":"string","maximumLength":64,"required":true,"classification":"internal"});
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
+        json!(["applicant", "value"]);
     source["actions"]["correct-name"]["commitGuards"] = json!({});
     source["actions"]["correct-name"]["plan"] = json!({"type":"fixed","effects":[{"id":"application","operation":"create","target":{"recordType":"target"},"set":{"name":{"fromInput":"value"},"applicant":{"fromInput":"applicant"}}}]});
     source["accessProfiles"]["clerk"]["permissions"]["records"] = json!([{"recordType":"target","operations":["get","list"],"readableFields":["name","applicant"],"rowBoundaries":[{"field":"applicant","claim":"sub","operator":"equals"}]}]);
@@ -1497,7 +1499,7 @@ async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals()
         .push(json!({"id":"memo","type":"text","required":true,
             "maximumLength":320_000,"classification":"internal"}));
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
-        json!(["memo"]);
+        json!(["target", "value", "memo"]);
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
     // JSON encoding makes this legal text input nearly 2 MiB on the wire.
@@ -1744,6 +1746,10 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_stays_re
                 json!({"id":"activation-note","type":"string","maximumLength":32,
                 "required":false,"classification":"internal"}),
             );
+        incompatible["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("activation-note"));
         let mut registry = (*fixture.registry).clone();
         let mut identity = fixture.identity.clone();
         let mut activated = None;
@@ -2375,7 +2381,8 @@ async fn manual_no_review_attachments_cas_concealment_and_exact_receipt() {
     let client = &fixture.http.client;
     let draft = start(&fixture, "After", "manual-start").await;
     assert_eq!(draft.state(), BRegProposalState::Draft);
-    assert!(serde_json::to_value(&draft).unwrap().get("input").is_none());
+    // The clerk grant reads the inputs it may write, so the draft serves them.
+    assert!(serde_json::to_value(&draft).unwrap().get("input").is_some());
     let uploaded = client
         .upload_proposal_attachment(
             &draft,
@@ -5287,7 +5294,8 @@ async fn proposal_inputs_require_an_explicit_selected_profile_allowlist() {
         .await
         .unwrap()
         .value;
-    assert!(serde_json::to_value(&draft).unwrap().get("input").is_none());
+    // The clerk grant reads the inputs it may write, so the draft serves them.
+    assert!(serde_json::to_value(&draft).unwrap().get("input").is_some());
     let metadata = client
         .registry_contract(Some("input-reader"))
         .await
@@ -5717,6 +5725,10 @@ async fn prepared_lifecycle_recovery_uses_current_authority_and_the_original_exa
 async fn reference_only_targets_are_locked_and_readmitted_at_submit_and_apply() {
     let mut source = registry_source(false);
     source["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(json!({"id":"linked","type":"reference","target":"target","required":true,"classification":"internal"}));
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("linked"));
     let mut fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
     let client = &fixture.http.client;
@@ -6597,6 +6609,10 @@ async fn review_context_projects_an_omitted_optional_input_as_null() {
         .push(json!("get-review-context"));
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["proposedName", "note", "relatedName"]);
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("note"), json!("related")]);
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
     // The shared helper supplies only the required inputs.

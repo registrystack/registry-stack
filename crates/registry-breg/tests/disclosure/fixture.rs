@@ -9,6 +9,40 @@
 
 use serde_json::{json, Map, Value};
 
+/// Grants every Proposal grant that edits, revises or rebases the read of the
+/// inputs it may write, which the compiler requires.
+#[allow(dead_code)]
+pub fn grant_readable_inputs(source: &mut Value) {
+    let actions = source["actions"].clone();
+    let Some(profiles) = source["accessProfiles"].as_object_mut() else {
+        return;
+    };
+    for profile in profiles.values_mut() {
+        let Some(grants) = profile
+            .pointer_mut("/permissions/proposals")
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        for grant in grants {
+            let writes = grant["operations"].as_array().is_some_and(|operations| {
+                operations.iter().any(|operation| {
+                    matches!(operation.as_str(), Some("edit" | "revise" | "rebase"))
+                })
+            });
+            if !writes || grant.get("readableInputs").is_some() {
+                continue;
+            }
+            let inputs: Vec<Value> = actions[grant["action"].as_str().unwrap_or_default()]
+                ["inputs"]
+                .as_array()
+                .map(|inputs| inputs.iter().map(|input| input["id"].clone()).collect())
+                .unwrap_or_default();
+            grant["readableInputs"] = Value::Array(inputs);
+        }
+    }
+}
+
 use super::postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;

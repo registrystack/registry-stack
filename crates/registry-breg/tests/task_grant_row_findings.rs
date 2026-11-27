@@ -49,7 +49,7 @@ fn project(rows: Value, classification: &str) -> Value {
                     "actions":[
                         {"action":"relabel-note","operations":["invoke"],"targets":[{"recordType":"note","rowBoundaries":rows.clone()}],"results":["relabelled"]},
                         {"action":"correct-case","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":rows.clone()}]}],
-                    "proposals":[{"action":"correct-case","operations":["get","edit"],"ownership":"caller","targets":[{"recordType":"case","rowBoundaries":rows}]}]}}
+                    "proposals":[{"action":"correct-case","operations":["get","edit"],"ownership":"caller","readableInputs":["case-ref","new-label"],"targets":[{"recordType":"case","rowBoundaries":rows}]}]}}
         }
     })
 }
@@ -123,6 +123,10 @@ fn public_record_types_and_standing_profiles_draw_no_finding() {
         .expect("action permissions")
         .remove(0);
     permissions["proposals"][0]["operations"] = json!(["edit"]);
+    permissions["proposals"][0]
+        .as_object_mut()
+        .expect("proposal grant")
+        .remove("readableInputs");
     let registry = compile(&standing);
     assert_eq!(unbound_paths(&registry), Vec::<String>::new());
 }
