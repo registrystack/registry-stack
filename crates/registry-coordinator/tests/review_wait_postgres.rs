@@ -15,6 +15,7 @@ use registry_coordinator::{
     store::{Actor, Store},
     worker::Worker,
 };
+use registry_platform_crypto::delivery_signature::{sign, DeliveryKey, DeliveryKeys};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -33,7 +34,8 @@ const REQUEST: &str = "6f1d4c1e-2b7a-4c55-9a3e-1d2c3b4a5f60";
 const RESULT: &str = "0b9e8d7c-6a5f-4e3d-8c2b-1a0f9e8d7c6b";
 const MESSAGE: &str = "3c2b1a0f-9e8d-4c7b-a6f5-e4d3c2b1a0f9";
 const APPLICATION: &str = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
-const TOKEN: &str = "synthetic-completion-token-canary-0123456789abcdef";
+const KEY: &[u8] = &[0xa7; 32];
+const OLD_KEY: &[u8] = &[0x31; 32];
 const RECIPIENT: &str = "coordinator-v1";
 
 const FUNCTIONS: &str = include_str!("fixtures/review-wait/functions.rhai");
@@ -116,6 +118,7 @@ fn result(status: &str) -> Value {
 }
 
 struct Fake {
+    completion_keys: DeliveryKeys,
     reads: Mutex<VecDeque<CompletionObservation>>,
     cancel_results: Mutex<VecDeque<CallOutcome>>,
     read_count: AtomicUsize,
@@ -144,6 +147,7 @@ impl Fake {
         release: Option<Semaphore>,
     ) -> Self {
         Self {
+            completion_keys: keys(KEY, None),
             reads: Mutex::new(reads.into()),
             cancel_results: Mutex::new(cancel_results.into()),
             read_count: AtomicUsize::new(0),
@@ -248,8 +252,8 @@ impl AdapterSet for Fake {
         900
     }
 
-    fn review_completion(&self, token: &str, recipient: &str) -> Option<String> {
-        (token == TOKEN && recipient == RECIPIENT).then(|| "review".to_owned())
+    fn review_completion(&self, recipient: &str) -> Option<(&str, &DeliveryKeys)> {
+        (recipient == RECIPIENT).then_some(("review", &self.completion_keys))
     }
 }
 
@@ -454,21 +458,28 @@ impl Harness {
     }
 }
 
-fn completion_headers(token: &str, recipient: &str, event: Uuid) -> HeaderMap {
+fn keys(current: &[u8], previous: Option<&[u8]>) -> DeliveryKeys {
+    DeliveryKeys::new(
+        DeliveryKey::new(current).unwrap(),
+        previous.map(|key| DeliveryKey::new(key).unwrap()),
+    )
+    .unwrap()
+}
+
+fn completion_headers(keys: &DeliveryKeys, recipient: &str, event: Uuid, body: &[u8]) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "authorization",
-        HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
-    );
-    headers.insert(
-        "registry-recipient-binding",
-        HeaderValue::from_str(recipient).unwrap(),
-    );
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-    headers.insert(
-        "idempotency-key",
-        HeaderValue::from_str(&event.to_string()).unwrap(),
-    );
+    let id = event.to_string();
+    let timestamp = Utc::now().timestamp().try_into().unwrap();
+    let signature = sign(keys, &id, timestamp, body).unwrap();
+    for (name, value) in [
+        ("registry-recipient-binding", recipient),
+        ("content-type", "application/json"),
+        ("webhook-id", &id),
+        ("webhook-timestamp", &timestamp.to_string()),
+        ("webhook-signature", &signature),
+    ] {
+        headers.insert(name, HeaderValue::from_str(value).unwrap());
+    }
     headers
 }
 
@@ -486,11 +497,12 @@ fn completion_body(event: Uuid, request: &str) -> Vec<u8> {
 /// Deliver one authentic completion event for `request`.
 async fn complete(h: &Harness, adapters: &dyn AdapterSet, request: &str) -> StatusCode {
     let event = Uuid::new_v4();
+    let body = completion_body(event, request);
     receive_review_completion(
         &h.store,
         adapters,
-        &completion_headers(TOKEN, RECIPIENT, event),
-        Some(&completion_body(event, request)),
+        &completion_headers(&keys(KEY, None), RECIPIENT, event, &body),
+        Some(&body),
     )
     .await
     .status()
@@ -641,6 +653,64 @@ async fn an_event_for_an_unknown_request_is_accepted_and_changes_nothing() {
 }
 
 #[tokio::test]
+async fn a_repeated_completion_wakes_one_wait_once() {
+    let h = harness(true).await;
+    let fake = Fake::new(vec![
+        CompletionObservation::Pending { retry_after: None },
+        CompletionObservation::Settled(result("approved")),
+    ]);
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    let event = Uuid::new_v4();
+    let body = completion_body(event, REQUEST);
+    let headers = completion_headers(&keys(KEY, None), RECIPIENT, event, &body);
+    for _ in 0..2 {
+        assert_eq!(
+            receive_review_completion(&h.store, fake.as_ref(), &headers, Some(&body))
+                .await
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    assert!(h.wait_row(run).await.unwrap().woken);
+    h.make_due(run).await;
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 2);
+    assert!(h.wait_row(run).await.is_none());
+    assert_eq!(
+        receive_review_completion(&h.store, fake.as_ref(), &headers, Some(&body))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    h.drain(&worker).await;
+    assert_eq!(fake.reads(), 2);
+}
+
+#[tokio::test]
+async fn a_completion_signed_during_rotation_wakes_the_wait() {
+    let h = harness(true).await;
+    let fake = Arc::new(Fake {
+        completion_keys: keys(KEY, Some(OLD_KEY)),
+        ..Fake::with(vec![], vec![], false, None)
+    });
+    let worker = Worker::new(h.store.clone(), fake.clone());
+    let run = h.admit().await;
+    h.drain(&worker).await;
+    let event = Uuid::new_v4();
+    let body = completion_body(event, REQUEST);
+    let headers = completion_headers(&keys(OLD_KEY, None), RECIPIENT, event, &body);
+    assert_eq!(
+        receive_review_completion(&h.store, fake.as_ref(), &headers, Some(&body))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(h.wait_row(run).await.unwrap().woken);
+}
+
+#[tokio::test]
 async fn an_inauthentic_or_malformed_event_is_refused_and_wakes_nothing() {
     let h = harness(true).await;
     let fake = Fake::new(vec![]);
@@ -651,37 +721,33 @@ async fn an_inauthentic_or_malformed_event_is_refused_and_wakes_nothing() {
     let body = completion_body(event, REQUEST);
     let mut cases: Vec<(&str, HeaderMap, Option<Vec<u8>>, StatusCode)> = vec![
         (
-            "a forged token",
-            completion_headers(
-                "another-synthetic-token-canary-0123456789",
-                RECIPIENT,
-                event,
-            ),
+            "a forged signature",
+            completion_headers(&keys(&[0x90; 32], None), RECIPIENT, event, &body),
             Some(body.clone()),
             StatusCode::UNAUTHORIZED,
         ),
         (
             "another recipient",
-            completion_headers(TOKEN, "another-recipient", event),
+            completion_headers(&keys(KEY, None), "another-recipient", event, &body),
             Some(body.clone()),
             StatusCode::UNAUTHORIZED,
         ),
         (
             "a replayed body under another event key",
-            completion_headers(TOKEN, RECIPIENT, Uuid::new_v4()),
+            completion_headers(&keys(KEY, None), RECIPIENT, Uuid::new_v4(), &body),
             Some(body.clone()),
             StatusCode::BAD_REQUEST,
         ),
     ];
-    let mut missing = completion_headers(TOKEN, RECIPIENT, event);
-    missing.remove("authorization");
+    let mut missing = completion_headers(&keys(KEY, None), RECIPIENT, event, &body);
+    missing.remove("webhook-signature");
     cases.push((
-        "no credential",
+        "no signature",
         missing,
         Some(body.clone()),
         StatusCode::UNAUTHORIZED,
     ));
-    let mut text = completion_headers(TOKEN, RECIPIENT, event);
+    let mut text = completion_headers(&keys(KEY, None), RECIPIENT, event, &body);
     text.insert("content-type", HeaderValue::from_static("text/plain"));
     cases.push((
         "another media type",
@@ -695,7 +761,11 @@ async fn an_inauthentic_or_malformed_event_is_refused_and_wakes_nothing() {
         assert_eq!(response.status(), expected, "{case}");
         assert_eq!(response.headers()["cache-control"], "no-store", "{case}");
         if expected == StatusCode::UNAUTHORIZED {
-            assert_eq!(response.headers()["www-authenticate"], "Bearer", "{case}");
+            assert_eq!(
+                response.headers()["www-authenticate"],
+                "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\"",
+                "{case}"
+            );
         }
         assert_eq!(
             response.headers()["content-type"],
@@ -717,7 +787,7 @@ async fn an_inauthentic_or_malformed_event_is_refused_and_wakes_nothing() {
         assert_eq!(problem["status"], expected.as_u16(), "{case}");
         assert!(
             !problem.to_string().contains("canary"),
-            "a refusal repeats no credential: {case}"
+            "a refusal repeats no key bytes: {case}"
         );
     }
     assert!(!h.wait_row(run).await.unwrap().woken);

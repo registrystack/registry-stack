@@ -559,9 +559,9 @@ async fn a_result_read_without_an_accepted_request_or_casework_binding_sends_not
         .is_empty());
 }
 
-fn with_completion(config: &mut RuntimeConfig, root: &std::path::Path, name: &str, token: &str) {
-    let file = format!("{name}-completion-token");
-    support::private_file(&root.join(&file), token.as_bytes());
+fn with_completion(config: &mut RuntimeConfig, root: &std::path::Path, name: &str, key: &[u8]) {
+    let file = format!("{name}-completion-key");
+    support::private_file(&root.join(&file), key);
     let mut connection = config.connections["review"].clone();
     let ConnectionConfig::CaseworkReviewProducer(ref mut binding) = connection else {
         panic!("Casework binding")
@@ -569,7 +569,8 @@ fn with_completion(config: &mut RuntimeConfig, root: &std::path::Path, name: &st
     binding.result_check_seconds = None;
     binding.completion = Some(ReviewCompletionConfig {
         recipient_binding: format!("{name}-v1"),
-        bearer_token_ref: SecretReference::parse(format!("secret:file/{file}")).unwrap(),
+        hmac_sha256_key_ref: SecretReference::parse(format!("secret:file/{file}")).unwrap(),
+        previous_hmac_sha256_key_ref: None,
     });
     config.connections.insert(name.into(), connection);
 }
@@ -599,106 +600,40 @@ async fn completion_fixture() -> (HttpAdapters, tempfile::TempDir) {
             },
         ),
     );
-    with_completion(
-        &mut config,
-        root.path(),
-        "intake",
-        "completion-token-intake",
-    );
-    with_completion(
-        &mut config,
-        root.path(),
-        "appeals",
-        "completion-token-shared",
-    );
-    with_completion(
-        &mut config,
-        root.path(),
-        "renewals",
-        "completion-token-shared",
-    );
+    with_completion(&mut config, root.path(), "intake", &[0x10; 32]);
+    with_completion(&mut config, root.path(), "appeals", &[0x20; 32]);
     let adapters = HttpAdapters::new(&config).unwrap();
     issuer.stop().await;
     (adapters, root)
 }
 
 #[tokio::test]
-async fn a_completion_names_one_connection_only_for_its_own_token_and_binding() {
+async fn a_completion_verifies_only_under_its_own_bindings_key() {
+    use registry_platform_crypto::delivery_signature::{
+        self, DeliveryKey, DeliveryKeys, SignedContent,
+    };
     let (adapters, _root) = completion_fixture().await;
-    assert_eq!(
-        adapters
-            .review_completion("completion-token-intake", "intake-v1")
-            .as_deref(),
-        Some("intake")
-    );
-    // Two connections may share a token; the binding still names one.
-    assert_eq!(
-        adapters
-            .review_completion("completion-token-shared", "appeals-v1")
-            .as_deref(),
-        Some("appeals")
-    );
-    assert_eq!(
-        adapters
-            .review_completion("completion-token-shared", "renewals-v1")
-            .as_deref(),
-        Some("renewals")
-    );
-    for (token, recipient) in [
-        ("completion-token-intake", "appeals-v1"),
-        ("completion-token-shared", "intake-v1"),
-        ("completion-token-intak", "intake-v1"),
-        ("completion-token-intakee", "intake-v1"),
-        ("", "intake-v1"),
-        ("completion-token-intake", ""),
-        ("completion-token-intake", "intake-v2"),
-    ] {
-        assert!(adapters.review_completion(token, recipient).is_none());
-    }
-    // A connection without a completion block accepts no completion at all.
-    assert!(adapters.review_completion("", "review-v1").is_none());
+    let sender = DeliveryKeys::new(DeliveryKey::new(&[0x10; 32]).unwrap(), None).unwrap();
+    let signature = delivery_signature::sign(&sender, "event-id", 1_800_000_000, b"{}").unwrap();
+    let content = SignedContent {
+        id: "event-id",
+        timestamp: "1800000000",
+        signature: &signature,
+        body: b"{}",
+    };
+    let (intake, intake_keys) = adapters.review_completion("intake-v1").unwrap();
+    assert_eq!(intake, "intake");
+    assert!(delivery_signature::verify_authenticity(intake_keys, content).is_ok());
+    let (appeals, appeals_keys) = adapters.review_completion("appeals-v1").unwrap();
+    assert_eq!(appeals, "appeals");
+    assert!(delivery_signature::verify_authenticity(appeals_keys, content).is_err());
+    assert!(adapters.review_completion("review-v1").is_none());
+    assert!(adapters.review_completion("intake-v2").is_none());
     assert_eq!(adapters.observation_interval("review", &completion()), 120);
     assert_eq!(
         adapters.observation_interval("intake", &completion()),
         registry_coordinator::runtime::DEFAULT_RESULT_CHECK_SECONDS
     );
-}
-
-#[tokio::test]
-async fn a_completion_token_that_is_not_a_bearer_token_refuses_the_configuration() {
-    let root = tempfile::tempdir().unwrap();
-    let issuer = support::issuer().await;
-    let mut config = support::config(
-        root.path(),
-        &issuer,
-        "http://127.0.0.1:9",
-        "http://127.0.0.1:9",
-    );
-    config.connections.insert(
-        "review".into(),
-        ConnectionConfig::CaseworkReviewProducer(
-            registry_coordinator::runtime::CaseworkConnectionConfig {
-                base_url: "http://127.0.0.1:9".parse().unwrap(),
-                authorization: config.connections["applications"]
-                    .authorization()
-                    .unwrap()
-                    .clone(),
-                profile: PROFILE.into(),
-                producer: PRODUCER.into(),
-                completion: None,
-                result_check_seconds: None,
-            },
-        ),
-    );
-    issuer.stop().await;
-    for token in ["completion token\n", "", "token with space"] {
-        with_completion(&mut config, root.path(), "intake", token);
-        let Err(error) = HttpAdapters::new(&config) else {
-            panic!("a completion token outside the bearer grammar is refused");
-        };
-        assert_eq!(error.code, "adapter.configuration");
-        assert!(!error.to_string().contains("token with space"));
-    }
 }
 
 fn completion() -> CompletionDefinition {

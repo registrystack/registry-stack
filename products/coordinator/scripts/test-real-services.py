@@ -161,7 +161,7 @@ def http(method, url, token=None, body=None, headers=None, expected=(200,)):
         fields["Authorization"] = "Bearer " + token
     data = None
     if body is not None:
-        data = json.dumps(body).encode()
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
         fields["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=fields, method=method)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -1284,7 +1284,7 @@ class Journey:
         with urllib.request.urlopen(self.mailpit_url + "/api/v1/messages", timeout=10) as response:
             return json.load(response)["messages"]
 
-    def review_casework(self, owner, resource, port, completion_url, completion_token):
+    def review_casework(self, owner, resource, port, completion_url, keys):
         """Serve a Casework whose review producer's completions reach the Coordinator."""
         project = write_review_casework(self.root / "review-casework", self.urls)
         checked = self.ctl("caseworkctl", "check", project)
@@ -1292,12 +1292,10 @@ class Journey:
         package = self.root / "review-casework-package"
         self.ctl("caseworkctl", "package", project, "--output", package)
         database, root_certificate = self.tls_database("review-casework-database")
-        keys = self.root / "review-casework-secrets"
-        private(keys / "database", database)
-        private(keys / "database-root.pem", root_certificate)
-        private(keys / "audit-key", secrets.token_hex(32))
-        private(keys / "jwks", http("GET", self.urls["issuer"] + "/oauth2/jwks"))
-        private(keys / "completion-token", completion_token)
+        private(keys / "casework-database", database)
+        private(keys / "casework-database-root.pem", root_certificate)
+        private(keys / "casework-audit-key", secrets.token_hex(32))
+        private(keys / "casework-jwks", http("GET", self.urls["issuer"] + "/oauth2/jwks"))
         url = f"http://127.0.0.1:{port}"
         runtime = self.root / "review-casework-runtime.yaml"
         private(runtime, {
@@ -1306,16 +1304,16 @@ class Journey:
             "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback",
                          "networkExposure": "private-address"},
             "secretProviders": {"file": {"root": str(keys)}},
-            "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database",
-                         "caBundleRef": "secret:file/database-root.pem"},
+            "database": {"runtimeUrlRef": "secret:file/casework-database", "migrationUrlRef": "secret:file/casework-database",
+                         "caBundleRef": "secret:file/casework-database-root.pem"},
             "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
                 "allowedClients": ["review-producer", "staff", "administrator"], "scopeClaim": "scope",
-                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
+                "jwksSource": {"type": "static", "documentRef": "secret:file/casework-jwks"},
                 "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}}},
-            "audit": {"path": str(self.root / "audit/review-casework.ndjson"), "hashKeyRef": "secret:file/audit-key"},
+            "audit": {"path": str(self.root / "audit/review-casework.ndjson"), "hashKeyRef": "secret:file/casework-audit-key"},
             "contextProviders": {},
             "reviewCompletionDestinations": {"coordinator": {
-                "url": completion_url, "bearerTokenRef": "secret:file/completion-token",
+                "url": completion_url, "hmacSha256KeyRef": "secret:file/reviewed-notice-completion-key",
                 "attemptTimeoutMilliseconds": 5000, "maximumAttempts": 10, "retryDelaySeconds": 1}},
         })
         self.ctl("caseworkctl", "apply", "--runtime-config", runtime)
@@ -1337,15 +1335,15 @@ class Journey:
         within the fixture deadline was woken by Casework's completion event.
         """
         coordinator_port, casework_port = free_ports(2)
-        completion_token = secrets.token_urlsafe(32)
-        receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
-        casework_url = self.review_casework(owner, resource, casework_port, receiver, completion_token)
         keys = self.root / "coordinator-review-secrets"
+        completion_key = secrets.token_hex(32).encode("ascii")
+        private(keys / "reviewed-notice-completion-key", completion_key)
+        receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
+        casework_url = self.review_casework(owner, resource, casework_port, receiver, keys)
         reviewer = self.export(owner, "review-producer", keys)
         assert reviewer["resource"] == resource, "the review producer must request the Casework audience"
         reader = self.export(owner, "application-reader", keys)
         sender = self.export(owner, "case-system", keys)
-        private(keys / "review-completion-token", completion_token)
         production_project = REPO / "products/coordinator/examples/reviewed-notice"
         short_timeout_project = self.root / "reviewed-notice-short-timeout"
         shutil.copytree(production_project, short_timeout_project)
@@ -1367,7 +1365,7 @@ class Journey:
                 "authorization": self.authorization(reader, resource, ["records:get"])},
             "review": {"type": "casework-review-producer", "baseUrl": casework_url, "profile": "coordinator-producer",
                 "producer": "coordinator", "authorization": self.authorization(reviewer, resource, ["casework:review"]),
-                "completion": {"recipientBinding": "coordinator-v1", "bearerTokenRef": "secret:file/review-completion-token"},
+                "completion": {"recipientBinding": "coordinator-v1", "hmacSha256KeyRef": "secret:file/reviewed-notice-completion-key"},
                 "resultCheckSeconds": 900},
             "notices": {"type": "messaging", "baseUrl": messaging_url,
                 "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
@@ -1501,12 +1499,22 @@ class Journey:
         event = {"type": "review.completed", "eventId": str(uuid.uuid4()), "requestId": str(uuid.uuid4()),
                  "resultId": str(uuid.uuid4()), "completedAt": stamp()}
         refusals = {}
-        for label, token, binding, expected in (
-                ("wrongToken", "synthetic-wrong-completion-token", "coordinator-v1", 401),
-                ("wrongRecipientBinding", completion_token, "synthetic-other-recipient", 401),
-                ("unknownRequest", completion_token, "coordinator-v1", 204)):
-            http("POST", receiver, token, event, {"registry-recipient-binding": binding,
-                 "idempotency-key": event["eventId"]}, (expected,))
+        signer_spec = importlib.util.spec_from_file_location(
+            "breg_webhook_signer", REPO / "products/breg/examples/webhook-receiver/sign_delivery.py")
+        signer = importlib.util.module_from_spec(signer_spec)
+        signer_spec.loader.exec_module(signer)
+        body = json.dumps(event).encode()
+        timestamp = int(time.time())
+        for label, key, binding, expected in (
+                ("wrongSignature", bytes(32), "coordinator-v1", 401),
+                ("wrongRecipientBinding", completion_key, "synthetic-other-recipient", 401),
+                ("unknownRequest", completion_key, "coordinator-v1", 204)):
+            http("POST", receiver, body=body, headers={
+                "registry-recipient-binding": binding,
+                "webhook-id": event["eventId"],
+                "webhook-timestamp": str(timestamp),
+                "webhook-signature": signer.webhook_signature([key], event["eventId"], timestamp, body),
+            }, expected=(expected,))
             refusals[label] = expected
         private(self.root / "native-reviewed-notice-proof.json", {
             "proofBoundary": "native_breg_casework_breg_and_messaging",

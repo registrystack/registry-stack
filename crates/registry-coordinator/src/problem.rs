@@ -52,7 +52,6 @@ pub const DEPLOYMENT_ACTIVATION_CHANGED_PROBLEM: &str = "deployment.activation-c
 pub const DEPLOYMENT_REFUSED_PROBLEM: &str = "deployment.refused";
 pub const EVALUATION_UNCERTAIN_PROBLEM: &str = "evaluation.uncertain";
 pub const EVENT_INVALID_PROBLEM: &str = "event.invalid";
-pub const EVENT_SOURCE_UNAVAILABLE_PROBLEM: &str = "event.source-unavailable";
 pub const EVENT_TOO_LARGE_PROBLEM: &str = "event.too-large";
 pub const EVENT_UNAUTHENTICATED_PROBLEM: &str = "event.unauthenticated";
 pub const EXECUTION_HELD_PROBLEM: &str = "execution.held";
@@ -102,7 +101,6 @@ pub enum ProblemCode {
     DeploymentRefused,
     EvaluationUncertain,
     EventInvalid,
-    EventSourceUnavailable,
     EventTooLarge,
     EventUnauthenticated,
     ExecutionHeld,
@@ -153,7 +151,6 @@ impl ProblemCode {
         Self::DeploymentRefused,
         Self::EvaluationUncertain,
         Self::EventInvalid,
-        Self::EventSourceUnavailable,
         Self::EventTooLarge,
         Self::EventUnauthenticated,
         Self::ExecutionHeld,
@@ -204,7 +201,6 @@ impl ProblemCode {
             Self::DeploymentRefused => DEPLOYMENT_REFUSED_PROBLEM,
             Self::EvaluationUncertain => EVALUATION_UNCERTAIN_PROBLEM,
             Self::EventInvalid => EVENT_INVALID_PROBLEM,
-            Self::EventSourceUnavailable => EVENT_SOURCE_UNAVAILABLE_PROBLEM,
             Self::EventTooLarge => EVENT_TOO_LARGE_PROBLEM,
             Self::EventUnauthenticated => EVENT_UNAUTHENTICATED_PROBLEM,
             Self::ExecutionHeld => EXECUTION_HELD_PROBLEM,
@@ -295,9 +291,7 @@ impl ProblemCode {
             Self::RequestUnsupportedMediaType => 415,
             Self::RequestUnprocessable => 422,
             Self::RuntimeFailure => 500,
-            Self::AuditResponseUnavailable
-            | Self::ServiceUnavailable
-            | Self::EventSourceUnavailable => 503,
+            Self::AuditResponseUnavailable | Self::ServiceUnavailable => 503,
         }
     }
 
@@ -318,7 +312,6 @@ impl ProblemCode {
             Self::DeploymentRefused => "Deployment not serving",
             Self::EvaluationUncertain => "Evaluation outcome uncertain",
             Self::EventInvalid => "Event contract refused",
-            Self::EventSourceUnavailable => "Event source unavailable",
             Self::EventTooLarge => "Event too large",
             Self::EventUnauthenticated => "Event authentication refused",
             Self::ExecutionHeld => "Execution held",
@@ -391,7 +384,6 @@ impl ProblemCode {
                 "An evaluation may have completed at its provider, so the run is never evaluated again."
             }
             Self::EventInvalid => "The signed event must satisfy the accepted canonical envelope and typed event contract.",
-            Self::EventSourceUnavailable => "Restore the configured event source signing key and its enabled secret provider before retrying delivery.",
             Self::EventTooLarge => "The signed event exceeds the event value profile: 131072 canonical bytes, 32 levels of nesting, 4096 values, 256 items per array, 256 members per object, and 16384 bytes per string. Have the producer project fewer or smaller fields into the event.",
             Self::EventUnauthenticated => "Send a fresh signed delivery from the exact configured source to its accepted trigger.",
             Self::ExecutionHeld => {
@@ -498,7 +490,6 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "request.content-type-invalid" => ProblemCode::RequestUnsupportedMediaType,
         "list-limit-invalid" => ProblemCode::RequestLimitOutOfRange,
         "event-invalid" => ProblemCode::EventInvalid,
-        "event-source-unavailable" => ProblemCode::EventSourceUnavailable,
         "event-too-large" => ProblemCode::EventTooLarge,
         "event-unauthenticated" => ProblemCode::EventUnauthenticated,
         "reason-invalid" => ProblemCode::RequestReasonInvalid,
@@ -730,7 +721,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 46);
+        assert_eq!(ProblemCode::ALL.len(), 45);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -743,11 +734,6 @@ mod tests {
                 "event-unauthenticated",
                 ProblemCode::EventUnauthenticated,
                 401,
-            ),
-            (
-                "event-source-unavailable",
-                ProblemCode::EventSourceUnavailable,
-                503,
             ),
             ("event-too-large", ProblemCode::EventTooLarge, 413),
         ] {

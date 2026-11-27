@@ -754,18 +754,25 @@
       "additionalProperties": false,
       "description": "Trusted producer binding. Event vocabulary and mapping stay in the package.",
       "properties": {
-        "signingKeyRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "Protected reference to the raw HMAC-SHA-256 key, at least 32 bytes."
-        },
         "source": {
           "$ref": "#/$defs/ExternalId",
           "description": "Exact absolute producer URI that signed event envelopes must declare."
+        },
+        "triggers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkflowTriggerKeys"
+          },
+          "description": "Keys for event URLs, grouped by workflow ID.",
+          "maxProperties": 16,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
         }
       },
       "required": [
         "source",
-        "signingKeyRef"
+        "triggers"
       ],
       "type": "object"
     },
@@ -944,9 +951,12 @@
       "additionalProperties": false,
       "description": "How Casework's completion event for this connection's review requests is\nauthenticated. The event only wakes a waiting run: the run reads the result\nitself with its own producer authorization.",
       "properties": {
-        "bearerTokenRef": {
+        "hmacSha256KeyRef": {
           "$ref": "#/$defs/SecretReference",
-          "description": "The bearer token Casework's completion destination sends."
+          "description": "The exact HMAC-SHA-256 key shared with Casework's completion destination."
+        },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
         },
         "recipientBinding": {
           "description": "The recipientBinding the Casework project names for this producer's\ncompletion destination: 1 to 256 printable ASCII characters without\nspaces. Casework sends it in the registry-recipient-binding header.",
@@ -958,7 +968,7 @@
       },
       "required": [
         "recipientBinding",
-        "bearerTokenRef"
+        "hmacSha256KeyRef"
       ],
       "type": "object"
     },
@@ -1061,12 +1071,37 @@
         }
       ]
     },
+    "TriggerKeyConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "hmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        }
+      },
+      "required": [
+        "hmacSha256KeyRef"
+      ],
+      "type": "object"
+    },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
       "format": "uri",
       "maxLength": 2048,
       "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
+    },
+    "WorkflowTriggerKeys": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TriggerKeyConfig"
+      },
+      "maxProperties": 16,
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json",

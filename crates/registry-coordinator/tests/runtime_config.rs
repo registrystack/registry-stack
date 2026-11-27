@@ -1548,11 +1548,11 @@ fn runtime_definition_maps_refuse_separator_lookalikes_at_both_keys() {
     document["eventSources"] = json!({
         "event-source": {
             "source": "urn:example:coordinator:event-source:one",
-            "signingKeyRef": "secret:file/event-key"
+            "triggers": {}
         },
         "event_source": {
             "source": "urn:example:coordinator:event-source:two",
-            "signingKeyRef": "secret:file/event-key"
+            "triggers": {}
         }
     });
     let text = serde_norway::to_string(&document).unwrap();
@@ -1620,7 +1620,7 @@ fn runtime_connection_and_event_source_namespaces_remain_distinct() {
     document["eventSources"] = json!({
         "shared_name": {
             "source": "urn:example:coordinator:event-source:one",
-            "signingKeyRef": "secret:file/event-key"
+            "triggers": {}
         }
     });
     load(&serde_norway::to_string(&document).unwrap())
@@ -1846,7 +1846,7 @@ fn with_review_connection() -> Value {
         },
         "completion": {
             "recipientBinding": "coordinator-v1",
-            "bearerTokenRef": "secret:file/review-completion-token"
+            "hmacSha256KeyRef": "secret:file/reviewed-notice-completion-key"
         },
         "resultCheckSeconds": 900
     });
@@ -1897,8 +1897,8 @@ fn reviewed_notice_runtime_receives_completions_for_its_review_connection_on_the
     let completion = review.completion.as_ref().unwrap();
     assert_eq!(completion.recipient_binding, "coordinator-v1");
     assert_eq!(
-        completion.bearer_token_ref.as_str(),
-        "secret:file/review-completion-token"
+        completion.hmac_sha256_key_ref.as_str(),
+        "secret:file/reviewed-notice-completion-key"
     );
     assert!(config.connections["notices"]
         .product_binding()
@@ -1997,7 +1997,7 @@ fn casework_connections_name_a_producer_profile_and_bounded_result_checks_offlin
         .remove("file");
     let error = refused(&disabled.to_string());
     assert!(
-        finding_at(&error, "/connections/review/completion/bearerTokenRef")
+        finding_at(&error, "/connections/review/completion/hmacSha256KeyRef")
             .contains("secretProviders")
     );
 
@@ -2081,8 +2081,8 @@ fn casework_binding_identity_pins_the_producer_but_not_delivery_settings() {
     // rotate the token, rename the recipient or tune result checks without
     // stranding runs admitted under the earlier settings.
     let mut delivery = original.clone();
-    delivery["connections"]["review"]["completion"]["bearerTokenRef"] =
-        json!("secret:file/another-completion-token");
+    delivery["connections"]["review"]["completion"]["hmacSha256KeyRef"] =
+        json!("secret:file/another-completion-key");
     delivery["connections"]["review"]["completion"]["recipientBinding"] = json!("coordinator-v2");
     delivery["connections"]["review"]["resultCheckSeconds"] = json!(60);
     assert_eq!(
@@ -2304,7 +2304,7 @@ fn generated_runtime_schema_keeps_event_source_identifier_bounds() {
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&fragment)
         .unwrap();
-    let source = json!({"source":"urn:test:producer", "signingKeyRef":"secret:file/event-key"});
+    let source = json!({"source":"urn:test:producer", "triggers":{}});
     assert!(validator.is_valid(&json!({"registry":source})));
     for key in ["Invalid", "../registry", "", "123"] {
         let invalid = json!({(key):source});
@@ -2395,3 +2395,198 @@ fn breg_proposal_follow_settings_are_bounded_and_outside_the_binding_digest() {
 }
 
 const VALID_ID: &str = "018f2f9e-5d7a-7c3b-9a1e-2b3c4d5e6f70";
+
+#[test]
+fn an_event_source_signing_key_names_its_replacement() {
+    let mut document = yaml_value(RUNTIME).unwrap();
+    document["eventSources"] = json!({
+        "registry": {
+            "source": "urn:example:coordinator:registry",
+            "signingKeyRef": "secret:file/event-key"
+        }
+    });
+    let error = refused(&document.to_string());
+    let removed = error
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "config.removed-key")
+        .expect("the obsolete event source key must be refused");
+    assert_eq!(removed.path, "/eventSources/registry/signingKeyRef");
+    assert!(removed
+        .suggested_action
+        .contains("eventSources.<alias>.triggers.<workflow>.<trigger>.hmacSha256KeyRef"));
+}
+
+#[test]
+fn a_completion_bearer_token_names_its_replacement() {
+    let mut document = with_review_connection();
+    let completion = document["connections"]["review"]["completion"]
+        .as_object_mut()
+        .unwrap();
+    let reference = completion.remove("hmacSha256KeyRef").unwrap();
+    completion.insert("bearerTokenRef".into(), reference);
+    let error = refused(&document.to_string());
+    let diagnostic = finding_at(&error, "/connections/review/completion/bearerTokenRef");
+    assert!(diagnostic.contains("config.removed-key"));
+    assert!(diagnostic.contains("hmacSha256KeyRef"));
+}
+
+fn event_source() -> Value {
+    json!({"source":"urn:example:registry","triggers":{
+        "delayed-follow-up":{
+            "saved":{"hmacSha256KeyRef":"secret:file/event-key"}
+        }
+    }})
+}
+
+#[test]
+fn an_explicit_null_previous_key_is_refused() {
+    let mut document = with_review_connection();
+    document["eventSources"] = json!({"registry":event_source()});
+    for (route, path) in [
+        (
+            "/eventSources/registry/triggers/delayed-follow-up/saved",
+            "/eventSources/registry/triggers/delayed-follow-up/saved/previousHmacSha256KeyRef",
+        ),
+        (
+            "/connections/review/completion",
+            "/connections/review/completion/previousHmacSha256KeyRef",
+        ),
+    ] {
+        let mut invalid = document.clone();
+        invalid.pointer_mut(route).unwrap()["previousHmacSha256KeyRef"] = Value::Null;
+        finding_at(&refused(&invalid.to_string()), path);
+    }
+}
+
+#[test]
+fn a_trigger_without_a_key_is_refused_with_its_path() {
+    let mut document = yaml_value(RUNTIME).unwrap();
+    document["eventSources"] = json!({"registry":event_source()});
+    let config = load(&document.to_string()).unwrap();
+    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/coordinator/examples/delayed-follow-up");
+    let mut workflow = Definition::load(&project).unwrap().workflow.clone();
+    workflow.event_triggers.insert(
+        "missing".into(),
+        serde_json::from_value(json!({
+            "source":"registry", "eventType":"record.created", "dataSchema":"urn:example:event",
+            "event":{"type":"object"}, "input":{"type":"literal","value":{}}
+        }))
+        .unwrap(),
+    );
+    let error = config.validate_workflow(&workflow).unwrap_err();
+    assert_eq!(
+        error.field.as_deref(),
+        Some(
+            format!(
+                "/eventSources/registry/triggers/{}/missing/hmacSha256KeyRef",
+                workflow.id
+            )
+            .as_str()
+        )
+    );
+}
+
+#[test]
+fn a_key_for_an_undeployed_trigger_is_refused() {
+    use registry_coordinator::deployment::{load_workflows, package};
+    let root = tempfile::tempdir().unwrap();
+    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/coordinator/examples/delayed-follow-up");
+    let package_root = root.path().canonicalize().unwrap().join("package");
+    let digest = package(&project, &package_root).unwrap();
+    let mut document = yaml_value(SINGLE_FLOW).unwrap();
+    document["deployment"]["packages"] = json!([{"root":package_root,"expectedDigest":digest}]);
+    document["eventSources"] = json!({"registry":event_source()});
+    let config = load(&document.to_string()).unwrap();
+    let workflows = load_workflows(config.deployment.as_ref().unwrap()).unwrap();
+    let error = workflows.validate(&config).unwrap_err();
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/eventSources/registry/triggers/delayed-follow-up/saved/hmacSha256KeyRef")
+    );
+}
+
+fn with_ingress_keys(document: &mut Value, root: &std::path::Path, key: &[u8]) {
+    use registry_platform_testing::fixtures::ED25519_PRIVATE_JWK;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    let root = root.canonicalize().unwrap();
+    document["secretProviders"]["file"]["root"] = json!(root);
+    document["eventSources"] = json!({"registry":event_source()});
+    for (name, bytes) in [
+        ("event-key", key),
+        ("client-key", ED25519_PRIVATE_JWK.as_bytes()),
+    ] {
+        let path = root.join(name);
+        fs::write(&path, bytes).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn startup_error(document: &Value) -> registry_coordinator::CoordinatorError {
+    let config = load(&document.to_string()).unwrap();
+    match registry_coordinator::adapters::HttpAdapters::new(&config) {
+        Ok(_) => panic!("startup must refuse the ingress keys"),
+        Err(error) => error,
+    }
+}
+
+const TRIGGER_KEY_PATH: &str =
+    "eventSources.registry.triggers.delayed-follow-up.saved.hmacSha256KeyRef";
+
+#[test]
+fn two_triggers_sharing_key_bytes_are_refused_naming_both_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let mut document = yaml_value(RUNTIME).unwrap();
+    with_ingress_keys(&mut document, root.path(), &[0x78; 32]);
+    document["eventSources"]["registry"]["triggers"]["delayed-follow-up"]["other"] =
+        json!({"hmacSha256KeyRef":"secret:file/event-key"});
+    let error = startup_error(&document);
+    assert_eq!(
+        error.message,
+        format!("`eventSources.registry.triggers.delayed-follow-up.other.hmacSha256KeyRef` and `{TRIGGER_KEY_PATH}` resolve to the same key bytes. Give `{TRIGGER_KEY_PATH}` its own key by writing 32 new random bytes to another secret and referencing it there."),
+    );
+}
+
+#[test]
+fn a_trigger_key_equal_to_a_completion_key_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let mut document = with_review_connection();
+    with_ingress_keys(&mut document, root.path(), &[0x78; 32]);
+    document["connections"]["review"]["completion"]["hmacSha256KeyRef"] =
+        json!("secret:file/event-key");
+    let error = startup_error(&document);
+    assert!(error.message.contains(TRIGGER_KEY_PATH), "{error:?}");
+    assert!(error
+        .message
+        .contains("connections.review.completion.hmacSha256KeyRef"));
+}
+
+#[test]
+fn a_65_byte_key_ending_in_a_newline_names_its_length_and_the_newline() {
+    let root = tempfile::tempdir().unwrap();
+    let mut document = yaml_value(RUNTIME).unwrap();
+    let mut key = vec![b'x'; 64];
+    key.push(b'\n');
+    with_ingress_keys(&mut document, root.path(), &key);
+    let error = startup_error(&document);
+    let advice = error.suggested_action.as_deref().unwrap();
+    assert!(advice.contains(TRIGGER_KEY_PATH));
+    assert!(advice.contains("65 bytes"));
+    assert!(advice.contains("newline"));
+    assert!(!advice.contains(&"x".repeat(64)));
+}
+
+#[test]
+fn a_verification_key_the_receiver_cannot_use_is_refused_at_startup() {
+    let root = tempfile::tempdir().unwrap();
+    let mut document = yaml_value(RUNTIME).unwrap();
+    with_ingress_keys(&mut document, root.path(), b"short");
+    let error = startup_error(&document);
+    let advice = error.suggested_action.as_deref().unwrap();
+    assert!(advice.contains(TRIGGER_KEY_PATH));
+    assert!(advice.contains("5 bytes"));
+}

@@ -21,7 +21,20 @@ use serde_json::json;
 
 pub const AUDIENCE: &str = "urn:registry-scheduling:coordinator-lifecycle";
 pub const CLIENT: &str = "lifecycle-agent";
-pub const HOOK_KEY: &[u8] = &[0x6b; 32];
+pub const EVENT_KEYS: [(&str, [u8; 32]); 5] = [
+    ("confirmed", [0x6b; 32]),
+    ("rescheduled", [0x6c; 32]),
+    ("cancelled", [0x6d; 32]),
+    ("reminder", [0x6e; 32]),
+    ("reminder-confirmation", [0x6f; 32]),
+];
+
+pub fn event_key(trigger: &str) -> &'static [u8] {
+    EVENT_KEYS
+        .iter()
+        .find_map(|(name, key)| (*name == trigger).then_some(key.as_slice()))
+        .expect("synthetic trigger key")
+}
 pub const SCHEDULING_ID: &str = "coordinator-lifecycle";
 
 fn binary(variable: &str) -> PathBuf {
@@ -135,7 +148,9 @@ impl Scheduling {
             &root.path().join("audit-key"),
             b"synthetic-scheduling-audit-key-32",
         );
-        super::private_file(&root.path().join("hook-key"), HOOK_KEY);
+        for (trigger, key) in &EVENT_KEYS {
+            super::private_file(&root.path().join(format!("{trigger}-key")), key);
+        }
         let signing_key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
         super::private_file(
             &root.path().join("jwks"),
@@ -148,19 +163,21 @@ impl Scheduling {
         drop(listener);
         let path = root.path().join("scheduling-runtime.yaml");
         let mut destinations = json!({"hooks":{
-            "confirmed":{"url":format!("{relay_origin}/v1/events/scheduling-lifecycle/confirmed"),"hmacSha256KeyRef":"secret:file/hook-key","maximumAttempts":1},
-            "rescheduled":{"url":format!("{relay_origin}/v1/events/scheduling-lifecycle/rescheduled"),"hmacSha256KeyRef":"secret:file/hook-key","maximumAttempts":1},
-            "cancelled":{"url":format!("{relay_origin}/v1/events/scheduling-lifecycle/cancelled"),"hmacSha256KeyRef":"secret:file/hook-key","maximumAttempts":1}
+            "confirmed":{"url":format!("{relay_origin}/v1/events/scheduling-lifecycle/confirmed"),"hmacSha256KeyRef":"secret:file/confirmed-key","maximumAttempts":1},
+            "rescheduled":{"url":format!("{relay_origin}/v1/events/scheduling-lifecycle/rescheduled"),"hmacSha256KeyRef":"secret:file/rescheduled-key","maximumAttempts":1},
+            "cancelled":{"url":format!("{relay_origin}/v1/events/scheduling-lifecycle/cancelled"),"hmacSha256KeyRef":"secret:file/cancelled-key","maximumAttempts":1}
         }});
         if let Some(reminder_path) = reminder_path {
             let mut reminder_destination = json!({
                 "url":format!("{relay_origin}{reminder_path}"),
-                "hmacSha256KeyRef":"secret:file/hook-key"
+                "hmacSha256KeyRef":"secret:file/reminder-key"
             });
             if let Some(confirmation_path) = confirmation_path {
-                reminder_destination["purposeUrls"] = json!({
-                    "confirmation":format!("{relay_origin}{confirmation_path}"),
-                    "reminder":format!("{relay_origin}{reminder_path}")
+                reminder_destination["purposes"] = json!({
+                    "confirmation":{
+                        "url":format!("{relay_origin}{confirmation_path}"),
+                        "hmacSha256KeyRef":"secret:file/reminder-confirmation-key"
+                    }
                 });
             }
             destinations["reminders"] = reminder_destination;

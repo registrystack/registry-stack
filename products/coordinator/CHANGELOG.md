@@ -22,10 +22,7 @@
   host, an IPv4-mapped loopback literal such as `[::ffff:127.0.0.1]` counts as
   loopback, the same as `127.0.0.1`. A database host of `localhost` is matched
   in any letter case. Host names other than `localhost` stay refused.
-- A signed event delivery that Coordinator cannot verify because its own
-  signing key is unreadable, missing or too short counts under
-  `key-source-unavailable` in `coordinator_request_refusals_total`. The 401 and
-  503 answers are unchanged.
+- Coordinator refuses startup when a configured event trigger key file is missing. The event route no longer returns a source-key-unavailable response.
 - A static key set that startup refuses now names the rule it broke, and the
   key's position for a rule about one key, in the `access.configuration`
   message instead of pointing at the issuer and policy configuration.

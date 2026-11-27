@@ -13,7 +13,7 @@ use registry_breg_client::{
     BRegRecordFormat, BRegRecordOptions,
 };
 use registry_coordinator::{deployment, runtime::RuntimeConfig};
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::{sign, DeliveryKey, DeliveryKeys};
 use serde_json::{json, Value};
 use std::{
     path::Path,
@@ -137,34 +137,13 @@ async fn start(config: &Path, origin: &str) -> Process {
     }
 }
 fn refresh_signature(headers: &mut HeaderMap, body: &[u8]) {
-    headers.insert(
-        "x-registry-delivery-time",
-        chrono::Utc::now()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            .parse()
-            .unwrap(),
-    );
-    let value = |name| headers.get(name).unwrap().to_str().unwrap();
-    let signature = sign_v1(
-        KEY,
-        SignatureFields {
-            id: value("ce-id"),
-            source: value("ce-source"),
-            event_type: value("ce-type"),
-            time: value("ce-time"),
-            data_schema: value("ce-dataschema"),
-            generation: value("x-registry-event-generation"),
-            attempt: value("x-registry-delivery-attempt"),
-            delivery_time: value("x-registry-delivery-time"),
-            method: "POST",
-            request_target: TARGET,
-            content_type: "application/json",
-            idempotency_key: value("idempotency-key"),
-            body,
-        },
-    )
-    .unwrap();
-    headers.insert("x-registry-signature", signature.parse().unwrap());
+    headers.remove("content-length");
+    let id = headers["webhook-id"].to_str().unwrap();
+    let timestamp = chrono::Utc::now().timestamp().try_into().unwrap();
+    let keys = DeliveryKeys::new(DeliveryKey::new(KEY).unwrap(), None).unwrap();
+    let signature = sign(&keys, id, timestamp, body).unwrap();
+    headers.insert("webhook-timestamp", timestamp.to_string().parse().unwrap());
+    headers.insert("webhook-signature", signature.parse().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -254,7 +233,7 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         .remove("notices");
     runtime["connections"]["applications"]["profile"] = json!("reader");
     runtime["database"] = json!({"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"});
-    runtime["eventSources"] = json!({"registry":{"source":"urn:registrystack:registry:coordinator-action-proof:instance:coordinator-action-proof","signingKeyRef":"secret:file/event-key"}});
+    runtime["eventSources"] = json!({"registry":{"source":"urn:registrystack:registry:coordinator-action-proof:instance:coordinator-action-proof","triggers":{"proposal-event-proof":{"submitted":{"hmacSha256KeyRef":"secret:file/event-key"}}}}});
     runtime["deployment"] = json!({"databaseId":"native-event-proof","runtimeRole":role,"packages":[{"root":package,"expectedDigest":digest}],
         "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback"},
         "authentication":{"issuer":issuer.issuer(),"audience":"urn:coordinator:native-event","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},
@@ -405,7 +384,7 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         "authenticated changed event identity conflicts"
     );
     let mut unauthenticated = headers.clone();
-    unauthenticated.remove("x-registry-signature");
+    unauthenticated.remove("webhook-signature");
     assert_eq!(
         http.post(format!("{origin}{TARGET}"))
             .headers(unauthenticated)

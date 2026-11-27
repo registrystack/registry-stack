@@ -89,6 +89,7 @@ struct TaskConnection {
 }
 
 pub struct HttpAdapters {
+    event_keys: crate::event_trigger::EventKeys,
     connections: BTreeMap<String, Connection>,
     digest: String,
     config: RuntimeConfig,
@@ -167,6 +168,14 @@ impl HttpAdapters {
     }
 
     pub fn new(config: &RuntimeConfig) -> Result<Self> {
+        config.validate()?;
+        Self::with_event_keys(config, crate::event_trigger::resolve_keys(config)?)
+    }
+
+    pub(crate) fn with_event_keys(
+        config: &RuntimeConfig,
+        event_keys: crate::event_trigger::EventKeys,
+    ) -> Result<Self> {
         config.validate()?;
         let secrets = Arc::new(
             config
@@ -335,23 +344,21 @@ impl HttpAdapters {
                         crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
                         registry_platform_yaml::BoundedU32::get,
                     );
-                    let completion = match &binding.completion {
-                        Some(completion) => {
-                            let bytes = secrets
-                                .resolve_reference(&completion.bearer_token_ref)
-                                .map_err(|_| config_error())?;
-                            let token = std::str::from_utf8(bytes.expose_secret())
-                                .map_err(|_| config_error())?;
-                            if !valid_completion_token(token) {
-                                return Err(config_error());
-                            }
-                            Some(crate::review::CompletionSender {
-                                token: zeroize::Zeroizing::new(token.to_owned()),
+                    let completion = binding
+                        .completion
+                        .map(|completion| {
+                            let ingress = crate::event_trigger::IngressKeys::resolve(
+                                &secrets,
+                                format!("connections.{name}.completion"),
+                                &completion.hmac_sha256_key_ref,
+                                completion.previous_hmac_sha256_key_ref.as_ref(),
+                            )?;
+                            Ok(crate::review::CompletionSender {
+                                ingress,
                                 recipient: completion.recipient_binding.clone(),
                             })
-                        }
-                        None => None,
-                    };
+                        })
+                        .transpose()?;
                     let tokens = tokens(&auth, key, &auth.resource, &auth.scopes)
                         .map_err(|_| config_error())?;
                     let client = CaseworkClient::new(
@@ -376,21 +383,27 @@ impl HttpAdapters {
             };
             connections.insert(name.clone(), connection);
         }
+        let completion_keys = connections
+            .values()
+            .filter_map(|connection| match connection {
+                Connection::Casework(connection) => connection.completion(),
+                _ => None,
+            });
+        registry_platform_crypto::delivery_signature::distinct_delivery_keys(
+            event_keys
+                .values()
+                .flat_map(|keys| keys.labelled())
+                .chain(completion_keys.flat_map(|sender| sender.ingress.labelled())),
+        )
+        .map_err(|error| crate::event_trigger::duplicate_key(error.first(), error.second()))?;
         let digest = config.binding_digest()?;
         Ok(Self {
+            event_keys,
             connections,
             digest,
             config: config.clone(),
         })
     }
-}
-
-/// A completion token is a bearer token Casework can send unchanged: the
-/// header grammar holds it and it is at most 4096 bytes.
-fn valid_completion_token(token: &str) -> bool {
-    token.len() <= 4096
-        && registry_platform_authcommon::parse_bearer_token(&format!("Bearer {token}"))
-            .is_ok_and(|parsed| parsed == token)
 }
 
 pub(crate) fn refused(code: &str) -> CallOutcome {
@@ -1302,24 +1315,30 @@ impl AdapterSet for HttpAdapters {
         }
     }
 
-    fn review_completion(&self, token: &str, recipient: &str) -> Option<String> {
-        // Every connection is compared, so the time taken does not depend on
-        // which one matched.
-        let mut matched = None;
-        let mut ambiguous = false;
-        for (name, connection) in &self.connections {
-            if let Connection::Casework(connection) = connection {
-                if connection.completion_matches(token, recipient) {
-                    ambiguous |= matched.is_some();
-                    matched = Some(name.clone());
-                }
-            }
-        }
-        if ambiguous {
-            None
-        } else {
-            matched
-        }
+    fn event_keys(
+        &self,
+        workflow: &str,
+        trigger: &str,
+    ) -> Option<&registry_platform_crypto::delivery_signature::DeliveryKeys> {
+        use registry_platform_yaml::LocalId;
+        let path = (LocalId::new(workflow).ok()?, LocalId::new(trigger).ok()?);
+        self.event_keys.get(&path).map(|ingress| &ingress.keys)
+    }
+
+    fn review_completion(
+        &self,
+        recipient: &str,
+    ) -> Option<(
+        &str,
+        &registry_platform_crypto::delivery_signature::DeliveryKeys,
+    )> {
+        self.connections.iter().find_map(|(name, connection)| {
+            let Connection::Casework(connection) = connection else {
+                return None;
+            };
+            let sender = connection.completion()?;
+            (sender.recipient == recipient).then_some((name.as_str(), &sender.ingress.keys))
+        })
     }
 
     async fn reconcile(

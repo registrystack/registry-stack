@@ -548,7 +548,7 @@ class ReservationJourney(native.Journey):
         resource: str,
         port: int,
         completion_url: str,
-        completion_token: str,
+        completion_key: bytes,
         agent_subject: str,
     ) -> tuple[Path, str, dict[str, object]]:
         project = write_review_casework(
@@ -573,7 +573,7 @@ class ReservationJourney(native.Journey):
         native.private(
             keys / "jwks", native.http("GET", self.urls["issuer"] + "/oauth2/jwks")
         )
-        native.private(keys / "completion-token", completion_token)
+        native.private(keys / "reservation-review-completion-key", completion_key)
         authority_key = generate_task_authority_key()
         native.private(keys / "task-authority-signing-key", authority_key)
         jwks = JwksFixture(self.ports["jwks"], authority_key)
@@ -634,7 +634,7 @@ class ReservationJourney(native.Journey):
                 "reviewCompletionDestinations": {
                     "coordinator": {
                         "url": completion_url,
-                        "bearerTokenRef": "secret:file/completion-token",
+                        "hmacSha256KeyRef": "secret:file/reservation-review-completion-key",
                         "attemptTimeoutMilliseconds": 5000,
                         "maximumAttempts": 10,
                         "retryDelaySeconds": 1,
@@ -681,7 +681,7 @@ class ReservationJourney(native.Journey):
         casework_url: str,
         scheduling_url: str,
         messaging_url: str,
-        completion_token: str,
+        completion_key: bytes,
         agent_subject: str,
         binding: dict[str, object],
         port: int,
@@ -692,7 +692,7 @@ class ReservationJourney(native.Journey):
         catalogue = self.export(owner, "scheduling-reader", keys)
         booking = self.export(owner, "task-agent", keys)
         sender = self.export(owner, "case-system", keys)
-        native.private(keys / "review-completion-token", completion_token)
+        native.private(keys / "reservation-review-completion-key", completion_key)
         task = {
             "baseUrl": casework_url,
             "issuer": native.AUTHORITY,
@@ -727,7 +727,7 @@ class ReservationJourney(native.Journey):
                     ),
                     "completion": {
                         "recipientBinding": "reservation-review-v1",
-                        "bearerTokenRef": "secret:file/review-completion-token",
+                        "hmacSha256KeyRef": "secret:file/reservation-review-completion-key",
                     },
                     "resultCheckSeconds": 900,
                 },
@@ -1035,7 +1035,7 @@ class ReservationJourney(native.Journey):
 
         (coordinator_port,) = native.free_ports(1)
         casework_port = self.ports["casework"]
-        completion_token = uuid.uuid4().hex + uuid.uuid4().hex
+        completion_key = uuid.uuid4().bytes + uuid.uuid4().bytes
         receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
         casework_project = write_review_casework(
             self.root / "review-casework-source", self.urls, agent_subject
@@ -1072,7 +1072,7 @@ class ReservationJourney(native.Journey):
             casework_placeholder,
             scheduling_proxy.url,
             messaging_url,
-            completion_token,
+            completion_key,
             agent_subject,
             binding,
             coordinator_port,
@@ -1082,7 +1082,7 @@ class ReservationJourney(native.Journey):
             resource,
             casework_port,
             receiver,
-            completion_token,
+            completion_key,
             agent_subject,
         )
         assert runtime_binding == binding

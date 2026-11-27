@@ -61,7 +61,7 @@ project, its mappings, waits, and checks.
 - [Reviewed notice](examples/reviewed-notice/README.md) combines standalone review with a fresh
   record and permission check before Messaging.
 - [Product events](examples/product-events/README.md) admits committed BReg events and a
-  conforming alternate-source fixture through the same signed event contract.
+  conforming alternate-source fixture through Standard Webhooks with a distinct key for each trigger.
 - [External directory](examples/external-directory/README.md) performs a configured HTTP GET.
 - [External job](examples/external-job/README.md) uses a bounded completion poll and pure
   interpreter for one previously selected external job.
