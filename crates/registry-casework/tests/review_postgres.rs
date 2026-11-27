@@ -13722,6 +13722,122 @@ async fn c2_sod2_an_erased_later_round_stops_an_older_round_resuming() {
     assert_eq!(c2_sod2_active_stage(&fixture, third).await, 0);
 }
 
+/// A resumption service for one revision of the policy with the given stage
+/// order. `primary` keeps its asks; every other stage excludes previous-stage
+/// reviewers.
+fn c2_sod3_revision(fixture: &Fixture, version: &str, stage_ids: &[&str]) -> CaseworkService {
+    let mut project = asks_project(true, true);
+    project.project = ProjectIdentity::new("review-test".parse().unwrap(), version.to_owned());
+    let policy = &mut project.review_policies[0];
+    policy.version = version.to_owned();
+    policy.resubmission = ReviewResubmissionPolicy::ResumeAtReturningStage;
+    let (primary, later) = (policy.stages[0].clone(), policy.stages[1].clone());
+    policy.stages = stage_ids
+        .iter()
+        .map(|id| {
+            let mut stage = if *id == "primary" {
+                primary.clone()
+            } else {
+                later.clone()
+            };
+            stage.id = (*id).to_owned();
+            stage
+        })
+        .collect();
+    CaseworkService::new(fixture.store.clone(), project, Vec::new()).unwrap()
+}
+
+#[tokio::test]
+async fn c2_sod3_resumption_needs_the_same_stages_up_to_the_returning_stage() {
+    // Round 1 under [primary, secondary, tertiary] returns at tertiary. A
+    // revision that moves tertiary first starts the resubmission at the first
+    // stage, so earlier-round stage positions never under-exclude.
+    let fixture = fixture().await;
+    let earlier = c2_sod3_revision(&fixture, "order-1", &["primary", "secondary", "tertiary"]);
+    let reviewer_c = c2_sod2_member(&fixture, "reviewer-c").await;
+    let (first, primary, _) = claimed_for_asks(&fixture, &earlier, "reordered").await;
+    earlier
+        .decide_review_task(
+            &fixture.reviewer_a,
+            primary,
+            ReviewTaskDecisionRequest {
+                decision: c2_sod2_approve(),
+            },
+            None,
+            "",
+            2,
+            "decide-reordered-primary",
+        )
+        .await
+        .unwrap();
+    c2_sod2_claim_and_decide(
+        &earlier,
+        &fixture.reviewer_b,
+        task_id(&fixture, first, 1).await,
+        c2_sod2_approve(),
+        "reordered-secondary",
+    )
+    .await;
+    c2_sod2_claim_and_decide(
+        &earlier,
+        &reviewer_c,
+        task_id(&fixture, first, 2).await,
+        c2_sod2_return(),
+        "reordered-tertiary",
+    )
+    .await;
+    let reordered = c2_sod3_revision(&fixture, "order-2", &["tertiary", "primary", "secondary"]);
+    let second = c2_sod2_round(&fixture, &reordered, "reordered", 2).await;
+    assert_eq!(c2_sod2_active_stage(&fixture, second).await, 0);
+    let history: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='review-resumed-at-stage'",
+            &[&second],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(history, 0);
+    let prior: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_prior_stage_reviewers WHERE request_id=$1",
+            &[&second],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(prior, 0);
+}
+
+#[tokio::test]
+async fn c2_sod3_stages_added_or_reordered_above_the_returning_stage_still_resume() {
+    for (label, later_order) in [
+        (
+            "added-above",
+            &["primary", "secondary", "tertiary", "quaternary", "extra"][..],
+        ),
+        (
+            "reordered-above",
+            &["primary", "secondary", "quaternary", "tertiary"][..],
+        ),
+    ] {
+        let fixture = fixture().await;
+        let earlier = c2_sod3_revision(
+            &fixture,
+            "above-1",
+            &["primary", "secondary", "tertiary", "quaternary"],
+        );
+        // reviewer_a approves primary, reviewer_b returns at secondary.
+        c2_returning_stage_round(&fixture, &earlier, label).await;
+        let revised = c2_sod3_revision(&fixture, "above-2", later_order);
+        let resumed = c2_sod2_round(&fixture, &revised, label, 2).await;
+        assert_eq!(c2_sod2_active_stage(&fixture, resumed).await, 1, "{label}");
+    }
+}
+
 /// The protocol carries answer times at microsecond precision.
 fn now_micros() -> chrono::DateTime<Utc> {
     let now = Utc::now();

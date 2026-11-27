@@ -2803,10 +2803,14 @@ impl PostgresStore {
         // first (a revision with shorter retention) would no longer match. Any
         // later erased request of this producer and policy may be that round,
         // so it stops the resumption and the request starts at the first stage.
+        // The request resumes only when this revision has the earlier round's
+        // stage ids, in the same order, up to and including the returning
+        // stage, so earlier stage indices mean the same stages in both rounds.
         let returning = if policy.resubmission == ReviewResubmissionPolicy::ResumeAtReturningStage {
-            transaction
+            let row = transaction
                 .query_opt(
-                    "SELECT settling.stage_id,r.request_id,settling.stage_index
+                    "SELECT settling.stage_id,r.request_id,settling.stage_index,
+                        jsonb_path_query_array(r.policy_snapshot->'stages','$[*].id')
                  FROM casework_review_requests r
                  LEFT JOIN LATERAL (
                      SELECT t.stage_id,d.stage_index FROM casework_review_decisions d
@@ -2835,18 +2839,31 @@ impl PostgresStore {
                         &now,
                     ],
                 )
-                .await?
-                .and_then(|row| {
-                    let stage_id: Option<String> = row.get(0);
-                    let earlier = (row.get::<_, Uuid>(1), row.get::<_, Option<i32>>(2));
-                    stage_id.and_then(|id| {
-                        policy
-                            .stages
-                            .iter()
-                            .position(|stage| stage.id == id)
-                            .map(|index| (index, id, earlier))
-                    })
-                })
+                .await?;
+            match row {
+                Some(row) => match (
+                    row.get::<_, Option<String>>(0),
+                    row.get::<_, Option<i32>>(2),
+                ) {
+                    (Some(stage_id), Some(settling_index)) => {
+                        let earlier_stage_ids: Vec<String> =
+                            serde_json::from_value(row.get::<_, Value>(3))
+                                .map_err(|_| ReviewRuntimeError::Corrupt)?;
+                        let index = usize::try_from(settling_index)
+                            .map_err(|_| ReviewRuntimeError::Corrupt)?;
+                        let same_stages = earlier_stage_ids.get(index) == Some(&stage_id)
+                            && policy.stages.len() > index
+                            && policy.stages[..=index]
+                                .iter()
+                                .map(|stage| &stage.id)
+                                .eq(earlier_stage_ids[..=index].iter());
+                        same_stages
+                            .then(|| (index, stage_id, (row.get::<_, Uuid>(1), settling_index)))
+                    }
+                    _ => None,
+                },
+                None => None,
+            }
         } else {
             None
         };
@@ -3009,7 +3026,6 @@ impl PostgresStore {
                  VALUES($1,$2,'review-resumed-at-stage',NULL,$3,$4)",
                 &[&Uuid::new_v4(),&request_id,&json!({"stageId":stage_id}),&now],
             ).await?;
-            let settling_stage_index = settling_stage_index.ok_or(ReviewRuntimeError::Corrupt)?;
             transaction
                 .execute(
                     "INSERT INTO casework_review_prior_stage_reviewers(

@@ -465,16 +465,15 @@ If the latest round was approved, rejected, cancelled, or is still open, the new
 The subject source, type, and ID must match.
 Casework also requires the same policy ID.
 Casework reads the stage of the decision that settled the earlier request.
-Casework matches the returning stage by its ID in the new policy.
-If that stage no longer exists, Casework starts at the first stage.
+Casework resumes only when the new policy revision has the same stage IDs, in the same order, as the earlier round for every stage up to and including the returning stage.
+Otherwise, for example when a stage was removed or reordered at or below the returning stage, Casework starts at the first stage.
+A revision that only adds or reorders stages above the returning stage still resumes.
 Casework resumes within the earlier request's result retention, and starts a resubmission at the first stage after that.
 Once any later request of the same producer and policy ID has been erased, Casework also starts at the first stage, because erasure removes the subject that would show whether that request was a later round. A later request whose records are already deleted cannot be detected.
 The `review-resumed-at-stage` history detail carries only `stageId`, without linking to the earlier request.
 Earlier approvals are not carried over.
 The staff who decided a stage of an earlier round, up to and including the returning stage, count as reviewers of that stage, so a later stage with `excludePreviousStageReviewers` keeps them out, as within one request, even after the earlier request is erased.
-A reviewer of the returning stage may review that stage again.
-Casework compares the earlier round's stage positions, not stage IDs, with the new policy's stages, so after a revision that reorders stages the exclusions follow the earlier order.
-The subject clock starts with a fresh budget.
+A reviewer of the returning stage may review that stage again.The subject clock starts with a fresh budget.
 Omitting `resubmission` preserves the policy digest.
 
 {/* Evidence: crates/registry-casework-core/src/review.rs ReviewNegativeDecisionMode;
@@ -574,7 +573,8 @@ The producer learns of asks by polling, so delivery can lag.
 Casework judges timeliness by `answeredAt`, the time the applicant answered, rather than when the report arrives.
 Casework accepts an answer at or before `dueAt` even after maintenance marks the ask expired.
 Delivery lag therefore never makes an on-time answer late.
-The ask becomes `answered` and the task marker becomes `answered`, unless another ask on that task is open, when it remains `waiting`.
+The ask becomes `answered`.
+The task marker follows its newest ask: `waiting` while open, `expired` after expiry, or `answered` after its answer.
 Closing a task or request preserves an already expired ask's state and expiry time.
 An expired ask can receive an on-time answer only while its request is still under review.
 The `ask-answered` history detail records `arrivedAfterDue` when the report arrives after the deadline.
@@ -598,6 +598,7 @@ Casework audits both transitions.
 {/* Evidence: crates/registry-casework/tests/review_postgres.rs,
     c2_ask_due_date_is_absolute_and_delivery_lag_does_not_make_an_answer_late;
     c2_a_late_answer_is_refused_before_the_expiry_runner_runs;
+    c2_fix_old_answer_preserves_the_newest_expired_asks_marker;
     c2_ask_pause_shifts_the_clock_and_resumes_on_answer;
     c2_resubmission_resumes_at_the_returning_stage_with_a_fresh_clock;
     c2_resubmission_starts_at_first_stage_after_result_retention */}
