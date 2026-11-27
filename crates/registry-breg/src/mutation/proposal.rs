@@ -955,6 +955,7 @@ impl MutationTransaction {
                 TerminalAuditOutcome::Replayed,
                 0,
                 &[],
+                None,
             )?;
             check_current_proposal_grant(input.authority)?;
             guarded
@@ -1163,6 +1164,7 @@ impl MutationTransaction {
                 TerminalAuditOutcome::Replayed,
                 0,
                 &[],
+                None,
             )?;
             check_current_proposal_grant(input.authority)?;
             guarded
@@ -1869,6 +1871,7 @@ impl MutationTransaction {
                 TerminalAuditOutcome::Refused,
                 0,
                 &[],
+                None,
             )?;
             if tokio::time::Instant::now() >= deadline {
                 return Err(MutationError::Unavailable);
@@ -1981,6 +1984,10 @@ impl MutationTransaction {
             TerminalAuditOutcome::Committed,
             result_count,
             &changed_inputs,
+            value
+                .pointer("/decision/publicReason")
+                .is_some()
+                .then_some(PUBLIC_REASON_REFERENCE),
         )?;
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
@@ -2055,6 +2062,7 @@ impl MutationTransaction {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn proposal_terminal(
         &self,
         input: &ProposalMutationInput<'_>,
@@ -2063,6 +2071,7 @@ impl MutationTransaction {
         outcome: TerminalAuditOutcome,
         count: u16,
         changed_inputs: &[String],
+        field_set_reference: Option<&'static str>,
     ) -> Result<AuditEntry, MutationError> {
         let terminal = TerminalAudit {
             context: input.authority.common.audit_context().cloned(),
@@ -2082,7 +2091,7 @@ impl MutationTransaction {
             record_reference: None,
             record_revision: None,
             result_count: Some(usize::from(count)),
-            field_set_reference: None,
+            field_set_reference: field_set_reference.map(str::to_owned),
             correlation: input.correlation.clone(),
         };
         let entry = if outcome == TerminalAuditOutcome::Refused {
@@ -3355,18 +3364,37 @@ impl MutationTransaction {
         let Some(claims) = claims else {
             return Ok(value);
         };
-        // The decision is disclosed on the reads only, beside the inputs the
-        // same Get authority discloses; a lifecycle command's response omits it.
+        // The decision, the hand-off refusal and the inputs are disclosed to a
+        // caller whose selected access profile holds Get authority on this
+        // Proposal, on every response: a command's authority is not read
+        // authority, so a profile without Get is served none of them.
+        let get_authority = match crate::api::proposals::authorize(
+            registry,
+            action,
+            claims,
+            Some(current.common.access_profile()),
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
+            Some(document.proposal_id),
+        ) {
+            Some(authority)
+                if self
+                    .authorize_proposal_document(tx, registry, document, &authority)
+                    .await
+                    .is_ok() =>
+            {
+                Some(authority)
+            }
+            _ => None,
+        };
+        let is_read = matches!(
+            current.operation,
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get | ProposalOperation::List)
+        );
         if document.header.state != "draft"
             && workflow
                 .as_ref()
                 .is_some_and(|workflow| workflow.current_proposal().is_some())
-            && matches!(
-                current.operation,
-                ProposalAuthorityOperation::Lifecycle(
-                    ProposalOperation::Get | ProposalOperation::List
-                )
-            )
+            && (is_read || get_authority.is_some())
         {
             if let Some(decision) = review_decision(
                 tx,
@@ -3388,6 +3416,22 @@ impl MutationTransaction {
                 .await?
                 {
                     value["handoffRefusal"] = refusal;
+                }
+            }
+        }
+        if let Some(get_authority) = &get_authority {
+            let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+                return Err(MutationError::InvalidRequest);
+            };
+            if let Some(permission) = proposal
+                .permissions
+                .iter()
+                .find(|permission| permission.profile_id == get_authority.common.access_profile())
+            {
+                if let Some(inputs) =
+                    public_inputs(action, &permission.readable_inputs, document.input.as_ref())
+                {
+                    value["input"] = Value::Object(inputs);
                 }
             }
         }
@@ -3466,29 +3510,6 @@ impl MutationTransaction {
                 .is_err()
             {
                 continue;
-            }
-            if operation == ProposalOperation::Get
-                && matches!(
-                    current.operation,
-                    ProposalAuthorityOperation::Lifecycle(
-                        ProposalOperation::Get | ProposalOperation::List
-                    )
-                )
-            {
-                let CompiledActionExecution::Proposal { proposal } = &action.execution else {
-                    return Err(MutationError::InvalidRequest);
-                };
-                if let Some(permission) = proposal
-                    .permissions
-                    .iter()
-                    .find(|permission| permission.profile_id == authority.common.access_profile())
-                {
-                    if let Some(inputs) =
-                        public_inputs(action, &permission.readable_inputs, document.input.as_ref())
-                    {
-                        value["input"] = Value::Object(inputs);
-                    }
-                }
             }
             let available = match operation {
                 ProposalOperation::Get => true,

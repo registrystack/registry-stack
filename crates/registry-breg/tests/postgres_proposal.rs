@@ -4499,6 +4499,252 @@ async fn review_rejection_is_terminal_and_changes_requested_returns_to_the_party
     }
 }
 
+/// A Proposal source whose review authority is the injected local one, with
+/// the inputs readable so a response's `input` member is observable.
+fn reviewed_source() -> (Value, Value) {
+    let mut source = registry_source(false);
+    source["reviewAuthorities"] =
+        json!({"local-review": {"protocol":"id.registrystack.org/protocols/review/v1"}});
+    let policy =
+        json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+    source["actions"]["correct-name"]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
+        json!(["target", "value"]);
+    (source, policy)
+}
+
+/// Records the review authority's decision on the one submitted Proposal, as
+/// the reconciler does when the authority answers.
+async fn inject_review_decision(
+    fixture: &client_http::ClientFixture,
+    review: &LocalReview,
+    policy: Value,
+    outcome: &str,
+) {
+    let row=fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions",&[]).await.unwrap();
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(0)).unwrap();
+    let accepted = registry_review_client::ReviewRequestAccepted {
+        request_id: uuid::Uuid::new_v4(),
+        subject: create.subject,
+        policy: serde_json::from_value(policy).unwrap(),
+        submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+    };
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",
+        &[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
+    let mut result = review.result(&accepted);
+    result.status = serde_json::from_value(json!(outcome)).unwrap();
+    result.outcome = Some(outcome.to_owned());
+    result.public_reason = Some("Public reason canary".to_owned());
+    let (mut migration, task) = fixture.database.connect_migration().await;
+    let tx = migration.transaction().await.unwrap();
+    registry_breg::review_store::reconcile_result(
+        &tx,
+        "local-review",
+        &accepted,
+        &result,
+        &fixture.mutations,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(migration);
+    task.abort();
+}
+
+async fn post_command_link(base_url: &str, link: &Value, key_name: &str) -> Value {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}{}",
+            base_url.trim_end_matches('/'),
+            link["path"].as_str().unwrap()
+        ))
+        .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+        .header("content-type", "application/json")
+        .header("if-match", link["ifMatch"].as_str().unwrap())
+        .header("idempotency-key", key_name)
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(status, reqwest::StatusCode::OK, "{key_name}: {body}");
+    body
+}
+
+/// A lifecycle command answers with the document a Get by the same caller
+/// would serve right after it: the decision with its public reason, and the
+/// readable inputs. Serving the public reason is audited with the same fixed
+/// marker a Get records, and a replay returns the stored body.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn command_response_carries_the_decision_a_get_would_serve() {
+    let (source, policy) = reviewed_source();
+    let review = std::sync::Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Reviewed", "decision-command-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("decision-command-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    inject_review_decision(&fixture, &review, policy, "changes-requested").await;
+
+    let current =
+        serde_json::to_value(client.read_proposal(&submitted).await.unwrap().value).unwrap();
+    assert_eq!(current["decision"]["publicReason"], "Public reason canary");
+    let before = fixture.audit_capture.entries().len();
+    let cancelled = post_command_link(
+        &fixture.http.base_url,
+        &current["links"]["cancel"],
+        "decision-command-cancel",
+    )
+    .await;
+    assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+    assert_eq!(cancelled["decision"], current["decision"], "{cancelled}");
+    assert_eq!(cancelled["input"], current["input"], "{cancelled}");
+    let entries = fixture.audit_capture.entries();
+    assert!(
+        entries[before..].iter().any(|entry| {
+            entry["record"]["phase"] == "terminal"
+                && entry["record"]["operationId"] == "proposals.correct-name.cancel"
+                && entry["record"]["fieldSetReference"] == "proposal-review-public-reason"
+        }),
+        "{:?}",
+        &entries[before..]
+    );
+    assert!(!entries[before..]
+        .iter()
+        .any(|entry| entry.to_string().contains("Public reason canary")));
+    // A replay returns the stored body, decision included.
+    let replay = post_command_link(
+        &fixture.http.base_url,
+        &current["links"]["cancel"],
+        "decision-command-cancel",
+    )
+    .await;
+    assert_eq!(replay, cancelled);
+    fixture.finish().await;
+}
+
+/// A caller whose profile may run a command but not Get on the Proposal gets
+/// the command response without `decision` and `input`: command authority is
+/// not read authority.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn command_response_withholds_the_decision_from_a_profile_without_get() {
+    let (mut source, policy) = reviewed_source();
+    let mut filer = source["accessProfiles"]["clerk"].clone();
+    filer["default"] = json!(false);
+    filer["permissions"]["proposals"][0]["operations"] = json!(["submit", "cancel"]);
+    // Input and attachment disclosure require Get, so the profile has none.
+    filer["permissions"]["proposals"][0]["readableInputs"] = json!([]);
+    filer["permissions"]["proposals"][0]["readableAttachments"] = json!([]);
+    filer["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
+    source["accessProfiles"]["filer"] = filer;
+    let review = std::sync::Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("filer")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "filer")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    let record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"}))).unwrap(),
+            &key("filer-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-name", "filer")
+        .unwrap();
+    let invocation = BRegActionInvocationRequest::new(
+        &action,
+        map(json!({"target":record.value.data.record_identifier,"value":"Reviewed"})),
+        None,
+    )
+    .unwrap();
+    let draft = client
+        .start_proposal(&action, &invocation, &key("filer-start"))
+        .await
+        .unwrap()
+        .value;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("filer-submit"))
+        .unwrap();
+    let submitted =
+        serde_json::to_value(client.execute_proposal(&submit).await.unwrap().value).unwrap();
+    assert!(submitted.get("input").is_none(), "{submitted}");
+    inject_review_decision(&fixture, &review, policy, "changes-requested").await;
+
+    // The decision exists: the clerk, who holds Get, reads it.
+    let clerk_read = reqwest::get(format!(
+        "{}/v1/proposals/{}?accessProfile=clerk",
+        fixture.http.base_url,
+        submitted["id"].as_str().unwrap()
+    ))
+    .await
+    .unwrap();
+    let clerk_view: Value = clerk_read.json().await.unwrap();
+    assert_eq!(
+        clerk_view["decision"]["publicReason"],
+        "Public reason canary"
+    );
+    assert!(clerk_view.get("input").is_some(), "{clerk_view}");
+
+    let before = fixture.audit_capture.entries().len();
+    let cancelled = post_command_link(
+        &fixture.http.base_url,
+        &submitted["links"]["cancel"],
+        "filer-cancel",
+    )
+    .await;
+    assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+    for member in ["decision", "handoffRefusal", "input"] {
+        assert!(cancelled.get(member).is_none(), "{member}: {cancelled}");
+    }
+    assert!(!cancelled.to_string().contains("Public reason canary"));
+    let entries = fixture.audit_capture.entries();
+    assert!(
+        !entries[before..]
+            .iter()
+            .any(|entry| entry["record"]["fieldSetReference"] == "proposal-review-public-reason"),
+        "no public reason was served, so none is marked"
+    );
+    fixture.finish().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submission_read_reports_each_version_separately_and_is_gone_after_its_windows() {
     let mut source = registry_source(false);
@@ -5408,12 +5654,13 @@ async fn prepared_lifecycle_recovery_uses_current_authority_and_the_original_exa
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
     let client = &fixture.http.client;
     let draft = start(&fixture, "Recover lifecycle", "recover-start").await;
-    assert!(
-        draft.input().is_none(),
-        "mutation receipts retain no optional input disclosure"
-    );
     let current = client.read_proposal(&draft).await.unwrap().value;
     let original_input = current.input().unwrap().clone();
+    assert_eq!(
+        draft.input(),
+        Some(&original_input),
+        "a command response discloses the input a read by the same caller does"
+    );
     let submit = client
         .prepare_proposal(&current, "submit", json!({}), &key("recover-submit"))
         .unwrap();
