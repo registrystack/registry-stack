@@ -1,0 +1,421 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Runs the token fixture corpus through BReg's real authentication path and
+//! asserts each result against the `breg` column of `expected.yaml`.
+//!
+//! The access-token verifier profile and the authority claim mapping come from
+//! a runtime file parsed by `parse_runtime_config`, as at startup. The key set
+//! is the signer's static public key set. A token that authenticates is sent
+//! through the authenticated router to a compiled access profile, so a profile
+//! refusal is observed where a request meets it.
+
+#![cfg(feature = "runtime")]
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::http::header::AUTHORIZATION;
+use axum::http::{Request, StatusCode};
+use registry_breg::api::{
+    authenticated_router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError,
+    ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture,
+};
+use registry_breg::auth::{AuthenticationConfigError, AuthenticationError, RegistryAuthenticator};
+use registry_breg::cursor::CursorCodec;
+use registry_breg::runtime_config::parse_runtime_config;
+use registry_breg::{compile_project, parse_project_yaml, CompileProfile};
+use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_testing::{
+    Against, CapturedDiagnosticLogs, ClaimValue, Configuration, FixtureCase, Outcome, Stage,
+    TokenCorpus, TokenFixture, TokenSigner,
+};
+use serde_json::{json, Value};
+use tower::ServiceExt as _;
+use tracing::instrument::WithSubscriber;
+use zeroize::Zeroizing;
+
+const ISSUER: &str = "https://issuer.example.test";
+const AUDIENCE: &str = "urn:breg:test";
+const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
+/// The client a default configuration lists when the fixture names none, so a
+/// token without a client claim meets a list that does not include it.
+const LISTED_CLIENT: &str = "journey-app";
+/// The scope a profile requires when the fixture carries none.
+const FALLBACK_SCOPE: &str = "records:get";
+
+#[tokio::test]
+async fn breg_token_characterisation() {
+    let corpus = TokenCorpus::load().expect("the corpus loads");
+    let signer = TokenSigner::new();
+    let report = corpus
+        .run_product_async("breg", &signer, ISSUER, AUDIENCE, observe)
+        .await
+        .expect("the corpus runs");
+    assert!(
+        report.rows.iter().any(|row| row.observed.is_some()),
+        "no row ran, so the test proves nothing"
+    );
+    report.assert_matches();
+}
+
+/// What a configuration changes in the runtime file's `authentication.oidc`
+/// block, derived from the fixture the way `expected.yaml` describes.
+struct Shape {
+    algorithm: &'static str,
+    access_token_type: String,
+    scope_claim: &'static str,
+    /// Empty writes `allowedClients: unrestricted`.
+    clients: Vec<String>,
+    /// The scope the compiled access profile requires.
+    scope: String,
+    /// The client a people-only profile serves.
+    profile_client: String,
+}
+
+impl Shape {
+    fn of(case: &FixtureCase) -> Self {
+        let fixture = &case.fixture;
+        let header = fixture.header.as_ref();
+        let algorithm = match header.map(|header| header.alg.as_str()) {
+            Some("ES256") => "ES256",
+            Some("EdDSA") => "EdDSA",
+            _ => "RS256",
+        };
+        let recipe = case.configuration == Configuration::Recipe;
+        let access_token_type = match case.configuration {
+            Configuration::Recipe => header
+                .and_then(|header| header.typ.clone())
+                .unwrap_or_else(|| "at+jwt".to_owned()),
+            Configuration::JwtAccepted => "JWT".to_owned(),
+            Configuration::Default => "at+jwt".to_owned(),
+        };
+        let scope_claim = if recipe && fixture.claims.contains_key("scp") {
+            "scp"
+        } else {
+            "scope"
+        };
+        let client = literal_text(fixture, "client_id").or_else(|| literal_text(fixture, "azp"));
+        let clients = match (&client, recipe) {
+            (Some(client), _) => vec![client.clone()],
+            (None, true) => Vec::new(),
+            (None, false) => vec![LISTED_CLIENT.to_owned()],
+        };
+        let scope = first_scope(fixture, scope_claim).unwrap_or_else(|| FALLBACK_SCOPE.to_owned());
+        Self {
+            algorithm,
+            access_token_type,
+            scope_claim,
+            clients,
+            scope,
+            profile_client: client.unwrap_or_else(|| LISTED_CLIENT.to_owned()),
+        }
+    }
+
+    fn runtime_yaml(&self, case: &FixtureCase) -> String {
+        let clients = if self.clients.is_empty() {
+            "unrestricted".to_owned()
+        } else {
+            json!(self.clients).to_string()
+        };
+        format!(
+            r#"
+apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
+kind: BRegRuntimeConfig
+listener:
+  bind: 127.0.0.1:8080
+identity:
+  environment: production
+  instanceId: registry-primary
+  databaseId: registry-db
+  databaseInitializationEnvironment: production
+secretProviders:
+  environment: {{}}
+  file:
+    root: /var/lib/breg/secrets
+database:
+  runtimeUrlRef: secret:env/BREG_DATABASE_URL
+  migrationUrlRef: secret:env/BREG_MIGRATION_DATABASE_URL
+  pool:
+    maximumConnections: 4
+    waitTimeoutMilliseconds: 1000
+    createTimeoutMilliseconds: 1000
+    recycleTimeoutMilliseconds: 1000
+  roles:
+    migration: registry_migration
+    runtime: registry_runtime
+package:
+  root: /var/lib/breg/package
+authentication:
+  oidc:
+    issuer: {issuer}
+    audience: {audience}
+    allowedAlgorithm: {algorithm}
+    accessTokenType: "{access_token_type}"
+    scopeClaim: {scope_claim}
+    scopeSeparator: " "
+    allowedClients: {clients}
+    maximumTokenLifetimeSeconds: 3600
+    leewayMilliseconds: 60000
+  authorityClaims:
+    principal: sub
+audit:
+  hashKeyRef: secret:file/audit-key
+  path: /var/lib/breg/audit/audit.jsonl
+cursor:
+  secretRef: secret:file/cursor-key
+  maximumAgeSeconds: 300
+destinations:
+  hooks: {{}}
+operationalTimeouts:
+  httpRequestMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+  recordLockMilliseconds: 5000
+  migrationLockMilliseconds: 30000
+  migrationStatementMilliseconds: 60000
+"#,
+            issuer = case.issuer,
+            audience = case.audience,
+            algorithm = self.algorithm,
+            access_token_type = self.access_token_type,
+            scope_claim = self.scope_claim,
+        )
+    }
+
+    /// A project with the one access profile the row is read against: a
+    /// default profile for any actor, or a profile for people only. Each
+    /// requires the fixture's first scope. A people-only profile names the
+    /// requester clients it serves, as the compiler demands.
+    fn project_yaml(&self, against: Against) -> String {
+        let profile = match against {
+            Against::PlainRead => format!(
+                "  reader:\n    default: true\n    principalClaim: sub\n    requiredScopes: [{}]\n",
+                self.scope
+            ),
+            Against::HumanOnlyProfile => format!(
+                "  people:\n    default: true\n    principalClaim: sub\n    actorKind: human\n    requesterClients: [{}]\n    requiredScopes: [{}]\n",
+                self.profile_client, self.scope
+            ),
+        };
+        format!(
+            r#"
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {{id: token-characterisation, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}}
+recordTypes:
+  case:
+    primaryDataset: test-dataset
+    route: cases
+    mutationMode: mutable
+    tombstone: false
+    classification: public
+    fields:
+      - {{id: label, type: string, required: true, maximumLength: 100, classification: public}}
+datasets:
+  test-dataset: {{}}
+accessProfiles:
+{profile}    permissions:
+      records:
+        - {{recordType: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}}
+"#
+        )
+    }
+}
+
+fn literal_text(fixture: &TokenFixture, claim: &str) -> Option<String> {
+    match fixture.claims.get(claim) {
+        Some(ClaimValue::Literal(Value::String(text))) => Some(text.clone()),
+        _ => None,
+    }
+}
+
+/// The first scope the fixture carries in `claim`, a space-separated string or
+/// a list.
+fn first_scope(fixture: &TokenFixture, claim: &str) -> Option<String> {
+    match fixture.claims.get(claim) {
+        Some(ClaimValue::Literal(Value::String(text))) => text.split(' ').next().map(str::to_owned),
+        Some(ClaimValue::Literal(Value::Array(items))) => {
+            items.first().and_then(Value::as_str).map(str::to_owned)
+        }
+        _ => None,
+    }
+}
+
+async fn observe(case: FixtureCase) -> Outcome {
+    let shape = Shape::of(&case);
+    let config = parse_runtime_config(&shape.runtime_yaml(&case))
+        .expect("the runtime file for this row parses");
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_yaml(shape.project_yaml(case.against).as_bytes())
+                .expect("project parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("project compiles"),
+    );
+    let keys = Arc::new(JwksFetcher::new_static(
+        serde_json::from_value(case.jwks.clone()).expect("the key set parses"),
+        JwksFetcherConfig::defaults(),
+    ));
+    let authenticator = match RegistryAuthenticator::new(
+        &registry,
+        config.authentication().oidc().token_verifier_config(),
+        keys,
+        config.authentication().authority_claim_config(),
+    ) {
+        Ok(authenticator) => Arc::new(authenticator),
+        // A profile that names requester clients cannot be served by a file
+        // that leaves the clients unrestricted: BReg refuses to start.
+        Err(AuthenticationConfigError::NamedClientNotListed) => return Outcome::None,
+        Err(error) => panic!("the authentication block is invalid for the project: {error}"),
+    };
+
+    let logs = CapturedDiagnosticLogs::default();
+    let token = case.token.expose();
+    let claims = authenticator
+        .authenticate(token)
+        .with_subscriber(logs.subscriber())
+        .await;
+    let claims = match claims {
+        Ok(claims) => claims,
+        Err(
+            AuthenticationError::VerificationRefused | AuthenticationError::MalformedCredential,
+        ) => {
+            return logged_stage(&logs).map_or(Outcome::Unknown, Outcome::Refused);
+        }
+        Err(AuthenticationError::MissingActorKind | AuthenticationError::InvalidClaims) => {
+            return Outcome::Refused(Stage::Claims);
+        }
+    };
+    let kind = actor_kind_of(&format!("{claims:?}"));
+
+    let profile = match case.against {
+        Against::PlainRead => "reader",
+        Against::HumanOnlyProfile => "people",
+    };
+    let status = request_record(&registry, &authenticator, token, profile).await;
+    if status == StatusCode::OK {
+        Outcome::Admitted(Some(kind))
+    } else {
+        Outcome::Refused(Stage::Profile)
+    }
+}
+
+/// The stage of the one value-free diagnostic a refusal logged, when there is
+/// exactly one.
+fn logged_stage(logs: &CapturedDiagnosticLogs) -> Option<Stage> {
+    let text = logs.text();
+    let stages: Vec<String> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|line| line["fields"]["stage"].as_str().map(str::to_owned))
+        .collect();
+    match stages.as_slice() {
+        [stage] => Some(
+            format!("refused/{stage}")
+                .parse::<Outcome>()
+                .ok()
+                .and_then(|outcome| match outcome {
+                    Outcome::Refused(stage) => Some(stage),
+                    _ => None,
+                })
+                .expect("the logged stage is a known stage"),
+        ),
+        _ => None,
+    }
+}
+
+/// The actor kind in a `VerifiedRequestClaims` debug rendering, which prints
+/// the kind and redacts every value.
+fn actor_kind_of(rendered: &str) -> String {
+    let after = rendered
+        .split("actor_kind: Some(")
+        .nth(1)
+        .expect("an authenticated request carries an actor kind");
+    after
+        .split(')')
+        .next()
+        .expect("the actor kind is closed")
+        .to_ascii_lowercase()
+}
+
+async fn request_record(
+    registry: &Arc<registry_breg::CompiledRegistry>,
+    authenticator: &Arc<RegistryAuthenticator>,
+    token: &str,
+    profile: &str,
+) -> StatusCode {
+    let service = Arc::new(HttpService::new(
+        Arc::clone(registry),
+        ReadRuntimeIdentity {
+            package_revision: "package-token-test".to_owned(),
+            schema_fingerprint: "schema-token-test".to_owned(),
+        },
+        Arc::new(OneRecord),
+        Arc::new(Ready),
+        Arc::new(
+            CursorCodec::new(
+                Zeroizing::new(vec![0x43; 32]),
+                std::time::Duration::from_secs(300),
+            )
+            .expect("the cursor key is valid"),
+        ),
+    ));
+    let app = authenticated_router(service, Arc::clone(authenticator));
+    let request = Request::builder()
+        .uri(format!(
+            "/v1/records/cases/{RECORD_ID}?accessProfile={profile}"
+        ))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("request");
+    app.oneshot(request)
+        .await
+        .expect("the router responds")
+        .status()
+}
+
+struct OneRecord;
+
+impl RecordReadService for OneRecord {
+    fn get(
+        &self,
+        request: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        let fields: BTreeSet<String> = request.selected_fields;
+        Box::pin(async move {
+            let data: serde_json::Map<String, Value> = fields
+                .into_iter()
+                .map(|field| (field, json!("visible")))
+                .collect();
+            let record = json!({"id": RECORD_ID, "revision": 1, "data": data});
+            Ok(Some(
+                HeldReadResponse::from_json(&record).expect("the record serializes"),
+            ))
+        })
+    }
+
+    fn list(
+        &self,
+        _request: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
+        Box::pin(async {
+            Ok(HeldReadResponse::from_json(&json!({"items": []})).expect("the list serializes"))
+        })
+    }
+
+    fn lookup(
+        &self,
+        _request: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+struct Ready;
+
+impl ReadinessProbe for Ready {
+    fn is_ready(&self) -> ServiceFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}

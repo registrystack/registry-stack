@@ -557,6 +557,9 @@ impl Serialize for AccessConfig {
 }
 
 #[cfg(test)]
+mod token_characterisation;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use registry_platform_config::JwksSource;

@@ -47,7 +47,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+registry-platform-testing = { workspace = true, features = ["test-authorization-server", "token-fixtures"] }
 reqwest.workspace = true
 tokio.workspace = true
 tower.workspace = true

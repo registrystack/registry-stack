@@ -99,6 +99,7 @@ rcgen.workspace = true
 registry-evidence-authoring.workspace = true
 registry-evidence-presentation.workspace = true
 registry-platform-crypto = { workspace = true, features = ["test-support", "transit"] }
+registry-platform-testing = { workspace = true, features = ["token-fixtures"] }
 serde_norway.workspace = true
 tokio-rustls.workspace = true
 wiremock.workspace = true

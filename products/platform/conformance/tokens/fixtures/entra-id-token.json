@@ -1,0 +1,50 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "entra-id-token",
+  "class": "negative",
+  "provider": "entra",
+  "kind": "user-id",
+  "tokenUse": "id",
+  "subjectKind": "user",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference",
+    "note": "The header typ is JWT and alg is RS256, the same as an access token. aud is the application's own ID. It has a nonce and no scp or roles."
+  },
+  "header": {
+    "alg": "RS256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": {
+      "bind": "issuer"
+    },
+    "aud": {
+      "bind": "audience"
+    },
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "nonce": "synthetic-nonce",
+    "ver": "2.0",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 3600
+    }
+  },
+  "omits": [
+    "scope",
+    "scp",
+    "roles",
+    "client_id",
+    "azp"
+  ],
+  "notes": "aud is bound to the product's audience on purpose. When a client and an API share one app registration the ID token's aud equals the API's audience, so aud alone cannot refuse it. This is the hardest case for a check that refuses ID tokens when the token type JWT is accepted."
+}

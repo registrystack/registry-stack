@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "registry.token-fixture/v1",
+  "title": "Token fixture",
+  "description": "One decoded token shape. The test loader signs it with a test key. A fixture holds no signature and no key.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "class", "provider", "kind", "tokenUse", "subjectKind", "source"],
+  "properties": {
+    "schema": { "const": "registry.token-fixture/v1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+    "class": {
+      "enum": ["positive", "negative"],
+      "description": "A positive fixture is one a correctly configured product can admit for a plain read. A negative fixture is one every product must refuse."
+    },
+    "provider": { "enum": ["keycloak", "thunderid", "entra", "supabase-auth", "esignet", "rstack-dev", "synthetic"] },
+    "kind": { "enum": ["user-access", "client-access", "user-id", "user-refresh", "api-key"] },
+    "tokenUse": { "enum": ["access", "id", "refresh", "api-key"] },
+    "subjectKind": { "enum": ["user", "service", "unspecified"] },
+    "source": { "$ref": "#/$defs/source" },
+    "header": { "$ref": "#/$defs/header" },
+    "claims": { "$ref": "#/$defs/claims" },
+    "opaque": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A credential that is not a JWT, as a synthetic string. A fixture holds either opaque or header with claims."
+    },
+    "omits": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Claim names whose absence is the point. The loader asserts they are absent."
+    },
+    "notes": { "type": "string", "minLength": 1 }
+  },
+  "oneOf": [
+    { "required": ["opaque"], "not": { "anyOf": [{ "required": ["header"] }, { "required": ["claims"] }, { "required": ["omits"] }] } },
+    { "required": ["header", "claims"], "not": { "required": ["opaque"] } }
+  ],
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["basis"],
+      "properties": {
+        "basis": { "enum": ["observed", "documentation", "constructed"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "basis": { "const": "observed" },
+            "observedFrom": { "const": "capture" },
+            "observedOn": { "type": "string", "format": "date" },
+            "version": { "type": "string", "minLength": 1 },
+            "image": { "type": "string", "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$" },
+            "captureFile": { "type": "string", "pattern": "^[a-z0-9-]+\\.json$" }
+          },
+          "required": ["basis", "observedFrom", "observedOn", "version", "image", "captureFile"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "basis": { "const": "observed" },
+            "observedFrom": { "const": "code" },
+            "observedOn": { "type": "string", "format": "date" },
+            "path": { "type": "string", "minLength": 1 },
+            "lines": { "type": "string", "pattern": "^[0-9]+-[0-9]+$" }
+          },
+          "required": ["basis", "observedFrom", "observedOn", "path", "lines"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "basis": { "const": "documentation" },
+            "consultedOn": { "type": "string", "format": "date" },
+            "url": { "type": "string", "pattern": "^https://" },
+            "note": { "type": "string", "minLength": 1 }
+          },
+          "required": ["basis", "consultedOn", "url"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "basis": { "const": "constructed" },
+            "reason": { "type": "string", "minLength": 1 }
+          },
+          "required": ["basis", "reason"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "header": {
+      "type": "object",
+      "required": ["alg", "kid"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "enum": ["RS256", "ES256", "EdDSA", "HS256", "HS512"] },
+        "typ": { "type": "string", "minLength": 1 },
+        "kid": { "$ref": "#/$defs/generated" }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": ["exp"],
+      "minProperties": 1,
+      "additionalProperties": {
+        "if": {
+          "type": "object",
+          "anyOf": [{ "required": ["bind"] }, { "required": ["offsetSeconds"] }, { "required": ["generated"] }]
+        },
+        "then": { "$ref": "#/$defs/directive" }
+      },
+      "properties": {
+        "exp": { "$ref": "#/$defs/offset" },
+        "iat": { "$ref": "#/$defs/offset" },
+        "nbf": { "$ref": "#/$defs/offset" }
+      }
+    },
+    "directive": {
+      "oneOf": [{ "$ref": "#/$defs/bind" }, { "$ref": "#/$defs/offset" }, { "$ref": "#/$defs/generated" }]
+    },
+    "bind": {
+      "type": "object",
+      "required": ["bind"],
+      "additionalProperties": false,
+      "properties": { "bind": { "enum": ["issuer", "audience"] } },
+      "description": "Takes the issuer or the audience of the product under test, so the fixture tests a token's shape and not a mismatch the test set up."
+    },
+    "offset": {
+      "type": "object",
+      "required": ["offsetSeconds"],
+      "additionalProperties": false,
+      "properties": { "offsetSeconds": { "type": "integer", "minimum": 0 } },
+      "description": "Seconds after the moment of signing."
+    },
+    "generated": {
+      "type": "object",
+      "required": ["generated"],
+      "additionalProperties": false,
+      "properties": { "generated": { "const": true } },
+      "description": "A value the loader generates at signing time."
+    }
+  }
+}

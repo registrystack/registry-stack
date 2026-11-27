@@ -999,6 +999,9 @@ fn tolerate_metrics_shutdown_timeout(result: std::io::Result<()>) -> std::io::Re
 }
 
 #[cfg(test)]
+mod token_characterisation;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

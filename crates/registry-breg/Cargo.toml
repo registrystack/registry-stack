@@ -375,7 +375,7 @@ futures-core.workspace = true
 tempfile.workspace = true
 rcgen.workspace = true
 registry-evidence-authoring.workspace = true
-registry-platform-testing = { workspace = true, features = ["test-utils"] }
+registry-platform-testing = { workspace = true, features = ["test-utils", "token-fixtures"] }
 registry-breg-client.workspace = true
 tokio-rustls.workspace = true
 tower.workspace = true
@@ -519,6 +519,11 @@ required-features = ["runtime"]
 [[test]]
 name = "issuer_portability"
 path = "tests/issuer_portability.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "token_characterisation"
+path = "tests/token_characterisation.rs"
 required-features = ["runtime"]
 
 [[test]]

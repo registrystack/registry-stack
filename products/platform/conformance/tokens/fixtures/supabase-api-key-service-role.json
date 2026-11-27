@@ -1,0 +1,32 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "supabase-api-key-service-role",
+  "class": "negative",
+  "provider": "supabase-auth",
+  "kind": "api-key",
+  "tokenUse": "api-key",
+  "subjectKind": "unspecified",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://supabase.com/docs/guides/api/api-keys",
+    "note": "See supabase-api-key-anon."
+  },
+  "header": {
+    "alg": "HS256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "role": "service_role",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 315360000
+    }
+  },
+  "notes": "The expiry models a long-lived key, a test choice."
+}

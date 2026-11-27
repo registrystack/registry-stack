@@ -1,0 +1,16 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "supabase-api-key-opaque",
+  "class": "negative",
+  "provider": "supabase-auth",
+  "kind": "api-key",
+  "tokenUse": "api-key",
+  "subjectKind": "unspecified",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://supabase.com/docs/guides/api/api-keys",
+    "note": "Publishable and secret keys are short strings, not JWTs. The value is synthetic and not a key."
+  },
+  "opaque": "sb_publishable_synthetic-test-value-not-a-key"
+}

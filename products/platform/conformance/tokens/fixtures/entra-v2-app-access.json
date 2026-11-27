@@ -1,0 +1,53 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "entra-v2-app-access",
+  "class": "positive",
+  "provider": "entra",
+  "kind": "client-access",
+  "tokenUse": "access",
+  "subjectKind": "service",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://learn.microsoft.com/en-us/entra/identity-platform/access-token-claims-reference",
+    "note": "An application token (client credentials) carries roles and no scp."
+  },
+  "header": {
+    "alg": "RS256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": {
+      "bind": "issuer"
+    },
+    "aud": {
+      "bind": "audience"
+    },
+    "sub": "00000000-0000-4000-8000-000000000002",
+    "azp": "journey-service",
+    "roles": [
+      "journey.read"
+    ],
+    "ver": "2.0",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 3600
+    }
+  },
+  "omits": [
+    "scope",
+    "scp",
+    "client_id",
+    "appid",
+    "registry_actor_kind"
+  ],
+  "notes": "The documentation gives no lifetime. 3600 seconds is a test choice."
+}

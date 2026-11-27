@@ -1,0 +1,41 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "supabase-id-token",
+  "class": "negative",
+  "provider": "supabase-auth",
+  "kind": "user-id",
+  "tokenUse": "id",
+  "subjectKind": "user",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://supabase.com/docs/guides/auth/oauth-server/getting-started",
+    "note": "The page says an ID token is issued when openid is requested and that asymmetric signing is required. It lists no ID token claims. The claim set here is the OpenID Connect Core minimum. Replace with an observed shape when one exists."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": {
+      "bind": "issuer"
+    },
+    "aud": "journey-app",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "nonce": "synthetic-nonce",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 3600
+    }
+  },
+  "omits": [
+    "scope",
+    "client_id",
+    "azp"
+  ]
+}

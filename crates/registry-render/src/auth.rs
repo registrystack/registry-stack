@@ -154,6 +154,9 @@ pub(crate) async fn authenticate(
 }
 
 #[cfg(test)]
+mod token_characterisation;
+
+#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use base64::Engine as _;

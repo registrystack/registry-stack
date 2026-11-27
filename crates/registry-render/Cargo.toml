@@ -55,6 +55,7 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+registry-platform-testing = { workspace = true, features = ["token-fixtures"] }
 registry-platform-crypto = { workspace = true, features = ["cms-signing", "test-support", "transit"] }
 registry-render-client.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
