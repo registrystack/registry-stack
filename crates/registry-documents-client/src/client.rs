@@ -31,6 +31,7 @@ use crate::{DocumentsClientError, DocumentsProtocolFailure};
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
+const MAXIMUM_PROBE_BYTES: u64 = 4096;
 const DEFAULT_MAXIMUM_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_MAXIMUM_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024;
@@ -271,7 +272,8 @@ impl DocumentsClient {
         })
     }
 
-    /// Whether the process answers at all.
+    /// Whether the process answers at all. The answer is 200 with an empty
+    /// body or a JSON object of at most 4096 bytes whose members are ignored.
     pub async fn health(&self) -> Result<DocumentsComplete<()>, DocumentsClientError> {
         let url = self.url(HEALTH_PATH, &[])?;
         let response =
@@ -289,10 +291,10 @@ impl DocumentsClient {
             return Err(problem_or_status(response).await);
         }
         let trace_id = response_trace(status, response.headers())?;
-        // The health answer has no body, so any byte is a protocol failure
-        // rather than a response the caller's bound was too small for.
-        match read_bounded(response, 0).await {
-            Ok(_) => {}
+        // The probe answers an empty body or a small JSON object. Its members
+        // are not read: the status code is the answer.
+        let body = match read_bounded(response, MAXIMUM_PROBE_BYTES).await {
+            Ok(body) => body,
             Err(
                 BoundedReadError::ContentLengthExceeded { .. }
                 | BoundedReadError::BodyTooLarge { .. },
@@ -308,6 +310,18 @@ impl DocumentsClient {
                     kind: read_failure_kind(&error),
                 })
             }
+        };
+        if !body.is_empty()
+            && !matches!(
+                serde_json::from_slice::<serde_json::Value>(&body),
+                Ok(serde_json::Value::Object(_))
+            )
+        {
+            return Err(protocol(
+                status,
+                DocumentsProtocolFailure::Body,
+                Some(trace_id),
+            ));
         }
         Ok(DocumentsComplete {
             value: (),

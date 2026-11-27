@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `authentication.oidc.allowedClients` accepts the keyword `from-package`,
+  which admits the requester clients of the package's access profiles, so the
+  clients are written once, in the package. The member stays required, and an
+  omitted member, an empty list and `unrestricted` are still refused. A list
+  must still include every client a profile names. `rstack dev` writes
+  `from-package`.
+
+- `registry-messaging-client` accepts an empty body or a JSON object of at
+  most 4096 bytes from `/health` and `/ready`, and refuses a larger one. The
+  runtime still answers an empty `200`.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: `providers`, `senderProfiles`, and `accessProfiles` in

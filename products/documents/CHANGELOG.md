@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The Rust Documents client accepts a `/health` answer with an empty body or a
+  JSON object body of at most 4096 bytes, and ignores the object's members. A
+  larger body, or a body that is not a JSON object, is still a body protocol
+  failure.
+
 - Accept an optional `project.label` and `project.description` in the project
   block, as the shared project block does. They are display text for
   people and change no compiled output.

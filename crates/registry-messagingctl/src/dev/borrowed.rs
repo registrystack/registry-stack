@@ -391,9 +391,7 @@ pub(super) async fn verify(
         access_token_typ_set("at+jwt"),
     )
     .with_scope_claim("scope")
-    .with_allowed_clients(crate::identity_facts::requester_clients(
-        loaded.package.access_profiles(),
-    ));
+    .with_allowed_clients(loaded.package.access_profiles().requester_clients());
     let verified = TokenVerifier::new(verifier.clone(), keys.clone())
         .verify(signed)
         .await

@@ -26,6 +26,8 @@ use crate::{MessagingClientConfig, MessagingClientError, MessagingProtocolFailur
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
+/// Longest `/health` or `/ready` body this client reads.
+const MAXIMUM_PROBE_BYTES: u64 = 4096;
 
 /// Longest `Retry-After` wait, in whole seconds, this client reports on a
 /// 429 refusal. A daily limit clears as the profile's oldest counted
@@ -82,14 +84,14 @@ impl MessagingClient {
     /// Whether the process answers at all. Liveness says nothing about the
     /// store; use `ready` for that.
     pub async fn health(&self) -> Result<MessagingComplete<()>, MessagingClientError> {
-        self.get_empty(HEALTH_PATH).await
+        self.get_probe(HEALTH_PATH).await
     }
 
     /// Whether the runtime can serve: its store is reachable and carries
     /// exactly the schema this runtime expects. A runtime that is not ready
     /// answers the typed `ProblemCode::ServiceUnavailable`.
     pub async fn ready(&self) -> Result<MessagingComplete<()>, MessagingClientError> {
-        self.get_empty(READY_PATH).await
+        self.get_probe(READY_PATH).await
     }
 
     /// Submit one message under `idempotency_key`. The runtime answers the
@@ -265,7 +267,9 @@ impl MessagingClient {
             .map_err(|_| MessagingClientError::configuration("the service base URL is not usable"))
     }
 
-    async fn get_empty(&self, path: &str) -> Result<MessagingComplete<()>, MessagingClientError> {
+    /// A probe answers 200 with an empty body or a JSON object; its
+    /// members are not read, the status code is the answer.
+    async fn get_probe(&self, path: &str) -> Result<MessagingComplete<()>, MessagingClientError> {
         let url = self.url_from_constant(path)?;
         let response = self.send(self.http.get(url)).await?;
         let status = response.status();
@@ -273,18 +277,30 @@ impl MessagingClient {
             return Err(self.problem_or_status(response).await);
         }
         let trace_id = response_trace(status, response.headers())?;
-        let body =
-            read_bounded(response, 1)
-                .await
-                .map_err(|error| MessagingClientError::Transport {
-                    kind: read_failure_kind(&error),
-                })?;
+        let json_media_type = exact_media_type(response.headers(), JSON_MEDIA_TYPE);
+        let body = read_bounded(response, MAXIMUM_PROBE_BYTES)
+            .await
+            .map_err(|error| MessagingClientError::Transport {
+                kind: read_failure_kind(&error),
+            })?;
         if !body.is_empty() {
-            return Err(protocol(
-                status,
-                MessagingProtocolFailure::Body,
-                Some(trace_id),
-            ));
+            if !json_media_type {
+                return Err(protocol(
+                    status,
+                    MessagingProtocolFailure::MediaType,
+                    Some(trace_id),
+                ));
+            }
+            if !matches!(
+                serde_json::from_slice::<serde_json::Value>(&body),
+                Ok(serde_json::Value::Object(_))
+            ) {
+                return Err(protocol(
+                    status,
+                    MessagingProtocolFailure::Body,
+                    Some(trace_id),
+                ));
+            }
         }
         Ok(MessagingComplete {
             value: (),

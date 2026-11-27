@@ -681,21 +681,32 @@ fn install_runtime_constraints(schema: &mut Value) {
         set_definition_property(schema, definition, property, "pattern", json!("^/"));
     }
     // Every access profile resolves its caller from the matched client, so
-    // a Messaging deployment always lists the clients it admits. The shared
+    // a Messaging deployment always states the clients it admits. The shared
     // block requires the member and also admits the keyword `unrestricted`,
     // which this runtime refuses in every mode, so the member is restated
-    // as the list alone and the shared definition is dropped.
+    // as `from-package` or the list, and the shared definition is dropped.
     if let Some(clients) = schema.pointer_mut("/$defs/OidcConfig/properties/allowedClients") {
         *clients = json!({
-            "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, an empty or repeated client, and\n`unrestricted` are refused.",
-            "type": "array",
-            "items": {"type": "string", "minLength": 1},
-            "minItems": 1,
-            "uniqueItems": true,
+            "description": "The clients whose access tokens are admitted. Required in every\nfile: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client must cover them. An\nomitted or empty list, an empty or repeated client, and `unrestricted` are\nrefused.",
+            "oneOf": [
+                {"type": "string", "const": "from-package"},
+                {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "uniqueItems": true,
+                },
+            ],
         });
+    }
+    if let Some(issuers) =
+        schema.pointer_mut("/$defs/OidcConfig/properties/assertionIssuers/description")
+    {
+        *issuers = json!("Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.");
     }
     if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
         definitions.remove("OidcAllowedClients");
+        definitions.remove("OidcPackageAllowedClients");
     }
     if let Some(profiles) = schema
         .pointer_mut("/properties/tlsTrustProfiles")
@@ -810,8 +821,9 @@ mod tests {
             document["$defs"]["RetentionConfig"]["properties"]["payloadRetentionDays"]["maximum"],
             MAXIMUM_PAYLOAD_RETENTION_DAYS
         );
-        // `allowedClients` is decided in every file, and only as a list:
-        // the runtime refuses `unrestricted` in every mode.
+        // `allowedClients` is decided in every file: the keyword
+        // `from-package` or a non-empty list. The runtime refuses
+        // `unrestricted` in every mode, so the schema does not offer it.
         let oidc = &document["$defs"]["OidcConfig"];
         assert_eq!(
             oidc["required"]
@@ -825,11 +837,15 @@ mod tests {
         let clients = &oidc["properties"]["allowedClients"];
         assert!(clients.get("default").is_none());
         assert!(clients.get("$ref").is_none(), "{clients}");
-        assert_eq!(clients["type"], "array");
-        assert_eq!(clients["minItems"], 1);
-        assert_eq!(clients["uniqueItems"], true);
-        assert_eq!(clients["items"]["minLength"], 1);
+        let forms = clients["oneOf"].as_array().expect("two written forms");
+        assert_eq!(forms.len(), 2, "{clients}");
+        assert_eq!(forms[0], json!({"type": "string", "const": "from-package"}));
+        assert_eq!(forms[1]["type"], "array");
+        assert_eq!(forms[1]["minItems"], 1);
+        assert_eq!(forms[1]["uniqueItems"], true);
+        assert_eq!(forms[1]["items"]["minLength"], 1);
         assert!(document["$defs"].get("OidcAllowedClients").is_none());
+        assert!(document["$defs"].get("OidcPackageAllowedClients").is_none());
         assert_eq!(
             document["$defs"]["OidcConfig"]["additionalProperties"], false,
             "unknown keys are refused"

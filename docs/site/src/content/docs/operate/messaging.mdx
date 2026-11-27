@@ -105,7 +105,10 @@ Set `package.root` to the absolute path of the package directory. Optionally set
 Set `listener.bind` to the private address your proxy reaches, and `tlsTermination` to
 `operator-controlled-upstream`: the example's `development-loopback` is refused on any non-loopback
 bind, and a public unicast address is refused under every setting. Set `authentication.oidc` to your
-issuer and audience; `allowedClients` must list every client an access profile names.
+issuer and audience. Write `allowedClients: from-package` to admit exactly the clients the
+package's access profiles name, so the clients are written once, in `messaging.yaml`. A list is also
+accepted, and it must include every client an access profile names. Clients in the list that no
+profile names are admitted by the verifier but reach no profile.
 
 Each provider the package declares gets a connection with the same id and `type`:
 

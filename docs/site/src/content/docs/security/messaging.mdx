@@ -30,8 +30,11 @@ Every `/v1` route except the provider callback routes resolves its caller first.
 A credential is an RFC 9068 access token from the configured issuer and audience, from a client in
 `authentication.oidc.allowedClients`, signed by a published or static key.
 An exchanged token is refused unless `assertionIssuers` declares its authority.
-`allowedClients: unrestricted` is refused in every mode, because an access profile resolves from
-the matched client.
+`allowedClients` is required in every runtime file. `allowedClients: from-package` admits the sorted
+union of the access profiles' `requesterClients` and nothing more, so the package and the runtime
+file cannot disagree. An explicit list must include every client an access profile names, or the
+runtime refuses to start. `allowedClients: unrestricted` and an empty list are refused in every mode,
+because an access profile resolves from the matched client.
 A refused or malformed credential, or one whose verified claims do not resolve to a client, is
 `401 authentication.refused` with a `WWW-Authenticate: Bearer` challenge.
 A credential that verifies but resolves to no usable access profile (including an exchanged token

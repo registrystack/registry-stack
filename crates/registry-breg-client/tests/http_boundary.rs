@@ -1008,3 +1008,18 @@ async fn derived_response_limits_retain_credentials_and_leave_the_original_bound
     assert_eq!(requests[0].uri, requests[1].uri);
     assert_eq!(requests[0].authorization, requests[1].authorization);
 }
+
+#[test]
+fn probe_status_ignores_members_it_does_not_know() {
+    let status: registry_breg_client::BRegProbeStatus = serde_json::from_str(
+        r#"{"status":"ready","posture":"production","developmentSettings":[]}"#,
+    )
+    .expect("unknown members are ignored");
+    assert_eq!(status.status, "ready");
+    assert!(
+        serde_json::from_str::<registry_breg_client::BRegProbeStatus>(
+            r#"{"posture":"production"}"#
+        )
+        .is_err()
+    );
+}

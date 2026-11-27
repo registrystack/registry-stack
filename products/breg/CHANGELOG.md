@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The Rust BReg client decodes `/health` and `/ready` answers that carry
+  members besides `status`, and ignores them. `status` is still required and
+  checked.
+
 - The Rust, Node and Python hook verifiers in the BReg clients refuse a
   delivery time more than 300 seconds from the receiver clock, either way,
   with the new code `stale-delivery`. A receiver that passed nothing gets that

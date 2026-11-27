@@ -46,6 +46,33 @@ fn assert_problem(answer: &(StatusCode, Value), status: StatusCode, code: &str) 
     assert_eq!(answer.1["code"], code, "{}", answer.1);
 }
 
+/// The runtime file of the harness says `allowedClients: from-package` and
+/// lists no client. The package's two requester clients both reach their
+/// profile, and a client the package does not name is refused.
+#[tokio::test]
+async fn a_runtime_that_admits_the_package_clients_serves_a_call_from_each() {
+    let harness = Harness::start().await;
+    let text = std::fs::read_to_string(harness.runtime_path()).unwrap();
+    assert!(text.contains("allowedClients: from-package"), "{text}");
+
+    let accepted = harness
+        .submit(&sender_token(), "from-package-key", &email_submission())
+        .await;
+    assert_eq!(accepted.0, StatusCode::ACCEPTED, "{}", accepted.1);
+    let uri = format!("/v1/messages/{}", accepted.1["id"].as_str().unwrap());
+    let (status, view) = harness.call("GET", &uri, Some(&operator_token())).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+
+    let stranger = token(json!({
+        "sub": "unlisted-principal",
+        "azp": "reporting-job",
+        "registry_scopes": "messaging:send",
+        "registry_actor_kind": "service",
+    }));
+    let refused = harness.call("GET", &uri, Some(&stranger)).await;
+    assert_eq!(refused.0, StatusCode::UNAUTHORIZED, "{}", refused.1);
+}
+
 #[tokio::test]
 async fn operator_reads_and_action_previews_ignore_a_refused_audit_destination() {
     let harness = Harness::start().await;
