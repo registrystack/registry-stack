@@ -443,6 +443,9 @@
     "personAudience": {
       "description": "The audience that the products a person calls from a page may share\n(an absolute URI). Omitted: every product keeps its own audience.",
       "maxLength": 4096,
+      "not": {
+        "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@"
+      },
       "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$",
       "type": [
         "string",

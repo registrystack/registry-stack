@@ -706,6 +706,18 @@ fn check(document: &Document, facts: &IdentityFacts) -> Vec<Diagnostic> {
                 "Write each profile id once, as 1 to 64 lowercase letters, digits, `-` or `_`.",
             );
         }
+        if profile
+            .scopes
+            .iter()
+            .any(|scope| STANDARD_SCOPE_NAMES.contains(&scope.as_str()))
+        {
+            error(
+                &pointer("scopes"),
+                "identity.facts.standard-scope-name",
+                "a scope is spelled like a standard scope name, which the issuer puts into a token without checking a role",
+                "Rename the scope, for example with the product's prefix.",
+            );
+        }
         if profile.scopes.is_empty()
             || profile.scopes.len() > MAXIMUM_SCOPES
             || !unique(&profile.scopes)
@@ -1093,19 +1105,6 @@ fn check_person_member(
             "a member admits every client. List the clients the product admits.",
             format!("{location}/allowedClients"),
         ));
-    }
-    for (index, profile) in facts.access_profiles.iter().enumerate() {
-        if profile
-            .scopes
-            .iter()
-            .any(|scope| STANDARD_SCOPE_NAMES.contains(&scope.as_str()))
-        {
-            return Err(refuse(
-                "identity.person-audience.standard-scope-name",
-                "a member scope is spelled like a standard scope name, which the issuer puts into a token without checking a role. Rename the scope, for example with the product's prefix.",
-                format!("{location}/accessProfiles/{index}"),
-            ));
-        }
     }
     // A product's own profiles may repeat a scope; another member may not.
     for (index, profile) in facts.access_profiles.iter().enumerate() {

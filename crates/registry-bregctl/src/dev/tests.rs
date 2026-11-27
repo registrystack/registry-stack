@@ -1091,6 +1091,16 @@ fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection
         .find(|issuer| issuer.name == "Local purpose assertion authority")
         .unwrap();
     assert_eq!(purpose.clients, ["operator"]);
+    // A multi-purpose client receives the exchange grant without being listed
+    // under `issuer.exchange_clients`, and no other client does.
+    let holders: Vec<&str> = description
+        .machine_clients
+        .iter()
+        .filter(|client| client.token_exchange.is_some())
+        .map(|client| client.client_id.as_str())
+        .collect();
+    assert!(clients.issuer.exchange_clients.is_empty());
+    assert_eq!(holders, ["operator"]);
     assert_eq!(purpose.token_attributes.len(), 5);
     assert!(purpose.token_attributes.contains_key("registry_actor_kind"));
     assert!(purpose.token_attributes.contains_key("registry_principal"));
@@ -5974,11 +5984,11 @@ fn external_review_executor_credentials_are_not_a_dev_client_contract() {
 }
 
 #[test]
-fn only_the_declared_exchange_clients_hold_the_token_exchange_grant() {
-    // The dev issuer hands the token-exchange grant to the clients the dev
-    // client file lists under `issuer.exchange_clients` (and to multi-purpose
-    // clients) and to no other client: a client that can exchange can
-    // re-audience a person token, so the set must not widen silently.
+fn the_exchange_grant_goes_to_the_declared_exchange_clients_of_this_inventory() {
+    // In this inventory (no multi-purpose client) the dev issuer hands the
+    // token-exchange grant to the clients the dev client file lists under
+    // `issuer.exchange_clients` and to no other client. Dev runs register
+    // Registry Stack products only, so it carries no `side` marker.
     let (_temp, state, base, files) = fixture();
     let clients = machine_grant_inventory(base);
     let clients = config::clients(

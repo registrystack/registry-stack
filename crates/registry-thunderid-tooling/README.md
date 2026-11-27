@@ -252,19 +252,30 @@ resolves no secret.
   issuer, so only the register checks task grants here
   (`...task-grant-member`); it lists its clients rather than `unrestricted`
   (`...unrestricted-member`); and it states no scope name another member
-  states (`...shared-scope`), and none of its scopes is spelled like a standard scope name (`openid`, `profile`, `email`, `phone`, `address`, `roles`), which ThunderID puts into a token with no role check (`...standard-scope-name`). The generator emits no application `scopeClaims`. No exchange may name the person audience as its
+  states (`...shared-scope`). No exchange may name the person audience as its
   bootstrap resource (`...bootstrap-audience`), a declared `personAudience`
   that no product uses is refused (`...unused`), and one that is not an
-  absolute URI is `identity.person-audience.invalid`. On a shared audience
-  every member's tokens carry the same audience, and a product picks the
-  access profile from the client id, so every profile that a browser or
-  session application selects (its `requesterClients` names one) must state a
-  scope that no other profile of the product states
-  (`identity.person-audience.profile-without-own-scope`). The rule needs no
-  user model, so it holds for every user and user type. ThunderID 1.1.0 uses
-  an application's user types for registration only, not to limit who signs
-  in, so `userTypes` on an application is never a control for reach. The
-  membership rule covers products that bring identity facts only.
+  absolute URI is `identity.person-audience.invalid`.
+- On every audience, an access profile that a browser or session application
+  can reach must state a scope that no other profile of the product states
+  (`identity.deployment.profile-without-own-scope`). A person can sign in
+  through any interactive application, and the application decides which
+  profile a token is presented for: the Document Store and Messaging select
+  the profile by client id, and BReg lets the caller pick it and gates it by
+  the clients the profile names. A profile is reachable when its
+  `requesterClients` name the application, or name none and the product
+  admits the application. The rule needs no user model, so it holds for every
+  user and user type. ThunderID 1.1.0 uses an application's user types for
+  registration only, not to limit who signs in, so `userTypes` is never a
+  control for reach and does not narrow which applications reach a product.
+  Machine clients keep client binding: their subject is the client itself.
+  The membership rule for the person audience covers products that bring
+  identity facts only.
+- No product scope may be spelled like a standard scope name (`openid`,
+  `profile`, `email`, `phone`, `address`, `roles`), on any audience: ThunderID
+  puts those into a token with no role check
+  (`identity.facts.standard-scope-name`). The generator emits no application
+  `scopeClaims`.
 - A session application (`sessionApps`) is the confidential client a session
   service uses for one kind of sign-in. Beside a browser application's members
   it states `postLogoutRedirectUris` and `products` (1 to 8 distinct product

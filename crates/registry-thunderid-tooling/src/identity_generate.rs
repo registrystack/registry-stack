@@ -183,7 +183,7 @@ fn resolve_grants<'a>(
                     &format!("{at}/accessProfiles/{position}"),
                     "identity.deployment.client-not-admitted",
                     "the product does not admit the client that would present this profile",
-                    "Admit the client in the product's configuration and regenerate its facts, list the user's type on a browser application of the product, or remove the grant.",
+                    "Admit the client in the product's configuration and regenerate its facts, name the client in the profile's requesterClients, or remove the grant.",
                 );
                 continue;
             }
@@ -495,8 +495,8 @@ fn settle_actor_kind(
 /// never selected for it, whatever its claims: Messaging resolves a profile
 /// by client id before it reads a scope, so two profiles may require the
 /// same scopes for disjoint requester clients. A user reaches a product
-/// through any of that product's browser applications that sign in the
-/// user's type, as for its grants.
+/// through any of that product's browser and session applications, as for
+/// its grants.
 ///
 /// That skip is safe only while every product that selects by claims states a
 /// selector on each such profile. Evidence does: it requires at least one
@@ -928,31 +928,29 @@ fn check_permission_bound(
     }
 }
 
-/// On the person audience every member's tokens carry the same audience, and
-/// a product picks the access profile from the client id. A profile that an
-/// interactive client selects must therefore state a scope that no other
-/// profile of the product states: otherwise a token another application
-/// obtained for another profile would also resolve to this one. The rule
-/// needs no user model, so it holds for every user and user type.
-fn check_person_profiles(
+/// A person can sign in through any browser or session application, and the
+/// application decides which access profile a token is presented for: a
+/// product picks the profile from the client id, or admits it only for the
+/// clients it names (Document Store and Messaging select by client, BReg lets
+/// the caller pick and gates it). So a profile that an interactive client can
+/// reach, because its `requesterClients` name the client or it names none and
+/// the product admits the client, must state a scope that no other profile of
+/// the product states. Otherwise a token obtained for another profile would
+/// also satisfy it. The rule needs no user model and holds on every audience.
+/// Machine clients keep client binding: their subject is the client itself.
+fn check_profile_scopes(
     findings: &mut Findings<'_>,
     facts: &MergedFacts,
-    person_audience: &str,
     interactive: &[(String, &str)],
 ) {
-    for (name, product) in facts
-        .products
-        .iter()
-        .filter(|(_, product)| product.audience == person_audience)
-    {
+    for (name, product) in &facts.products {
         for profile in product.access_profiles.values() {
-            let Some(selected) = &profile.requester_clients else {
+            if profile.exchange.is_some() || profile.scopes.is_empty() {
                 continue;
-            };
-            let Some((pointer, _)) = interactive
-                .iter()
-                .find(|(_, client)| selected.iter().any(|named| named == client))
-            else {
+            }
+            let Some((pointer, _)) = interactive.iter().find(|(_, client)| {
+                product.allowed_clients.admits(client) && requester_allows(profile, client)
+            }) else {
                 continue;
             };
             let others: BTreeSet<&String> = product
@@ -961,17 +959,14 @@ fn check_person_profiles(
                 .filter(|other| other.id != profile.id)
                 .flat_map(|other| other.scopes.iter())
                 .collect();
-            if profile.exchange.is_some()
-                || profile.scopes.is_empty()
-                || profile.scopes.iter().any(|scope| !others.contains(scope))
-            {
+            if profile.scopes.iter().any(|scope| !others.contains(scope)) {
                 continue;
             }
             findings.error(
                 pointer,
-                "identity.person-audience.profile-without-own-scope",
+                "identity.deployment.profile-without-own-scope",
                 &format!(
-                    "the {name} access profile {} is selected by this application but states no scope that another profile of the product lacks, so a token obtained for another profile would also resolve to it",
+                    "the {name} access profile {} can be reached through this application but states no scope that another profile of the product lacks, so a token obtained for another profile would also satisfy it",
                     profile.id
                 ),
                 "Give the profile a scope of its own, so no other profile's token carries all of it.",
@@ -1184,26 +1179,21 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             .map(|server| server.id.clone())
     };
 
-    // A user reaches a product only through a browser application of that
-    // product or a session application that lists it, and only one that
-    // signs in the user's type: every application admits `RegistryPerson`,
-    // and an extension type only where its `userTypes` list it.
-    let user_reaching = |user_type: Option<&str>, product: &str| {
-        let signs_in =
-            |types: &[String]| user_type.is_none_or(|wanted| types.iter().any(|id| id == wanted));
+    // A user reaches a product through any browser application of that
+    // product and any session application that lists it. ThunderID uses an
+    // application's user types for registration only, not to limit who signs
+    // in, so a user type never narrows reach.
+    let user_reaching = |product: &str| {
         deployment
             .browser_apps
             .iter()
-            .filter(|app| app.product == product && signs_in(&app.user_types))
+            .filter(|app| app.product == product)
             .map(|app| app.id.clone())
             .chain(
                 deployment
                     .session_apps
                     .iter()
-                    .filter(|app| {
-                        app.products.iter().any(|listed| listed == product)
-                            && signs_in(&app.user_types)
-                    })
+                    .filter(|app| app.products.iter().any(|listed| listed == product))
                     .map(|app| app.id.clone()),
             )
             .collect::<Vec<_>>()
@@ -1223,22 +1213,20 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
     // receipt: its products and the audiences it fetches tokens for.
     let mut session_receipts: BTreeMap<String, Value> = BTreeMap::new();
 
-    if let Some(person) = deployment.person_audience.as_deref() {
-        let interactive: Vec<(String, &str)> = deployment
-            .browser_apps
-            .iter()
-            .enumerate()
-            .map(|(index, app)| (format!("/browserApps/{index}"), app.id.as_str()))
-            .chain(
-                deployment
-                    .session_apps
-                    .iter()
-                    .enumerate()
-                    .map(|(index, app)| (format!("/sessionApps/{index}"), app.id.as_str())),
-            )
-            .collect();
-        check_person_profiles(&mut findings, &facts, person, &interactive);
-    }
+    let interactive: Vec<(String, &str)> = deployment
+        .browser_apps
+        .iter()
+        .enumerate()
+        .map(|(index, app)| (format!("/browserApps/{index}"), app.id.as_str()))
+        .chain(
+            deployment
+                .session_apps
+                .iter()
+                .enumerate()
+                .map(|(index, app)| (format!("/sessionApps/{index}"), app.id.as_str())),
+        )
+        .collect();
+    check_profile_scopes(&mut findings, &facts, &interactive);
 
     for (index, client) in deployment.clients.iter().enumerate() {
         let pointer = format!("/clients/{index}");
@@ -1595,7 +1583,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
 
     for (index, user) in deployment.users.iter().enumerate() {
         let pointer = format!("/users/{index}");
-        let reaching = |product: &str| user_reaching(user.user_type.as_deref(), product);
+        let reaching = |product: &str| user_reaching(product);
         let found_before = findings.found.len();
         let granted = resolve_grants(&mut findings, &facts, &pointer, &user.grants, &reaching);
         let resolved = findings.found.len() == found_before;
@@ -1642,7 +1630,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             if profile.exchange.is_some() {
                 continue;
             }
-            for app in user_reaching(user.user_type.as_deref(), product) {
+            for app in user_reaching(product) {
                 projected_requirements
                     .entry(app)
                     .or_default()

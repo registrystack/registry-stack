@@ -761,18 +761,25 @@ fn a_typo_in_the_person_audience_is_reported_as_unused_not_as_a_duplicate() {
 }
 
 #[test]
-fn a_member_scope_never_takes_a_standard_scope_name() {
+fn no_product_scope_takes_a_standard_scope_name() {
     for name in ["openid", "profile", "email", "phone", "address", "roles"] {
-        let member = person_member("documents", name);
-        assert_eq!(
-            refusal(person_merge(vec![breg_like(), member], Some(PERSON))),
-            "identity.person-audience.standard-scope-name",
-            "{name}"
-        );
+        // On the person audience and on a product's own audience alike.
+        for audience in [PERSON, "urn:documents:example"] {
+            let text = person_member("documents", name).replace(PERSON, audience);
+            let error = read("facts.yaml", text.as_bytes()).expect_err("refused");
+            let codes: Vec<_> = error
+                .report()
+                .expect("a refused file")
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code.clone())
+                .collect();
+            assert!(
+                codes.contains(&"identity.facts.standard-scope-name".to_owned()),
+                "{name} on {audience}: {codes:?}"
+            );
+        }
     }
-    // A product on its own audience is not bound by the rule.
-    let own = person_member("documents", "profile").replace(PERSON, "urn:documents:example");
-    assert!(person_merge(vec![breg_like(), own], Some(PERSON)).is_ok());
     // Names that merely contain one are fine.
     let namespaced = person_member("documents", "profile:read");
     assert!(person_merge(vec![breg_like(), namespaced], Some(PERSON)).is_ok());

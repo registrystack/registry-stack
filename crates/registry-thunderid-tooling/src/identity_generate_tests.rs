@@ -395,7 +395,7 @@ fn case_with_profile_requiring(kind: &str) -> Case {
     let mut case = case();
     case.facts[0]
         .1
-        .push_str(&format!("  - id: case-kind\n    scopes: [records:get]\n    actorKind: {kind}\n"));
+        .push_str(&format!("  - id: case-kind\n    scopes: [records:kind]\n    actorKind: {kind}\n"));
     case
 }
 
@@ -1419,18 +1419,19 @@ fn a_browser_application_with_no_room_for_the_actor_kind_is_refused() {
 const FIELD_PORTAL: &str = "  - id: field-portal\n    clientSecretRef: secret:env/FIELD_PORTAL_CLIENT_SECRET\n    origin: https://field.registry.example\n    redirectUris: [https://field.registry.example/auth/callback]\n    product: breg\n    tokenAttributes: [registry_actor_kind, registry_role]\n    grants:\n      - product: breg\n        accessProfiles: [case-read]\nusers:\n";
 
 #[test]
-fn a_user_reaches_a_product_only_through_an_application_that_admits_its_type() {
-    // staff-portal is the only BReg application; once it no longer admits
-    // farmers, no token of farmer-one's can reach BReg.
+fn a_typed_user_reaches_a_product_through_every_application_of_it() {
+    // ThunderID does not limit sign-in by user type, so removing the type
+    // from the only BReg application changes nothing about reach.
     let mut case = case();
     case.deployment = case.deployment.replace("    userTypes: [farmer]\n", "");
-    assert_eq!(case.refusal(), ["identity.deployment.client-not-admitted"]);
+    assert!(case.run().is_ok(), "{:?}", case.run().err());
 }
 
 #[test]
-fn selection_counts_only_the_applications_that_admit_the_users_type() {
-    // `case-review` selects farmers but names only field-portal, which does
-    // not admit farmers, so farmer-one can never be resolved to it.
+fn selection_counts_every_application_whatever_the_users_type() {
+    // `case-review` selects farmers and names only field-portal, which does
+    // not list the farmer type. A farmer can still sign in there, so
+    // farmer-one is resolved to it whichever application it names.
     let review = |clients: &str| {
         let mut case = case();
         case.facts[0].1 = case.facts[0]
@@ -1445,11 +1446,13 @@ fn selection_counts_only_the_applications_that_admit_the_users_type() {
         case.deployment = case.deployment.replace("users:\n", FIELD_PORTAL);
         case
     };
-    review("field-portal").run().expect("generates");
-    assert_eq!(
-        review("staff-portal").refusal(),
-        ["identity.deployment.claims-select-ungranted-profile"]
-    );
+    for clients in ["field-portal", "staff-portal"] {
+        assert_eq!(
+            review(clients).refusal(),
+            ["identity.deployment.claims-select-ungranted-profile"],
+            "{clients}"
+        );
+    }
 }
 
 #[test]
@@ -2023,7 +2026,7 @@ fn a_profile_an_interactive_client_selects_holds_a_scope_of_its_own() {
     // either application would carry the scope the other's profile needs.
     assert!(two_clients_case("citizen-read")
         .refusal()
-        .contains(&"identity.person-audience.profile-without-own-scope".to_owned()));
+        .contains(&"identity.deployment.profile-without-own-scope".to_owned()));
     // A superset profile leaves the smaller one without a scope of its own.
     let mut superset = two_clients_case("citizen-read");
     superset.facts[0].1 = superset.facts[0].1.replace(
@@ -2032,7 +2035,7 @@ fn a_profile_an_interactive_client_selects_holds_a_scope_of_its_own() {
     );
     assert!(superset
         .refusal()
-        .contains(&"identity.person-audience.profile-without-own-scope".to_owned()));
+        .contains(&"identity.deployment.profile-without-own-scope".to_owned()));
     // Distinct scopes pass, whoever is granted what.
     let mut distinct = two_clients_case("citizen-read");
     distinct.facts[0].1 = distinct.facts[0].1.replace(
@@ -2045,7 +2048,7 @@ fn a_profile_an_interactive_client_selects_holds_a_scope_of_its_own() {
     no_users.deployment = no_users.deployment.split("users:\n").next().unwrap().to_owned();
     assert!(no_users
         .refusal()
-        .contains(&"identity.person-audience.profile-without-own-scope".to_owned()));
+        .contains(&"identity.deployment.profile-without-own-scope".to_owned()));
 }
 
 #[test]
@@ -2067,7 +2070,12 @@ fn a_profile_only_a_machine_client_selects_needs_no_scope_of_its_own() {
 #[test]
 fn a_browser_application_counts_as_an_interactive_client_of_a_shared_scope() {
     let mut case = two_clients_case("citizen-read");
-    // `staff-pages` becomes a browser application of the other member.
+    // `citizen-read` has a scope of its own, so only `staff-read`, selected
+    // by the browser application `staff-pages`, can trigger the rule.
+    case.facts[0].1 = case.facts[0].1.replace(
+        "scopes: [documents:get]\n    requesterClients: [citizen-pages]",
+        "scopes: [documents:get, documents:citizen]\n    requesterClients: [citizen-pages]",
+    );
     let sessions = case.deployment.find("  - id: staff-pages").unwrap();
     let users = case.deployment.find("users:\n").unwrap();
     case.deployment = format!(
@@ -2076,18 +2084,14 @@ fn a_browser_application_counts_as_an_interactive_client_of_a_shared_scope() {
         &case.deployment[users..]
     );
     case.facts.push(("breg".into(), person_facts("breg", "records:get").replace("- citizen-pages", "- staff-pages")));
-    assert!(case
-        .refusal()
-        .contains(&"identity.person-audience.profile-without-own-scope".to_owned()));
-}
-
-#[test]
-fn a_deployment_error_is_reported_even_when_a_person_audience_is_declared() {
-    let mut case = session_case();
-    case.deployment = case
-        .deployment
-        .replace("origin: https://pages.registry.example", "origin: http://pages.registry.example");
-    assert_eq!(case.refusal(), ["identity.deployment.invalid-origin"]);
+    let error = case.run().unwrap_err();
+    let report = error.report().expect("a refused deployment");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "identity.deployment.profile-without-own-scope")
+        .expect("the rule fires");
+    assert_eq!(diagnostic.path, "/browserApps/0");
 }
 
 #[test]
@@ -2297,4 +2301,108 @@ fn a_browser_application_a_machine_client_and_a_user_stay_within_the_permission_
     assert!(user
         .refusal()
         .contains(&"identity.deployment.too-many-permissions".to_owned()));
+}
+
+/// BReg-shaped facts on `audience` with two profiles per `profiles` pair of
+/// `(id, scopes, requesterClients)`; no requesterClients makes it open.
+fn breg_profiles(audience: &str, profiles: &[(&str, &str, Option<&str>)]) -> String {
+    let mut text = format!("apiVersion: id.registrystack.org/formats/platform/identity-facts/v1\nkind: PlatformIdentityFacts\nproduct: breg\nissuer: https://id.registry.example\naudience: {audience}\nallowedClients:\n  - citizen-pages\n  - staff-pages\nclaims:\n  registry_actor_kind: string\naccessProfiles:\n");
+    for (id, scopes, clients) in profiles {
+        text.push_str(&format!("  - id: {id}\n    scopes: [{scopes}]\n"));
+        if let Some(clients) = clients {
+            text.push_str(&format!("    requesterClients: [{clients}]\n"));
+        }
+    }
+    text
+}
+
+fn breg_session_case(audience: &str, person: bool, profiles: &[(&str, &str, Option<&str>)]) -> Case {
+    let app = |id: &str, secret: &str, profile: &str| {
+        format!("  - id: {id}\n    clientSecretRef: secret:env/{secret}\n    origin: https://{id}.registry.example\n    redirectUris: [https://{id}.registry.example/cb]\n    postLogoutRedirectUris: [https://{id}.registry.example/out]\n    products: [breg]\n    tokenAttributes: [registry_actor_kind]\n    grants:\n      - product: breg\n        accessProfiles: [{profile}]\n")
+    };
+    let first = profiles[0].0;
+    Case {
+        deployment: format!(
+            "apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1\nkind: PlatformIdentityDeployment\norganizationUnit:\n  handle: registry\n  name: Registry\n{}sessionApps:\n{}{}",
+            if person { format!("personAudience: {audience}\n") } else { String::new() },
+            app("citizen-pages", "CITIZEN_SECRET", first),
+            app("staff-pages", "STAFF_SECRET", profiles.get(1).map_or(first, |profile| profile.0)),
+        ),
+        facts: vec![("breg".into(), breg_profiles(audience, profiles))],
+        jwks: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn the_own_scope_rule_holds_on_every_audience() {
+    let shared = [
+        ("citizen-read", "records:get", Some("citizen-pages")),
+        ("staff-read", "records:get", Some("staff-pages")),
+    ];
+    // BReg on its own audience, with no person audience declared.
+    let error_codes = breg_session_case("urn:breg:example", false, &shared).refusal();
+    assert!(error_codes.contains(&"identity.deployment.profile-without-own-scope".to_owned()));
+    let distinct = [
+        ("citizen-read", "records:get", Some("citizen-pages")),
+        ("staff-read", "records:patch", Some("staff-pages")),
+    ];
+    let case = breg_session_case("urn:breg:example", false, &distinct);
+    assert!(case.run().is_ok(), "{:?}", case.run().err());
+}
+
+#[test]
+fn a_profile_with_no_requester_clients_counts_when_an_interactive_client_is_admitted() {
+    let nested = [
+        ("holder", "records:get, records:own", Some("citizen-pages")),
+        ("officer", "records:get", None),
+    ];
+    assert!(breg_session_case("urn:breg:example", false, &nested)
+        .refusal()
+        .contains(&"identity.deployment.profile-without-own-scope".to_owned()));
+    let own = [
+        ("holder", "records:get, records:own", Some("citizen-pages")),
+        ("officer", "records:get, records:officer", None),
+    ];
+    assert!(breg_session_case("urn:breg:example", false, &own).run().is_ok());
+}
+
+#[test]
+fn an_open_profile_no_interactive_client_is_admitted_to_is_not_checked() {
+    // The product admits only a machine client, so no application reaches it.
+    let mut case = breg_session_case(
+        "urn:breg:example",
+        false,
+        &[
+            ("holder", "records:get", None),
+            ("officer", "records:get", None),
+        ],
+    );
+    case.facts[0].1 = case.facts[0]
+        .1
+        .replace("  - citizen-pages\n  - staff-pages\n", "  - machine-client\n");
+    case.deployment = case.deployment.split("sessionApps:").next().unwrap().to_owned()
+        + "clients:\n  - id: machine-client\n    publicJwksFile: keys/case-portal.jwks.json\n    claims:\n      registry_actor_kind: service\n    grants:\n      - product: breg\n        accessProfiles: [holder, officer]\n";
+    case.jwks = case_jwks();
+    assert!(case.run().is_ok(), "{:?}", case.run().err());
+}
+
+fn case_jwks() -> BTreeMap<String, Vec<u8>> {
+    case().jwks
+}
+
+#[test]
+fn the_own_scope_rule_holds_for_a_typed_user_in_the_file() {
+    let mut case = two_clients_case("citizen-read");
+    case.deployment = case.deployment.replace(
+        "    passwordRef: secret:env/CITIZEN_ONE_PASSWORD\n",
+        "    passwordRef: secret:env/CITIZEN_ONE_PASSWORD\n    userType: citizen\n",
+    );
+    case.deployment = case.deployment.replacen(
+        "    tokenAttributes: [registry_actor_kind]\n",
+        "    tokenAttributes: [registry_actor_kind]\n    userTypes: [citizen]\n",
+        1,
+    ) + "userTypes:\n  - id: citizen\n    name: Citizen\n";
+    assert!(case
+        .refusal()
+        .contains(&"identity.deployment.profile-without-own-scope".to_owned()));
 }

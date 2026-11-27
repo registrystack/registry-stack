@@ -52,6 +52,9 @@ const ENDPOINT_PATTERN: &str = "^(?:[Hh][Tt][Tt][Pp][Ss]://[^/?#@]+|[Hh][Tt][Tt]
 const RESOURCE_PATTERN: &str =
     "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$";
 
+/// A hierarchical URI that carries user information.
+const USERINFO_PATTERN: &str = "^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@";
+
 /// An OAuth scope token without `*`.
 const SCOPE_PATTERN: &str = "^[!#-)+-\\[\\]-~]+$";
 
@@ -344,7 +347,7 @@ fn install_deployment_constraints(schema: &mut Value) {
     install_bounds(
         schema,
         "/properties/personAudience",
-        json!({"pattern": RESOURCE_PATTERN, "maxLength": 4096}),
+        json!({"pattern": RESOURCE_PATTERN, "maxLength": 4096, "not": {"pattern": USERINFO_PATTERN}}),
     );
     install_bounds(
         schema,
@@ -648,6 +651,7 @@ mod tests {
             ("https://id.registry.example/person", true),
             ("not a uri", false),
             ("urn:registry:person#fragment", false),
+            ("https://user:secret@id.registry.example/person", false),
             ("person", false),
         ] {
             let mut document = identity_example("identity-deployment.yaml");
