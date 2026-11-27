@@ -7,6 +7,7 @@ import http.server
 import json
 import os
 import sqlite3
+import stat
 import uuid
 from pathlib import Path
 from typing import Any, Protocol
@@ -25,16 +26,65 @@ class WebhookAcceptance(Protocol):
         raise NotImplementedError
 
 
+def read_hook_key(path: Path, option: str) -> bytes:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as file:
+            metadata = os.fstat(file.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_mode & 0o077
+                or metadata.st_uid != os.getuid()
+            ):
+                raise OSError
+            key = file.read(65)
+            if len(key) == 65:
+                length = max(len(key), file.seek(0, os.SEEK_END))
+                file.seek(-1, os.SEEK_END)
+                last_byte = file.read(1)
+            else:
+                length = len(key)
+                last_byte = key[-1:]
+    except OSError:
+        raise ValueError(
+            f"{option} must name an owner-only regular file containing the exact key bytes."
+        ) from None
+    if key.startswith(b"whsec_"):
+        reason = "starts with whsec_"
+    elif not 32 <= length <= 64:
+        newline = " including a trailing newline" if last_byte == b"\n" else ""
+        reason = f"contains {length} bytes{newline}, outside the 32 to 64 byte range"
+    else:
+        return key
+    raise ValueError(f"{option} {reason}. Write the exact key bytes to the file without encoding them or adding a newline.")
+
+
+def read_hook_keys(key_path: Path, previous_key_path: Path | None) -> tuple[bytes, bytes | None]:
+    key = read_hook_key(key_path, "--key")
+    previous = read_hook_key(previous_key_path, "--previous-key") if previous_key_path else None
+    if previous == key:
+        raise ValueError(
+            "--previous-key holds the same bytes as --key. To rotate, write 32 new "
+            "random bytes to the file --key names and keep the old bytes in the file "
+            "--previous-key names."
+        )
+    return key, previous
+
+
 def _verify_webhook_request(
     key: bytes,
     path: str,
     header_pairs: list[tuple[str, str]],
     body: bytes,
     contract: dict[str, Any],
+    *,
+    previous_key: bytes | None,
 ) -> breg.VerifiedHookDelivery:
     if path != "/events":
         raise ReceiverError("the receiver refused the webhook route")
-    verified = breg.verify_hook_delivery(headers=header_pairs, body=body, key=key)
+    verified = breg.verify_hook_delivery(
+        headers=header_pairs, body=body, key=key, previous_key=previous_key,
+    )
     if verified["type"] != contract["event_id"]:
         raise ReceiverError("the receiver refused the event type")
     expected_source = (
@@ -156,7 +206,8 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
             body = self.rfile.read(length)
             header_pairs = list(self.headers.raw_items())
             delivery = _verify_webhook_request(
-                self.server.webhook_key, self.path, header_pairs, body, self.server.contract
+                self.server.webhook_key, self.path, header_pairs, body, self.server.contract,
+                previous_key=self.server.webhook_previous_key,
             )
         except (
             ReceiverError, breg.BaseRegistryClientError, KeyError, TypeError, ValueError,
@@ -176,9 +227,13 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def make_server(port: int, key: bytes, contract: dict[str, Any], acceptance: WebhookAcceptance):
+def make_server(
+    port: int, key: bytes, contract: dict[str, Any], acceptance: WebhookAcceptance,
+    *, previous_key: bytes | None = None,
+):
     server = http.server.HTTPServer(("127.0.0.1", port), WebhookReceiver)
     server.webhook_key = key
+    server.webhook_previous_key = previous_key
     server.contract = contract
     server.webhook_acceptance = acceptance
     return server
@@ -188,6 +243,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--key", type=Path, required=True)
+    parser.add_argument("--previous-key", type=Path)
     parser.add_argument("--registry-id", required=True)
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--record-type", required=True)
@@ -195,18 +251,19 @@ def main() -> None:
     parser.add_argument("--field", action="append", required=True)
     parser.add_argument("--inbox", type=Path, required=True)
     args = parser.parse_args()
-    if not args.key.is_file() or args.key.is_symlink() or args.key.stat().st_mode & 0o077:
-        parser.error("key must be an owner-only regular file")
-    key = args.key.read_bytes()
-    if not 32 <= len(key) <= 64:
-        parser.error("key must contain 32 to 64 bytes")
+    try:
+        key, previous_key = read_hook_keys(args.key, args.previous_key)
+    except ValueError as error:
+        parser.error(str(error))
     parent = args.inbox.parent
     if not parent.is_dir() or parent.is_symlink() or parent.stat().st_mode & 0o077:
         parser.error("inbox parent must be an owner-only directory")
     contract = {"registry_id": args.registry_id, "instance_id": args.instance_id,
                 "record_type": args.record_type, "event_id": args.event_id,
                 "event_values": args.field}
-    with make_server(args.port, key, contract, WebhookInbox(args.inbox)) as server:
+    with make_server(
+        args.port, key, contract, WebhookInbox(args.inbox), previous_key=previous_key,
+    ) as server:
         server.serve_forever(poll_interval=0.1)
 
 

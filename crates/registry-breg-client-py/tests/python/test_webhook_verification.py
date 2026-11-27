@@ -177,16 +177,15 @@ class HookVerificationTests(unittest.TestCase):
 
     def test_reports_invalid_keys_without_their_bytes(self):
         for overrides, expected in (
-            ({"key": b"x" * 31}, ("31", "32")),
-            ({"key": b"x" * 64 + b"\n"}, ("65", "newline")),
-            ({"key": b"whsec_synthetic_key_text_for_test"}, ("33", "whsec_")),
-            ({"previous_key": KEY}, ("32", "previous", "equals")),
+            ({"key": b"x" * 31}, 'The current hook key is 31 bytes and must contain 32 to 64 exact bytes.'),
+            ({"key": b"x" * 64 + b"\n"}, 'The current hook key is 65 bytes including a trailing newline and must contain 32 to 64 exact bytes.'),
+            ({"key": b"whsec_synthetic_key_text_for_test"}, 'The current hook key starts with whsec_ and must be supplied as exact key bytes.'),
+            ({"previous_key": KEY}, 'The previous hook key equals the current key. Pass the key the sender used before rotation, or omit the previous key.'),
         ):
             with self.assertRaises(BaseRegistryClientError) as raised:
                 verify(**overrides)
             self.assertEqual(raised.exception.code, "invalid-key")
-            for detail in expected:
-                self.assertIn(detail, str(raised.exception))
+            self.assertEqual(str(raised.exception), expected)
             self.assertNotIn(next(iter(overrides.values())).decode(), str(raised.exception))
 
     def test_refuses_each_missing_signed_header(self) -> None:

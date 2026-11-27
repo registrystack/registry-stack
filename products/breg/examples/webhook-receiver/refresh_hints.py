@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from receiver import ReceiverError, make_server
+from receiver import ReceiverError, make_server, read_hook_keys
 
 if TYPE_CHECKING:
     from registry_client.breg import VerifiedHookDelivery
@@ -111,6 +111,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--key", type=Path, required=True)
+    parser.add_argument("--previous-key", type=Path)
     parser.add_argument("--registry-id", required=True)
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--record-type", required=True)
@@ -126,9 +127,10 @@ def main() -> None:
     if not re.fullmatch(r"[0-9a-f]{64}", args.schema_digest):
         parser.error("configure the exact 64-character event schema digest")
     try:
-        key = read_secret(args.key)
-        if not 32 <= len(key) <= 64:
-            raise ValueError("the webhook key needs 32 to 64 bytes")
+        key, previous_key = read_hook_keys(args.key, args.previous_key)
+    except ValueError as error:
+        parser.error(str(error))
+    try:
         acceptance = SourceChanges(
             origin=args.destination_origin, plan=args.plan, projection=args.projection,
             fields=args.selector_field, token_file=args.token_file,
@@ -145,7 +147,9 @@ def main() -> None:
             "record_type": args.record_type, "event_id": args.event_id, "trigger": args.trigger,
             "data_schema": schema, "event_values": args.selector_field,
         }
-        with make_server(args.port, key, contract, acceptance) as server:
+        with make_server(
+            args.port, key, contract, acceptance, previous_key=previous_key,
+        ) as server:
             server.serve_forever(poll_interval=0.1)
 
 

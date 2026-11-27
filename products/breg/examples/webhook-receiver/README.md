@@ -22,6 +22,10 @@ python3 products/breg/examples/webhook-receiver/receiver.py \
   --inbox /path/to/private-state/inbox.sqlite3 --port 8090
 ```
 
+During signing-key rotation, set `--key` to the current key file and pass the
+old key file with `--previous-key`. Both files must contain 32 to 64 exact key
+bytes. This option also works with `refresh_hints.py`.
+
 The listener binds only `127.0.0.1`; its destination path is `/events` and
 readiness path is `/ready`. Configure the BReg destination separately. This
 example does not provision a registry, issuer, runtime, or destination.

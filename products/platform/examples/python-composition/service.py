@@ -55,6 +55,23 @@ def strict_json(body):
     return json.loads(body, object_pairs_hook=members)
 
 
+def read_hook_key(path, member):
+    try:
+        key = Path(path).read_bytes()
+    except (OSError, TypeError, ValueError):
+        raise CompositionError(f"{member} must name a readable file containing the exact key bytes.") from None
+    if key.startswith(b"whsec_"):
+        reason = "starts with whsec_"
+    elif not 32 <= len(key) <= 64:
+        newline = " including a trailing newline" if key.endswith(b"\n") else ""
+        reason = f"contains {len(key)} bytes{newline}, outside the 32 to 64 byte range"
+    else:
+        return key
+    raise CompositionError(
+        f"{member} {reason}. Write the exact key bytes to its file without encoding them or adding a newline."
+    )
+
+
 def proposal_subject(verified):
     """Read the native Proposal envelope, never an adopter approval document."""
     try:
@@ -142,7 +159,7 @@ class Inbox:
         finally:
             db.close()
 
-    def accept(self, headers, body, *, key, source, event_type, schema):
+    def accept(self, headers, body, *, key, source, event_type, schema, previous_key=None):
         from registry_client.breg import (
             BaseRegistryClientError,
             verify_hook_delivery,
@@ -151,7 +168,9 @@ class Inbox:
         if not body or len(body) > MAXIMUM_BODY:
             raise WakeRefused("hook body was refused")
         try:
-            verified = verify_hook_delivery(headers=headers, body=body, key=key)
+            verified = verify_hook_delivery(
+                headers=headers, body=body, key=key, previous_key=previous_key,
+            )
             if (verified["source"], verified["type"], verified["dataschema"]) != (
                 source,
                 event_type,
@@ -595,7 +614,7 @@ class Composition:
         return count
 
 
-def receiver(inbox, *, key, source, event_type, schema):
+def receiver(inbox, *, key, source, event_type, schema, previous_key=None):
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
             super().setup()
@@ -636,6 +655,7 @@ def receiver(inbox, *, key, source, event_type, schema):
                     headers,
                     self.rfile.read(length),
                     key=key,
+                    previous_key=previous_key,
                     source=source,
                     event_type=event_type,
                     schema=schema,
@@ -700,7 +720,18 @@ def main():
     config = strict_json(args.config.read_bytes())
     inbox = Inbox(Path(config["inbox"]))
     if args.command == "serve-wakes":
-        key = Path(config["hookKeyFile"]).read_bytes()
+        key = read_hook_key(config["hookKeyFile"], "hookKeyFile")
+        previous_key = (
+            read_hook_key(config["hookPreviousKeyFile"], "hookPreviousKeyFile")
+            if "hookPreviousKeyFile" in config
+            else None
+        )
+        if previous_key == key:
+            raise CompositionError(
+                "hookPreviousKeyFile holds the same bytes as hookKeyFile. To rotate, write "
+                "32 new random bytes to the secret hookKeyFile references and keep the old "
+                "bytes behind hookPreviousKeyFile."
+            )
         host, port = config.get("listen", "127.0.0.1:9300").rsplit(":", 1)
         if host != "127.0.0.1":
             raise CompositionError("put the example receiver behind a local TLS proxy")
@@ -709,6 +740,7 @@ def main():
             receiver(
                 inbox,
                 key=key,
+                previous_key=previous_key,
                 source=config["hookSource"],
                 event_type=config["hookType"],
                 schema=config["hookSchema"],

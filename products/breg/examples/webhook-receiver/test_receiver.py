@@ -1,6 +1,7 @@
 import http.client
 import http.server
 import json
+import secrets
 import sqlite3
 import sys
 import tempfile
@@ -97,6 +98,60 @@ class WebhookAcceptanceInterfaceTests(unittest.TestCase):
             IncompleteAcceptance().accept({}, b"")
 
 
+class ReceiverStartupTests(unittest.TestCase):
+    def test_refuses_invalid_current_or_previous_key_before_serving(self):
+        equal = "--previous-key holds the same bytes as --key. To rotate, write 32 new random bytes to the file --key names and keep the old bytes in the file --previous-key names."
+        for module in (RECEIVER, REFRESH):
+            for option in ("--key", "--previous-key"):
+                for content, reason in (
+                    (b"whsec_" + b"x" * 26, "starts with whsec_"),
+                    (b"x" * 64 + b"\n", "65 bytes including a trailing newline"),
+                    (None, equal),
+                ):
+                    if content is None and option == "--key":
+                        continue
+                    with self.subTest(receiver=module.__name__, option=option, reason=reason):
+                        with tempfile.TemporaryDirectory() as root:
+                            key, previous = Path(root) / "key", Path(root) / "previous"
+                            current_bytes = secrets.token_bytes(32)
+                            key.touch(mode=0o600)
+                            previous.touch(mode=0o600)
+                            key.write_bytes(content if option == "--key" else current_bytes)
+                            previous.write_bytes(current_bytes if content is None else content)
+                            args = [
+                                module.__name__, "--key", str(key),
+                                "--registry-id", "example", "--instance-id", "local",
+                                "--record-type", "person", "--event-id", "person-patched-v1",
+                            ]
+                            if option == "--previous-key":
+                                args.extend(["--previous-key", str(previous)])
+                            if module is RECEIVER:
+                                args.extend(["--field", "name", "--inbox", str(Path(root) / "inbox")])
+                            else:
+                                args.extend([
+                                    "--trigger", "patched", "--schema-digest", "a" * 64,
+                                    "--selector-field", "name", "--destination-origin",
+                                    "http://127.0.0.1:9000", "--plan", "refresh",
+                                    "--projection", "name", "--token-file", str(key),
+                                ])
+                            stderr = StringIO()
+                            with (
+                                patch.object(sys, "argv", args),
+                                patch.object(module, "make_server") as serve,
+                                redirect_stderr(stderr),
+                                self.assertRaises(SystemExit) as stopped,
+                            ):
+                                module.main()
+                            self.assertEqual(stopped.exception.code, 2)
+                            serve.assert_not_called()
+                            if content is None:
+                                self.assertTrue(stderr.getvalue().endswith(equal + "\n"))
+                            else:
+                                self.assertIn(option + " ", stderr.getvalue().split("error: ")[-1])
+                                self.assertIn(reason, stderr.getvalue())
+                                self.assertIn("exact key bytes", stderr.getvalue())
+
+
 class WebhookAcceptanceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -115,6 +170,22 @@ class WebhookAcceptanceTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.start()
         self.addCleanup(self.stop)
+
+    def test_accepts_a_delivery_signed_with_the_previous_key(self):
+        previous = secrets.token_bytes(32)
+        headers, body = signed_event(previous, self.contract, {"name": "Contact"})
+        self.assertEqual(self.post(headers, body), 400)
+        with RECEIVER.make_server(
+            0, self.key, self.contract, RECEIVER.WebhookInbox(self.inbox_path),
+            previous_key=previous,
+        ) as server:
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                self.assertEqual(post_event(server, headers, body)[0], 204)
+            finally:
+                server.shutdown()
+                thread.join()
 
     def stop(self):
         if self.thread.is_alive():

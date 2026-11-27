@@ -88,13 +88,13 @@ test('refuses mismatched identity and invalid headers or bytes', () => {
 
 test('names invalid key lengths and kinds without revealing their bytes', () => {
   for (const [overrides, message] of [
-    [{ key: Buffer.alloc(31, 120) }, /31.*32/],
-    [{ key: Buffer.from('x'.repeat(64) + '\n') }, /65.*newline/],
-    [{ key: Buffer.from('whsec_synthetic_key_text_for_test') }, /33.*whsec_/],
-    [{ previousKey: key }, /32.*previous.*equals/],
+    [{ key: Buffer.alloc(31, 120) }, 'The current hook key is 31 bytes and must contain 32 to 64 exact bytes.'],
+    [{ key: Buffer.from('x'.repeat(64) + '\n') }, 'The current hook key is 65 bytes including a trailing newline and must contain 32 to 64 exact bytes.'],
+    [{ key: Buffer.from('whsec_synthetic_key_text_for_test') }, 'The current hook key starts with whsec_ and must be supplied as exact key bytes.'],
+    [{ previousKey: key }, 'The previous hook key equals the current key. Pass the key the sender used before rotation, or omit the previous key.'],
   ]) {
     assert.throws(() => verifyHookDelivery(input(overrides)),
-      (error) => assertRefusal('invalid-key')(error) && message.test(error.message));
+      (error) => assertRefusal('invalid-key')(error) && error.message === message);
   }
 });
 

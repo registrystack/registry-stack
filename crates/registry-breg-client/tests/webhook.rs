@@ -167,24 +167,11 @@ fn a_webhook_id_that_differs_from_the_envelope_id_is_refused() {
 
 #[test]
 fn an_invalid_key_names_its_length_and_newline_without_its_bytes() {
-    for (key, previous_key, checks) in [
-        (&[b'x'; 31][..], None, &["31", "32"][..]),
-        (
-            &[
-                &[b'x'; 64][..],
-                b"
-",
-            ]
-            .concat()[..],
-            None,
-            &["65", "newline"],
-        ),
-        (
-            &b"whsec_synthetic_key_text_for_test"[..],
-            None,
-            &["whsec_", "33"],
-        ),
-        (KEY, Some(KEY), &["previous", "equals", "32"]),
+    for (key, previous_key, expected) in [
+        (&[b'x'; 31][..], None, "The current hook key is 31 bytes and must contain 32 to 64 exact bytes."),
+        (&[&[b'x'; 64][..], b"\n"].concat()[..], None, "The current hook key is 65 bytes including a trailing newline and must contain 32 to 64 exact bytes."),
+        (&b"whsec_synthetic_key_text_for_test"[..], None, "The current hook key starts with whsec_ and must be supplied as exact key bytes."),
+        (KEY, Some(KEY), "The previous hook key equals the current key. Pass the key the sender used before rotation, or omit the previous key."),
     ] {
         let error = registry_breg_client::verify_hook_delivery(BRegHookDelivery {
             headers: &headers(ID, &TS.to_string(), SIGNATURE),
@@ -196,9 +183,7 @@ fn an_invalid_key_names_its_length_and_newline_without_its_bytes() {
         .unwrap_err();
         assert_eq!(error.code(), "invalid-key");
         let message = error.to_string();
-        for check in checks {
-            assert!(message.contains(check), "{message}");
-        }
+        assert_eq!(message, expected);
         assert!(!message.contains(std::str::from_utf8(key).unwrap()));
     }
 }

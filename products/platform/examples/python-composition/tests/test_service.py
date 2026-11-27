@@ -1,7 +1,9 @@
 import base64
 import hmac
 import json
+import secrets
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -23,6 +25,7 @@ from service import (
     Inbox,
     TokenSource,
     WakeRefused,
+    main,
     receiver,
 )
 
@@ -35,9 +38,9 @@ SOURCE = "/products/breg/deployments/example"
 SCHEMA = "https://example.test/schema"
 
 
-def headers(body=BODY, timestamp=None):
+def headers(body=BODY, timestamp=None, *, key=CANARY_KEY):
     timestamp = int(time.time()) if timestamp is None else timestamp
-    digest = hmac.digest(CANARY_KEY, f"{EVENT_ID}.{timestamp}.".encode("ascii") + body, "sha256")
+    digest = hmac.digest(key, f"{EVENT_ID}.{timestamp}.".encode("ascii") + body, "sha256")
     return [
         ("content-type", "application/json"),
         ("webhook-id", EVENT_ID),
@@ -385,15 +388,59 @@ class ReceiptRecoveryTests(unittest.TestCase):
 
 
 class ReceiverHttpTests(unittest.TestCase):
+    def test_wake_server_loads_and_validates_both_key_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            config = root / "config.json"
+            key_path = root / "key"
+            previous_path = root / "previous"
+            current_key = secrets.token_bytes(32)
+            previous_key = b"x" * 31 + b"\n"
+            key_path.write_bytes(current_key)
+            config.write_text(json.dumps({
+                "inbox": str(root / "inbox.sqlite"),
+                "hookKeyFile": str(key_path),
+                "hookPreviousKeyFile": str(previous_path),
+                "hookSource": SOURCE,
+                "hookType": "proposal.applied",
+                "hookSchema": PROPOSAL_SCHEMA,
+            }))
+            with (
+                patch.object(sys, "argv", ["service", "--config", str(config), "serve-wakes"]),
+                patch("service.ThreadingHTTPServer") as server,
+                patch("service.receiver") as handler,
+            ):
+                for value, expected in (
+                    (b"whsec_" + b"x" * 26, "hookPreviousKeyFile starts with whsec_"),
+                    (b"x" * 64 + b"\n", "hookPreviousKeyFile contains 65 bytes including a trailing newline"),
+                    (current_key, "hookPreviousKeyFile holds the same bytes as hookKeyFile. To rotate, write 32 new random bytes to the secret hookKeyFile references and keep the old bytes behind hookPreviousKeyFile."),
+                ):
+                    with self.subTest(expected=expected):
+                        previous_path.write_bytes(value)
+                        with self.assertRaises(CompositionError) as refused:
+                            main()
+                        if value == current_key:
+                            self.assertEqual(str(refused.exception), expected)
+                        else:
+                            self.assertIn(expected, str(refused.exception))
+                server.assert_not_called()
+                previous_path.write_bytes(previous_key)
+                main()
+                self.assertEqual(handler.call_args.kwargs["key"], current_key)
+                self.assertEqual(handler.call_args.kwargs["previous_key"], previous_key)
+                server.return_value.serve_forever.assert_called_once()
+
     def test_acknowledgment_follows_persistence_and_replay_is_safe(self):
         with tempfile.TemporaryDirectory() as root:
             inbox = Inbox(Path(root) / "inbox.sqlite")
             body = proposal_body()
+            previous_key = secrets.token_bytes(32)
             server = ThreadingHTTPServer(
                 ("127.0.0.1", 0),
                 receiver(
                     inbox,
                     key=CANARY_KEY,
+                    previous_key=previous_key,
                     source=SOURCE,
                     event_type="proposal.applied",
                     schema=PROPOSAL_SCHEMA,
@@ -406,7 +453,10 @@ class ReceiverHttpTests(unittest.TestCase):
                     connection = HTTPConnection(*server.server_address, timeout=5)
                     connection.request(
                         "POST", "/hooks/breg", body=body,
-                        headers=dict(headers(body, timestamp=int(time.time()) + offset)),
+                        headers=dict(headers(
+                            body, timestamp=int(time.time()) + offset,
+                            key=previous_key if offset == 0 else CANARY_KEY,
+                        )),
                     )
                     response = connection.getresponse()
                     self.assertEqual(response.status, 204)

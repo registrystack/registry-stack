@@ -148,15 +148,18 @@ pub fn verify_hook_delivery_at(
         BRegHookFreshness::CallerEnforced => DeliveryFreshness::CallerEnforced,
     };
     let current = DeliveryKey::new(delivery.key)
-        .map_err(|error| invalid_key("current", delivery.key.len(), error))?;
+        .map_err(|error| invalid_key("current", delivery.key, error.code()))?;
     let previous = delivery
         .previous_key
         .map(|bytes| {
-            DeliveryKey::new(bytes).map_err(|error| invalid_key("previous", bytes.len(), error))
+            DeliveryKey::new(bytes).map_err(|error| invalid_key("previous", bytes, error.code()))
         })
         .transpose()?;
-    let keys = DeliveryKeys::new(current, previous)
-        .map_err(|error| invalid_key("current and previous", delivery.key.len(), error))?;
+    let keys = DeliveryKeys::new(current, previous).map_err(|_| {
+        BRegHookVerificationError::InvalidKey {
+            detail: "The previous hook key equals the current key. Pass the key the sender used before rotation, or omit the previous key.".into(),
+        }
+    })?;
     let verified = verify_standard_delivery(
         HookDelivery {
             headers: delivery
@@ -168,7 +171,9 @@ pub fn verify_hook_delivery_at(
         },
         freshness,
     )
-    .map_err(|error| map_receiver_error(error.code()))?;
+    .map_err(|error| {
+        map_receiver_error(error.code()).unwrap_or(BRegHookVerificationError::MalformedSignature)
+    })?;
 
     Ok(BRegVerifiedHookDelivery {
         id: verified.id.to_owned(),
@@ -185,30 +190,83 @@ pub fn verify_hook_delivery_at(
     })
 }
 
-fn invalid_key(
-    which: &str,
-    length: usize,
-    error: impl std::fmt::Display,
-) -> BRegHookVerificationError {
-    BRegHookVerificationError::InvalidKey {
-        detail: format!("Invalid {which} hook key ({length} bytes). {error}. Check the configured exact key bytes"),
-    }
+fn invalid_key(which: &str, bytes: &[u8], code: &str) -> BRegHookVerificationError {
+    let detail = match code {
+        "key-is-secret-text" => format!(
+            "The {which} hook key starts with whsec_ and must be supplied as exact key bytes."
+        ),
+        _ => {
+            let length = bytes.len();
+            let newline = if bytes.ends_with(b"\n") {
+                " including a trailing newline"
+            } else {
+                ""
+            };
+            format!(
+                "The {which} hook key is {length} bytes{newline} and must contain 32 to 64 exact bytes."
+            )
+        }
+    };
+    BRegHookVerificationError::InvalidKey { detail }
 }
 
-fn map_receiver_error(code: &str) -> BRegHookVerificationError {
+fn map_receiver_error(code: &str) -> Option<BRegHookVerificationError> {
     use BRegHookVerificationError::*;
-    match code {
+    Some(match code {
         "missing-header" => MissingHeader,
         "duplicate-header" => DuplicateHeader,
         "invalid-content-type" => InvalidContentType,
         "invalid-id" => InvalidId,
         "invalid-timestamp" => InvalidTimestamp,
         "stale-delivery" => StaleDelivery,
+        "malformed-signature" => MalformedSignature,
         "unsupported-version" => UnsupportedVersion,
         "signature-mismatch" => SignatureMismatch,
         "body-too-large" => BodyTooLarge,
         "invalid-envelope" => InvalidEnvelope,
         "id-mismatch" => IdMismatch,
-        _ => MalformedSignature,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_shared_receiver_code_has_a_distinct_mapping() {
+        // The receiver enum is non-exhaustive and exposes no code inventory.
+        // Read both code methods so new upstream codes also enter this check.
+        let sources = [
+            include_str!("../../registry-platform-hooks/src/receiver.rs")
+                .split_once("impl HookDeliveryError {")
+                .unwrap()
+                .1,
+            include_str!("../../registry-platform-crypto/src/delivery_signature.rs")
+                .split_once("impl DeliverySignatureError {")
+                .unwrap()
+                .1,
+        ];
+        let codes = sources.into_iter().flat_map(|source| {
+            source
+                .split_once("\n}\n")
+                .unwrap()
+                .0
+                .lines()
+                .filter_map(|line| {
+                    let (_, value) = line.split_once("=> \"")?;
+                    Some(value.split_once('"').unwrap().0)
+                })
+        });
+        let mut count = 0;
+        for code in codes {
+            count += 1;
+            assert_eq!(
+                map_receiver_error(code).map(|error| error.code()),
+                Some(code)
+            );
+        }
+        assert!(count >= 12);
+        assert_eq!(map_receiver_error("unknown-receiver-code"), None);
     }
 }
