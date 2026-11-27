@@ -17,7 +17,7 @@ use registry_documents::runtime::{prepare, RuntimeError};
 use registry_documents_client::{DocumentsClient, DocumentsClientConfig, ProblemCode};
 use support::{
     database_url, pdf, reservation_body, sha256, token, Deployment, APP, CITIZEN, DATABASE_STORAGE,
-    DISABLED_VERIFIER,
+    DISABLED_VERIFIER, PARTNER_SERVICE, READER, STAFF,
 };
 use url::Url;
 
@@ -125,6 +125,46 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
         .unwrap();
     assert_eq!(policies.status(), reqwest::StatusCode::OK);
 
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// The runtime file says `allowedClients: from-package` and lists no client.
+/// Each requester client of the package reaches its profile, and a client the
+/// package does not name is refused.
+#[tokio::test]
+async fn a_runtime_that_admits_the_package_clients_serves_a_call_from_each() {
+    let mut deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.admit_package_clients();
+    let text = std::fs::read_to_string(&deployment.runtime).unwrap();
+    assert!(text.contains("allowedClients: from-package"), "{text}");
+    deployment.migrate().await;
+    let prepared = prepare(&deployment.runtime)
+        .await
+        .expect("the runtime prepares");
+    let address = prepared.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(prepared.serve_until(async {
+        stopped.await.ok();
+    }));
+    let http = reqwest::Client::new();
+    let policies = format!("http://{address}/v1/document-policies");
+    for principal in [APP, CITIZEN, READER, STAFF] {
+        let response = http
+            .get(&policies)
+            .bearer_auth(token(principal))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK, "{principal:?}");
+    }
+    let response = http
+        .get(&policies)
+        .bearer_auth(token(PARTNER_SERVICE))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }

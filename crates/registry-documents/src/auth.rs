@@ -240,7 +240,7 @@ pub(crate) mod tests {
         .value
     }
 
-    fn keys() -> Arc<JwksFetcher> {
+    pub(crate) fn keys() -> Arc<JwksFetcher> {
         Arc::new(JwksFetcher::new_static(
             serde_json::from_value(json!({"keys": [{
                 "kty": "oct",

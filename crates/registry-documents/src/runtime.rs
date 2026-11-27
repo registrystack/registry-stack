@@ -411,8 +411,11 @@ async fn prepare_with(
             "versions verified under another verifier binding were suspended for verification again"
         );
     }
+    let admitted = config
+        .admitted_clients(&project)
+        .map_err(|finding| RuntimeConfigError::Refused(vec![finding]))?;
     let authenticator = Arc::new(DocumentsAuthenticator::new(
-        config.verifier_profile(),
+        config.verifier_profile(&admitted),
         keys,
         AccessProfiles::new(&project),
         config.binds_assertion_issuers(),

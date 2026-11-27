@@ -29,7 +29,12 @@ and the restore drill is in
   clients, signature from the configured key set) and resolves exactly one access profile before it
   reads a body or the store.
   An unreachable key set answers 503, never 401.
-  The deployment trusts one issuer; `allowedClients: unrestricted` is refused.
+  The deployment trusts one issuer.
+  `allowedClients` is required in every runtime file. `allowedClients: from-package` admits the sorted
+  union of the access profiles' `requesterClients` and nothing more, so the package and the runtime
+  file cannot disagree. An explicit list must include every client an access profile names, or the
+  runtime refuses to start with `documents.runtime.profile-client-not-allowed`.
+  `allowedClients: unrestricted` and an empty list are refused in every mode.
   Declared issuer and key addresses are trusted on the operator's word (DOCUMENTS-RES-17).
   A static key set (`jwksSource: static`) holds public keys only.
   The runtime refuses to start on a set that carries a private member (`d`, `p`, `q`, `dp`, `dq`,

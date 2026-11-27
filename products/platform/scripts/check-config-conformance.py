@@ -496,7 +496,7 @@ ROWS: tuple[Row, ...] = (
                 "crates/registry-documents/src/config.rs",
                 "OidcConfig",
                 "clients",
-                "OidcClientsConfig",
+                "OidcPackageClientsConfig",
             ),
             RustBlock(
                 "crates/registry-documents/src/config.rs",

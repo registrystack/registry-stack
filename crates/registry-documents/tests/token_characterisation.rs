@@ -243,8 +243,11 @@ destinations:
         .expect("the rewritten project decodes")
         .value;
 
+    let admitted = config
+        .admitted_clients(&decoded)
+        .expect("the listed clients cover the project");
     let authenticator = DocumentsAuthenticator::new(
-        config.verifier_profile(),
+        config.verifier_profile(&admitted),
         keys.clone(),
         AccessProfiles::new(&decoded),
         config.binds_assertion_issuers(),
@@ -255,7 +258,7 @@ destinations:
         Err(AuthenticationError::Claims(_)) => refusal("claims"),
         Err(AuthenticationError::Unavailable) => refusal("unavailable"),
         Err(error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_))) => {
-            let reference = TokenVerifier::new(config.verifier_profile(), keys);
+            let reference = TokenVerifier::new(config.verifier_profile(&admitted), keys);
             match reference.verify(token).await {
                 Err(failure) => refusal(failure.authentication_stage().label()),
                 Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {

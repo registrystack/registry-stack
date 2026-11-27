@@ -80,8 +80,9 @@ invariants:
       Any client the issuer knows can call the Document Store because the
       operator never named the clients the deployment serves.
     enforcementPoint: >-
-      The runtime configuration requires an explicit allowedClients list; the
-      unrestricted form is refused.
+      The runtime configuration requires allowedClients: an explicit list that
+      covers every requester client the package names, or from-package, which
+      admits exactly those clients. The unrestricted form is refused.
     refusal: >-
       Refuse with documents.runtime.allowed-clients-required at
       /authentication/oidc/allowedClients.
