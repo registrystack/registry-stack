@@ -374,6 +374,32 @@ fn proposal_attachments_require_explicit_bounded_slot_grants() {
     assert!(parse_project_json(&serde_json::to_vec(&value).unwrap()).is_err());
 }
 
+/// The download answers with the stored content type, so its declaration
+/// is `*/*` as the Document Store's content download declares it: a generated
+/// client then finds a matching response for any stored type.
+#[test]
+fn proposal_attachment_download_declares_any_media_type_for_its_content() {
+    let model = compile(&parse_project_yaml(PROJECT).unwrap()).unwrap();
+    let openapi: serde_json::Value = serde_json::from_slice(
+        &model
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let content = openapi["paths"]["/v1/proposals/{proposal_id}/attachments/supporting-document"]
+        ["get"]["responses"]["200"]["content"]
+        .as_object()
+        .unwrap();
+    assert_eq!(content.keys().collect::<Vec<_>>(), ["*/*"]);
+    assert_eq!(content["*/*"]["schema"]["type"], "string");
+    assert_eq!(
+        content["*/*"]["schema"]["contentMediaType"],
+        "application/octet-stream"
+    );
+}
+
 #[test]
 fn proposal_attachment_download_schema_requires_a_positive_u32_submission_version() {
     use serde_json::json;
