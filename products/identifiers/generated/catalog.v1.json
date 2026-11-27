@@ -5382,7 +5382,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "b80fb562dbef1c9bdee11eb9466f5408ab7ba53ff925344e8ace47edd0ce537e",
+        "sha256": "0b19dbf18c681a79ad2f4bca44b0645c8ca0cd164d4d502a32b0c50fe22813c3",
         "mediaType": "application/schema+json"
       }
     },
