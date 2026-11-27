@@ -1101,7 +1101,7 @@ fn compiled_bound_writer_registry() -> CompiledRegistry {
                     {"action": "propose-person-phone", "operations": ["start"], "targets": targets}],
                 "proposals": [{"action": "propose-person-phone", "ownership": "caller",
                     "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
-                    "targets": targets}]}})
+                    "readableInputs": ["person", "phone"], "targets": targets}]}})
     };
     let source = json!({"datasets": {"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1", "kind": "BRegProject",
@@ -1216,6 +1216,7 @@ fn compiled_record_condition_writer_registry(effect: &str) -> CompiledRegistry {
                     {"action": "propose-person", "operations": ["start"], "targets": targets}],
                 "proposals": [{"action": "propose-person", "ownership": "caller",
                     "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
+                    "readableInputs": if effect == "patch" { json!(["person", "phone"]) } else { json!(["phone"]) },
                     "targets": targets}]}})
     };
     let source = json!({"datasets": {"test-dataset": {}},

@@ -19,7 +19,7 @@ pub fn source(hooks: Value) -> Value {
             "records":[{"recordType":"target","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],"rowBoundaries":"unrestricted"}],
             "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}],
             "proposals":[{"action":"correct-name","operations":["get","edit","submit","cancel","apply"],"ownership":"caller",
-                "readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]}}}})
+                "readableInputs":["target","value"],"readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]}}}})
 }
 
 pub fn url_hook() -> Value {

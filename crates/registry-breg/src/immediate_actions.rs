@@ -3298,15 +3298,44 @@ fn compile_execution(
                     "input disclosure grants must name declared Action inputs and require Get",
                 ));
             }
+            let writes_inputs = grant.operations.iter().any(|operation| {
+                matches!(
+                    operation,
+                    ProposalOperation::Edit | ProposalOperation::Revise | ProposalOperation::Rebase
+                )
+            });
+            // A standing agent cannot hold Get, so it drafts blind and replaces the whole input
+            // as authored. The rule below protects clients that merge into what they read.
+            let standing_agent =
+                profile.actor_kind == Some(ActorKindSource::Agent) && profile.task_grant.is_none();
+            if writes_inputs && !standing_agent {
+                // Edit, Revise, and Rebase replace the stored input wholesale. A client
+                // merges its change into what it read, so an input it may write but not
+                // read would be cleared, or would fail when required.
+                let written = grant
+                    .writable_inputs
+                    .as_ref()
+                    .map_or(&input_ids, |writable| writable.as_set());
+                let unreadable = written
+                    .iter()
+                    .filter(|id| input_ids.contains(*id) && !grant.readable_inputs.contains(*id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !unreadable.is_empty() {
+                    errors.push(Diagnostic::error(
+                        "breg.proposal.input-write-unreadable",
+                        "accessProfiles[].permissions.proposals[].readableInputs",
+                        &format!(
+                            "access profile `{}` may write input(s) {} of Action `{}` through edit, revise, or rebase but cannot read them, so a client would clear or lose them. Next: add {} to readableInputs (with get), or narrow writableInputs",
+                            profile.id,
+                            unreadable.join(", "),
+                            action.id,
+                            unreadable.join(", "),
+                        ),
+                    ));
+                }
+            }
             if let Some(writable) = &grant.writable_inputs {
-                let writes_inputs = grant.operations.iter().any(|operation| {
-                    matches!(
-                        operation,
-                        ProposalOperation::Edit
-                            | ProposalOperation::Revise
-                            | ProposalOperation::Rebase
-                    )
-                });
                 let starts = profile.permissions.actions.iter().any(|permission| {
                     permission.action == action.id
                         && permission.operations.contains(&Operation::Start)

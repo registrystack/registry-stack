@@ -51,6 +51,12 @@
   refused. To migrate, write the store's or verifier's own IPv4 or native
   IPv6 address, or a name that answers one.
 
+- BREAKING: the compiler refuses a Proposal grant that holds `edit`, `revise`
+  or `rebase` unless its `readableInputs` cover every input it may write
+  (`writableInputs`, or every declared input when absent), with
+  `breg.proposal.input-write-unreadable`. Add the named inputs to
+  `readableInputs`. An agent profile without a task grant is exempt.
+
 - BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The
   POST carries `webhook-id`, `webhook-timestamp` and `webhook-signature`, an
   HMAC-SHA-256 over the id, the timestamp and the exact body. It no longer

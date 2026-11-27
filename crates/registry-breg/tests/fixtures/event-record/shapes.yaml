@@ -215,5 +215,6 @@ accessProfiles:
       proposals:
         - action: correct-grant-number
           operations: [get, list, edit, submit, revise, rebase, retry, cancel, apply]
+          readableInputs: [grant-ref, value]
           ownership: caller
           targets: [{recordType: grant, rowBoundaries: unrestricted}]

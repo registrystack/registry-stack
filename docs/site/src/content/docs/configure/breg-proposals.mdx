@@ -146,6 +146,11 @@ The list must name declared inputs and needs Start, Edit, Revise or Rebase autho
 When the grant holds Edit, Revise or Rebase, every input outside the list must be in `readableInputs`, so the equality check never reveals a value the caller cannot read.
 Attachments keep their own `writableAttachments` grant.
 
+A grant that holds Edit, Revise or Rebase must also read every input it may write: `readableInputs` has to cover `writableInputs`, or every declared input when `writableInputs` is absent.
+Get and List serve `input` projected to `readableInputs`, while a write replaces the stored input as a whole, so a client that merges its change into what it read would otherwise clear the inputs it could not see.
+The compiler refuses the grant with `breg.proposal.input-write-unreadable`, naming the access profile, the Action and the missing inputs.
+An agent profile without a task grant cannot hold Get, drafts blind and is exempt.
+
 For an Action whose inputs are `holder`, `statement` and `licence-number`, an applicant may write the first two while an officer, under a grant without the list, records the licence number:
 
 ```yaml
