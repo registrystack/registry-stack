@@ -4324,6 +4324,16 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
             );
         }
     }
+    let missing = config::inbox_key_path(&root, "second-hook");
+    fs::remove_file(&missing).unwrap();
+    let error = events::check_destination_keys(&root).unwrap_err();
+    assert_eq!(error.to_string(), "This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
+    config::repair_inbox(&root, 18996).unwrap();
+    events::check_destination_keys(&root).unwrap();
+    assert_eq!(
+        fs::metadata(missing).unwrap().len(),
+        config::INBOX_KEY_BYTES
+    );
     private::validate_tree(&root).unwrap();
     let saved = read_state(&root).unwrap();
     assert_eq!(saved.webhook_port, Some(18996));

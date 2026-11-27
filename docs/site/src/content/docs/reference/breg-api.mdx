@@ -909,7 +909,7 @@ transition always carries the same event identity.
 BReg signs `webhook-id.webhook-timestamp.body` using Standard Webhooks, with the exact body bytes.
 Each `webhook-signature` entry starts with `v1,` followed by the base64 HMAC-SHA-256 digest.
 The current key's entry comes first. During rotation the previous key adds a second entry
-separated by a space. Each destination has its own key of 32 to 64 exact bytes.
+separated by a space. Each destination has its own [key of 32 to 64 exact bytes](../delivery-signing/#use-a-separate-key-for-each-destination).
 
 See the [delivery signing reference](../delivery-signing/) for verification and freshness rules.
 

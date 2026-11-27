@@ -6835,12 +6835,12 @@ fn schema_test_runtime_setup_failure(
         ) => (
             "test.hook-destinations.inventory-mismatch",
             "destinations.hooks",
-            "configure exactly the logical destination bindings required by the candidate event deliveries before retrying",
+            "",
         ),
         SchemaTestRuntimeSetupError::EventDestinations(_) => (
             "test.hook-destinations.activation-failed",
             "destinations.hooks",
-            "check the destination bindings, delivery ceilings, and referenced secret, signing, and TLS material before retrying",
+            "",
         ),
         SchemaTestRuntimeSetupError::Evidence => (
             "test.evidence-providers.activation-failed",
@@ -6858,11 +6858,15 @@ fn schema_test_runtime_setup_failure(
             "check the WASM execution budgets and backend support before retrying",
         ),
     };
+    let message = match &error {
+        SchemaTestRuntimeSetupError::EventDestinations(cause) => cause.to_string(),
+        _ => format!("{error}; {recovery}"),
+    };
     FailureReport {
         ok: false,
         command: "test",
         diagnostics: vec![tool_diagnostic(
-            diagnostic(code, path, &format!("{error}; {recovery}")),
+            diagnostic(code, path, &message),
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         )],
@@ -8412,11 +8416,12 @@ fn runtime_config_diagnostics(error: &RuntimeConfigError) -> Vec<Diagnostic> {
         .diagnostics(None)
         .into_iter()
         .map(|reader| {
-            diagnostic(
-                &reader.code,
-                &reader.path,
-                &format!("{}; next: {}", reader.message, reader.suggested_action),
-            )
+            let message = if matches!(error, RuntimeConfigError::InvalidDeliveryKey { .. }) {
+                format!("{} {}", reader.message, reader.suggested_action)
+            } else {
+                format!("{}; next: {}", reader.message, reader.suggested_action)
+            };
+            diagnostic(&reader.code, &reader.path, &message)
         })
         .collect()
 }

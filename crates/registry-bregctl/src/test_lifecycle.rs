@@ -1178,6 +1178,10 @@ bindings:
             EventDestinationActivationError::DeliveryCeilingWidening,
             EventDestinationActivationError::Secret,
             EventDestinationActivationError::InvalidTlsMaterial,
+            EventDestinationActivationError::RepeatedSigningKey {
+                first: "destinations.hooks.receiver.hmacSha256KeyRef".to_owned(),
+                second: "reviewAuthorities.casework.completion.hmacSha256KeyRef".to_owned(),
+            },
         ] {
             cases.push((
                 SchemaTestRuntimeSetupError::EventDestinations(error),
@@ -1186,6 +1190,10 @@ bindings:
             ));
         }
         for (error, code, path) in cases {
+            let activation_message = match &error {
+                SchemaTestRuntimeSetupError::EventDestinations(cause) => Some(cause.to_string()),
+                _ => None,
+            };
             let report =
                 crate::test_lifecycle_failure(execution_error(FixtureError::RuntimeSetup(error)));
             let diagnostic = &report.diagnostics[0];
@@ -1200,7 +1208,11 @@ bindings:
                 crate::SuggestedAction::CorrectRuntimeConfiguration
             );
             assert!(!diagnostic.message.contains("recreate"));
-            assert!(diagnostic.message.contains("before retrying"));
+            if let Some(activation_message) = activation_message {
+                assert_eq!(diagnostic.message, activation_message);
+            } else {
+                assert!(diagnostic.message.contains("before retrying"));
+            }
             let serialized = serde_json::to_string(&report).expect("failure report serializes");
             assert!(!serialized.contains("recreate_disposable_database"));
         }

@@ -2177,7 +2177,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
     }
     let destinations = if state.webhook_port.is_some() || !clients.destinations.hooks.is_empty() {
         if let Some(port) = state.webhook_port {
-            event_destinations(root, &compiled, port)?
+            event_destinations(root, &compiled, port, false)?
         } else {
             external_event_destinations(&compiled, &clients.destinations.hooks)?
         }
@@ -2413,15 +2413,44 @@ pub(super) fn inbox_key_path(root: &Path, destination_id: &str) -> PathBuf {
         .join(format!("inbox-key-{destination_id}"))
 }
 
-fn ensure_inbox_key(root: &Path, destination_id: &str) -> Result<()> {
+pub(super) const INBOX_KEY_BYTES: u64 = 43;
+
+fn ensure_inbox_key(root: &Path, destination_id: &str, repair: bool) -> Result<()> {
     let path = inbox_key_path(root, destination_id);
-    if path.try_exists()? {
-        return Ok(());
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            private::check_metadata(&metadata, false)?;
+            if metadata.len() == INBOX_KEY_BYTES {
+                return Ok(());
+            }
+            if !repair {
+                bail!("The local inbox key is incomplete. Run bregctl dev stop --remove and start again.");
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
     }
     let mut bytes = Zeroizing::new([0u8; 32]);
     getrandom::fill(bytes.as_mut()).context("cannot generate local webhook secret")?;
     let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref()));
-    private::create(&path, encoded.as_bytes())
+    private::replace(&path, encoded.as_bytes())
+}
+
+#[cfg(test)]
+#[test]
+fn an_interrupted_inbox_key_write_requires_a_new_session() {
+    let root = tempfile::tempdir().unwrap();
+    let secrets = root.path().join("secrets");
+    private::directory(&secrets).unwrap();
+    let path = inbox_key_path(root.path(), "local-hook");
+    private::create(&path, b"unfinished").unwrap();
+    let error = ensure_inbox_key(root.path(), "local-hook", false).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "The local inbox key is incomplete. Run bregctl dev stop --remove and start again."
+    );
+    ensure_inbox_key(root.path(), "local-hook", true).unwrap();
+    assert_eq!(fs::metadata(path).unwrap().len(), INBOX_KEY_BYTES);
 }
 
 /// Use the same compiled inventory as `explain events`. Shared destinations
@@ -2430,6 +2459,7 @@ fn event_destinations(
     root: &Path,
     compiled: &registry_breg::CompiledRegistry,
     port: u16,
+    repair_keys: bool,
 ) -> Result<Value> {
     let mut destinations = BTreeMap::new();
     for delivery in &compiled.event_deliveries().deliveries {
@@ -2448,7 +2478,7 @@ fn event_destinations(
         *attempts = (*attempts).min(delivery.maximum_attempts);
     }
     destinations.into_iter().map(|(id, (classification, timeout, attempts))| {
-        ensure_inbox_key(root, id)?;
+        ensure_inbox_key(root, id, repair_keys)?;
         Ok((id.clone(), json!({
             "origin":format!("http://127.0.0.1:{port}"),"path":"/events",
             "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
@@ -2457,6 +2487,35 @@ fn event_destinations(
             "deliveryCeilings":{"attemptTimeoutMilliseconds":timeout,"maximumAttempts":attempts}
         })))
     }).collect::<Result<_>>().map(Value::Object)
+}
+
+/// Restore the inbox bindings after the operator has removed the retained database.
+pub(super) fn repair_inbox(root: &Path, port: u16) -> Result<()> {
+    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+        .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
+    let hooks = event_destinations(root, &compiled, port, true)?;
+    for name in ["runtime.yaml", "runtime-test.yaml"] {
+        let path = root.join(name);
+        if path.try_exists()? {
+            let mut runtime = Reader::new(name)
+                .scan(&private::read(&path, MAX_BYTES)?)
+                .map_err(|report| anyhow::anyhow!("{report}"))?
+                .with_context(|| format!("{name} is empty"))?
+                .to_json_value();
+            let destinations = runtime
+                .as_object_mut()
+                .with_context(|| format!("{name} must hold a runtime configuration"))?
+                .entry("destinations")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .with_context(|| format!("{name} destinations must be a map"))?;
+            if destinations.get("hooks") != Some(&hooks) {
+                destinations.insert("hooks".to_owned(), hooks.clone());
+                private::replace(&path, serde_norway::to_string(&runtime)?.as_bytes())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn write_yaml(path: &Path, value: &Value) -> Result<()> {

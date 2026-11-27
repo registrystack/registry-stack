@@ -34,6 +34,8 @@ use zeroize::Zeroizing;
 const MAX_BODY: usize = 1024 * 1024;
 const MAX_STORAGE: u64 = 16 * 1024 * 1024;
 
+type DeliveryMap = BTreeMap<(String, String), Delivery>;
+
 pub(super) struct Receiver {
     stop: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
@@ -42,7 +44,7 @@ pub(super) struct Receiver {
 struct Inbox {
     root: PathBuf,
     keys: BTreeMap<String, DeliveryKeys>,
-    deliveries: BTreeMap<(String, String), Delivery>,
+    deliveries: DeliveryMap,
 }
 
 struct Delivery {
@@ -90,6 +92,36 @@ impl Delivery {
     }
 }
 
+pub(super) fn check_destination_keys(root: &Path) -> Result<()> {
+    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+        .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
+    for destination in compiled
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .filter_map(|delivery| delivery.destination_id.as_deref())
+    {
+        check_destination_key(&super::config::inbox_key_path(root, destination))?;
+    }
+    Ok(())
+}
+
+fn check_destination_key(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bail!("This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
+        }
+        Err(error) => Err(error.into()),
+        Ok(metadata) => {
+            private::check_metadata(&metadata, false)?;
+            if metadata.len() != super::config::INBOX_KEY_BYTES {
+                bail!("The local inbox key is incomplete. Run bregctl dev stop --remove and start again.");
+            }
+            Ok(())
+        }
+    }
+}
+
 impl Receiver {
     pub(super) fn start(root: &Path, port: u16, instance_id: &str) -> Result<Self> {
         let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
@@ -97,7 +129,7 @@ impl Receiver {
         // The local receiver stands in for a remote destination, so it holds
         // the url deliveries only; a local handler runs inside the engine and
         // never reaches an HTTP receiver.
-        let mut deliveries: BTreeMap<(String, String), Delivery> = BTreeMap::new();
+        let mut deliveries: DeliveryMap = BTreeMap::new();
         for delivery in compiled
             .event_deliveries()
             .deliveries
@@ -146,11 +178,7 @@ impl Receiver {
         Self::start_with_deliveries(root, port, deliveries)
     }
 
-    fn start_with_deliveries(
-        root: &Path,
-        port: u16,
-        deliveries: BTreeMap<(String, String), Delivery>,
-    ) -> Result<Self> {
+    fn start_with_deliveries(root: &Path, port: u16, deliveries: DeliveryMap) -> Result<Self> {
         private::check(root, true)?;
         let mut keys = BTreeMap::new();
         for delivery in deliveries.values() {
@@ -161,6 +189,8 @@ impl Receiver {
                     keys.entry(destination.clone())
                 {
                     let path = super::config::inbox_key_path(root, destination);
+                    check_destination_key(&path)?;
+                    // Use the 43-character base64url text as the key bytes as written.
                     let bytes = Zeroizing::new(private::read(&path, 64 * 1024)?);
                     let key = DeliveryKey::new(&bytes)
                         .with_context(|| format!("invalid local inbox key for {destination}"))?;
@@ -476,19 +506,30 @@ fn append(root: &Path, record: &Value) -> Result<()> {
     let _lock = storage_lock(root)?;
     let path = root.join("events.jsonl");
     let mut bytes = private::read(&path, MAX_STORAGE)?;
+    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+        bail!("local event inbox has an incomplete record");
+    }
+    for line in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let received = parse_json_strict(line).context("local event inbox record is invalid")?;
+        if received["destinationId"] == record["destinationId"]
+            && received["webhookId"] == record["webhookId"]
+        {
+            return Ok(());
+        }
+    }
     let line = serde_json::to_vec(record)?;
     if bytes.len() as u64 + line.len() as u64 + 1 > MAX_STORAGE {
         bail!(
             "local event inbox reached its 16 MiB bound; stop the session and move the journal to an owner-only location before restarting"
         );
     }
-    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-        bail!("local event inbox has an incomplete record");
-    }
     bytes.extend_from_slice(&line);
     bytes.push(b'\n');
     // Atomic replacement under the stable lock prevents partial reports and
-    // acknowledges only a durable complete record, including repeated attempts.
+    // acknowledges only a durable complete record.
     private::replace(&path, &bytes)
 }
 
@@ -581,6 +622,15 @@ mod tests {
         trigger: EventTrigger,
         vocabulary: bool,
     ) -> (tempfile::TempDir, u16, Receiver) {
+        let (root, port, deliveries) = captured_inbox(trigger, vocabulary);
+        let receiver = Receiver::start_with_deliveries(root.path(), port, deliveries).unwrap();
+        (root, port, receiver)
+    }
+
+    fn captured_inbox(
+        trigger: EventTrigger,
+        vocabulary: bool,
+    ) -> (tempfile::TempDir, u16, DeliveryMap) {
         let mut field =
             json!({"id":"label", "type":"string", "maximumLength":64, "classification":"internal"});
         if vocabulary {
@@ -629,13 +679,9 @@ mod tests {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
-        let receiver = Receiver::start_with_deliveries(
-            root.path(),
-            port,
-            BTreeMap::from([(("record-created-v1".into(), "record".into()), delivery)]),
-        )
-        .unwrap();
-        (root, port, receiver)
+        let deliveries =
+            BTreeMap::from([(("record-created-v1".into(), "record".into()), delivery)]);
+        (root, port, deliveries)
     }
 
     const EVENT_TIME: &str = "2026-01-01T00:00:00.123Z";
@@ -684,6 +730,7 @@ mod tests {
 
     fn signed_envelope(envelope: HookEnvelope) -> (HeaderMap, Vec<u8>) {
         let mut headers = event_headers();
+        headers.insert("webhook-id", HeaderValue::from_str(&envelope.id).unwrap());
         let body = envelope
             .to_canonical_bytes(&EnvelopeLimits::default())
             .unwrap();
@@ -737,12 +784,30 @@ mod tests {
     }
 
     #[test]
+    fn a_session_missing_a_destination_key_explains_how_to_restart() {
+        let (root, port, deliveries) = captured_inbox(EventTrigger::Created, false);
+        fs::remove_file(root.path().join("secrets/inbox-key-second-hook")).unwrap();
+        let error = Receiver::start_with_deliveries(root.path(), port, deliveries)
+            .err()
+            .expect("missing key prevents receiver startup");
+        assert_eq!(error.to_string(), "This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
+    }
+
+    #[test]
     fn signed_receipts_record_the_webhook_id_and_destination_and_redact_values() {
         let (root, port, receiver) = fixture();
         for _ in 0..3 {
             let (headers, body) = signed();
             assert_eq!(request(port, headers, body), 204);
         }
+        let (mut headers, body) = signed();
+        headers.insert(
+            "webhook-timestamp",
+            HeaderValue::from_str(&(OffsetDateTime::now_utc().unix_timestamp() + 10).to_string())
+                .unwrap(),
+        );
+        sign(&mut headers, &body);
+        assert_eq!(request(port, headers, body), 204);
         assert!(!receiver.exited());
         let metadata = report(root.path(), false).unwrap();
         assert!(!metadata.to_string().contains("projected-value-canary"));
@@ -750,7 +815,7 @@ mod tests {
             .to_string()
             .contains("00000000-0000-4000-8000-000000000002"));
         let records = metadata["deliveries"].as_array().unwrap();
-        assert_eq!(records.len(), 3);
+        assert_eq!(records.len(), 1);
         assert!(records.iter().all(|record| record["webhookId"] == EVENT_ID));
         assert_eq!(records[0]["status"], "received");
         assert_eq!(
@@ -777,13 +842,15 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            3
+            1
         );
     }
 
     #[test]
     fn a_delivery_is_attributed_to_the_destination_whose_key_verifies() {
         let (root, port, _receiver) = fixture();
+        let (headers, body) = signed();
+        assert_eq!(request(port, headers, body), 204);
         let (mut headers, body) = signed();
         sign_with_key(
             &mut headers,
@@ -792,11 +859,11 @@ mod tests {
         );
         assert_eq!(request(port, headers, body), 204);
         let metadata = report(root.path(), false).unwrap();
-        assert_eq!(metadata["deliveries"][0]["destinationId"], "second-hook");
-        assert_eq!(
-            metadata["deliveries"][0]["deliveryId"],
-            "test-second-delivery"
-        );
+        let records = metadata["deliveries"].as_array().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["destinationId"], "local-hook");
+        assert_eq!(records[1]["destinationId"], "second-hook");
+        assert_eq!(records[1]["deliveryId"], "test-second-delivery");
     }
 
     #[test]
@@ -1040,7 +1107,10 @@ mod tests {
             }
         });
         for _ in 0..5 {
-            let (headers, body) = signed();
+            let mut event = envelope(event_data());
+            event.id = uuid::Uuid::new_v4().to_string();
+            event.causation = registry_platform_hooks::Causation::root(&event.id);
+            let (headers, body) = signed_envelope(event);
             assert_eq!(request(port, headers, body), 204);
         }
         reader.join().unwrap();

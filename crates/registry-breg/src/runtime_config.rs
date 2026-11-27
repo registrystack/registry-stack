@@ -20,7 +20,7 @@ use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretFileCheck, SecretReference,
     SecretResolver, TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
-use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
+use registry_platform_crypto::{delivery_signature::DeliveryKeys, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
 use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
@@ -47,8 +47,8 @@ use crate::{
     auth::{AuthenticationConfigError, AuthorityClaimConfig},
     cursor::CursorCodec,
     event_destination::{
-        present_hook_key_reference, resolve_delivery_keys, signing_key_action,
-        ActivatedEventDestinationRegistry, EventDestinationActivationError,
+        labeled_delivery_keys, present_hook_key_reference, resolve_delivery_keys,
+        signing_key_action, ActivatedEventDestinationRegistry, EventDestinationActivationError,
         EventDestinationConfigs, RawEventDestinationConfigs, CURRENT_KEY_MEMBER,
         PREVIOUS_KEY_MEMBER,
     },
@@ -388,11 +388,11 @@ pub enum RuntimeConfigError {
     InvalidCursor,
     #[error("runtime configuration contains an invalid event destination binding")]
     InvalidEventDestination,
-    #[error("{reason}")]
+    #[error("{reason} {action}")]
     InvalidDeliveryKey {
         path: String,
         reason: String,
-        action: &'static str,
+        action: String,
     },
     #[error("{first} and {second} select the same completion recipient.")]
     DuplicateCompletionRecipient {
@@ -536,7 +536,7 @@ impl RuntimeConfigError {
     /// The edit that fixes a refusal this runtime decides itself
     /// (CFG-DIAG-6). A reader refusal carries its own action in each
     /// diagnostic.
-    fn suggested_action(&self) -> &'static str {
+    fn suggested_action(&self) -> &str {
         match self {
             Self::Reader(_) => "",
             Self::InvalidTaskGrantStatus => {
@@ -647,7 +647,11 @@ impl RuntimeConfigError {
             Self::InvalidStaticJwks(cause) => cause.to_string(),
             other => other.suggested_action().to_owned(),
         };
-        let mut diagnostic = Diagnostic::error(self.code(), self.path(), self.to_string(), action);
+        let message = match self {
+            Self::InvalidDeliveryKey { reason, .. } => reason.clone(),
+            other => other.to_string(),
+        };
+        let mut diagnostic = Diagnostic::error(self.code(), self.path(), message, action);
         diagnostic.source = file.map(|file| Source {
             file: file.display().to_string(),
             line: None,
@@ -1336,27 +1340,24 @@ impl RuntimeConfig {
                         path: format!("{pointer}/recipientBinding"),
                     });
                 }
-                let keys = resolve_delivery_keys(
-                    &resolver,
-                    &block,
-                    &completion.hmac_sha256_key_ref,
-                    completion.previous_hmac_sha256_key_ref.as_ref(),
-                )
-                .map_err(|error| {
-                    let (member_path, action) = match &error {
-                        EventDestinationActivationError::SigningKeyUnavailable {
-                            path,
-                            action,
-                            ..
-                        } => (path, *action),
+                let keys = completion.resolve_keys(&resolver, &block).map_err(|error| {
+                    let (member_path, reason, action) = match error {
+                        EventDestinationActivationError::SigningKeyUnavailable {path, reason, action} => (
+                            path.clone(),
+                            format!("{path} could not be resolved: {reason}."),
+                            action.to_owned(),
+                        ),
                         EventDestinationActivationError::InvalidSigningKey {
-                            path, reason, ..
-                        } => (path, signing_key_action(reason)),
-                        EventDestinationActivationError::PreviousEqualsCurrent {
-                            previous, ..
+                            path, length, trailing_newline, reason,
                         } => (
-                            previous,
-                            "Configure a previous key distinct from the current key.",
+                            path.clone(),
+                            format!("{path} has {length} bytes (trailing newline: {trailing_newline})."),
+                            signing_key_action(&reason).to_owned(),
+                        ),
+                        EventDestinationActivationError::PreviousEqualsCurrent { current, previous } => (
+                            previous.clone(),
+                            format!("{previous} holds the same bytes as {current}."),
+                            format!("To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."),
                         ),
                         _ => unreachable!("key resolution returns only key errors"),
                     };
@@ -1367,7 +1368,7 @@ impl RuntimeConfig {
                     };
                     RuntimeConfigError::InvalidDeliveryKey {
                         path: format!("{pointer}/{member}"),
-                        reason: error.to_string(),
+                        reason,
                         action,
                     }
                 })?;
@@ -1561,7 +1562,30 @@ impl RuntimeConfig {
         ActivatedEventDestinationRegistry,
         crate::event_destination::EventDestinationActivationError,
     > {
-        self.activate_event_destinations_with_review_authorities(compiled, None)
+        let resolver = self
+            .secret_resolver()
+            .map_err(|_| EventDestinationActivationError::Secret)?;
+        let completion_keys = self
+            .review_authorities
+            .iter()
+            .filter_map(|(authority, config)| Some((authority, config.completion.as_ref()?)))
+            .map(|(authority, completion)| {
+                let block = format!("reviewAuthorities.{authority}.completion");
+                completion
+                    .resolve_keys(&resolver, &block)
+                    .map(|keys| (block, keys))
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ActivatedEventDestinationRegistry::activate(
+            compiled,
+            &self.event_destinations,
+            &resolver,
+            completion_keys
+                .iter()
+                .flat_map(|(block, keys)| labeled_delivery_keys(block, keys))
+                .collect(),
+        )
+        .map(|destinations| destinations.with_payload_retention(self.retention.payload_retention))
     }
 
     /// Activate hook destinations and check their keys against the active review authorities.
@@ -3164,8 +3188,11 @@ struct RawReviewAuthorityConfig {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawReviewCompletionConfig {
+    /// Recipient binding the completion sender supplies to select this authority.
     recipient_binding: String,
+    /// Runtime secret reference for 32 to 64 exact HMAC-SHA-256 key bytes.
     hmac_sha256_key_ref: SecretReference,
+    /// Optional previous completion signing key during rotation.
     #[serde(
         default,
         deserialize_with = "present_hook_key_reference",
@@ -3173,6 +3200,21 @@ struct RawReviewCompletionConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     previous_hmac_sha256_key_ref: Option<SecretReference>,
+}
+
+impl RawReviewCompletionConfig {
+    fn resolve_keys(
+        &self,
+        resolver: &SecretResolver,
+        path: &str,
+    ) -> std::result::Result<DeliveryKeys, EventDestinationActivationError> {
+        resolve_delivery_keys(
+            resolver,
+            path,
+            &self.hmac_sha256_key_ref,
+            self.previous_hmac_sha256_key_ref.as_ref(),
+        )
+    }
 }
 
 #[derive(Clone)]

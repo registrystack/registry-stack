@@ -234,10 +234,18 @@ fn execute(
         identity.instance_id(),
         identity.database_id(),
     );
-    // A plan learns from the database whether the package would be the first,
-    // so it resolves database authority first; an apply is told by --initial
-    // and checks everything the package and the runtime file decide before
-    // any database authority is resolved.
+    // A plan can verify delivery bindings before opening database authority.
+    let planned_destinations = if mode == LifecycleMode::Plan {
+        Some(
+            config
+                .activate_event_destinations(target.registry())
+                .map_err(|error| ApplyLifecycleError::EventDestinations(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    // The plan reads the activation ledger to learn whether this is the
+    // first package. Apply receives that decision through --initial.
     let mut access = None;
     let initial = match mode {
         LifecycleMode::Apply => request.initial,
@@ -291,19 +299,21 @@ fn execute(
         .map(|_| config.secret_resolver())
         .transpose()
         .map_err(|_| ApplyLifecycleError::FieldEncryptionConfiguration)?;
-    let review_authorities = if matches!(mode, LifecycleMode::Apply) {
-        config
-            .activate_review_authorities(target.registry())
-            .map_err(ApplyLifecycleError::RuntimeConfig)?
-    } else {
-        None
+    let (review_authorities, activated_event_destinations) = match planned_destinations {
+        Some(destinations) => (None, destinations),
+        None => {
+            let authorities = config
+                .activate_review_authorities(target.registry())
+                .map_err(ApplyLifecycleError::RuntimeConfig)?;
+            let destinations = config
+                .activate_event_destinations_with_review_authorities(
+                    target.registry(),
+                    authorities.as_deref(),
+                )
+                .map_err(|error| ApplyLifecycleError::EventDestinations(error.to_string()))?;
+            (authorities, destinations)
+        }
     };
-    let activated_event_destinations = config
-        .activate_event_destinations_with_review_authorities(
-            target.registry(),
-            review_authorities.as_deref(),
-        )
-        .map_err(|error| ApplyLifecycleError::EventDestinations(error.to_string()))?;
     let event_destination_compatibility = activated_event_destinations.compatibility_inventory();
 
     let DatabaseAccess {

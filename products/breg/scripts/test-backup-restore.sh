@@ -644,8 +644,12 @@ class Receiver(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         status = int(answer_file.read_text(encoding="ascii").strip())
-        envelope = json.loads(body)
-        record_id = envelope.get("data", {}).get("recordId")
+        try:
+            envelope = json.loads(body)
+            record_id = envelope.get("data", {}).get("recordId")
+        except (ValueError, AttributeError):
+            envelope = {}
+            record_id = None
         receipt = {
             "eventId": self.headers.get("webhook-id"),
             "type": envelope.get("type"),

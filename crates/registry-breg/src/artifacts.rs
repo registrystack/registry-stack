@@ -2762,7 +2762,7 @@ pub(crate) fn append_review_completion_openapi(
                         "name": "webhook-timestamp",
                         "in": "header",
                         "required": true,
-                        "schema": {"type": "string", "pattern": "^[0-9]+$"}
+                        "schema": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$"}
                     },
                     {
                         "name": "webhook-signature",
@@ -2790,7 +2790,7 @@ pub(crate) fn append_review_completion_openapi(
                             }
                         }
                     },
-                    "413": {"description": "The completion body exceeds 2048 bytes."},
+                    "413": {"description": "The completion body exceeds 2048 bytes. The response body is empty."},
                     "415": {"description": "The request is not application/json."},
                     "503": {"description": "The completion could not be durably recorded."}
                 }

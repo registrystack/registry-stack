@@ -171,7 +171,7 @@ that client's registered audience.
 ## Observe local events
 
 Declare an event with a webhook destination in the authored project before the first start.
-By default, `dev` generates a separate key for each compiled destination and binds all
+By default, `dev` generates a [separate key for each compiled destination](../delivery-signing/#use-a-separate-key-for-each-destination) and binds all
 destinations to one Standard Webhooks receiver on a free numeric loopback port. The receiver
 identifies the destination by the key that verifies the delivery. The port, keys, and bindings
 are retained across restarts. A conflicting receiver port is refused.
@@ -194,7 +194,7 @@ destinations:
     explicit_local_event_destinations_bind_exact_compiled_inventory,
     local_event_destinations_refuse_an_origin_without_a_usable_port. */}
 
-Name a distinct key of 32 to 64 exact bytes for each destination using a
+Name a [distinct key of 32 to 64 exact bytes for each destination](../delivery-signing/#use-a-separate-key-for-each-destination) using a
 [secret reference](#secret-references).
 The session copies it into its private state and uses the same bounded outbox delivery and replay
 rules.

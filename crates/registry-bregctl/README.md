@@ -102,7 +102,7 @@ destination identifiers and governed delivery policy, never deployed URLs,
 secret references, or secret values.
 
 `bregctl hook sample PROJECT --event ID` compiles the authoring
-project and renders a deterministic CloudEvents HTTP request with typed
+project and renders a deterministic Standard Webhooks HTTP request with typed
 synthetic projection values. The request target and signature are explicit
 placeholders because this offline command does not load deployment
 configuration or secrets.

@@ -266,11 +266,14 @@ Give this destination's receiver the same file through its secret store. BReg us
 key bytes exactly as written. The recipe produces 64 hexadecimal characters that the receiver
 loads directly as its key. Use a regular file owned by the user that runs `breg`, with mode `0400`
 or `0600`. Startup refuses a key reused across destinations or with a review completion and names
-both configuration paths.
+both configuration paths. The signature covers the webhook ID, the timestamp and the body but not
+the URL, so a delivery signed with a key two destinations share could be replayed to the other one.
+See [Use a separate key for each destination](../../reference/delivery-signing/#use-a-separate-key-for-each-destination).
 
-To rotate a key, write new bytes behind the existing `hmacSha256KeyRef` and reference the old bytes
-with `previousHmacSha256KeyRef`. During rotation, BReg signs with both keys. Remove the previous
-reference once the receiver has the new key.
+To rotate a key stored through a `secret:file` reference, copy the current file to a new name and
+reference the copy as `previousHmacSha256KeyRef`. Write new bytes to the file
+`hmacSha256KeyRef` references, then restart BReg so it signs with both keys. Once the receiver
+has the new key, remove the previous reference and restart BReg.
 
 {/* Evidence: crates/registry-breg/src/event_destination.rs, resolve_delivery_keys(), digest_value();
     crates/registry-breg/tests/runtime_config.rs, a_previous_destination_key_leaves_the_binding_digest_unchanged,

@@ -1229,6 +1229,9 @@ fn start(args: StartArgs) -> Result<Value> {
     let mut state = if let Some(state) = existing {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
+        if state.webhook_port.is_some() {
+            events::check_destination_keys(&root)?;
+        }
         if control(&root, "status").is_ok_and(|status| status == "ready") {
             borrowed_owner(&state)?;
             return state.report();
@@ -1569,7 +1572,11 @@ fn reclaim(docker: &Path, state: &mut State) -> Result<()> {
     )?;
     events::clear(&state.root())?;
     reclaimed(state);
-    state.save()
+    state.save()?;
+    if let Some(port) = state.webhook_port.filter(|_| state.sequence == 1) {
+        config::repair_inbox(&state.root(), port)?;
+    }
+    Ok(())
 }
 
 /// Forget the reclaimed database while keeping the ownership identifier, ports,

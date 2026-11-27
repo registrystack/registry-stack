@@ -755,6 +755,17 @@ async fn review_completion_authentication_refusals_use_the_registered_problem() 
             expected
         );
     }
+    for (key, expected) in [
+        (2, StatusCode::SERVICE_UNAVAILABLE),
+        (3, StatusCode::UNAUTHORIZED),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(valid(0, keys(key, None)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
     // Unix seconds on the wire are compared against the receiver's subsecond clock.
     for (offset, previous) in [(-299, None), (300, None), (0, Some(2))] {
         let response = app

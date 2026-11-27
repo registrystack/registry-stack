@@ -1334,7 +1334,7 @@
         },
         "hmacSha256KeyRef": {
           "$ref": "#/$defs/SecretReference",
-          "description": "Runtime secret reference for the receiver's shared HMAC-SHA-256 key."
+          "description": "Runtime secret reference for the receiver's 32 to 64 exact HMAC-SHA-256 key bytes."
         },
         "networkProfile": {
           "$ref": "#/$defs/EventDestinationNetworkProfile",
@@ -1913,12 +1913,15 @@
       "additionalProperties": false,
       "properties": {
         "hmacSha256KeyRef": {
-          "$ref": "#/$defs/SecretReference"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Runtime secret reference for 32 to 64 exact HMAC-SHA-256 key bytes."
         },
         "previousHmacSha256KeyRef": {
-          "$ref": "#/$defs/SecretReference"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Optional previous completion signing key during rotation."
         },
         "recipientBinding": {
+          "description": "Recipient binding the completion sender supplies to select this authority.",
           "type": "string"
         }
       },

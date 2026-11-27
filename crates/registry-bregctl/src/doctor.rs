@@ -265,11 +265,12 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         );
     }
     if let StartupError::EventDestinations(reason) = error {
-        return diagnostic(
-            "startup.hook-destinations.refused",
-            "destinations.hooks",
-            &reason,
-        );
+        let path = reason
+            .split_whitespace()
+            .next()
+            .filter(|path| path.starts_with("reviewAuthorities."))
+            .unwrap_or("destinations.hooks");
+        return diagnostic("startup.hook-destinations.refused", path, &reason);
     }
     let (code, path, message) = match error {
         StartupError::RuntimeConfig(_) => {
@@ -763,6 +764,17 @@ mod tests {
                 ),
                 "startup.hook-destinations.refused",
                 "destinations.hooks",
+            ),
+            (
+                StartupError::EventDestinations(
+                    registry_breg::event_destination::EventDestinationActivationError::RepeatedSigningKey {
+                        first: "reviewAuthorities.alpha.completion.hmacSha256KeyRef".to_owned(),
+                        second: "reviewAuthorities.beta.completion.hmacSha256KeyRef".to_owned(),
+                    }
+                    .to_string(),
+                ),
+                "startup.hook-destinations.refused",
+                "reviewAuthorities.alpha.completion.hmacSha256KeyRef",
             ),
             (
                 StartupError::FieldEncryption,

@@ -92,9 +92,7 @@ pub(crate) fn signing_key_action(reason: &DeliveryKeyError) -> &'static str {
             "Supply 32 to 64 exact key bytes."
         }
         DeliveryKeyError::SecretText => "Supply the exact key bytes without the whsec_ encoding.",
-        DeliveryKeyError::PreviousEqualsCurrent => {
-            "Configure a previous key distinct from the current key."
-        }
+        DeliveryKeyError::PreviousEqualsCurrent => unreachable!("key equality has both paths"),
     }
 }
 
@@ -659,7 +657,7 @@ pub(crate) struct RawEventDestinationConfig {
     dns_family: EventDestinationDnsFamily,
     /// Explicitly allowed private network ranges in canonical CIDR notation.
     allowed_private_cidrs: Vec<String>,
-    /// Runtime secret reference for the receiver's shared HMAC-SHA-256 key.
+    /// Runtime secret reference for the receiver's 32 to 64 exact HMAC-SHA-256 key bytes.
     hmac_sha256_key_ref: SecretReference,
     /// Optional previous signing key during rotation.
     #[serde(
