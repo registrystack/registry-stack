@@ -1896,6 +1896,7 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httputil",
+ "registry-platform-posture",
  "registry-platform-yaml",
  "reqwest",
  "serde",
