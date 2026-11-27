@@ -911,6 +911,9 @@
     "ExplainStage": {
       "additionalProperties": false,
       "properties": {
+        "asks": {
+          "type": "boolean"
+        },
         "decidingProfiles": {
           "items": {
             "type": "string"
@@ -1792,6 +1795,11 @@
         },
         "profile": {
           "type": "string"
+        },
+        "readsAsks": {
+          "default": false,
+          "description": "Whether this producer reads reviewer asks through the ask feed and\nanswers them. A review policy whose stage declares `asks` needs it\non every producer that submits to the policy.",
+          "type": "boolean"
         },
         "retention": {
           "$ref": "#/$defs/ProducerRetention"

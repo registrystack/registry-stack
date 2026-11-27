@@ -488,6 +488,60 @@ Neither refusal echoes the peer's header or source data.
 {/* Evidence: crates/registry-casework-breg/tests/support/peer_version.rs;
     crates/registry-casework/src/problem.rs source.version-mismatch */}
 
+### Ask the applicant
+
+A reviewer who holds a task can ask the applicant for more before deciding.
+Casework keeps the ask, and the producer shows it to the applicant and reports the answer.
+
+A stage opts in with `asks: {}`.
+Only an approval policy can declare it, and a stage without `asks` behaves as before, with the same policy bytes and digest.
+The producer must say it reads asks, with `readsAsks: true` on its `trustedProducers` entry.
+`caseworkctl check` reports a policy with `asks` that a listed producer does not read.
+
+```yaml
+reviewPolicies:
+  licence-renewal:
+    stages:
+      - id: review
+        queue: licensing
+        decidingProfiles: [licensing-officer]
+        requiredApprovals: 1
+        asks: {}
+trustedProducers:
+  licensing-registry:
+    readsAsks: true
+```
+
+The holder sends `POST /v1/review-tasks/{taskId}/asks` with `If-Match`, `Idempotency-Key` and a body of `text` and `wants`.
+The text is plain, bounded like a public reason, and has no control characters.
+`wants` lists what the applicant should give, from `answer` and `document`.
+Casework refuses the ask when the caller does not hold the task, the request is no longer under review, the task is not at the active stage, the stage declares no `asks`, the producer does not read asks, or the request already has an open ask.
+Each refusal has its own problem code: `review.ask-task-inactive`, `review.ask-not-offered`, `review.ask-producer-unsupported` and `review.ask-already-open`, besides `review.task-not-held` and the usual precondition failure.
+The task stays claimed by the same holder.
+
+The producer reads the ask on `GET /v1/review-asks`, a resumable feed of announcements, and then on `GET /v1/review-requests/{requestId}/asks/{askId}`.
+It reports the answer with `POST /v1/review-requests/{requestId}/asks/{askId}/answer`, which carries the subject binding and the time the answer was committed.
+It carries no text.
+Only the producer that created the request can answer, an unknown or foreign ask answers with an empty `404`, and an ask that is not open answers `409` with `review.ask-not-open`.
+The answer time must not precede the ask or lie more than five minutes ahead of Casework's clock, or Casework answers `review.ask-answer-time-invalid`.
+
+A task with an open ask carries the marker `waiting`, and the marker becomes `answered` when the producer reports the answer.
+The marker stays with the task if the holder releases it or a supervisor reassigns it, so the next holder sees it.
+`GET /v1/review-tasks` and the holdings list take `marker=waiting` or `marker=answered`.
+The task context lists the request's asks with their text, wants, times, state and the task that asked.
+
+An ask closes when the task that holds it is decided, and every open ask closes when the request settles or is cancelled.
+Asks and their feed announcements are erased with the request's history.
+
+{/* Evidence: crates/registry-casework/tests/review_postgres.rs,
+    the_holder_asks_the_applicant_and_the_producer_reads_the_ask;
+    an_ask_is_refused_unless_every_condition_holds;
+    the_producer_answer_marks_the_task_answered_and_obeys_its_rules;
+    deciding_the_task_closes_its_ask_and_clears_the_marker;
+    staff_list_tasks_that_wait_for_an_applicant_or_were_answered;
+    crates/registry-casework/tests/review_http.rs,
+    the_ask_command_and_the_producer_ask_routes_follow_the_contract_over_http */}
+
 ## Pair a current-source provider
 
 A current-source review adds one read-only context provider.

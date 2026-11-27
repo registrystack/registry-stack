@@ -234,6 +234,13 @@ The residuals refer to these obligations by number.
        crates/registry-casework/tests/review_postgres.rs, at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhausts_bounded_retries;
        crates/registry-casework/src/http.rs, review_result_feed. */}
 7. Treat reviewer-written public reasons as released text (`CASEWORK-RES-06`).
+   An ask of the applicant is released text too: its text goes to the producer, which shows it to
+   the applicant. The history row and audit record of an ask name only its identifier, and the
+   producer's answer call carries a subject binding and a time and no applicant text.
+   {/* Evidence: crates/registry-casework/tests/review_postgres.rs,
+       the_holder_asks_the_applicant_and_the_producer_reads_the_ask;
+       the_producer_answer_marks_the_task_answered_and_obeys_its_rules. */}
+
    {/* Evidence: crates/registry-review-protocol/src/lib.rs, check_public_reason. */}
 8. Use an HTTPS issuer and list the admitted OAuth clients. Production refuses `allowInsecureHttp: true` and `allowedClients: unrestricted` in any issuer entry.
    Declare only issuer and JWKS addresses you intend Casework to reach (`CASEWORK-RES-08`).

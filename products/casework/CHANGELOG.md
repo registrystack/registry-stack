@@ -71,6 +71,19 @@
 - The runtime schema declares no empty default for an issuer entry's
   `assertionIssuers`. Omitting the member still means no assertion-issuer rule
   applies.
+- A reviewer who holds a task can ask the applicant. A stage opts in with
+  `asks: {}` (approval policies only), and a producer declares
+  `readsAsks: true`. `POST /v1/review-tasks/{task_id}/asks` opens the ask. The
+  producer reads `GET /v1/review-asks` and
+  `GET /v1/review-requests/{request_id}/asks/{ask_id}`, and reports the answer
+  with `POST /v1/review-requests/{request_id}/asks/{ask_id}/answer`, which
+  carries no text. Tasks carry a `marker` (`waiting` or `answered`), the task
+  context lists the request's `asks`, and `GET /v1/review-tasks` takes a
+  `marker` filter. A migration adds the ask tables and the task marker. New
+  problem codes: `review.ask-already-open`, `review.ask-answer-time-invalid`,
+  `review.ask-not-offered`, `review.ask-not-open`,
+  `review.ask-producer-unsupported` and `review.ask-task-inactive`. A policy
+  without `asks` keeps its bytes and digest.
 
 - BREAKING: review completion wakes use Standard Webhooks. Casework signs
   `webhook-id`, `webhook-timestamp` and the exact JSON bytes with
