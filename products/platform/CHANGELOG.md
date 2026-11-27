@@ -357,6 +357,13 @@
   now says why: `registry-mcp` names the refusal in its startup message, and
   `registry-breg-mcp` logs it, with its startup code unchanged.
 
+- `registry-platform-httputil`'s `PrivateKeyJwt` now reports an access token
+  in the server's answer that it cannot present (empty, or not visible ASCII)
+  as `TokenError::Protocol` with the answer's status, where it reported
+  `TokenError::Invalid`. The client-secret client already did, so both clients
+  now read a token answer the same way.
+
+
 ## 0.48.0 - 2026-11-23
 
 - No user-visible product changes in this release.

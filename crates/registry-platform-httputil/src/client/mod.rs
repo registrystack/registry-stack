@@ -32,15 +32,15 @@ pub use private_key_jwt::{
     valid_resource_uri, valid_scope_token, validate_requested_scopes, PrivateKeyJwt,
     PrivateKeyJwtConfig, RedeemedAuthorizationCode, SubjectTokenType,
     DEFAULT_ASSERTION_LIFETIME_SECONDS, DEFAULT_REFRESH_MARGIN_SECONDS,
-    MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
-    MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES, MAXIMUM_SCOPE_PARAMETER_BYTES,
-    MAXIMUM_TOKEN_RESPONSE_BYTES,
+    MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
+    MAXIMUM_SCOPE_PARAMETER_BYTES,
 };
 pub use retry::{
     classify_keyed_attempt, retry_keyed_mutation, KeyedMutationAttempt, RetryAfter,
     DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRY_AFTER_SECONDS,
 };
 pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};
+pub use token_endpoint::{MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, MAXIMUM_TOKEN_RESPONSE_BYTES};
 // The bearer bound is public to the crate's own tests, which tie the
 // open-member decode's credential bound to it.
 #[cfg(test)]

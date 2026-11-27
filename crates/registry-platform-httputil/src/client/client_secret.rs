@@ -22,19 +22,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use url::Url;
 use zeroize::Zeroizing;
 
 use crate::FetchUrlPolicy;
 
 use super::{
-    outbound::{
-        self, base_url_without_userinfo, transport_protects_the_credential, OutboundOptions,
-    },
+    outbound::{self, base_url_without_userinfo, OutboundOptions},
     private_key_jwt::{present_value, valid_resource_uri, AUTHORIZATION_CODE_GRANT_TYPE},
     token::{BearerToken, TokenError, MAXIMUM_TOKEN_BYTES},
-    token_endpoint::{self, Transport},
+    token_endpoint::{self, Transport, WipedString},
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
 };
 
@@ -223,19 +221,11 @@ pub struct ClientSecretConfig {
 /// reached over https or over HTTP on a loopback host, with no credentials or
 /// fragment in its URL.
 fn check_endpoint(endpoint: &Url) -> Result<(), TokenError> {
-    let refuse = |reason: &'static str| TokenError::Configuration { reason };
-    if !endpoint.username().is_empty()
-        || endpoint.password().is_some()
-        || endpoint.fragment().is_some()
-    {
-        return Err(refuse("an endpoint must carry no credentials or fragment"));
-    }
-    if !transport_protects_the_credential(endpoint) {
-        return Err(refuse(
-            "an endpoint must use HTTPS, or HTTP with a loopback host",
-        ));
-    }
-    Ok(())
+    token_endpoint::check_endpoint(
+        endpoint,
+        "an endpoint must carry no credentials or fragment",
+        "an endpoint must use HTTPS, or HTTP with a loopback host",
+    )
 }
 
 impl ClientSecretConfig {
@@ -460,25 +450,39 @@ impl ClientSecretClient {
         });
         let answer = self.post(endpoint, body).await?;
         // RFC 7009 section 2.2: the server answers 200 whether or not the
-        // token was known, so the body carries nothing to act on and is never
-        // read.
+        // token was known, so the body carries nothing to act on. The answer is
+        // dropped without its body being read, so a body that stalls cannot hold
+        // up the caller.
         if answer.status == 200 {
             return Ok(());
         }
-        Err(answer.into_refusal())
+        Err(answer.into_refusal().await)
+    }
+
+    /// The size the form buffer starts at. The serializer's buffer grows by
+    /// reallocation and leaves partial copies in freed memory, so it starts
+    /// large enough for the largest request whose parts the crate bounds.
+    ///
+    /// The largest part is a refresh token, which percent-encoding can triple.
+    /// The client credentials are encoded the same way, and the rest is fixed
+    /// field names and grant types. A redirect URI or resource is not bounded
+    /// here, so a request carrying a very long one may still grow the buffer.
+    fn form_capacity(&self) -> usize {
+        const FIXED_FIELDS: usize = 512;
+        const ENCODING_EXPANSION: usize = 3;
+        ENCODING_EXPANSION
+            * (MAXIMUM_TOKEN_BYTES + self.config.client_id.len() + self.config.client_secret.len())
+            + FIXED_FIELDS
     }
 
     /// The form of one token request: the grant's own fields, then the client
     /// credentials the `client_secret_post` method places in the body.
-    ///
-    /// The serializer's buffer grows by reallocation and leaves partial copies
-    /// in freed memory, so it starts large enough for any request this client
-    /// builds from bounded inputs short of a pathological one.
     fn form(
         &self,
         grant_fields: impl FnOnce(&mut url::form_urlencoded::Serializer<'_, String>),
     ) -> Zeroizing<String> {
-        let mut form = url::form_urlencoded::Serializer::new(String::with_capacity(4096));
+        let mut form =
+            url::form_urlencoded::Serializer::new(String::with_capacity(self.form_capacity()));
         grant_fields(&mut form);
         form.append_pair("client_id", &self.config.client_id);
         form.append_pair("client_secret", &self.config.client_secret);
@@ -487,15 +491,16 @@ impl ClientSecretClient {
 
     /// Post a token request body and read the answer as a token response.
     async fn issue(&self, body: Zeroizing<String>) -> Result<IssuedTokens, TokenError> {
+        // The issuer counts the lifetime from some moment between the request
+        // and the answer, so the deadline is measured from before the request.
+        let monotonic_now = Instant::now();
         let answer = self.post(&self.config.token_endpoint, body).await?;
         let status = answer.status;
-        let issued: IssuedToken = answer.into_token_response()?;
+        let issued: IssuedToken = answer.into_token_response().await?;
         token_endpoint::require_bearer(&issued.token_type, status)?;
         let (lifetime_stated, expires_at) =
-            token_endpoint::lifetime_deadline(issued.expires_in, Instant::now());
-        // A token the server sent that this client cannot use is the server's
-        // fault, not the caller's input, so it is a protocol failure.
-        let unusable = |_: TokenError| TokenError::Protocol { status };
+            token_endpoint::lifetime_deadline(issued.expires_in, monotonic_now);
+        let unusable = token_endpoint::unusable_token(status);
         Ok(IssuedTokens {
             // Moved rather than copied, so each credential ends up in the
             // buffer its type wipes on drop.
@@ -533,27 +538,6 @@ impl ClientSecretClient {
             body,
         )
         .await
-    }
-}
-
-/// A string member of a response that is wiped when dropped, so a token this
-/// client rejects on any path is not left behind in freed memory. The JSON
-/// reader's own scratch buffer for escaped strings is out of reach.
-struct WipedString(Zeroizing<String>);
-
-impl WipedString {
-    fn into_inner(mut self) -> String {
-        std::mem::take(&mut *self.0)
-    }
-
-    fn into_zeroizing(self) -> Zeroizing<String> {
-        self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for WipedString {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer).map(|value| Self(Zeroizing::new(value)))
     }
 }
 
@@ -599,7 +583,7 @@ mod tests {
 
     use super::*;
     use crate::client::{
-        private_key_jwt::{
+        token_endpoint::{
             MAXIMUM_AUTHORIZATION_CODE_BYTES, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
             MAXIMUM_TOKEN_RESPONSE_BYTES,
         },
@@ -1477,6 +1461,88 @@ mod tests {
             .await
             .expect("a 200 is success whatever happens to its body");
         serve.abort();
+    }
+
+    /// A sign-out does not wait for a body it ignores: the 200 is the answer,
+    /// and the stalled body is dropped unread.
+    #[tokio::test]
+    async fn a_200_revocation_does_not_wait_for_its_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _read = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        let base = Url::parse(&format!("http://{address}/")).unwrap();
+        // The default request timeout is far longer than the bound below, so a
+        // call that read the body would not return inside it.
+        let config = ClientSecretConfig::new(base.join("token").unwrap(), CLIENT_ID, secret())
+            .unwrap()
+            .with_revocation_endpoint(base.join("revoke").unwrap())
+            .unwrap();
+        let client = ClientSecretClient::new(config).unwrap();
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            client.revoke_refresh_token(&RefreshToken::new(REFRESH_SENTINEL).unwrap()),
+        )
+        .await
+        .expect("the call returns without waiting for the body")
+        .expect("a 200 is success whatever happens to its body");
+        serve.abort();
+    }
+
+    /// The deadline counts from before the request, as the issuer counts the
+    /// lifetime from some moment after it, so a slow answer cannot place the
+    /// deadline past the issuer's own expiry.
+    #[tokio::test]
+    async fn the_deadline_is_measured_from_before_the_request() {
+        let server = serving(
+            "/token",
+            issued(
+                json!({"access_token": ACCESS_SENTINEL, "token_type": "Bearer", "expires_in": 60}),
+            )
+            .set_delay(Duration::from_secs(3)),
+        )
+        .await;
+        let client = client_for(&server);
+        let before = Instant::now();
+
+        let tokens = client
+            .refresh(&RefreshToken::new(REFRESH_SENTINEL).unwrap(), None)
+            .await
+            .expect("the answer is a token response");
+
+        let deadline = tokens.expires_at().expect("a lifetime was stated");
+        assert!(
+            deadline < before + Duration::from_secs(60) + Duration::from_millis(1500),
+            "the deadline counts the time the answer took"
+        );
+    }
+
+    /// The largest refresh token the crate accepts, written entirely in
+    /// characters that percent-encoding triples, fits the form buffer without
+    /// a reallocation that would leave a partial copy behind.
+    #[tokio::test]
+    async fn the_form_buffer_holds_the_largest_token_without_growing() {
+        let server = MockServer::start().await;
+        let client = client_for(&server);
+        let largest = RefreshToken::new("%".repeat(MAXIMUM_TOKEN_BYTES)).unwrap();
+
+        let form = client.form(|form| {
+            form.append_pair("refresh_token", largest.expose());
+        });
+
+        assert!(form.len() > 3 * MAXIMUM_TOKEN_BYTES);
+        assert_eq!(form.capacity(), client.form_capacity());
     }
 
     #[tokio::test]

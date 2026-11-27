@@ -35,25 +35,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{FetchUrlError, FetchUrlPolicy};
+use crate::FetchUrlPolicy;
 use async_trait::async_trait;
 use chrono::Utc;
 use registry_platform_authcommon::client_assertion::{
     sign_client_assertion, ClientAssertionError, ClientAssertionRequest,
 };
 use registry_platform_crypto::PrivateJwk;
-use reqwest::header::{HeaderMap, CONTENT_TYPE};
 use serde::{Deserialize, Deserializer};
 use tokio::sync::{Mutex, RwLock};
 use url::Url;
 use zeroize::Zeroizing;
 
 use super::{
-    outbound::{
-        self, base_url_without_userinfo, transport_protects_the_credential, OutboundOptions,
-    },
-    token::{BearerToken, OAuthErrorCode, TokenError, TokenProvider},
-    token_endpoint::{self, Transport},
+    outbound::{self, base_url_without_userinfo, OutboundOptions},
+    token::{BearerToken, TokenError, TokenProvider},
+    token_endpoint::{self, Transport, WipedString},
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
 };
 
@@ -77,27 +74,10 @@ const CLIENT_KEY_PROBE: &[u8] = b"registry-platform-httputil client key usabilit
 /// How much of an access token's remaining life is treated as already spent.
 pub const DEFAULT_REFRESH_MARGIN_SECONDS: i64 = 30;
 
-/// Longest an issuer's stated `expires_in` is trusted for, when deciding how
-/// long to cache the credential it came with.
-///
-/// `expires_in` is a remote-controlled value. An authorization server that
-/// reports one far longer than any real access token lives, whether by a bug
-/// or by intent, must not be able to keep a credential cached, and therefore
-/// live in memory, for the life of the process with no way for the integrator
-/// to evict it. Re-acquiring a token earlier than an issuer's stated lifetime
-/// requires is always safe, so clamping to 86400 seconds (24 hours) cannot
-/// break a correct deployment.
-pub const MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS: i64 = 86_400;
-// Ties the doc comment above to the constant, so the two cannot drift apart.
-const _: () = assert!(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS == 86_400);
-
 /// The grant this provider asks for. The client authenticates as itself, on its
 /// own behalf, which is the closed grant this provider supports.
 const GRANT_TYPE: &str = "client_credentials";
 pub(super) const AUTHORIZATION_CODE_GRANT_TYPE: &str = "authorization_code";
-/// Longest authorization code this provider will present. Codes are short
-/// opaque strings; the bound keeps a redirect parameter from growing the form.
-pub(super) const MAXIMUM_AUTHORIZATION_CODE_BYTES: usize = 4 * 1024;
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const JWT_SUBJECT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
@@ -168,7 +148,7 @@ impl RedeemedAuthorizationCode {
     }
 
     /// A monotonic deadline from the issuer's stated `expires_in`, clamped to
-    /// [`MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS`]. `None` when the issuer
+    /// [`MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS`](super::MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS). `None` when the issuer
     /// stated no usable lifetime.
     #[must_use]
     pub fn expires_at(&self) -> Option<Instant> {
@@ -203,20 +183,6 @@ struct ExchangeGrant<'a> {
 
 /// The client authentication method of RFC 7523 section 2.2.
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
-
-pub(super) const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
-pub(super) const JSON_MEDIA_TYPE: &str = "application/json";
-
-/// The only token type an `Authorization: Bearer` request can present. Compared
-/// without case, as RFC 6749 section 5.1 requires.
-pub(super) const BEARER_TOKEN_TYPE: &str = "bearer";
-
-/// Longest token response this provider will read. A token response is a small
-/// JSON object; anything larger is not one.
-///
-/// Authorization servers may use this value to reject registered authority
-/// that could only produce a response this provider would refuse.
-pub const MAXIMUM_TOKEN_RESPONSE_BYTES: u64 = 16 * 1024;
 
 /// Longest individual scope this provider will request, and the most scopes it
 /// will request at once.
@@ -408,22 +374,14 @@ impl PrivateKeyJwtConfig {
         if audience.trim().is_empty() {
             return Err(refuse("the assertion audience must not be empty"));
         }
-        if !token_endpoint.username().is_empty()
-            || token_endpoint.password().is_some()
-            || token_endpoint.fragment().is_some()
-        {
-            return Err(refuse(
-                "the token endpoint must carry no credentials or fragment",
-            ));
-        }
         // The assertion authenticates the client, so it is as sensitive in transit
         // as the access token it is exchanged for, and the same transport rule
         // applies to both.
-        if !transport_protects_the_credential(token_endpoint) {
-            return Err(refuse(
-                "the token endpoint must use HTTPS, or HTTP with a loopback host",
-            ));
-        }
+        token_endpoint::check_endpoint(
+            token_endpoint,
+            "the token endpoint must carry no credentials or fragment",
+            "the token endpoint must use HTTPS, or HTTP with a loopback host",
+        )?;
         Ok(())
     }
 
@@ -962,9 +920,9 @@ impl PrivateKeyJwt {
         grant: Grant<'_>,
     ) -> Result<AcquiredToken, TokenError> {
         let assertion = self.sign_assertion(now)?;
-        // The assertion is a credential, so it lives in a scrubbed buffer here.
-        // The body reqwest owns afterwards cannot be wiped, which is why the
-        // assertion is single use and its lifetime is bounded.
+        // The assertion is a credential, so it lives in a scrubbed buffer here
+        // and the request body built from it is wiped when the request ends. The
+        // assertion is also single use, and its lifetime is bounded.
         //
         // The body `client_id` repeats the identity the assertion proves, which
         // RFC 6749 section 3.2.1 permits for this client-authentication method
@@ -1031,7 +989,7 @@ impl PrivateKeyJwt {
         )
         .await?;
         let status = answer.status;
-        let issued: IssuedToken = answer.into_token_response()?;
+        let issued: IssuedToken = answer.into_token_response().await?;
         token_endpoint::require_bearer(&issued.token_type, status)?;
         if matches!(grant, Grant::Exchange(_))
             && issued.issued_token_type.as_deref() != Some(ACCESS_TOKEN_TYPE)
@@ -1060,40 +1018,19 @@ impl PrivateKeyJwt {
         Ok(AcquiredToken {
             // Moved rather than copied, so the credential ends up in the buffer
             // `BearerToken` wipes on drop.
-            token: BearerToken::new(issued.access_token)?,
+            token: BearerToken::new(issued.access_token.into_inner())
+                .map_err(token_endpoint::unusable_token(status))?,
             lifetime_stated,
             // A stated lifetime is what makes caching possible. Without one, or
             // with one already elapsed, the credential is used once and dropped.
             expires_at,
             // Only a code redemption hands an ID token to its caller; any other
-            // grant's is dropped here, wiped with the response buffer.
+            // grant's is dropped here, wiped on drop.
             id_token: issued
                 .id_token
                 .filter(|_| matches!(grant, Grant::AuthorizationCode(_)))
-                .map(Zeroizing::new),
+                .map(WipedString::into_zeroizing),
         })
-    }
-}
-
-pub(super) fn token_fetch_policy_failure(error: FetchUrlError) -> TokenError {
-    match error {
-        FetchUrlError::Dns { .. } | FetchUrlError::NoAddresses => TokenError::Transport {
-            kind: super::TransportKind::Connect,
-        },
-        FetchUrlError::ValidationTimeout { .. } => TokenError::Transport {
-            kind: super::TransportKind::Timeout,
-        },
-        FetchUrlError::ValidationTask(_) => TokenError::Transport {
-            kind: super::TransportKind::Exchange,
-        },
-        FetchUrlError::ClientBuild(_) | FetchUrlError::OutboundClientBuild(_) => {
-            TokenError::Configuration {
-                reason: "the DNS-pinned token endpoint client could not be built",
-            }
-        }
-        _ => TokenError::Configuration {
-            reason: "the token endpoint is not permitted by the outbound fetch policy",
-        },
     }
 }
 
@@ -1169,7 +1106,7 @@ pub(super) struct AcquiredToken {
 /// The success response of RFC 6749 section 5.1, in the members this client uses.
 #[derive(Deserialize)]
 struct IssuedToken {
-    access_token: String,
+    access_token: WipedString,
     token_type: String,
     /// Member presence outside, stated value inside. RFC 6749 section 5.1
     /// makes this member optional, and an issuer that sends it as JSON null
@@ -1179,7 +1116,7 @@ struct IssuedToken {
     expires_in: Option<Option<i64>>,
     scope: Option<String>,
     issued_token_type: Option<String>,
-    id_token: Option<String>,
+    id_token: Option<WipedString>,
 }
 
 /// Read a member as present, whatever it holds.
@@ -1194,16 +1131,6 @@ where
     D: Deserializer<'de>,
 {
     T::deserialize(deserializer).map(Some)
-}
-
-/// The error response of RFC 6749 section 5.2 and RFC 8707 section 2.
-///
-/// Only the code is read. `error_description` and `error_uri` are server-authored
-/// text about a failed authentication attempt, so they stay in the buffer this
-/// exchange is about to drop.
-#[derive(Deserialize)]
-struct DeclinedToken {
-    error: String,
 }
 
 /// Report a refusal from the assertion builder in this provider's own words.
@@ -1233,43 +1160,6 @@ fn assertion_refusal(error: ClientAssertionError) -> TokenError {
     TokenError::Configuration { reason }
 }
 
-/// Map a refused token request onto the code it reported.
-///
-/// RFC 6749 section 5.2 and RFC 8707 section 2 put token request refusals at
-/// 400, while an RFC 6749 client-authentication failure may use 401. Any other
-/// status is the server reporting something about itself, which is not a
-/// statement this client can act on as a refusal. A body is read as a refusal
-/// only when it arrives in the media type the request asked for; an intermediary
-/// answering in some other media type, or none at all, never reached the
-/// authorization server's own refusal logic, so it is reported as a protocol
-/// failure instead.
-pub(super) fn declined(status: u16, media_type: Option<&str>, body: &[u8]) -> TokenError {
-    if !matches!(status, 400 | 401)
-        || !media_type.is_some_and(|value| essence(value).eq_ignore_ascii_case(JSON_MEDIA_TYPE))
-    {
-        return TokenError::Protocol { status };
-    }
-    match serde_json::from_slice::<DeclinedToken>(body) {
-        Ok(declined) => TokenError::Refused {
-            code: OAuthErrorCode::from_wire(&declined.error),
-        },
-        Err(_) => TokenError::Protocol { status },
-    }
-}
-
-/// The media type without its parameters.
-pub(super) fn essence(value: &str) -> &str {
-    value.split(';').next().unwrap_or_default().trim()
-}
-
-pub(super) fn exact_content_type(headers: &HeaderMap) -> Option<&str> {
-    let mut values = headers.get_all(CONTENT_TYPE).iter();
-    match (values.next(), values.next()) {
-        (Some(value), None) => value.to_str().ok(),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1293,17 +1183,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::client::{OAuthErrorCode, TokenError, TokenProvider, TransportKind};
-
-    #[test]
-    fn token_response_content_type_must_appear_exactly_once() {
-        let mut headers = HeaderMap::new();
-        assert_eq!(exact_content_type(&headers), None);
-        headers.append(CONTENT_TYPE, "application/json".parse().expect("header"));
-        assert_eq!(exact_content_type(&headers), Some("application/json"));
-        headers.append(CONTENT_TYPE, "application/json".parse().expect("header"));
-        assert_eq!(exact_content_type(&headers), None);
-    }
+    use crate::client::{
+        token_endpoint::{JSON_MEDIA_TYPE, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS},
+        OAuthErrorCode, TokenError, TokenProvider, TransportKind,
+    };
 
     /// The instant the offline assertions in this module are centered on.
     const NOW: i64 = 1_785_000_000;
@@ -2657,6 +2540,28 @@ mod tests {
                 ),
                 "{description}: {error:?}"
             );
+        }
+    }
+
+    /// A token the server sent that this client cannot present is the server's
+    /// fault, so it is a protocol failure whichever client read the answer.
+    #[tokio::test]
+    async fn an_unusable_token_in_the_answer_is_a_protocol_failure() {
+        for access_token in ["has space", ""] {
+            let server = token_endpoint_serving(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"access_token": access_token, "token_type": "Bearer"})),
+            )
+            .await;
+            let clock = Arc::new(TestClock::new(NOW));
+            let provider = provider(endpoint(&server.uri()), &clock);
+
+            let error = provider
+                .bearer_token()
+                .await
+                .expect_err("the answer carries an unusable token");
+
+            assert_eq!(error, TokenError::Protocol { status: 200 });
         }
     }
 

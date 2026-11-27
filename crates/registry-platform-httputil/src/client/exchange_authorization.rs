@@ -39,7 +39,7 @@ const MAX_ASSERTION_LIFETIME_SECONDS: i64 = 60;
 /// Longest any exchanged token remains cached, even when its verified outer
 /// context lasts longer or the token issuer states no lifetime.
 const MAX_EXCHANGE_CACHE_SECONDS: u64 =
-    super::private_key_jwt::MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS as u64;
+    super::token_endpoint::MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS as u64;
 const REFRESH_MARGIN: Duration = Duration::from_secs(5);
 const MAX_REMOTE_ASSERTION_RESPONSE_BYTES: u64 = 40 * 1024;
 
