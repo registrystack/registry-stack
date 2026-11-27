@@ -33,13 +33,13 @@ use crate::{guidance, Job, Outcome, View};
 
 /// The runtime configuration a database command reads, resolved against the
 /// working directory, as an operator means a relative path.
-struct Runtime {
-    given: PathBuf,
+pub(crate) struct Runtime {
+    pub(crate) given: PathBuf,
     absolute: PathBuf,
-    config: RuntimeConfig,
+    pub(crate) config: RuntimeConfig,
 }
 
-fn load(path: &Path) -> Result<Runtime, Outcome> {
+pub(crate) fn load(path: &Path) -> Result<Runtime, Outcome> {
     let Ok(absolute) = std::path::absolute(path) else {
         return Err(Outcome::refused(
             OPERATIONAL_FAILURE_EXIT,
@@ -248,7 +248,7 @@ pub(crate) fn replay(job: Job, path: &Path, version: Uuid, expected_generation: 
 }
 
 /// The report of a database command that did not finish.
-fn failure(path: &Path, error: RuntimeError) -> Outcome {
+pub(crate) fn failure(path: &Path, error: RuntimeError) -> Outcome {
     let refused = |exit, code, member| Outcome::refused(exit, code, member, error.to_string());
     let activation_refused = |activation: &ActivationError, member| {
         refused(

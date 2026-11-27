@@ -48,6 +48,7 @@ use registry_platform_yaml::{Diagnostic, Report, Source};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+mod identity_facts;
 mod operate;
 mod provision;
 mod report;
@@ -103,6 +104,26 @@ enum Command {
     /// Report erasure, and inspect and replay dead-lettered erasure jobs.
     #[command(subcommand)]
     Erasure(ErasureCommand),
+    /// Write files derived from a deployment's configuration.
+    #[command(subcommand)]
+    Generate(GenerateCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum GenerateCommand {
+    /// Write the identity facts this runtime states about its issuer.
+    IdentityFacts(GenerateIdentityFactsArgs),
+}
+
+#[derive(Debug, Args)]
+struct GenerateIdentityFactsArgs {
+    /// Runtime configuration file: its authentication.oidc block and the
+    /// package it names state the facts.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: PathBuf,
+    /// New YAML file to create. Existing files are never overwritten.
+    #[arg(long, value_name = "FILE")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -279,6 +300,7 @@ enum View {
     DeadLetters(Job),
     Replayed,
     Erasure,
+    GenerateIdentityFacts,
 }
 
 impl Outcome {
@@ -463,6 +485,18 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "erasure-job",
             "Run documentsctl erasure list to see whether the job is still dead-lettered before replaying it again.",
         ),
+        "output.exists" => (
+            "filesystem",
+            "Name a new --output file; an existing file is never overwritten.",
+        ),
+        "output.failed" => (
+            "filesystem",
+            "Make the --output parent directory writable, then retry.",
+        ),
+        "identity.facts.unstatable" => (
+            "runtime-configuration",
+            "Change the runtime configuration or project as the message names, then rerun documentsctl generate identity-facts.",
+        ),
         _ if exit == OPERATIONAL_FAILURE_EXIT => (
             "runtime-dependency",
             "Restore the file, secret, database, or service the message names, then retry.",
@@ -549,6 +583,7 @@ where
             args.version_id,
             args.expected_generation,
         ),
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => identity_facts::generate(args),
     };
     finish(&outcome, command, cli.format, stdout, stderr)
 }
@@ -568,6 +603,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Erasure(ErasureCommand::Status(_)) => "erasure status",
         Command::Erasure(ErasureCommand::List(_)) => "erasure list",
         Command::Erasure(ErasureCommand::Replay(_)) => "erasure replay",
+        Command::Generate(GenerateCommand::IdentityFacts(_)) => "generate identity-facts",
     }
 }
 
@@ -956,6 +992,11 @@ fn render_human(
             text(&report["versionId"]),
             report["generation"],
         ),
+        View::GenerateIdentityFacts => {
+            writeln!(stdout, "created: {}", text(&report["output"]))?;
+            writeln!(stdout, "access profiles: {}", report["accessProfiles"])?;
+            writeln!(stdout, "claims: {}", report["claims"])
+        }
         View::Erasure => {
             writeln!(stdout, "erasure: {}", text(&report["erasure"]))?;
             writeln!(stdout, "awaiting grace: {}", report["awaitingGrace"])?;
@@ -1665,6 +1706,9 @@ mod tests {
             "audit.unavailable",
             "package.outcome-unknown",
             "database.unavailable",
+            "output.exists",
+            "output.failed",
+            "identity.facts.unstatable",
         ] {
             let fallback = guidance("unlisted.code", DOMAIN_REFUSAL_EXIT);
             assert_ne!(guidance(code, DOMAIN_REFUSAL_EXIT), fallback, "{code}");

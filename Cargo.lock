@@ -7054,6 +7054,7 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-provision",
  "registry-platform-yaml",
+ "registry-thunderid-tooling",
  "serde",
  "serde_json",
  "tempfile",

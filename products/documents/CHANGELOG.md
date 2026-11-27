@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- BREAKING: the project reader refuses an access profile whose every required
+  scope another access profile also requires
+  (`documents.project.profile-without-own-scope`). A person signs in through
+  any client of the deployment, so a profile selected by its client is safe
+  only when its scope gate cannot be met by a token meant for another profile.
+  Give each profile a scope no other profile requires. The starter's `staff`
+  profile now requires `documents:staff`.
+- `documentsctl generate identity-facts` writes the identity facts the hosted
+  identity generator reads from the runtime configuration and the package it
+  names. It never overwrites a file and refuses a named `scopeClaim` and
+  assertion issuers, which hosted generation does not state yet.
 - BREAKING: Document Store hook deliveries use Standard Webhooks. Each POST
   carries `accept`, `content-type`, `webhook-id`, `webhook-timestamp` and
   `webhook-signature`. The signature covers `webhook-id`, the attempt
