@@ -540,8 +540,12 @@ fn activation_refuses_a_signing_secret_it_cannot_resolve() {
         )
     ));
     let message = error.to_string();
-    assert!(message.contains("owning-system-events"), "{message}");
-    assert!(message.contains("hmacSha256KeyRef"), "{message}");
+    assert!(
+        message.starts_with("destinations.hooks.owning-system-events.hmacSha256KeyRef"),
+        "{message}"
+    );
+    assert!(message
+        .ends_with("Enable the reference's provider under secretProviders in the runtime file."));
     assert!(!message.contains("secret:file/hook-key"));
 }
 

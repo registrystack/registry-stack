@@ -733,7 +733,7 @@ async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
         .expect(1)
         .mount(&receiver)
         .await;
-    const PREVIOUS_KEY: &str = "documents-test-previous-key-not-a-secret";
+    const PREVIOUS_KEY: &str = "documents-test-previous-key-not-a-secret\n";
     let mut deployment = deployment(STARTER_PROJECT).await;
     deployment.bind_hooks(&format!("{}/document-events", receiver.uri()));
     deployment.secret("previous-hook-key", PREVIOUS_KEY);
@@ -932,20 +932,36 @@ async fn startup_reports_invalid_hook_key_bytes_after_the_offline_reference_chec
         "the offline check accepts the reference"
     );
 
-    let message = match prepare(&deployment.runtime).await {
-        Err(RuntimeError::HookActivation(error)) => error.to_string(),
-        Err(error) => panic!("expected a hook signing key refusal, got {error}"),
-        Ok(_) => panic!("startup accepted invalid hook key bytes"),
-    };
+    let message = hook_key_startup_refusal(&deployment).await;
     for detail in [
-        "owning-system-events",
-        "hmacSha256KeyRef",
+        "destinations.hooks.owning-system-events.hmacSha256KeyRef",
         "65 bytes",
         "trailing newline: true",
+        "Supply 32 to 64 exact key bytes.",
     ] {
         assert!(message.contains(detail), "{message}");
     }
     assert!(!message.contains(&key[..64]));
+}
+
+#[tokio::test]
+async fn startup_reports_an_empty_hook_key_file() {
+    let mut deployment = deployment(STARTER_PROJECT).await;
+    deployment.secret("hook-key", "");
+
+    let message = hook_key_startup_refusal(&deployment).await;
+    assert_eq!(
+        message,
+        "destinations.hooks.owning-system-events.hmacSha256KeyRef: the referenced secret value is invalid. Store a non-empty value of at most 64 KiB, without NUL bytes unless the secret is a binary key."
+    );
+}
+
+async fn hook_key_startup_refusal(deployment: &Deployment) -> String {
+    match prepare(&deployment.runtime).await {
+        Err(RuntimeError::HookActivation(error)) => error.to_string(),
+        Err(error) => panic!("expected a hook signing key refusal, got {error}"),
+        Ok(_) => panic!("startup accepted invalid hook key bytes"),
+    }
 }
 
 #[tokio::test]

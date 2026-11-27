@@ -364,9 +364,9 @@ so a rolled-back verdict or grant change reports nothing, and a capture that
 cannot be written fails the transition. A repeated verdict, an issue replayed
 under its `Idempotency-Key`, a repeated revocation, and a repeated removal
 request report nothing.
-Delivery runs after commit: each attempt is a signed Version 1 hook envelope
-whose `source` is `urn:registrystack:documents:<project id>`, whose `type`
-is the hook id, and whose `dataschema` names the family's published schema
+Delivery runs after commit. Each attempt carries a hook envelope signed with
+Standard Webhooks. Its `source` is `urn:registrystack:documents:<project id>`,
+its `type` is the hook id, and its `dataschema` names the family's published schema
 under `generated/events/`. The HTTP POST carries `accept`, `content-type`,
 `webhook-id`, `webhook-timestamp`, and `webhook-signature`. The id matches the
 envelope and stays stable on retries. The receiver verifies the signature

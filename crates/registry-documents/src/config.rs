@@ -1725,8 +1725,10 @@ pub(crate) mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(error.contains("owning-system-events"), "{error}");
-        assert!(error.contains("previousHmacSha256KeyRef"), "{error}");
+        assert_eq!(
+            error,
+            "destinations.hooks.owning-system-events.hmacSha256KeyRef and destinations.hooks.owning-system-events.previousHmacSha256KeyRef resolve to the same key bytes. Give destinations.hooks.owning-system-events.previousHmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there."
+        );
         assert!(!error.contains(std::str::from_utf8(CURRENT_HOOK_KEY).unwrap()));
     }
 
@@ -1740,14 +1742,35 @@ pub(crate) mod tests {
                 .unwrap_err()
                 .to_string();
         for detail in [
-            "owning-system-events",
-            "hmacSha256KeyRef",
+            "destinations.hooks.owning-system-events.hmacSha256KeyRef",
             "65 bytes",
             "trailing newline: true",
+            "Supply 32 to 64 exact key bytes.",
         ] {
             assert!(error.contains(detail), "{error}");
         }
         assert!(!error.contains("xxxxxxxx"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_signing_keys_refuse_previous_key_secret_text() {
+        let text = b"whsec_synthetic-secret-encoding";
+        let error = activate_test_hook_keys(
+            &rotating_hook_runtime(),
+            &[
+                ("owning-system-events-hmac", CURRENT_HOOK_KEY),
+                ("previous", text),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.starts_with("destinations.hooks.owning-system-events.previousHmacSha256KeyRef:")
+        );
+        assert!(error.contains("starts with whsec_"));
+        assert!(error.ends_with("Supply the exact key bytes without the whsec_ encoding."));
+        assert!(!error.contains(std::str::from_utf8(text).unwrap()));
     }
 
     #[cfg(unix)]
@@ -1766,12 +1789,10 @@ pub(crate) mod tests {
         )
         .unwrap_err()
         .to_string();
-        for member in [
-            "audit-mirror.hmacSha256KeyRef",
-            "owning-system-events.hmacSha256KeyRef",
-        ] {
-            assert!(error.contains(member), "{error}");
-        }
+        assert_eq!(
+            error,
+            "destinations.hooks.audit-mirror.hmacSha256KeyRef and destinations.hooks.owning-system-events.hmacSha256KeyRef resolve to the same key bytes. Give destinations.hooks.owning-system-events.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there."
+        );
         assert!(!error.contains(std::str::from_utf8(CURRENT_HOOK_KEY).unwrap()));
     }
 

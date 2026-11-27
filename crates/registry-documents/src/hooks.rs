@@ -73,7 +73,7 @@ const MAXIMUM_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const _: () = assert!(MAXIMUM_PAYLOAD_BYTES <= MAX_DESTINATION_REQUEST_BODY_BYTES);
 
 /// Value-free refusal from hook compilation or deployment activation.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HookActivationError {
     #[error("the Document Store hook declaration is invalid")]
     InvalidDeclaration,
@@ -100,8 +100,8 @@ pub enum HookActivationError {
     InvalidDestination,
     #[error("a Document Store hook destination widens the fixed delivery budget")]
     DeliveryBudgetWidening,
-    #[error(transparent)]
-    InvalidSigningMaterial(UrlHookActivationError),
+    #[error("{}", signing_material_refusal(.0))]
+    InvalidSigningMaterial(#[source] UrlHookActivationError),
     #[error("the Document Store hook runtime identity is invalid")]
     InvalidIdentity,
 }
@@ -729,6 +729,51 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
             HookActivationError::InvalidSigningMaterial(error)
         }
     }
+}
+
+fn signing_material_refusal(error: &UrlHookActivationError) -> String {
+    match error {
+        UrlHookActivationError::SigningKeyUnavailable {
+            destination,
+            member,
+            reason,
+        } => format!(
+            "destinations.hooks.{destination}.{member}: {reason}. {}",
+            reason.suggested_action()
+        ),
+        UrlHookActivationError::InvalidSigningKey {
+            destination,
+            member,
+            length,
+            trailing_newline,
+            reason,
+        } => match reason.code() {
+            "previous-key-equals-current" => shared_signing_key_refusal(
+                &format!("{destination}.hmacSha256KeyRef"),
+                &format!("{destination}.{member}"),
+            ),
+            "key-is-secret-text" => format!(
+                "destinations.hooks.{destination}.{member}: the delivery key starts with whsec_. Supply the exact key bytes without the whsec_ encoding."
+            ),
+            _ => format!(
+                "destinations.hooks.{destination}.{member} has {length} bytes (trailing newline: {trailing_newline}). Supply 32 to 64 exact key bytes."
+            ),
+        },
+        UrlHookActivationError::RepeatedSigningKey { first, second } => {
+            shared_signing_key_refusal(first, second)
+        }
+        UrlHookActivationError::DeliveryBudgetWidening | UrlHookActivationError::InvalidDestination => {
+            error.to_string()
+        }
+    }
+}
+
+fn shared_signing_key_refusal(first: &str, second: &str) -> String {
+    let first = format!("destinations.hooks.{first}");
+    let second = format!("destinations.hooks.{second}");
+    format!(
+        "{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there."
+    )
 }
 
 /// The delays between attempts: from 30 seconds, doubling, capped at one
