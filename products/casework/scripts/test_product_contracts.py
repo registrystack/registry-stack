@@ -124,6 +124,19 @@ class ProductContractTests(unittest.TestCase):
             "taskId", "requestId", "queue", "revision", "state", "staffingDiagnostic", "accountabilityEventId"
         })
 
+    def test_ask_timing_and_resubmission_are_published(self):
+        schemas = json.loads((PRODUCT / "generated/registry-casework.openapi.json").read_text())["components"]["schemas"]
+        self.assertIn("expired", schemas["ReviewTaskMarker"]["enum"])
+        self.assertIn("paused", schemas["ReviewClockState"]["enum"])
+        self.assertEqual(set(schemas["ReviewStageAsksPolicy"]["properties"]), {"answerWithin", "onDue", "pauseClocks"})
+        self.assertEqual(schemas["ReviewAskOnDue"]["enum"], ["return-to-reviewer"])
+        self.assertEqual(schemas["ReviewResubmissionPolicy"]["enum"], ["first-stage", "resume-at-returning-stage"])
+        self.assertIn("resubmission", schemas["ReviewPolicyClosure"]["properties"])
+        self.assertNotIn("resubmission", schemas["ReviewPolicyClosure"]["required"])
+        project = json.loads((PRODUCT / "generated/project/project.schema.json").read_text())
+        self.assertEqual(set(project["$defs"]["ReviewStageAsksPolicy"]["properties"]), {"answerWithin", "onDue", "pauseClocks"})
+        self.assertIn("resubmission", project["properties"]["reviewPolicies"]["additionalProperties"]["properties"])
+
     def test_cli_report_contract_is_generated_from_one_typed_union(self):
         schemas = sorted(path.name for path in (PRODUCT / "contracts/cli").glob("*.schema.json"))
         self.assertEqual(schemas, ["report.schema.json"])

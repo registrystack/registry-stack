@@ -27,7 +27,7 @@
     - ['`review.ask-already-open`', '409', 'Wait for the open ask on this request to be answered or closed before asking again.']
     - ['`review.ask-answer-time-invalid`', '422', 'Report the time the applicant''s answer was committed: not before the ask was made and no more than five minutes ahead of Casework''s clock.']
     - ['`review.ask-not-offered`', '409', 'The active stage of this review policy does not let a reviewer ask the applicant.']
-    - ['`review.ask-not-open`', '409', 'This ask was already answered or closed and cannot be answered again.']
+    - ['`review.ask-not-open`', '409', 'This ask was already answered or closed, or the applicant answered after its due date.']
     - ['`review.ask-producer-unsupported`', '409', 'The producer of this request does not read asks, so the reviewer cannot ask the applicant.']
     - ['`review.ask-task-inactive`', '409', 'Ask from a task at the active stage of a request that is still under review.']
     - ['`review.distinct-approver-required`', '403', 'Each approval in this stage must be supplied by a different reviewer.']
