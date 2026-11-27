@@ -956,14 +956,6 @@ fn encode_ingestion_chunk(
         .map_err(|error| ingestion_error(py, error))
 }
 
-fn hook_text(py: Python<'_>, value: &Bound<'_, PyAny>, field: &str) -> PyResult<String> {
-    value
-        .cast::<PyString>()
-        .ok()
-        .and_then(|text| text.to_str().ok().map(str::to_owned))
-        .ok_or_else(|| invalid(py, format!("hook {field} must be a string")))
-}
-
 fn hook_bytes<'py>(
     py: Python<'py>,
     value: &Bound<'py, PyAny>,
@@ -1090,58 +1082,52 @@ fn hook_freshness(
     })
 }
 
-/// Verify one exact Base Registry Engine Version 1 hook delivery with the
+/// Verify one exact Base Registry Engine Standard Webhooks delivery with the
 /// shared Rust verifier and return its authenticated attributes and body.
 ///
-/// `path` is the request target the receiver was called on, `headers` is an
-/// ordered sequence of name/value pairs (matched without regard to ASCII case), `body` is
-/// the exact request body, and `key` is the destination's HMAC key. The
-/// delivery time must fall within 300 seconds of the receiver clock. Pass
+/// Pass `headers` as ordered name/value pairs, `body` as exact request bytes,
+/// and `key` as the destination's HMAC key. Use `previous_key` during rotation.
+/// The signed timestamp must fall within 300 seconds of the receiver clock. Pass
 /// `max_skew_seconds` (a whole number from 1 to 3600) for another window, or
-/// `caller_enforced_freshness=True` to check only that the time is well formed
-/// and bound it yourself, but not both. A time outside the window raises code
-/// `stale-delivery`. Deduplication stays the caller's: deduplicate before
-/// acting on `body`. Refusal raises
+/// `caller_enforced_freshness=True` to enforce the window yourself. Choose one
+/// freshness option. A timestamp outside the window raises code `stale-delivery`.
+/// Deduplicate by `source` and `id` before acting on `body`. Refusal raises
 /// `BaseRegistryClientError` with kind `hook-verification` and a value-free
 /// `code`; input of the wrong shape raises kind `invalid-request`.
 #[pyfunction]
-#[pyo3(signature = (*, method, path, headers, body, key, max_skew_seconds=None, caller_enforced_freshness=None))]
+#[pyo3(signature = (*, headers, body, key, previous_key=None, max_skew_seconds=None, caller_enforced_freshness=None))]
 #[allow(clippy::too_many_arguments)]
 fn verify_hook_delivery<'py>(
     py: Python<'py>,
-    method: &Bound<'py, PyAny>,
-    path: &Bound<'py, PyAny>,
     headers: &Bound<'py, PyAny>,
     body: &Bound<'py, PyAny>,
     key: &Bound<'py, PyAny>,
+    previous_key: Option<&Bound<'py, PyAny>>,
     max_skew_seconds: Option<&Bound<'py, PyAny>>,
     caller_enforced_freshness: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let freshness = hook_freshness(py, max_skew_seconds, caller_enforced_freshness)?;
-    let method = hook_text(py, method, "method")?;
-    let path = hook_text(py, path, "path")?;
     let headers = hook_headers(py, headers)?;
     let body = hook_bytes(py, body, "body")?;
     let key = hook_bytes(py, key, "key")?;
+    let previous_key = previous_key
+        .map(|value| hook_bytes(py, value, "previous_key"))
+        .transpose()?;
     let verified = verify_core_hook_delivery(CoreHookDelivery {
-        method: &method,
-        path: &path,
         headers: &headers,
         body: body.as_bytes(),
         key: key.as_bytes(),
+        previous_key: previous_key.as_ref().map(|value| value.as_bytes()),
         freshness,
     })
     .map_err(|error| hook_verification_error(py, error))?;
     let result = PyDict::new(py);
     result.set_item("id", verified.id)?;
+    result.set_item("timestamp", verified.timestamp)?;
     result.set_item("source", verified.source)?;
     result.set_item("type", verified.event_type)?;
     result.set_item("time", verified.time)?;
     result.set_item("dataschema", verified.data_schema)?;
-    result.set_item("generation", verified.generation)?;
-    result.set_item("attempt", verified.attempt)?;
-    result.set_item("delivery_time", verified.delivery_time)?;
-    result.set_item("idempotency_key", verified.idempotency_key)?;
     result.set_item("body", PyBytes::new(py, &verified.body))?;
     Ok(result)
 }

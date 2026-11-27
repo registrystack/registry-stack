@@ -1,9 +1,11 @@
+import base64
+import hmac
 import json
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
-from datetime import UTC, datetime
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -24,50 +26,24 @@ from service import (
     receiver,
 )
 
-# The fixed vector is owned by registry-breg-client/tests/webhook.rs and the
-# shared registry-platform-crypto delivery signing contract, not this service.
-CANARY_KEY = b"webhook-delivery-signing-key-0123456789abcdef"
-BODY = b'{"entity":"case","values":{"label":"value"}}'
-SOURCE = "urn:registrystack:registry:example:instance:primary"
-SCHEMA = "urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa"
-NOW = datetime(2026, 8, 30, 0, 0, 1, tzinfo=UTC)
+# This fixed vector is also verified by the Rust BReg client tests.
+CANARY_KEY = b"0123456789abcdef0123456789abcdef"
+BODY = b'{"causation":{"hop":0,"root":"00000000-0000-4000-8000-000000000001"},"data":{},"dataschema":"https://example.test/schema","id":"00000000-0000-4000-8000-000000000001","source":"/products/breg/deployments/example","subject":{"recordReference":"breg/case/42","recordRevision":7},"time":"2026-08-30T00:00:00.123Z","type":"case-created-v1"}'
+SIGNATURE = "v1,NELq97rzqnAqQUxh1eiskBB3oOl+4FsqaI1ZV/lAqQY="
+EVENT_ID = "00000000-0000-4000-8000-000000000001"
+SOURCE = "/products/breg/deployments/example"
+SCHEMA = "https://example.test/schema"
 
 
-def headers():
+def headers(body=BODY, timestamp=None):
+    timestamp = int(time.time()) if timestamp is None else timestamp
+    digest = hmac.digest(CANARY_KEY, f"{EVENT_ID}.{timestamp}.".encode("ascii") + body, "sha256")
     return [
-        ("ce-specversion", "1.0"),
-        ("ce-id", "00000000-0000-4000-8000-000000000001"),
-        ("ce-source", SOURCE),
-        ("ce-type", "case-created-v1"),
-        ("ce-time", "2026-08-30T00:00:00Z"),
-        ("ce-dataschema", SCHEMA),
-        ("x-registry-event-generation", "1"),
-        ("x-registry-delivery-attempt", "1"),
-        ("x-registry-delivery-time", "2026-08-30T00:00:01Z"),
-        ("idempotency-key", "sha256:" + "a" * 64),
         ("content-type", "application/json"),
-        ("x-registry-signature", "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM"),
+        ("webhook-id", EVENT_ID),
+        ("webhook-timestamp", str(timestamp)),
+        ("webhook-signature", "v1," + base64.b64encode(digest).decode("ascii")),
     ]
-
-
-def header(name):
-    return next(value for candidate, value in headers() if candidate == name)
-
-
-def accept(inbox, body=BODY, **overrides):
-    options = {
-        "method": "POST",
-        "path": "/hooks/registry",
-        "headers": headers(),
-        "body": body,
-        "key": CANARY_KEY,
-        "source": SOURCE,
-        "event_type": "case-created-v1",
-        "schema": SCHEMA,
-        "now": NOW,
-    }
-    options.update(overrides)
-    return inbox.accept(**options)
 
 
 PROPOSAL_ID = "00000000-0000-4000-8000-000000000002"
@@ -76,7 +52,7 @@ PROPOSAL_SCHEMA = "https://id.registrystack.org/contracts/breg/proposal-event/v1
 
 def proposal_envelope():
     return {
-        "id": header("ce-id"),
+        "id": EVENT_ID,
         "type": "proposal.applied",
         "source": SOURCE,
         "time": "2026-08-30T00:00:00Z",
@@ -85,7 +61,7 @@ def proposal_envelope():
             "proposalReference": "/v1/proposals/" + PROPOSAL_ID,
             "proposalRevision": 2,
         },
-        "causation": {"root": header("ce-id"), "hop": 0},
+        "causation": {"root": EVENT_ID, "hop": 0},
         "data": {
             "proposalId": PROPOSAL_ID,
             "submissionVersion": 1,
@@ -103,48 +79,37 @@ def proposal_envelope():
     }
 
 
-def verified_proposal(envelope=None):
+def proposal_body(envelope=None):
     envelope = proposal_envelope() if envelope is None else envelope
-    verified = breg.verify_hook_delivery(
-        method="POST",
-        path="/hooks/registry",
-        headers=headers(),
-        body=BODY,
-        key=CANARY_KEY,
-        caller_enforced_freshness=True,
-    )
-    verified.update(
-        {
-            name: envelope[name]
-            for name in ("id", "type", "source", "time", "dataschema")
-        }
-    )
-    verified["body"] = json.dumps(envelope).encode()
-    return verified
+    return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
 
 
 def accept_proposal(inbox, envelope=None):
-    verified = verified_proposal(envelope)
-    with patch.object(breg, "verify_hook_delivery", return_value=verified):
-        return inbox.accept(
-            "POST",
-            "/hooks/breg",
-            [],
-            verified["body"],
-            key=CANARY_KEY,
-            source=SOURCE,
-            event_type="proposal.applied",
-            schema=PROPOSAL_SCHEMA,
-            now=NOW,
-        )
+    body = proposal_body(envelope)
+    return inbox.accept(
+        headers(body), body, key=CANARY_KEY, source=SOURCE,
+        event_type="proposal.applied", schema=PROPOSAL_SCHEMA,
+    )
 
 
 class WakeReceiverTests(unittest.TestCase):
+    def test_fixed_standard_webhooks_vector(self):
+        pairs = headers(timestamp=1788048001)
+        self.assertEqual(dict(pairs)["webhook-signature"], SIGNATURE)
+        verified = breg.verify_hook_delivery(
+            headers=pairs, body=BODY, key=CANARY_KEY, caller_enforced_freshness=True,
+        )
+        self.assertEqual(verified["id"], EVENT_ID)
+        self.assertEqual(verified["timestamp"], 1788048001)
+
     def test_authenticated_record_payload_is_not_an_accepted_proposal_hint(self):
         with tempfile.TemporaryDirectory() as root:
             inbox = Inbox(Path(root) / "inbox.sqlite")
             with self.assertRaises(WakeRefused):
-                accept(inbox)
+                inbox.accept(
+                    headers(), BODY, key=CANARY_KEY, source=SOURCE,
+                    event_type="case-created-v1", schema=SCHEMA,
+                )
             self.assertEqual(inbox.pending(), 0)
 
     def test_native_signature_acceptance_is_durable_and_event_replay_is_deduplicated(
@@ -161,25 +126,29 @@ class WakeReceiverTests(unittest.TestCase):
             with self.assertRaises(WakeRefused):
                 accept_proposal(inbox, conflict)
 
-    def test_signature_target_identity_schema_and_freshness_refusals_precede_acceptance(
+    def test_signature_identity_schema_and_freshness_refusals_precede_acceptance(
         self,
     ):
         with tempfile.TemporaryDirectory() as root:
             inbox = Inbox(Path(root) / "inbox.sqlite")
+            body = proposal_body()
+            options = {
+                "headers": headers(body), "body": body, "key": CANARY_KEY,
+                "source": SOURCE, "event_type": "proposal.applied", "schema": PROPOSAL_SCHEMA,
+            }
             for overrides in [
                 {"body": b"tampered"},
-                {"path": "/hooks/other"},
                 {"key": b"x" * 32},
                 {"source": "urn:other"},
-                {"event_type": "proposal.applied"},
+                {"event_type": "proposal.submitted"},
                 {"schema": "urn:other"},
-                {"now": datetime(2026, 10, 23, tzinfo=UTC)},
+                {"headers": headers(body, timestamp=int(time.time()) - 305)},
             ]:
                 with (
                     self.subTest(overrides=tuple(overrides)),
                     self.assertRaises(WakeRefused),
                 ):
-                    accept(inbox, **overrides)
+                    inbox.accept(**{**options, **overrides})
             self.assertEqual(inbox.pending(), 0)
 
 
@@ -419,8 +388,7 @@ class ReceiverHttpTests(unittest.TestCase):
     def test_acknowledgment_follows_persistence_and_replay_is_safe(self):
         with tempfile.TemporaryDirectory() as root:
             inbox = Inbox(Path(root) / "inbox.sqlite")
-            verified = verified_proposal()
-            verified["delivery_time"] = datetime.now(UTC).isoformat()
+            body = proposal_body()
             server = ThreadingHTTPServer(
                 ("127.0.0.1", 0),
                 receiver(
@@ -434,24 +402,20 @@ class ReceiverHttpTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                # Native cryptography and target checks are covered above.
-                # This trusted result isolates HTTP framing and commit order.
-                with patch.object(
-                    breg, "verify_hook_delivery", return_value=verified
-                ):
-                    for _ in range(2):
-                        connection = HTTPConnection(*server.server_address, timeout=5)
-                        connection.request(
-                            "POST", "/hooks/breg", body=BODY, headers=dict(headers())
-                        )
-                        response = connection.getresponse()
-                        self.assertEqual(response.status, 204)
-                        self.assertEqual(response.read(), b"")
-                        self.assertEqual(Inbox(inbox.path).pending(), 1)
-                        connection.close()
+                for offset in range(2):
+                    connection = HTTPConnection(*server.server_address, timeout=5)
+                    connection.request(
+                        "POST", "/hooks/breg", body=body,
+                        headers=dict(headers(body, timestamp=int(time.time()) + offset)),
+                    )
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 204)
+                    self.assertEqual(response.read(), b"")
+                    self.assertEqual(Inbox(inbox.path).pending(), 1)
+                    connection.close()
                 connection = HTTPConnection(*server.server_address, timeout=5)
                 connection.request(
-                    "POST", "/hooks/other", body=BODY, headers=dict(headers())
+                    "POST", "/hooks/other", body=body, headers=dict(headers(body))
                 )
                 response = connection.getresponse()
                 self.assertEqual(response.status, 403)
@@ -481,35 +445,28 @@ class ReceiverHttpTests(unittest.TestCase):
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
-            captured = []
-
-            def refuse_duplicate(**delivery):
-                captured.extend(delivery["headers"])
-                raise ValueError("the native verifier refused a repeated header")
-
+            body = proposal_body()
             try:
                 with patch.object(
-                    breg, "verify_hook_delivery", side_effect=refuse_duplicate
-                ):
+                    breg, "verify_hook_delivery", wraps=breg.verify_hook_delivery
+                ) as verify:
                     connection = HTTPConnection(*server.server_address, timeout=5)
                     connection.putrequest("POST", "/hooks/breg")
-                    connection.putheader("Content-Length", str(len(BODY)))
-                    for name, value in [*headers(), ("CE-TYPE", "proposal.applied")]:
+                    connection.putheader("Content-Length", str(len(body)))
+                    for name, value in [*headers(body), ("Webhook-Id", EVENT_ID)]:
                         connection.putheader(name, value)
-                    connection.endheaders(BODY)
+                    connection.endheaders(body)
                     response = connection.getresponse()
                     self.assertEqual(response.status, 403)
                     self.assertEqual(
                         json.loads(response.read())["code"], "receiver.hook-refused"
                     )
                     connection.close()
+                verify.assert_called_once()
                 self.assertEqual(
-                    [
-                        (name.lower(), value)
-                        for name, value in captured
-                        if name.lower() == "ce-type"
-                    ],
-                    [("ce-type", "case-created-v1"), ("ce-type", "proposal.applied")],
+                    [name for name, _ in verify.call_args.kwargs["headers"]
+                     if name.lower() == "webhook-id"],
+                    ["webhook-id", "Webhook-Id"],
                 )
                 self.assertEqual(inbox.pending(), 0)
             finally:

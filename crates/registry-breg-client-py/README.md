@@ -58,29 +58,21 @@ read that Proposal. Both revision reads return it as the server sent it.
 
 ## Hook verification
 
-`verify_hook_delivery(method=..., path=..., headers=..., body=..., key=...)`
-authenticates one exact Base Registry Engine Version 1 delivery with the shared
-Rust verifier. Arguments are keyword-only. `path` is the request target the
-receiver was called on, `headers` is an ordered sequence of string name/value
-pairs (names match without regard to ASCII case, and every repeated name is
-refused), and `body` and `key` are `bytes`. The result is a `dict` with
-`id`, `source`, `type`, `time`, `dataschema`, `generation`, `attempt`,
-`delivery_time`, `idempotency_key`, and the exact `body`. Generation and attempt
-remain decimal strings, as signed.
+`verify_hook_delivery(headers=..., body=..., key=..., previous_key=...)` authenticates one
+Base Registry Engine Standard Webhooks delivery with the shared Rust verifier.
+Pass all received headers as ordered name/value pairs and supply the body and keys as bytes.
+The optional previous key supports rotation. A key contains 32 to 64 exact bytes.
 
-The helper refuses a delivery time more than 300 seconds from the receiver clock
-(code `stale-delivery`). Pass `max_skew_seconds` (a whole number from 1 to 3600) for
-another window, or `caller_enforced_freshness=True` to check only that the time is
-well formed and bound `delivery_time` yourself, but not both. The helper applies no
-deduplication policy. `idempotency_key` collapses automatic
-retries within one delivery generation; an effect that must remain once-only
-across operator replay uses a durable apply-once operation keyed by authenticated
-`source` plus `id`, or by an application business key, before acting on `body`.
+The result contains the authenticated `id`, `timestamp` (an integer of signed Unix seconds),
+`source`, `type`, `time`, `dataschema`, and exact `body`. Deduplicate on `source` and
+`id` before acting. Retries and operator replays preserve the id.
 
-Refusal raises `BaseRegistryClientError` with kind `hook-verification` and a
-`code` from `missing-header`, `invalid-delivery-time`, `stale-delivery`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`; an
-argument of the wrong type raises kind `invalid-request`. The message names
-the input to check and never includes a header value, body, or key.
+The default window is 300 seconds in either direction. Choose `max_skew_seconds`
+(1 to 3600 seconds) for a custom window or `caller_enforced_freshness=True` to enforce freshness yourself.
+
+A refusal raises `BaseRegistryClientError` with kind `hook-verification` and one of
+`missing-header`, `duplicate-header`, `invalid-content-type`, `invalid-id`, `invalid-timestamp`, `stale-delivery`, `malformed-signature`, `unsupported-version`, `signature-mismatch`, `body-too-large`, `invalid-key`, `invalid-envelope`, or `id-mismatch`.
+The message names what to check without exposing header values, body, or keys.
 
 ## Direct and atomic mutations
 

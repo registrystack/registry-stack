@@ -15,7 +15,6 @@ import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -143,9 +142,7 @@ class Inbox:
         finally:
             db.close()
 
-    def accept(
-        self, method, path, headers, body, *, key, source, event_type, schema, now=None
-    ):
+    def accept(self, headers, body, *, key, source, event_type, schema):
         from registry_client.breg import (
             BaseRegistryClientError,
             verify_hook_delivery,
@@ -154,19 +151,7 @@ class Inbox:
         if not body or len(body) > MAXIMUM_BODY:
             raise WakeRefused("hook body was refused")
         try:
-            # The window below uses this receiver's own clock, which tests inject.
-            verified = verify_hook_delivery(
-                method=method,
-                path=path,
-                headers=headers,
-                body=body,
-                key=key,
-                caller_enforced_freshness=True,
-            )
-            delivered = datetime.fromisoformat(verified["delivery_time"])
-            instant = datetime.now(UTC) if now is None else now
-            if abs((instant - delivered).total_seconds()) > 300:
-                raise WakeRefused("hook delivery time is outside the accepted window")
+            verified = verify_hook_delivery(headers=headers, body=body, key=key)
             if (verified["source"], verified["type"], verified["dataschema"]) != (
                 source,
                 event_type,
@@ -178,8 +163,7 @@ class Inbox:
                 "hook signature or expected envelope was refused"
             ) from None
         proposal_id, version, effect_digest = proposal_subject(verified)
-        # Replay generations change the transport idempotency key. The event
-        # identity and captured bytes remain stable across every generation.
+        # The authenticated webhook id and body stay the same on retries and replays.
         identity = json.dumps(
             [verified["source"], verified["id"]], separators=(",", ":")
         )
@@ -649,8 +633,6 @@ def receiver(inbox, *, key, source, event_type, schema):
                     raise WakeRefused("hook body exceeds its bound")
                 headers = list(self.headers.items())
                 inbox.accept(
-                    "POST",
-                    self.path,
                     headers,
                     self.rfile.read(length),
                     key=key,

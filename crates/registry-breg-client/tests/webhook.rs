@@ -1,287 +1,248 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
-use registry_breg_client::{
-    verify_hook_delivery, verify_hook_delivery_at, BRegHookDelivery, BRegHookFreshness,
-    BRegHookVerificationError,
-};
+use registry_breg_client::{verify_hook_delivery_at, BRegHookDelivery, BRegHookFreshness};
 
-const KEY: &[u8] = b"webhook-delivery-signing-key-0123456789abcdef";
-const BODY: &[u8] = br#"{"entity":"case","values":{"label":"value"}}"#;
-/// Unix seconds of the vector's signed delivery time, 2026-08-30T00:00:01Z.
-const DELIVERY_EPOCH: u64 = 1_788_048_001;
-const SIGNATURE: &str = "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM";
+const ID: &str = "00000000-0000-4000-8000-000000000001";
+const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
+const PREVIOUS: &[u8] = b"abcdef0123456789abcdef0123456789";
+const BODY: &[u8] = br#"{"causation":{"hop":0,"root":"00000000-0000-4000-8000-000000000001"},"data":{},"dataschema":"https://example.test/schema","id":"00000000-0000-4000-8000-000000000001","source":"/products/breg/deployments/example","subject":{"recordReference":"breg/case/42","recordRevision":7},"time":"2026-08-30T00:00:00.123Z","type":"case-created-v1"}"#;
+const TS: u64 = 1_788_048_001;
+const SIGNATURE: &str = "v1,NELq97rzqnAqQUxh1eiskBB3oOl+4FsqaI1ZV/lAqQY=";
 
-fn headers() -> Vec<(String, String)> {
+fn headers(id: &str, timestamp: &str, signature: &str) -> Vec<(String, String)> {
     [
-        ("Ce-Specversion", "1.0"),
-        ("CE-ID", "00000000-0000-4000-8000-000000000001"),
-        (
-            "ce-source",
-            "urn:registrystack:registry:example:instance:primary",
-        ),
-        ("ce-type", "case-created-v1"),
-        ("ce-time", "2026-08-30T00:00:00Z"),
-        (
-            "ce-dataschema",
-            "urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa",
-        ),
-        ("x-registry-event-generation", "1"),
-        ("x-registry-delivery-attempt", "1"),
-        ("x-registry-delivery-time", "2026-08-30T00:00:01Z"),
-        (
-            "idempotency-key",
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ),
-        ("content-type", "application/json"),
-        ("x-registry-signature", SIGNATURE),
+        ("Content-Type", "application/json"),
+        ("Webhook-ID", id),
+        ("webhook-timestamp", timestamp),
+        ("webhook-signature", signature),
     ]
-    .into_iter()
-    .map(|(name, value)| (name.to_owned(), value.to_owned()))
-    .collect()
+    .map(|(name, value)| (name.into(), value.into()))
+    .to_vec()
 }
 
-fn delivery<'a>(
-    headers: &'a [(String, String)],
-    body: &'a [u8],
-    key: &'a [u8],
-) -> BRegHookDelivery<'a> {
-    BRegHookDelivery {
-        method: "POST",
-        path: "/hooks/registry",
-        headers,
-        body,
-        key,
-        freshness: BRegHookFreshness::CallerEnforced,
-    }
-}
-
-fn delivery_with<'a>(
-    headers: &'a [(String, String)],
+fn verify(
     freshness: BRegHookFreshness,
-) -> BRegHookDelivery<'a> {
-    BRegHookDelivery {
-        freshness,
-        ..delivery(headers, BODY, KEY)
-    }
-}
-
-fn at(offset_seconds: i64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(DELIVERY_EPOCH.checked_add_signed(offset_seconds).unwrap())
-}
-
-fn set_header(headers: &mut [(String, String)], name: &str, value: impl Into<String>) {
-    headers
-        .iter_mut()
-        .find(|(candidate, _)| candidate == name)
-        .unwrap()
-        .1 = value.into();
-}
-
-#[test]
-fn fixed_vector_verifies_and_returns_exact_delivery() {
-    let headers = headers();
-    let verified = verify_hook_delivery_at(
-        delivery_with(&headers, BRegHookFreshness::DefaultWindow),
-        at(0),
+    offset: i64,
+) -> Result<
+    registry_breg_client::BRegVerifiedHookDelivery,
+    registry_breg_client::BRegHookVerificationError,
+> {
+    verify_hook_delivery_at(
+        BRegHookDelivery {
+            headers: &headers(ID, &TS.to_string(), SIGNATURE),
+            body: BODY,
+            key: KEY,
+            previous_key: None,
+            freshness,
+        },
+        UNIX_EPOCH + Duration::from_secs(TS.checked_add_signed(offset).unwrap()),
     )
-    .unwrap();
-
-    assert_eq!(verified.id, "00000000-0000-4000-8000-000000000001");
-    assert_eq!(
-        verified.source,
-        "urn:registrystack:registry:example:instance:primary"
-    );
-    assert_eq!(verified.event_type, "case-created-v1");
-    assert_eq!(verified.time, "2026-08-30T00:00:00Z");
-    assert_eq!(
-        verified.data_schema,
-        "urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa"
-    );
-    assert_eq!(verified.generation, "1");
-    assert_eq!(verified.attempt, "1");
-    assert_eq!(verified.delivery_time, "2026-08-30T00:00:01Z");
-    assert_eq!(
-        verified.idempotency_key,
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    );
-    assert_eq!(verified.body, BODY);
-
-    let debug = format!("{verified:?}");
-    assert!(!debug.contains(&format!("{:?}", BODY.to_vec())));
-    assert!(debug.contains("body_bytes"));
 }
 
 #[test]
-fn refusal_codes_are_closed_and_value_free() {
-    let mut missing = headers();
-    missing.retain(|(name, _)| name != "ce-type");
-    assert_eq!(
-        verify_hook_delivery(delivery(&missing, BODY, KEY)),
-        Err(BRegHookVerificationError::MissingHeader)
-    );
+fn a_signed_envelope_verifies_and_returns_its_attributes() {
+    let result = verify(BRegHookFreshness::DefaultWindow, 0).unwrap();
+    assert_eq!(result.id, ID);
+    assert_eq!(result.timestamp, TS);
+    assert_eq!(result.source, "/products/breg/deployments/example");
+    assert_eq!(result.event_type, "case-created-v1");
+    assert_eq!(result.time, "2026-08-30T00:00:00.123Z");
+    assert_eq!(result.data_schema, "https://example.test/schema");
+    assert_eq!(result.body, BODY);
+}
 
-    let mut malformed = headers();
-    set_header(&mut malformed, "x-registry-signature", "v1=truncated");
-    assert_eq!(
-        verify_hook_delivery(delivery(&malformed, BODY, KEY)),
-        Err(BRegHookVerificationError::MalformedSignature)
-    );
-
-    let mut unsupported = headers();
-    set_header(
-        &mut unsupported,
-        "x-registry-signature",
-        SIGNATURE.replacen("v1=", "v2=", 1),
-    );
-    assert_eq!(
-        verify_hook_delivery(delivery(&unsupported, BODY, KEY)),
-        Err(BRegHookVerificationError::UnsupportedVersion)
-    );
-
-    let mut tampered = headers();
-    set_header(&mut tampered, "ce-type", "case-patched-v1");
-    assert_eq!(
-        verify_hook_delivery(delivery(&tampered, BODY, KEY)),
-        Err(BRegHookVerificationError::SignatureMismatch)
-    );
-
-    for error in [
-        BRegHookVerificationError::MissingHeader,
-        BRegHookVerificationError::MalformedSignature,
-        BRegHookVerificationError::SignatureMismatch,
-        BRegHookVerificationError::UnsupportedVersion,
-    ] {
-        assert!(!error.to_string().contains(SIGNATURE));
-        assert!(!error.to_string().contains("case-patched-v1"));
-    }
+fn unhex(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 #[test]
-fn invalid_delivery_time_names_the_delivery_time_fix() {
-    let mut invalid = headers();
-    let vectors: serde_json::Value = serde_json::from_str(include_str!(
-        "../../registry-platform-crypto/tests/fixtures/delivery-signatures.json"
+fn every_committed_vector_gets_its_expected_code() {
+    let vectors: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../registry-platform-crypto/tests/fixtures/standard-webhooks.json"
     ))
     .unwrap();
-    let vector = vectors
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|value| value["valid"] == false)
-        .unwrap();
-    set_header(
-        &mut invalid,
-        "x-registry-delivery-time",
-        vector["deliveryTime"].as_str().unwrap(),
-    );
-    set_header(
-        &mut invalid,
-        "x-registry-signature",
-        vector["signature"].as_str().unwrap(),
-    );
-    let error = verify_hook_delivery(delivery(&invalid, BODY, KEY)).unwrap_err();
-    assert_eq!(error, BRegHookVerificationError::InvalidDeliveryTime);
-    assert_eq!(error.code(), "invalid-delivery-time");
-    assert_eq!(
-        error.to_string(),
-        "the Base Registry Engine hook delivery time is invalid; check the signed delivery time and sender clock"
-    );
-}
-
-#[test]
-fn duplicate_header_names_the_header_fix() {
-    let mut duplicate = headers();
-    duplicate.push(("ce-type".into(), "case-created-v1".into()));
-    let error = verify_hook_delivery(delivery(&duplicate, BODY, KEY)).unwrap_err();
-    assert_eq!(error, BRegHookVerificationError::DuplicateHeader);
-    assert_eq!(error.code(), "duplicate-header");
-    assert_eq!(
-        error.to_string(),
-        "a Base Registry Engine hook header is repeated; remove duplicate signed headers"
-    );
-}
-
-#[test]
-fn oversized_body_names_the_body_size_fix() {
-    let oversized = vec![b'x'; 1_048_577];
-    let error = verify_hook_delivery(delivery(&headers(), &oversized, KEY)).unwrap_err();
-    assert_eq!(error, BRegHookVerificationError::BodyTooLarge);
-    assert_eq!(error.code(), "body-too-large");
-    assert_eq!(
-        error.to_string(),
-        "the Base Registry Engine hook body exceeds the Version 1 limit; reduce the body size"
-    );
-    assert!(!error.to_string().contains(&"x".repeat(64)));
-}
-
-#[test]
-fn invalid_key_names_the_key_configuration_fix() {
-    let error = verify_hook_delivery(delivery(&headers(), BODY, b"short-key")).unwrap_err();
-    assert_eq!(error, BRegHookVerificationError::InvalidKey);
-    assert_eq!(error.code(), "invalid-key");
-    assert_eq!(
-        error.to_string(),
-        "the Base Registry Engine hook verification key is too short; configure a key of at least 32 bytes"
-    );
-    assert!(!error.to_string().contains("short-key"));
+    for vector in vectors {
+        let key = unhex(vector["keyHex"].as_str().unwrap());
+        let previous = vector["previousKeyHex"].as_str().map(unhex);
+        let error = verify_hook_delivery_at(
+            BRegHookDelivery {
+                headers: &headers(
+                    vector["id"].as_str().unwrap(),
+                    vector["timestamp"].as_str().unwrap(),
+                    vector["signature"].as_str().unwrap(),
+                ),
+                body: vector["body"].as_str().unwrap().as_bytes(),
+                key: &key,
+                previous_key: previous.as_deref(),
+                freshness: BRegHookFreshness::DefaultWindow,
+            },
+            UNIX_EPOCH + Duration::from_secs(vector["now"].as_u64().unwrap()),
+        )
+        .unwrap_err();
+        let expected = match (
+            vector["keyPolicy"].as_str(),
+            vector["expected"].as_str().unwrap(),
+        ) {
+            (Some("below-minimum"), _) => "invalid-key",
+            (_, "accepted") => "invalid-envelope",
+            (_, code) => code,
+        };
+        assert_eq!(error.code(), expected, "{}", vector["name"]);
+    }
 }
 
 #[test]
 fn the_default_window_is_300_seconds_in_both_directions() {
-    let headers = headers();
-    let default = || delivery_with(&headers, BRegHookFreshness::DefaultWindow);
-    assert_eq!(
-        BRegHookFreshness::default(),
-        BRegHookFreshness::DefaultWindow
-    );
-    for offset in [299, -299, 0] {
-        verify_hook_delivery_at(default(), at(offset)).expect("inside the window");
+    for offset in [-300, 300] {
+        verify(BRegHookFreshness::DefaultWindow, offset).unwrap();
     }
-    for offset in [301, -301] {
-        let error = verify_hook_delivery_at(default(), at(offset)).unwrap_err();
-        assert_eq!(error, BRegHookVerificationError::StaleDelivery, "{offset}");
-        assert_eq!(error.code(), "stale-delivery");
+    for offset in [-301, 301] {
+        assert_eq!(
+            verify(BRegHookFreshness::DefaultWindow, offset)
+                .unwrap_err()
+                .code(),
+            "stale-delivery"
+        );
     }
-}
-
-#[test]
-fn the_system_clock_default_refuses_the_old_fixed_vector() {
-    let headers = headers();
-    assert_eq!(
-        verify_hook_delivery(delivery_with(&headers, BRegHookFreshness::DefaultWindow)),
-        Err(BRegHookVerificationError::StaleDelivery)
-    );
 }
 
 #[test]
 fn a_named_window_replaces_the_default() {
-    let headers = headers();
-    let within = |skew| delivery_with(&headers, BRegHookFreshness::Within { skew });
-    let ten = Duration::from_secs(10);
-    verify_hook_delivery_at(within(ten), at(10)).expect("at the edge");
-    assert_eq!(
-        verify_hook_delivery_at(within(ten), at(11)),
-        Err(BRegHookVerificationError::StaleDelivery)
-    );
-    verify_hook_delivery_at(within(Duration::from_secs(3600)), at(3600)).expect("wide window");
+    let freshness = BRegHookFreshness::Within {
+        skew: Duration::from_secs(10),
+    };
+    verify(freshness, 10).unwrap();
+    assert_eq!(verify(freshness, 11).unwrap_err().code(), "stale-delivery");
 }
 
 #[test]
 fn caller_enforced_freshness_accepts_a_year_old_delivery() {
-    let headers = headers();
-    let year = 365 * 24 * 3600;
-    verify_hook_delivery_at(
-        delivery_with(&headers, BRegHookFreshness::CallerEnforced),
-        at(year),
-    )
-    .expect("the caller owns the window");
+    verify(BRegHookFreshness::CallerEnforced, 365 * 24 * 3600).unwrap();
 }
 
 #[test]
-fn stale_delivery_names_the_clock_fix() {
-    let error = BRegHookVerificationError::StaleDelivery;
+fn a_previous_key_verifies_a_rotated_delivery() {
+    let input = BRegHookDelivery {
+        headers: &headers(
+            ID,
+            &TS.to_string(),
+            "v1,VJrqYnKSCnccY0zIQARwZ/xIh/dVWuudwj1QQyTzYx0=",
+        ),
+        body: BODY,
+        key: KEY,
+        previous_key: Some(PREVIOUS),
+        freshness: BRegHookFreshness::CallerEnforced,
+    };
     assert_eq!(
-        error.to_string(),
-        "the Base Registry Engine hook delivery time is outside the freshness window; check the receiver clock, or pass a wider window"
+        registry_breg_client::verify_hook_delivery(input)
+            .unwrap()
+            .id,
+        ID
     );
+}
+
+#[test]
+fn a_webhook_id_that_differs_from_the_envelope_id_is_refused() {
+    let input = BRegHookDelivery {
+        headers: &headers(
+            "00000000-0000-4000-8000-000000000002",
+            &TS.to_string(),
+            "v1,5utAVSfp86oJRURFYIoR2F3is1nWXe+aIL6vtd13e1Y=",
+        ),
+        body: BODY,
+        key: KEY,
+        previous_key: None,
+        freshness: BRegHookFreshness::CallerEnforced,
+    };
+    assert_eq!(
+        registry_breg_client::verify_hook_delivery(input)
+            .unwrap_err()
+            .code(),
+        "id-mismatch"
+    );
+}
+
+#[test]
+fn an_invalid_key_names_its_length_and_newline_without_its_bytes() {
+    for (key, previous_key, checks) in [
+        (&[b'x'; 31][..], None, &["31", "32"][..]),
+        (
+            &[
+                &[b'x'; 64][..],
+                b"
+",
+            ]
+            .concat()[..],
+            None,
+            &["65", "newline"],
+        ),
+        (
+            &b"whsec_synthetic_key_text_for_test"[..],
+            None,
+            &["whsec_", "33"],
+        ),
+        (KEY, Some(KEY), &["previous", "equals", "32"]),
+    ] {
+        let error = registry_breg_client::verify_hook_delivery(BRegHookDelivery {
+            headers: &headers(ID, &TS.to_string(), SIGNATURE),
+            body: BODY,
+            key,
+            previous_key,
+            freshness: BRegHookFreshness::CallerEnforced,
+        })
+        .unwrap_err();
+        assert_eq!(error.code(), "invalid-key");
+        let message = error.to_string();
+        for check in checks {
+            assert!(message.contains(check), "{message}");
+        }
+        assert!(!message.contains(std::str::from_utf8(key).unwrap()));
+    }
+}
+
+#[test]
+fn refusal_codes_are_closed_and_value_free() {
+    use registry_breg_client::BRegHookVerificationError::*;
+    let errors = [
+        MissingHeader,
+        DuplicateHeader,
+        InvalidContentType,
+        InvalidId,
+        InvalidTimestamp,
+        StaleDelivery,
+        MalformedSignature,
+        UnsupportedVersion,
+        SignatureMismatch,
+        BodyTooLarge,
+        InvalidKey {
+            detail: "configure a 32-byte key".into(),
+        },
+        InvalidEnvelope,
+        IdMismatch,
+    ];
+    assert_eq!(
+        errors.each_ref().map(|error| error.code()),
+        [
+            "missing-header",
+            "duplicate-header",
+            "invalid-content-type",
+            "invalid-id",
+            "invalid-timestamp",
+            "stale-delivery",
+            "malformed-signature",
+            "unsupported-version",
+            "signature-mismatch",
+            "body-too-large",
+            "invalid-key",
+            "invalid-envelope",
+            "id-mismatch",
+        ]
+    );
+    for error in errors {
+        assert!(!error.to_string().contains(ID));
+        assert!(!error.to_string().contains(SIGNATURE));
+    }
 }

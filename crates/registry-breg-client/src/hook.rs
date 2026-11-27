@@ -1,8 +1,10 @@
 use std::time::{Duration, SystemTime};
 
 use registry_platform_hooks::receiver::{
-    verify_delivery, DeliveryFreshness, ReceiverError, SignedDelivery,
+    verify_hook_delivery as verify_standard_delivery, DeliveryFreshness, HookDelivery,
 };
+use registry_platform_hooks::{DeliveryKey, DeliveryKeys};
+use time::format_description::well_known::Rfc3339;
 
 /// How the verifier bounds the signed delivery time.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -12,27 +14,24 @@ pub enum BRegHookFreshness {
     DefaultWindow,
     /// Refuse a delivery time further than `skew` from the receiver clock.
     ///
-    /// The Rust verifier applies `skew` as given. A zero `skew` refuses every
-    /// delivery and a very large one disables the window. The Node and Python
-    /// bindings accept 1 to 3600 seconds only. A receiver that wants no window
-    /// of its own uses [`Self::CallerEnforced`], which says so explicitly.
+    /// The Rust verifier applies `skew` as given. The Node and Python
+    /// bindings accept 1 to 3600 seconds. Use [`Self::CallerEnforced`] to
+    /// enforce the window in the receiver.
     Within { skew: Duration },
-    /// Check only that the delivery time is well formed. The caller enforces
-    /// its own window.
+    /// Verify authenticity and timestamp syntax. The caller enforces the window.
     CallerEnforced,
 }
 
-/// Exact request material supplied to the BReg Version 1 hook verifier.
+/// Exact request material supplied to the BReg Standard Webhooks verifier.
 ///
 /// Header pairs retain order and duplicates; names are matched without regard
 /// to ASCII case. The key and body are never rendered by this type or by its
 /// refusal errors.
 pub struct BRegHookDelivery<'a> {
-    pub method: &'a str,
-    pub path: &'a str,
     pub headers: &'a [(String, String)],
     pub body: &'a [u8],
     pub key: &'a [u8],
+    pub previous_key: Option<&'a [u8]>,
     pub freshness: BRegHookFreshness,
 }
 
@@ -46,19 +45,16 @@ impl std::fmt::Debug for BRegHookDelivery<'_> {
 ///
 /// Verification applies the delivery-time window named by
 /// [`BRegHookFreshness`], 300 seconds by default. It does not apply replay or
-/// deduplication policy. Receivers must deduplicate on `idempotency_key`
+/// deduplication policy. Receivers must deduplicate on `source` and `id`
 /// before acting on the body.
 #[derive(Clone, Eq, PartialEq)]
 pub struct BRegVerifiedHookDelivery {
     pub id: String,
+    pub timestamp: u64,
     pub source: String,
     pub event_type: String,
     pub time: String,
     pub data_schema: String,
-    pub generation: String,
-    pub attempt: String,
-    pub delivery_time: String,
-    pub idempotency_key: String,
     pub body: Vec<u8>,
 }
 
@@ -72,56 +68,68 @@ impl std::fmt::Debug for BRegVerifiedHookDelivery {
 }
 
 /// Closed, value-free reason a BReg hook delivery was refused.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BRegHookVerificationError {
-    #[error("a required Base Registry Engine hook header is missing")]
+    #[error("a required hook header is missing. Check Content-Type and the three webhook headers")]
     MissingHeader,
-    #[error("the Base Registry Engine hook delivery time is invalid; check the signed delivery time and sender clock")]
-    InvalidDeliveryTime,
-    #[error("the Base Registry Engine hook delivery time is outside the freshness window; check the receiver clock, or pass a wider window")]
-    StaleDelivery,
-    #[error("a Base Registry Engine hook header is repeated; remove duplicate signed headers")]
+    #[error("a required hook header is repeated. Remove duplicate headers")]
     DuplicateHeader,
+    #[error("the hook content type is invalid. Set Content-Type to application/json")]
+    InvalidContentType,
+    #[error("the webhook id is invalid. Check the webhook-id header")]
+    InvalidId,
     #[error(
-        "the Base Registry Engine hook body exceeds the Version 1 limit; reduce the body size"
+        "the webhook timestamp is invalid. Use canonical Unix seconds and check the sender clock"
     )]
-    BodyTooLarge,
-    #[error("the Base Registry Engine hook verification key is too short; configure a key of at least 32 bytes")]
-    InvalidKey,
-    #[error("the Base Registry Engine hook signature is malformed")]
+    InvalidTimestamp,
+    #[error("the webhook timestamp is outside the freshness window. Check the clocks or configure a wider window")]
+    StaleDelivery,
+    #[error("the webhook signature is malformed. Check the Standard Webhooks signature encoding")]
     MalformedSignature,
-    #[error("the Base Registry Engine hook signature does not match")]
-    SignatureMismatch,
-    #[error("the Base Registry Engine hook signature version is unsupported")]
+    #[error("the webhook signature version is unsupported. Check that the sender signs with v1")]
     UnsupportedVersion,
+    #[error("the webhook signature does not match. Check the key and exact signed bytes")]
+    SignatureMismatch,
+    #[error("the hook body exceeds the size limit. Reduce the body size")]
+    BodyTooLarge,
+    #[error("{detail}")]
+    InvalidKey { detail: String },
+    #[error("the hook envelope is invalid. Check the canonical JSON envelope")]
+    InvalidEnvelope,
+    #[error(
+        "the webhook id differs from the envelope id. Check that the sender uses the envelope id"
+    )]
+    IdMismatch,
 }
 
 impl BRegHookVerificationError {
     /// Stable refusal code exposed by language bindings.
     #[must_use]
-    pub const fn code(self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             Self::MissingHeader => "missing-header",
-            Self::InvalidDeliveryTime => "invalid-delivery-time",
-            Self::StaleDelivery => "stale-delivery",
             Self::DuplicateHeader => "duplicate-header",
-            Self::BodyTooLarge => "body-too-large",
-            Self::InvalidKey => "invalid-key",
+            Self::InvalidContentType => "invalid-content-type",
+            Self::InvalidId => "invalid-id",
+            Self::InvalidTimestamp => "invalid-timestamp",
+            Self::StaleDelivery => "stale-delivery",
             Self::MalformedSignature => "malformed-signature",
-            Self::SignatureMismatch => "signature-mismatch",
             Self::UnsupportedVersion => "unsupported-version",
+            Self::SignatureMismatch => "signature-mismatch",
+            Self::BodyTooLarge => "body-too-large",
+            Self::InvalidKey { .. } => "invalid-key",
+            Self::InvalidEnvelope => "invalid-envelope",
+            Self::IdMismatch => "id-mismatch",
         }
     }
 }
 
-/// Verify one exact BReg Version 1 hook delivery against the system clock.
+/// Verify one exact BReg Standard Webhooks delivery against the system clock.
 ///
-/// This delegates header extraction, the signature input, RFC 3339
-/// delivery-time validation, and constant-time HMAC comparison to the shared
-/// `registry_platform_hooks::receiver::verify_delivery`. The delivery time must
-/// fall inside the window `delivery.freshness` names, 300 seconds either way by
-/// default. Deduplication stays with the caller.
+/// The shared hooks verifier authenticates the exact body and checks the
+/// canonical envelope and event identity. The default freshness window is
+/// 300 seconds in either direction. Deduplication stays with the caller.
 pub fn verify_hook_delivery(
     delivery: BRegHookDelivery<'_>,
 ) -> Result<BRegVerifiedHookDelivery, BRegHookVerificationError> {
@@ -139,48 +147,68 @@ pub fn verify_hook_delivery_at(
         BRegHookFreshness::Within { skew } => DeliveryFreshness::Within { now, skew },
         BRegHookFreshness::CallerEnforced => DeliveryFreshness::CallerEnforced,
     };
-    let verified = verify_delivery(
-        SignedDelivery {
-            method: delivery.method,
-            request_target: delivery.path,
+    let current = DeliveryKey::new(delivery.key)
+        .map_err(|error| invalid_key("current", delivery.key.len(), error))?;
+    let previous = delivery
+        .previous_key
+        .map(|bytes| {
+            DeliveryKey::new(bytes).map_err(|error| invalid_key("previous", bytes.len(), error))
+        })
+        .transpose()?;
+    let keys = DeliveryKeys::new(current, previous)
+        .map_err(|error| invalid_key("current and previous", delivery.key.len(), error))?;
+    let verified = verify_standard_delivery(
+        HookDelivery {
             headers: delivery
                 .headers
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
             body: delivery.body,
-            key: delivery.key,
+            keys: &keys,
         },
         freshness,
     )
-    .map_err(map_receiver_error)?;
+    .map_err(|error| map_receiver_error(error.code()))?;
 
     Ok(BRegVerifiedHookDelivery {
         id: verified.id.to_owned(),
-        source: verified.source.to_owned(),
-        event_type: verified.event_type.to_owned(),
-        time: verified.time.to_owned(),
-        data_schema: verified.data_schema.to_owned(),
-        generation: verified.generation.to_owned(),
-        attempt: verified.attempt.to_owned(),
-        delivery_time: verified.delivery_time.to_owned(),
-        idempotency_key: verified.idempotency_key.to_owned(),
-        body: delivery.body.to_vec(),
+        timestamp: verified.timestamp,
+        source: verified.envelope.source,
+        event_type: verified.envelope.event_type,
+        time: verified
+            .envelope
+            .time
+            .format(&Rfc3339)
+            .map_err(|_| BRegHookVerificationError::InvalidEnvelope)?,
+        data_schema: verified.envelope.dataschema,
+        body: verified.body.to_vec(),
     })
 }
 
-fn map_receiver_error(error: ReceiverError) -> BRegHookVerificationError {
-    match error {
-        ReceiverError::MissingHeader => BRegHookVerificationError::MissingHeader,
-        ReceiverError::InvalidDeliveryTime => BRegHookVerificationError::InvalidDeliveryTime,
-        ReceiverError::Stale => BRegHookVerificationError::StaleDelivery,
-        ReceiverError::DuplicateHeader => BRegHookVerificationError::DuplicateHeader,
-        ReceiverError::BodyTooLarge => BRegHookVerificationError::BodyTooLarge,
-        ReceiverError::InvalidKey => BRegHookVerificationError::InvalidKey,
-        ReceiverError::UnsupportedVersion => BRegHookVerificationError::UnsupportedVersion,
-        ReceiverError::SignatureMismatch => BRegHookVerificationError::SignatureMismatch,
-        ReceiverError::MalformedHeader | ReceiverError::MalformedSignature => {
-            BRegHookVerificationError::MalformedSignature
-        }
-        _ => BRegHookVerificationError::MalformedSignature,
+fn invalid_key(
+    which: &str,
+    length: usize,
+    error: impl std::fmt::Display,
+) -> BRegHookVerificationError {
+    BRegHookVerificationError::InvalidKey {
+        detail: format!("Invalid {which} hook key ({length} bytes). {error}. Check the configured exact key bytes"),
+    }
+}
+
+fn map_receiver_error(code: &str) -> BRegHookVerificationError {
+    use BRegHookVerificationError::*;
+    match code {
+        "missing-header" => MissingHeader,
+        "duplicate-header" => DuplicateHeader,
+        "invalid-content-type" => InvalidContentType,
+        "invalid-id" => InvalidId,
+        "invalid-timestamp" => InvalidTimestamp,
+        "stale-delivery" => StaleDelivery,
+        "unsupported-version" => UnsupportedVersion,
+        "signature-mismatch" => SignatureMismatch,
+        "body-too-large" => BodyTooLarge,
+        "invalid-envelope" => InvalidEnvelope,
+        "id-mismatch" => IdMismatch,
+        _ => MalformedSignature,
     }
 }

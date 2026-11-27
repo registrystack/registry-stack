@@ -10,9 +10,13 @@ import re
 import stat
 import unicodedata
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from receiver import ReceiverError, make_server
+
+if TYPE_CHECKING:
+    from registry_client.breg import VerifiedHookDelivery
 
 
 def read_secret(path: Path) -> bytes:
@@ -74,7 +78,7 @@ class SourceChanges:
         self.fields = tuple(fields)
         self.token_file = token_file
 
-    def accept(self, headers: dict[str, str], body: bytes) -> None:
+    def accept(self, delivery: VerifiedHookDelivery, body: bytes) -> None:
         values = json.loads(body)["data"]["values"]
         selectors = [values[field] for field in self.fields]
         if not all(selector_is_valid(selector) for selector in selectors):
@@ -123,8 +127,8 @@ def main() -> None:
         parser.error("configure the exact 64-character event schema digest")
     try:
         key = read_secret(args.key)
-        if len(key) < 32:
-            raise ValueError("the webhook key needs at least 32 bytes")
+        if not 32 <= len(key) <= 64:
+            raise ValueError("the webhook key needs 32 to 64 bytes")
         acceptance = SourceChanges(
             origin=args.destination_origin, plan=args.plan, projection=args.projection,
             fields=args.selector_field, token_file=args.token_file,

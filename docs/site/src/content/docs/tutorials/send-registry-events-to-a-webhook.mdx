@@ -92,9 +92,10 @@ Built the sample delivery. The canonical request follows.
   event  contact-created-v1
 ```
 
-The output is a complete `POST` request: the headers `Idempotency-Key`, `X-Registry-Signature` and
-the `ce-` CloudEvents headers, then a body whose `values` hold a synthetic `name`. The signature
-is a placeholder. A real delivery signs the exact bytes with a key you share with the receiver.
+The sample `POST` includes `Accept`, `Content-Type`, `Webhook-Id`, `Webhook-Timestamp`,
+and `Webhook-Signature`. The envelope's `data.values` holds a synthetic `name`. The sample
+signature is a placeholder. Real deliveries sign the exact bytes with a shared key of 32 to
+64 bytes.
 
 ## Receive it
 
@@ -117,9 +118,8 @@ the runtime file of a registry you serve with `breg serve`, as
 [Bind webhook receivers](../../operate/breg-webhooks/) describes. That page also shows how to
 provision the shared key and list the deliveries still waiting or failed.
 
-The receiver proves only that an attempt arrived. A real receiving service stores each event
-before acting on it. A retry resends an event with the same `idempotencyKey`. An operator replay
-resends it with the same `eventId` and a new key. Check both before acting.
+A retry and an operator replay both carry the same `webhook-id`. Store the verified source
+and id before acting on the event.
 
 {/* Evidence: crates/registry-bregctl/src/hook_lifecycle.rs, sample;
     crates/registry-bregctl/src/explain_report.rs, events;
