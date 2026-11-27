@@ -2407,12 +2407,14 @@ impl OidcJwksSource {
             JwksSource::Uri { uri } => Ok(Self::Uri {
                 uri: uri.into_string(),
             }),
-            JwksSource::Static { document_ref } => Ok(Self::Static {
-                document_ref: parse_secret_reference(
-                    document_ref,
-                    RuntimeConfigError::InvalidOidc,
-                )?,
-            }),
+            JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
+                Ok(Self::Static {
+                    document_ref: parse_secret_reference(
+                        document_ref,
+                        RuntimeConfigError::InvalidOidc,
+                    )?,
+                })
+            }
         }
     }
 

@@ -1123,6 +1123,7 @@ fn findings(
         matches!(
             oidc.provider.jwks_source,
             registry_platform_config::JwksSource::Static { .. }
+                | registry_platform_config::JwksSource::TestIssuer { .. }
         )
     });
     if needs_secrets
@@ -1137,7 +1138,7 @@ fn findings(
     match (&runtime.authentication.oidc, &runtime.authentication.api_key_ref) {
         (Some(oidc), None) => {
             findings.extend([oidc.provider.check_without_posture("authentication.oidc", true), oidc.clients.check("authentication.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
-            if let registry_platform_config::JwksSource::Static { document_ref } = &oidc.provider.jwks_source {
+            if let registry_platform_config::JwksSource::Static { document_ref } | registry_platform_config::JwksSource::TestIssuer { document_ref } = &oidc.provider.jwks_source {
                 if let Err(error) = runtime.secret_providers.check_reference("authentication.oidc.jwksSource.documentRef", document_ref) { findings.push(block_finding(&error)); }
             }
         }

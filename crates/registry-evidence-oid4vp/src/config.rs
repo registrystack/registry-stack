@@ -1288,7 +1288,9 @@ impl VerifierDocument {
             ("/applicantTokens", &self.applicant_tokens.provider),
             ("/evidenceCredentials", &self.evidence_credentials.provider),
         ] {
-            if let JwksSource::Static { document_ref } = &provider.jwks_source {
+            if let JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } =
+                &provider.jwks_source
+            {
                 if self
                     .secret_providers
                     .check_reference(pointer, document_ref)

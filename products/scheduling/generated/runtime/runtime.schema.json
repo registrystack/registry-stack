@@ -348,6 +348,24 @@
             "documentRef"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, as `static` does, for a test issuer a\ndevelopment run supervises. Development only: production refuses it.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "test-issuer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -469,7 +487,10 @@
           "default": {
             "type": "discovery"
           },
-          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
         },
         "readsScope": {
           "default": "scheduling:read",
@@ -847,11 +868,20 @@
     },
     "TlsTermination": {
       "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
-      "enum": [
-        "operator-controlled-upstream",
-        "development-loopback"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "operator-controlled-upstream",
+            "development-loopback"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "loopback-plaintext",
+          "description": "Plaintext on a loopback bind, behind a proxy on the same host. Valid\nin every posture. It is placement only: it relaxes nothing a product\nrelaxes under `development-loopback`.",
+          "type": "string"
+        }
+      ]
     },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",

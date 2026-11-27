@@ -59,7 +59,8 @@ pub(crate) async fn verifier(
                 network.declared_jwks_fetch_policy(),
             )
         }
-        registry_platform_config::JwksSource::Static { document_ref } => {
+        registry_platform_config::JwksSource::Static { document_ref }
+        | registry_platform_config::JwksSource::TestIssuer { document_ref } => {
             let bytes = crate::runtime::resolve_secret(runtime, document_ref)?;
             let keys =
                 registry_platform_oidc::parse_static_jwks(&bytes).map_err(|error| match error {

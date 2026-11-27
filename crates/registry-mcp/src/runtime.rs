@@ -195,7 +195,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             JwksFetcherConfig::defaults(),
             policy.declared_jwks_fetch_policy(),
         ),
-        JwksSource::Static { document_ref } => {
+        JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
             let bytes = secret(
                 &secrets,
                 document_ref,

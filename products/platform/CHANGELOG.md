@@ -62,6 +62,22 @@
   the new members yet, and a runtime that has not adopted the posture
   behaves as before.
 
+- The shared private listener adds `tlsTermination: loopback-plaintext`:
+  plaintext on a loopback bind behind a proxy on the same host, valid in
+  every posture. It is placement only. A non-loopback bind is refused as under
+  `development-loopback`, and it relaxes nothing a runtime relaxes under
+  `development-loopback`. The shared OIDC issuer block adds
+  `jwksSource: {type: test-issuer, documentRef: <secret reference>}`, which
+  reads the key set from the secret like `static`, for a development run's
+  test issuer. A posture-aware load refuses it in production with
+  `platform.posture.test-issuer` and admits and lists it in development. A
+  runtime that has not adopted the posture reads it like `static`, and
+  Evidence, which reads access-token keys only from `uri`, refuses it. The
+  shared and product runtime schemas gain both values. Migration: add
+  `JwksSource::TestIssuer { document_ref }` beside `Static { document_ref }`
+  in an exhaustive match, and a `LoopbackPlaintext` arm where
+  `TlsTermination` is matched exhaustively.
+
 - `registry-cli-report` adds `Report::with_posture`, which writes
   `posture.value` and `posture.source` (`flag`, `environment` or `default`)
   into a CLI report body after the command members. A report built without it
