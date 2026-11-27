@@ -373,6 +373,17 @@ export interface HookDeliveryInput {
   headers: Record<string, string>
   body: Buffer
   key: Buffer
+  /**
+   * Window around the receiver clock, in whole seconds from 1 to 3600.
+   * With neither this nor `callerEnforcedFreshness`, the window is 300
+   * seconds.
+   */
+  maxSkewSeconds?: number
+  /**
+   * Check only that the delivery time is well formed; the caller enforces
+   * its own window. Cannot be combined with `maxSkewSeconds`.
+   */
+  callerEnforcedFreshness?: boolean
 }
 
 /** Validated product result serialized before the JavaScript number boundary. */
@@ -425,5 +436,10 @@ export interface VerifiedHookDelivery {
   body: Buffer
 }
 
-/** Verify a BReg Version 1 hook signature without applying receiver policy. */
+/**
+ * Verify a BReg Version 1 hook signature. The delivery time must fall within
+ * 300 seconds of the receiver clock unless `maxSkewSeconds` or
+ * `callerEnforcedFreshness` says otherwise. Deduplication stays with the
+ * caller.
+ */
 export declare function verifyHookDelivery(input: HookDeliveryInput): VerifiedHookDelivery

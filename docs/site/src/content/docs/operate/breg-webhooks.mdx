@@ -309,14 +309,23 @@ The receiver should:
 
 1. Verify `X-Registry-Signature` against the exact request bytes, in the signing-input order the
    [API reference](../../reference/breg-api/#events-and-webhooks) defines.
-2. Check `X-Registry-Delivery-Time` for freshness.
+2. Check `X-Registry-Delivery-Time` for freshness. The Node, Python and Rust verifiers the client
+   packages ship refuse a delivery time more than 300 seconds from the receiver clock, either way,
+   with the code `stale-delivery`. A receiver that sets no window gets that default. Pass
+   `maxSkewSeconds` (Python `max_skew_seconds`, 1 to 3600) for another window, or
+   `callerEnforcedFreshness: true` (Python `caller_enforced_freshness=True`) to bound the time
+   yourself. Coordinator's own receiver stays at 30 seconds until its signed delivery format
+   changes, which is stricter than the verifier we ship and safe to run beside it.
 3. Read the Record type from `data.recordType` and the record from `data.recordId`, and order
    events for one record by `data.revision`.
 4. Deduplicate by `Idempotency-Key`, and answer `2xx` only after it has durably recorded the event.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, HookSampleArgs and hook_sample();
     crates/registry-bregctl/src/hook_lifecycle.rs, sample() and synthetic_field_value();
-    crates/registry-breg/src/hooks.rs. */}
+    crates/registry-breg/src/hooks.rs;
+    crates/registry-breg-client/src/hook.rs BRegHookFreshness, verify_hook_delivery_at;
+    crates/registry-platform-hooks/src/receiver.rs DEFAULT_DELIVERY_SKEW;
+    crates/registry-coordinator/src/event_trigger.rs DELIVERY_SKEW. */}
 
 ## Settle local hooks before go-live
 

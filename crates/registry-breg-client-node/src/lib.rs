@@ -23,7 +23,7 @@ use registry_breg_client::{
     BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
     BRegDirectWrite, BRegEtag, BRegEventRecordError, BRegGeoJsonContinuation,
     BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
-    BRegHookDelivery as CoreHookDelivery, BRegHookVerificationError,
+    BRegHookDelivery as CoreHookDelivery, BRegHookFreshness, BRegHookVerificationError,
     BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
     BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
     BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
@@ -75,6 +75,13 @@ pub struct HookDeliveryInput {
     pub headers: BTreeMap<String, String>,
     pub body: Buffer,
     pub key: Buffer,
+    /// Window around the receiver clock, in whole seconds from 1 to 3600.
+    /// With neither this nor `callerEnforcedFreshness`, the window is 300
+    /// seconds.
+    pub max_skew_seconds: Option<f64>,
+    /// Check only that the delivery time is well formed; the caller enforces
+    /// its own window. Cannot be combined with `maxSkewSeconds`.
+    pub caller_enforced_freshness: Option<bool>,
 }
 
 /// Authenticated BReg hook metadata and exact body.
@@ -92,9 +99,35 @@ pub struct VerifiedHookDelivery {
     pub body: Buffer,
 }
 
-/// Verify a BReg Version 1 hook signature without applying receiver policy.
+const HOOK_MAXIMUM_SKEW_SECONDS: f64 = 3600.0;
+
+fn hook_freshness(
+    max_skew_seconds: Option<f64>,
+    caller_enforced_freshness: Option<bool>,
+) -> Result<BRegHookFreshness> {
+    let invalid = || binding_error("invalid-request", "hook freshness options are invalid");
+    match (max_skew_seconds, caller_enforced_freshness) {
+        (None, None | Some(false)) => Ok(BRegHookFreshness::DefaultWindow),
+        (None, Some(true)) => Ok(BRegHookFreshness::CallerEnforced),
+        (Some(_), Some(true)) => Err(invalid()),
+        (Some(seconds), None | Some(false)) => {
+            if seconds.fract() != 0.0 || !(1.0..=HOOK_MAXIMUM_SKEW_SECONDS).contains(&seconds) {
+                return Err(invalid());
+            }
+            Ok(BRegHookFreshness::Within {
+                skew: std::time::Duration::from_secs(seconds as u64),
+            })
+        }
+    }
+}
+
+/// Verify a BReg Version 1 hook signature. The delivery time must fall within
+/// 300 seconds of the receiver clock unless `maxSkewSeconds` or
+/// `callerEnforcedFreshness` says otherwise. Deduplication stays with the
+/// caller.
 #[napi]
 pub fn verify_hook_delivery(input: HookDeliveryInput) -> Result<VerifiedHookDelivery> {
+    let freshness = hook_freshness(input.max_skew_seconds, input.caller_enforced_freshness)?;
     let headers = input.headers.into_iter().collect::<Vec<_>>();
     let verified = verify_core_hook_delivery(CoreHookDelivery {
         method: &input.method,
@@ -102,6 +135,7 @@ pub fn verify_hook_delivery(input: HookDeliveryInput) -> Result<VerifiedHookDeli
         headers: &headers,
         body: input.body.as_ref(),
         key: input.key.as_ref(),
+        freshness,
     })
     .map_err(hook_verification_error)?;
     Ok(VerifiedHookDelivery {

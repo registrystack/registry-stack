@@ -45,11 +45,14 @@ The Node and Python bindings expose the same check as an entry point that takes 
 - Python: `breg.verify_hook_delivery(method=..., path=..., headers=..., body=..., key=...)`
 
 Both return the authenticated exact values, including `deliveryTime` (Python `delivery_time`) and `idempotencyKey` (Python `idempotency_key`).
-These binding entry points use caller-enforced freshness.
-Compare the returned instant with your trusted clock and chosen window, and durably deduplicate on the idempotency key before taking an effect.
+These binding entry points refuse a delivery time more than 300 seconds from the receiver clock, with the code `stale-delivery`.
+Pass `maxSkewSeconds` (Python `max_skew_seconds`), a whole number from 1 to 3600, for another window.
+Pass `callerEnforcedFreshness: true` (Python `caller_enforced_freshness=True`) to check only that the time is well formed, then compare the returned instant with your trusted clock yourself.
+The two options cannot be combined.
+Durably deduplicate on the idempotency key before taking an effect.
 Verification alone creates no source, schema, recipient, or business authority.
 
-{/* Evidence: crates/registry-platform-hooks/src/receiver.rs CallerEnforced;
+{/* Evidence: crates/registry-platform-hooks/src/receiver.rs CallerEnforced, DEFAULT_DELIVERY_SKEW;
     crates/registry-breg-client-py/src/lib.rs verify_hook_delivery;
     crates/registry-breg-client-node/__test__/webhook-verification.test.js verifyHookDelivery, deliveryTime. */}
 
