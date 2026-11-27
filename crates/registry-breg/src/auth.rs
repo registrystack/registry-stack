@@ -1408,6 +1408,8 @@ mod tests {
                 "ProblemCode::AuthenticationRefused in artifacts.rs",
                 "ProblemCode::AuthenticationRefused in auth.rs",
                 "ProblemCode::AuthenticationRefused in mod.rs",
+                // Proposal OpenAPI schemas and examples, never a runtime 401.
+                "ProblemCode::AuthenticationRefused in proposal_artifacts.rs",
                 "StatusCode::UNAUTHORIZED in auth.rs",
             ]
         );
