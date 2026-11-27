@@ -727,6 +727,8 @@ async fn no_log_line_carries_a_cookie_a_token_a_code_a_state_or_a_secret() {
         .sign_out(Some(&cookie), &[("origin", &harness.public)])
         .await;
 
+    // Sign-out queued its revocations: let them finish and log first.
+    harness.issuer.wait_live_families(0).await;
     let text = captured_logs();
     assert!(!text.is_empty(), "the service logs something");
     let mut secrets = vec![
@@ -742,7 +744,11 @@ async fn no_log_line_carries_a_cookie_a_token_a_code_a_state_or_a_secret() {
             .issuer
             .issued_refresh_tokens()
             .into_iter()
-            .map(|(token, _)| token),
+            .map(|(_, token)| token),
+    );
+    secrets.push(
+        flow.trim_start_matches(&format!("{FLOW_COOKIE}="))
+            .to_owned(),
     );
     secrets.extend(
         harness

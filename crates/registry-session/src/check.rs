@@ -401,14 +401,11 @@ async fn renew<G: Grants>(
                 Ok(()) => Renewal::Token(token),
                 Err(gone) => {
                     // The session ended during the renewal. The rotated
-                    // refresh token would stay live at the issuer, so it is
-                    // revoked here.
+                    // refresh token would stay live at the issuer, so it goes
+                    // to the revocation queue: the renewal lock and the
+                    // refresh permit are not held for the issuer.
                     if let Some(rotated) = gone.refresh_token {
-                        if inner.grants.revoke(&kind, &rotated).await.is_err() {
-                            tracing::warn!(
-                                "a rotated refresh token could not be revoked at the issuer"
-                            );
-                        }
+                        store.revoke_later(&kind, vec![rotated]);
                     }
                     Renewal::Expired
                 }
@@ -1799,6 +1796,7 @@ mod tests {
         let reply = reply(call.await.expect("task")).await;
         assert_problem(&reply, StatusCode::UNAUTHORIZED, "session.expired");
         assert_eq!(harness.issuer.refresh_calls(), 1);
+        until_revoked(&harness, 1).await;
         assert_eq!(harness.issuer.revoke_calls(), 1);
         assert!(harness.issuer.family_revoked(&original));
     }

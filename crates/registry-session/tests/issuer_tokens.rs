@@ -168,3 +168,79 @@ async fn a_renewal_with_no_readable_audience_ends_the_session_and_revokes_its_to
     .expect("the session ended");
     harness.issuer.wait_live_families(0).await;
 }
+
+/// A client that gives up quickly, so a refusal that waits on the issuer shows
+/// as a timeout.
+fn impatient() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(2))
+        .build()
+        .expect("client")
+}
+
+async fn until_no_session(harness: &Harness) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while harness.store.session_count() != 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the session ended");
+}
+
+#[tokio::test]
+async fn a_renewal_without_a_lifetime_ends_the_session_and_queues_the_rotated_token() {
+    let harness = Harness::start().await;
+    harness.issuer.set_access_lifetime(2);
+    let citizen = harness.sign_in("/apply/", "citizen-a").await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    harness.issuer.set_fault(Some(Fault::NoExpiresIn));
+    harness
+        .check("GET", "/api/registry/records", Some(&citizen.cookie))
+        .await;
+    until_no_session(&harness).await;
+    // The issuer ignores the spent first token: only the rotated one, which
+    // the unusable response carried, ends the family.
+    harness.issuer.wait_live_families(0).await;
+}
+
+#[tokio::test]
+async fn a_sign_in_refusal_answers_and_ends_at_once_while_revocation_stalls() {
+    let harness = Harness::start().await;
+    harness.issuer.set_fault(Some(Fault::WrongAccessAudience));
+    harness.issuer.hold_revocations();
+    let start = harness.start_sign_in("/apply/").await;
+    let flow = start.cookie_pair(support::FLOW_COOKIE).expect("flow");
+    let callback = harness.authorize_as(start.location(), "citizen-a").await;
+    let refused = impatient()
+        .get(&callback)
+        .header("cookie", flow)
+        .send()
+        .await
+        .expect("the refusal does not wait for the issuer");
+    assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(harness.store.session_count(), 0);
+    harness.issuer.release_revocations();
+    harness.issuer.wait_live_families(0).await;
+}
+
+#[tokio::test]
+async fn a_renewal_refusal_ends_the_session_at_once_while_revocation_stalls() {
+    let harness = Harness::start().await;
+    harness.issuer.set_access_lifetime(2);
+    let citizen = harness.sign_in("/apply/", "citizen-a").await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    harness.issuer.set_fault(Some(Fault::WrongAccessAudience));
+    harness.issuer.hold_revocations();
+    let answered = impatient()
+        .get(format!("{}/check/api/registry/records", harness.check))
+        .header("cookie", &citizen.cookie)
+        .send()
+        .await
+        .expect("the check does not wait for the issuer");
+    assert_eq!(answered.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(harness.store.session_count(), 0);
+    harness.issuer.release_revocations();
+    harness.issuer.wait_live_families(0).await;
+}

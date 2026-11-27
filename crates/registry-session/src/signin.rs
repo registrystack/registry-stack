@@ -20,10 +20,12 @@ use zeroize::Zeroizing;
 use crate::check::{clean_path, session_cookie};
 use crate::config::Route;
 use crate::grants::{GrantError, Grants, Redeemer, Redemption, RefreshToken};
-use crate::journal::{Action, Outcome};
+use crate::journal::{Action, Journal, Outcome};
 use crate::pages::{self, Failure};
 use crate::public::{html, rate_limited, App};
-use crate::store::{random_token, tokens_match, AudienceGrant, PendingSignIn, Person, Session};
+use crate::store::{
+    random_token, tokens_match, AudienceGrant, PendingSignIn, Person, Session, Store,
+};
 use crate::wire::{problem, ProblemKind, ANSWER_MARKER_HEADER, ANSWER_MARKER_VALUE};
 
 /// The longest return path, in bytes.
@@ -201,6 +203,48 @@ pub(crate) async fn start<G: Grants + Redeemer>(
     authorize_redirect(&app, &location, &secrets.cookie)
 }
 
+/// A session just opened whose cookie has not reached the browser. It travels
+/// with the answer: dropping it unconsumed, because the request behind the
+/// answer is gone, removes the session and queues its refresh tokens. The
+/// receiver of the answer disarms it once it has built the response.
+struct OpenSession {
+    store: Arc<Store>,
+    journal: Arc<Journal>,
+    cookie: String,
+    armed: bool,
+}
+
+impl OpenSession {
+    fn new(store: Arc<Store>, journal: Arc<Journal>, cookie: String) -> Self {
+        Self {
+            store,
+            journal,
+            cookie,
+            armed: true,
+        }
+    }
+
+    /// The cookie value, once the answer carrying it is built.
+    fn disarm(mut self) -> String {
+        self.armed = false;
+        std::mem::take(&mut self.cookie)
+    }
+}
+
+impl Drop for OpenSession {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        tracing::warn!("a sign-in finished after its request was given up on");
+        if let Some(session) = self.store.remove(&self.cookie) {
+            self.store.release(&session);
+            let journal = self.journal.clone();
+            tokio::spawn(async move { audit_ended(&journal, &session).await });
+        }
+    }
+}
+
 /// What a callback decided.
 enum Step {
     /// More audiences remain: send the browser to the issuer again.
@@ -210,7 +254,7 @@ enum Step {
     },
     /// The session is open.
     Done {
-        session_cookie: String,
+        session: OpenSession,
         return_to: String,
         max_age: u64,
     },
@@ -238,9 +282,8 @@ pub(crate) async fn callback<G: Grants + Redeemer>(
     let worker = app.clone();
     tokio::spawn(async move {
         let step = complete(&worker, query.as_deref(), &headers).await;
-        if let Err(unheard) = sender.send(step) {
-            discard(&worker, unheard).await;
-        }
+        // A step nobody receives drops with its guard, which ends the session.
+        let _ = sender.send(step);
     });
     let Ok(step) = receiver.await else {
         tracing::error!("a sign-in callback task ended without an answer");
@@ -252,14 +295,14 @@ pub(crate) async fn callback<G: Grants + Redeemer>(
             flow_cookie,
         } => return authorize_redirect(&app, &location, &flow_cookie),
         Step::Done {
-            session_cookie,
+            session,
             return_to,
             max_age,
         } => {
             let mut response = html(StatusCode::OK, pages::continue_to(&return_to));
             response.headers_mut().append(
                 header::SET_COOKIE,
-                app.cookie(app.config.session_cookie(), &session_cookie, max_age),
+                app.cookie(app.config.session_cookie(), &session.disarm(), max_age),
             );
             response
         }
@@ -285,28 +328,19 @@ pub(crate) async fn callback<G: Grants + Redeemer>(
     response
 }
 
-/// What to do with a step nobody will read: a session it opened never reaches
-/// the browser, so it ends and its tokens are revoked. A further hop's pending
-/// sign-in stays in the store until it expires and is reaped.
-async fn discard<G: Grants>(app: &App<G>, step: Step) {
-    if let Step::Done { session_cookie, .. } = step {
-        tracing::warn!("a sign-in finished after its request was given up on");
-        if let Some(session) = app.store.remove(&session_cookie) {
-            end_audited(app, &session).await;
-        }
-    }
-}
-
 /// Queue the refresh tokens of a session that ended without a sign-out and
 /// audit its end.
 async fn end_audited<G>(app: &App<G>, session: &Session) {
     app.store.release(session);
-    let Ok(person) = app.journal.person_at(session.issuer(), session.subject()) else {
+    audit_ended(&app.journal, session).await;
+}
+
+async fn audit_ended(journal: &Journal, session: &Session) {
+    let Ok(person) = journal.person_at(session.issuer(), session.subject()) else {
         tracing::error!("a person pseudonym could not be derived");
         return;
     };
-    if let Err(error) = app
-        .journal
+    if let Err(error) = journal
         .record(
             Action::SessionEnded,
             session.kind(),
@@ -582,7 +616,7 @@ async fn open_session<G: Grants + Redeemer>(
         end_audited(app, &held).await;
     }
     Step::Done {
-        session_cookie: cookie,
+        session: OpenSession::new(app.store.clone(), app.journal.clone(), cookie),
         return_to,
         max_age: absolute.as_secs(),
     }
@@ -606,12 +640,13 @@ mod tests {
     use crate::grants::{GrantError, Redeemed, Renewed};
     use crate::journal::Journal;
     use crate::public::router;
-    use crate::store::Store;
 
     /// An issuer double for the production posture, whose plain-HTTP token
     /// endpoint the real client could not reach.
     struct Issuer {
         redemptions: AtomicUsize,
+        /// The refresh tokens the revocation queue delivered.
+        revoked: std::sync::Mutex<Vec<String>>,
         /// Fills the pending store while a redemption is in flight, so the
         /// next hop finds it full.
         crowd: Option<Arc<Store>>,
@@ -653,7 +688,11 @@ mod tests {
             Err(GrantError::Refused)
         }
 
-        async fn revoke(&self, _kind: &str, _token: &RefreshToken) -> Result<(), GrantError> {
+        async fn revoke(&self, _kind: &str, token: &RefreshToken) -> Result<(), GrantError> {
+            self.revoked
+                .lock()
+                .expect("revoked")
+                .push(token.expose().to_owned());
             Ok(())
         }
     }
@@ -672,21 +711,33 @@ mod tests {
         }
     }
 
+    struct Fixture {
+        router: Router,
+        store: Arc<Store>,
+        sink: Sink,
+        issuer: Arc<Issuer>,
+        journal: Arc<Journal>,
+    }
+
     /// The production runtime file served over a double issuer.
-    fn production(crowd_the_store: bool) -> (Router, Arc<Store>, Sink) {
+    fn production(crowd_the_store: bool) -> Fixture {
         let config = Arc::new(
             crate::config::tests::load(&crate::config::tests::document())
                 .expect("the production document loads"),
         );
-        let store = Arc::new(Store::new(
-            Arc::new(SystemClock),
-            config.session.sessions(),
-            if crowd_the_store {
-                1
-            } else {
-                config.session.pending_sign_ins()
-            },
-        ));
+        let (ended, revoker) = crate::revoker::channel(16);
+        let store = Arc::new(
+            Store::new(
+                Arc::new(SystemClock),
+                config.session.sessions(),
+                if crowd_the_store {
+                    1
+                } else {
+                    config.session.pending_sign_ins()
+                },
+            )
+            .with_ended_sessions(ended),
+        );
         let sink = Sink::default();
         let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![7; 32]))
             .expect("audit profile");
@@ -709,19 +760,27 @@ mod tests {
             })
             .expect("limiter")
         };
-        let issuer = Issuer {
+        let issuer = Arc::new(Issuer {
             redemptions: AtomicUsize::new(0),
+            revoked: std::sync::Mutex::new(Vec::new()),
             crowd: crowd_the_store.then(|| store.clone()),
-        };
+        });
+        tokio::spawn(revoker.run(issuer.clone()));
         let app = Arc::new(App {
             config,
             store: store.clone(),
-            grants: issuer,
-            journal,
+            grants: issuer.clone(),
+            journal: journal.clone(),
             global_sign_in: limiter(6000, 600),
             per_person: limiter(6000, 600),
         });
-        (router(app), store, sink)
+        Fixture {
+            router: router(app),
+            store,
+            sink,
+            issuer,
+            journal,
+        }
     }
 
     async fn send(router: &Router, request: Request<Body>) -> axum::response::Response {
@@ -780,7 +839,7 @@ mod tests {
     /// no `Domain`, at sign-in, at the callback and at sign-out.
     #[tokio::test]
     async fn production_cookies_are_host_prefixed_secure_host_only_and_small() {
-        let (router, _store, _sink) = production(false);
+        let router = production(false).router;
         let started = send(&router, get("/session/sign-in?return=%2Fapply%2F", None)).await;
         assert_eq!(started.status(), StatusCode::FOUND);
         let flow = cookie_named(&started, crate::config::FLOW_COOKIE);
@@ -817,8 +876,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refusal_between_hops_is_audited_and_revokes_the_first_hops_token() {
-        let (router, store, sink) = production(true);
+    async fn a_refusal_between_hops_is_audited_and_queues_the_first_hops_token() {
+        let Fixture {
+            router,
+            store,
+            sink,
+            issuer,
+            ..
+        } = production(true);
         let started = send(&router, get("/session/sign-in?return=%2Fstaff%2F", None)).await;
         assert_eq!(started.status(), StatusCode::FOUND);
         let flow = cookie_named(&started, crate::config::FLOW_COOKIE);
@@ -831,5 +896,75 @@ mod tests {
         assert!(audit.contains("\"action\":\"sign-in\""), "{audit}");
         assert!(audit.contains("refused"), "{audit}");
         assert_eq!(store.session_count(), 0);
+        // The first hop's refresh token reached the revocation queue.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while issuer.revoked.lock().expect("revoked").is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first hop's token was revoked");
+        assert_eq!(*issuer.revoked.lock().expect("revoked"), ["refresh-0"]);
+    }
+
+    /// A session whose callback answer is dropped after a successful send,
+    /// before anything received it, ends with the answer.
+    #[tokio::test]
+    async fn dropping_an_unreceived_answer_ends_the_session_and_queues_its_tokens() {
+        let Fixture {
+            store,
+            issuer,
+            journal,
+            ..
+        } = production(false);
+        let session = Session::new(
+            "citizen".to_owned(),
+            "https://id.example".to_owned(),
+            "person-1".to_owned(),
+            Map::new(),
+            vec![AudienceGrant {
+                audience: "urn:person".to_owned(),
+                access_token: BearerToken::new("access-x").expect("token"),
+                expires_at: Instant::now() + Duration::from_secs(300),
+                issued_at: Instant::now(),
+                refresh_token: Some(RefreshToken::new("refresh-x").expect("token")),
+            }],
+            Instant::now() + Duration::from_secs(3600),
+        );
+        let _ = store.insert("cookie", session).expect("room");
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let step = Step::Done {
+            session: OpenSession::new(store.clone(), journal, "cookie".to_owned()),
+            return_to: "/apply/".to_owned(),
+            max_age: 60,
+        };
+        assert!(sender.send(step).is_ok(), "the receiver was still there");
+        drop(receiver);
+        assert_eq!(store.session_count(), 0);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while issuer.revoked.lock().expect("revoked").is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the session's token was revoked");
+        assert_eq!(*issuer.revoked.lock().expect("revoked"), ["refresh-x"]);
+    }
+
+    #[tokio::test]
+    async fn a_disarmed_guard_leaves_the_session_alone() {
+        let Fixture { store, journal, .. } = production(false);
+        let session = Session::new(
+            "citizen".to_owned(),
+            "https://id.example".to_owned(),
+            "person-1".to_owned(),
+            Map::new(),
+            Vec::new(),
+            Instant::now() + Duration::from_secs(3600),
+        );
+        let _ = store.insert("cookie", session).expect("room");
+        let guard = OpenSession::new(store.clone(), journal, "cookie".to_owned());
+        assert_eq!(guard.disarm(), "cookie");
+        assert_eq!(store.session_count(), 1);
     }
 }

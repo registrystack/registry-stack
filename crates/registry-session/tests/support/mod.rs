@@ -616,6 +616,12 @@ async fn token(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
                 if let Some(refresh) = refresh {
                     answer["refresh_token"] = json!(refresh);
                 }
+                if *shared.fault.lock().expect("lock") == Some(Fault::NoExpiresIn) {
+                    answer
+                        .as_object_mut()
+                        .expect("an object")
+                        .remove("expires_in");
+                }
                 answer
             };
             shared.refresh_response_gate.pass().await;

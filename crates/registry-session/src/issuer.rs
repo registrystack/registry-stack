@@ -26,6 +26,7 @@ use zeroize::Zeroizing;
 
 use crate::config::{describe_secret_failure, RuntimeConfig};
 use crate::grants::{GrantError, Grants, Redeemed, Redeemer, Redemption, RefreshToken, Renewed};
+use crate::revoker::EndedSessions;
 use crate::runtime::RuntimeError;
 
 /// Clock skew tolerated on an ID token's time claims.
@@ -47,6 +48,9 @@ struct KindClient {
 /// The token side of every kind of sign-in.
 pub struct HttpIssuer {
     kinds: HashMap<String, KindClient>,
+    /// Where refresh tokens the service will not keep go, so no refusal waits
+    /// on the issuer to revoke them.
+    ended: Option<EndedSessions>,
 }
 
 fn endpoint(text: &str) -> Result<Url, TokenError> {
@@ -111,7 +115,28 @@ impl HttpIssuer {
                 KindClient { client, verifier },
             );
         }
-        Ok(Self { kinds })
+        Ok(Self { kinds, ended: None })
+    }
+
+    /// Hand the refresh tokens of refused responses to `ended`.
+    #[must_use]
+    pub fn with_ended_sessions(mut self, ended: EndedSessions) -> Self {
+        self.ended = Some(ended);
+        self
+    }
+
+    /// Queue a refresh token the service will not keep for revocation. Never
+    /// waits on the issuer.
+    fn discard(&self, kind: &str, token: Option<RefreshToken>) {
+        let Some(token) = token else {
+            return;
+        };
+        match &self.ended {
+            Some(ended) => {
+                ended.revoke(kind, vec![token]);
+            }
+            None => tracing::error!("a refused token response has no revocation queue"),
+        }
     }
 }
 
@@ -243,14 +268,14 @@ impl Redeemer for HttpIssuer {
         // stated lifetime opens none.
         let (Some(expires_at), Some(id_token)) = (parts.expires_at, parts.id_token.as_ref()) else {
             tracing::warn!("the token response lacked a lifetime or an ID token");
-            revoke_quietly(kind, parts.refresh_token.as_ref()).await;
+            self.discard(redemption.kind, parts.refresh_token.clone());
             return Err(GrantError::Refused);
         };
         let verified = match kind.verifier.verify_related_token(id_token).await {
             Ok(verified) => verified,
             Err(error) => {
                 tracing::warn!(reason = refusal_reason(&error), "the ID token was refused");
-                revoke_quietly(kind, parts.refresh_token.as_ref()).await;
+                self.discard(redemption.kind, parts.refresh_token.clone());
                 return Err(verification_failure(&error));
             }
         };
@@ -262,11 +287,11 @@ impl Redeemer for HttpIssuer {
             .unwrap_or_default();
         if !crate::store::tokens_match(nonce, redemption.nonce) {
             tracing::warn!("the ID token carried the wrong nonce");
-            revoke_quietly(kind, parts.refresh_token.as_ref()).await;
+            self.discard(redemption.kind, parts.refresh_token.clone());
             return Err(GrantError::Refused);
         }
         if !audience_accepted(&parts.access_token, redemption.resource) {
-            revoke_quietly(kind, parts.refresh_token.as_ref()).await;
+            self.discard(redemption.kind, parts.refresh_token.clone());
             return Err(GrantError::Refused);
         }
         let claims = match serde_json::to_value(&verified.claims) {
@@ -283,24 +308,14 @@ impl Redeemer for HttpIssuer {
     }
 }
 
-/// Revoke a refresh token the sign-in will not use, so nothing stays live at
-/// the issuer. A failure is logged in fixed text.
-async fn revoke_quietly(kind: &KindClient, token: Option<&RefreshToken>) {
-    if let Some(token) = token {
-        if kind.client.revoke_refresh_token(token).await.is_err() {
-            tracing::warn!("a refresh token could not be revoked at the issuer");
-        }
-    }
-}
-
 impl Grants for HttpIssuer {
     async fn refresh(
         &self,
-        kind: &str,
+        kind_name: &str,
         refresh_token: &RefreshToken,
         resource: &str,
     ) -> Result<Renewed, GrantError> {
-        let kind = self.kinds.get(kind).ok_or(GrantError::Unavailable)?;
+        let kind = self.kinds.get(kind_name).ok_or(GrantError::Unavailable)?;
         let issued = kind
             .client
             .refresh(refresh_token, Some(resource))
@@ -315,14 +330,16 @@ impl Grants for HttpIssuer {
                 }
             })?;
         let parts = issued.into_parts();
+        // A response the service cannot use still carries a rotated refresh
+        // token, which the caller's session does not hold: it goes to the
+        // revocation queue here, and the refusal ends the session.
         let Some(expires_at) = parts.expires_at else {
             tracing::warn!("a renewed access token has no stated lifetime");
-            return Err(GrantError::Unavailable);
+            self.discard(kind_name, parts.refresh_token);
+            return Err(GrantError::Refused);
         };
-        // The rotated refresh token is revoked with the session the caller
-        // ends on this refusal: nothing else holds it.
         if !audience_accepted(&parts.access_token, resource) {
-            revoke_quietly(kind, parts.refresh_token.as_ref()).await;
+            self.discard(kind_name, parts.refresh_token);
             return Err(GrantError::Refused);
         }
         Ok(Renewed {

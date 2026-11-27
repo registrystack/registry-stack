@@ -94,7 +94,9 @@ impl Service {
         ))
         .map_err(|error| RuntimeError::Audit(error.to_string()))?;
         drop(audit_key);
-        let issuer = Arc::new(HttpIssuer::new(&config, &secrets)?);
+        let (ended, revoker) = revoker::channel(revoker::QUEUE_CAPACITY);
+        let issuer =
+            Arc::new(HttpIssuer::new(&config, &secrets)?.with_ended_sessions(ended.clone()));
 
         let writer = match writer {
             Some(writer) => writer,
@@ -123,7 +125,6 @@ impl Service {
         );
 
         let config = Arc::new(config);
-        let (ended, revoker) = revoker::channel(revoker::QUEUE_CAPACITY);
         tokio::spawn(revoker.run(issuer.clone()));
         let store = Arc::new(
             Store::new(
