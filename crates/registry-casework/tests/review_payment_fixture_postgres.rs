@@ -440,6 +440,7 @@ async fn fixture_for_issuer(
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     PostgresStore::connect_migration(&database_config, &secrets)
         .expect("payment migration store")

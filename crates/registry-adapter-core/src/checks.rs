@@ -6922,7 +6922,7 @@ pub fn check_endpoint_bindings(
 #[must_use]
 pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
     let mut findings = check_endpoint_bindings(workspace, &runtime.endpoint_bindings());
-    if let Err(error) = runtime.oidc.check("oidc", true) {
+    if let Err(error) = runtime.oidc.check_without_posture("oidc", true) {
         findings.push(finding(
             CheckCode::RuntimeInvalidOrigin,
             "/oidc",

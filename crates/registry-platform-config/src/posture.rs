@@ -123,7 +123,6 @@ pub struct DevelopmentWitness {
 
 impl DevelopmentWitness {
     /// The loader issues the witness to a process that declared development.
-    #[allow(dead_code)]
     pub(crate) const fn issue() -> Self {
         Self { _sealed: () }
     }
@@ -166,8 +165,16 @@ pub struct DevelopmentOnlyRefused {
 ///
 /// There is no `Deref` and no way to take the value out: a value that selects
 /// a development-only setting is unreadable without a [`DevelopmentWitness`].
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Gated<T>(T);
+
+impl<T> Gated<T> {
+    /// Hold `value`, whatever it selects. Shared blocks use it for the value
+    /// an omitted member stands for.
+    pub(crate) const fn wrap(value: T) -> Self {
+        Self(value)
+    }
+}
 
 impl<T: DevelopmentClass> Gated<T> {
     /// The value, when it is valid in every posture or the caller holds the

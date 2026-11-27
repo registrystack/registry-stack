@@ -681,7 +681,7 @@ fn load_inner(
     let absolute = std::fs::canonicalize(runtime_path).map_err(|_| LoadError::Unreadable {
         path: runtime_path.display().to_string(),
     })?;
-    let runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let runtime = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: ADAPTER_RUNTIME_API_VERSION,
         kind: ADAPTER_RUNTIME_KIND,
     })

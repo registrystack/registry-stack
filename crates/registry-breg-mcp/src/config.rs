@@ -303,7 +303,7 @@ impl RuntimeConfig {
     /// its retired apiVersion.
     #[must_use]
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(RUNTIME_ENVELOPE)
+        RuntimeConfigLoader::new_without_posture(RUNTIME_ENVELOPE)
             .removed_keys(REMOVED_KEYS)
             .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
     }

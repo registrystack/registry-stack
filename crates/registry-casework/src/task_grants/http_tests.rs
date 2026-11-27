@@ -177,6 +177,7 @@ async fn fixture_for_role_with_templates(
         migration_url_ref: format!("secret:env/{name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     let (audit, audit_capture) = crate::CaseworkAudit::capture();
     let store = PostgresStore::connect_migration(&config, &secrets)

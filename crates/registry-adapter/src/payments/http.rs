@@ -110,7 +110,7 @@ pub fn contract(config: &PaymentsConfig) -> serde_json::Value {
 pub fn load_config(path: &Path) -> Result<PaymentsConfig, ServeError> {
     let absolute = std::fs::canonicalize(path)
         .map_err(|_| refused("payment configuration could not be read"))?;
-    let config = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let config = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: API_VERSION,
         kind: KIND,
     })
@@ -464,7 +464,7 @@ pub async fn run_only(
 ) -> Result<(), ServeError> {
     let absolute = std::fs::canonicalize(runtime_path)
         .map_err(|_| refused("runtime configuration could not be read"))?;
-    let runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let runtime = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
         kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
     })

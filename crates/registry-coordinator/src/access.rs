@@ -187,7 +187,8 @@ impl AccessConfig {
     ) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
         for result in [
-            self.issuer.check("deployment.authentication", local),
+            self.issuer
+                .check_without_posture("deployment.authentication", local),
             self.clients().check("deployment.authentication"),
         ] {
             if let Err(error) = result {

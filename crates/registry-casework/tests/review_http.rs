@@ -490,6 +490,7 @@ async fn app_with_project_options(
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     PostgresStore::connect_migration(&database_config, &secrets)
         .expect("migration store")

@@ -409,6 +409,7 @@ fn unconnected_store(root: &std::path::Path) -> PostgresStore {
             migration_url_ref: "secret:file/database-url".to_owned(),
             ca_bundle_ref: None,
             test_only_plaintext: false,
+            transport: None,
         },
         &secrets,
     )

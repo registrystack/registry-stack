@@ -18,6 +18,7 @@ fn database(reference: &str) -> DatabaseConfig {
         migration_url_ref: reference.to_owned(),
         ca_bundle_ref: None,
         test_only_plaintext: false,
+        transport: None,
     }
 }
 

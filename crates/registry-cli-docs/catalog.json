@@ -1745,6 +1745,102 @@
           ]
         },
         {
+          "name": "provision",
+          "invocation": "adapterctl provision",
+          "about": "Create the roles and the database the runtime file names, or print the SQL",
+          "long_about": null,
+          "usage": "adapterctl provision [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one `apply` reads",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-file <ADMIN_URL_FILE>",
+              "description": "File holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-env <ADMIN_URL_ENV>",
+              "description": "Name of the environment variable holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--print-sql",
+              "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--admin-url-file <ADMIN_URL_FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--print-sql"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-file <ADMIN_URL_FILE>",
+                "--print-sql"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "name": "schemas",
           "invocation": "adapterctl schemas",
           "about": "Write the generated JSON Schemas of every Adapter format, or check the committed ones for drift",

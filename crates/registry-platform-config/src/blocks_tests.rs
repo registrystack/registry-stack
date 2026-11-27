@@ -237,7 +237,9 @@ fn issuer_and_jwks_uri_are_checked_urls_when_read() {
         let issuer: OidcIssuerConfig =
             read_block(&serde_json::json!({"issuer": text, "audience": "api"}).to_string())
                 .expect("ordinary issuer URL");
-        issuer.check("authentication.oidc", false).unwrap();
+        issuer
+            .check_without_posture("authentication.oidc", false)
+            .unwrap();
         assert_eq!(issuer.issuer.as_str(), text);
     }
 }
@@ -541,14 +543,14 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
         "urn:example:api",
         JwksSource::default(),
     )
-    .check(field, false)
+    .check_without_posture(field, false)
     .expect("https issuer");
     issuer("http://127.0.0.1:8082", "api", JwksSource::default())
-        .check(field, true)
+        .check_without_posture(field, true)
         .expect("supervised loopback issuer");
     for loopback in ["http://localhost:8082", "http://[::1]:8082"] {
         issuer(loopback, "api", JwksSource::default())
-            .check(field, true)
+            .check_without_posture(field, true)
             .expect("every loopback spelling is admitted");
     }
 
@@ -560,7 +562,7 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
     assert!(opted_in.issuer.allow_insecure_http);
     opted_in
         .issuer
-        .check(field, false)
+        .check_without_posture(field, false)
         .expect("explicit HTTP issuer opt-in validates");
 
     for (candidate, loopback, expected_field) in [
@@ -615,7 +617,7 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
         ),
     ] {
         let error = candidate
-            .check(field, loopback)
+            .check_without_posture(field, loopback)
             .expect_err("refused issuer");
         assert_eq!(error.field(), expected_field, "{error}");
         assert!(!error.to_string().contains("user:pass"), "{error}");
@@ -644,7 +646,7 @@ fn the_insecure_http_opt_in_also_admits_a_declared_http_jwks_uri() {
         },
     );
     let error = candidate
-        .check(field, false)
+        .check_without_posture(field, false)
         .expect_err("a plain HTTP key URI needs the opt-in");
     assert_eq!(error.field(), "authentication.oidc.jwksSource.uri");
     assert!(error.to_string().contains("allowInsecureHttp: true"));
@@ -652,7 +654,7 @@ fn the_insecure_http_opt_in_also_admits_a_declared_http_jwks_uri() {
 
     candidate.allow_insecure_http = true;
     candidate
-        .check(field, false)
+        .check_without_posture(field, false)
         .expect("the opt-in admits a declared HTTP key URI under an HTTPS issuer");
 }
 
@@ -664,14 +666,14 @@ fn an_oidc_issuer_with_a_query_is_refused_without_echoing_it() {
         "api",
         JwksSource::default(),
     )
-    .check(field, false)
+    .check_without_posture(field, false)
     .expect("an issuer with a path");
     for candidate in [
         "https://issuer.example.test/realms/pilot?tenant=query-canary",
         "https://issuer.example.test/?",
     ] {
         let error = issuer(candidate, "api", JwksSource::default())
-            .check(field, false)
+            .check_without_posture(field, false)
             .expect_err("an issuer with a query is refused");
         assert_eq!(error.field(), "authentication.oidc.issuer", "{error}");
         assert!(error.to_string().contains("query"), "{error}");

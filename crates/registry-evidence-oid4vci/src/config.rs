@@ -81,7 +81,7 @@ const REMOVED_KEYS: &[RemovedKey] = &[
 /// The shared runtime reader for a delivery runtime file.
 #[must_use]
 pub const fn loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new(RuntimeEnvelope {
+    RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: OID4VCI_RUNTIME_API_VERSION,
         kind: OID4VCI_RUNTIME_KIND,
     })

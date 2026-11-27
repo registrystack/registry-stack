@@ -387,6 +387,7 @@ async fn fixture_publishing_with_hook_and_status(
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     let migration_store =
         PostgresStore::connect_migration(&database, &secrets).expect("the migration store");
@@ -10102,6 +10103,7 @@ async fn refuses_a_pre_1_0_ledger_at_migrate_and_readiness(version: i64) {
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     let store = PostgresStore::connect_migration(&database, &secrets).expect("the migration store");
 

@@ -2545,7 +2545,7 @@ impl RuntimeConfig {
     /// The shared loader configured with the Evidence envelope and the keys
     /// it no longer accepts.
     pub fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(EVIDENCE_RUNTIME_ENVELOPE)
+        RuntimeConfigLoader::new_without_posture(EVIDENCE_RUNTIME_ENVELOPE)
             .removed_keys(EVIDENCE_RUNTIME_REMOVED_KEYS)
             .retired_api_versions(EVIDENCE_RETIRED_RUNTIME_API_VERSIONS)
     }
@@ -3524,7 +3524,7 @@ impl OidcAuthenticationConfig {
             }
         }
         self.provider
-            .check(
+            .check_without_posture(
                 "authentication.oidc",
                 assurance_profile == AssuranceProfile::Local,
             )

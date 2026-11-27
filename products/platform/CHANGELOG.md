@@ -35,6 +35,33 @@
   diagnostic: one that names a posture code is refused with
   `config.check-acceptance-not-acceptable`. No runtime uses the gate yet.
 
+- BREAKING (Rust API): `RuntimeConfigLoader::new` takes the
+  `DeclaredPosture`. In production it refuses every development-only setting
+  the file holds, listed beside any other problem in the file, and in
+  development it admits them, and `LoadedRuntimeConfig` carries the
+  `PostureReport` and, in development only, the `DevelopmentWitness`.
+  `check_offline` reports each such setting as an error in production and a
+  warning in development, under the same code, and still decodes the file.
+  Migration: call `RuntimeConfigLoader::new_without_posture(envelope)`, which
+  behaves as `new` did, until the runtime adopts the posture; add
+  `transport: None` to a `DatabaseConfig` literal; and call
+  `OidcIssuerConfig::check_without_posture(field, allow_loopback_http)` where
+  `check` was called.
+
+- The shared database block adds `database.transport`: `verified-tls`, the
+  default, `loopback-plaintext`, for a Unix socket, a numeric loopback
+  address or `localhost`, and `private-network-plaintext`, development only,
+  for loopback or private addresses. `DatabaseConfig::plaintext_permitted`
+  checks the hosts against the value, and `DatabaseConfig::check` refuses
+  `transport` beside `testOnlyPlaintext`, and `testOnlyPlaintext` outside a
+  test build. The shared audit block adds `audit.hashKeyCustody`:
+  `operator-provisioned`, the default, or `development-generated`,
+  development only. `authentication.oidc.allowInsecureHttp: true` is
+  recorded as a development-only setting. The shared and product runtime
+  schemas mark these members `x-registry-development-only`. No runtime reads
+  the new members yet, and a runtime that has not adopted the posture
+  behaves as before.
+
 - `registry-cli-report` adds `Report::with_posture`, which writes
   `posture.value` and `posture.source` (`flag`, `environment` or `default`)
   into a CLI report body after the command members. A report built without it
