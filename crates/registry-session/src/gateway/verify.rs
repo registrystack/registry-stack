@@ -528,11 +528,14 @@ fn configures_own_filter(value: &Value) -> bool {
 
 /// Whether a path matcher's value lies under `prefix`, in any case. A prefix
 /// without a closing `/` holds its own path and the paths below it at a
-/// segment boundary, as the generated `path_separated_prefix` match does.
+/// segment boundary, as the generated `path_separated_prefix` match does. A
+/// `?` is a boundary too: a host `prefix` match reads the query, so a value
+/// that goes on with `?` matches the prefix's own path.
 fn lies_under(path: &str, prefix: &str) -> bool {
     path.len() >= prefix.len()
         && path.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
-        && (prefix.ends_with('/') || matches!(path.as_bytes().get(prefix.len()), None | Some(b'/')))
+        && (prefix.ends_with('/')
+            || matches!(path.as_bytes().get(prefix.len()), None | Some(b'/' | b'?')))
 }
 
 fn verify_manager(expected: &Expected, manager: &Value, findings: &mut Vec<String>) {
@@ -1442,6 +1445,20 @@ mod tests {
             host_routes(&mut document).push(marker_removing_route("late", matcher.clone()));
             refuses(&document, "matches a path under the generated prefix");
         }
+    }
+
+    #[test]
+    fn a_host_prefix_that_reaches_an_exact_path_module_through_its_query_fails() {
+        // Envoy's `prefix` match reads the query too, so `/API/functions/renew?`
+        // matches `/API/functions/renew?x`, the exact path in another case.
+        let mut document = assembled();
+        host_routes(&mut document).push(marker_removing_route(
+            "late",
+            json!({ "prefix": "/API/functions/renew?" }),
+        ));
+        refuses(&document, "matches a path under the generated prefix");
+        assert!(lies_under("/API/functions/renew?", "/api/functions/renew"));
+        assert!(!lies_under("/api/documents?", "/api/documents/"));
     }
 
     #[test]
