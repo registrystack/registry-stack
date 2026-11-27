@@ -1727,7 +1727,7 @@ pub(crate) mod tests {
         .to_string();
         assert_eq!(
             error,
-            "`destinations.hooks.owning-system-events.previousHmacSha256KeyRef` holds the same bytes as `destinations.hooks.owning-system-events.hmacSha256KeyRef`. To rotate, write 32 new random bytes to the secret `destinations.hooks.owning-system-events.hmacSha256KeyRef` references and keep the old bytes behind `destinations.hooks.owning-system-events.previousHmacSha256KeyRef`."
+            "destinations.hooks.owning-system-events.previousHmacSha256KeyRef holds the same bytes as destinations.hooks.owning-system-events.hmacSha256KeyRef. To rotate, write 32 new random bytes to the secret destinations.hooks.owning-system-events.hmacSha256KeyRef references and keep the old bytes behind destinations.hooks.owning-system-events.previousHmacSha256KeyRef."
         );
         assert!(!error.contains(std::str::from_utf8(CURRENT_HOOK_KEY).unwrap()));
     }

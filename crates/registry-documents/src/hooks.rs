@@ -752,7 +752,7 @@ fn signing_material_refusal(error: &UrlHookActivationError) -> String {
                 let current = format!("destinations.hooks.{destination}.hmacSha256KeyRef");
                 let previous = format!("destinations.hooks.{destination}.{member}");
                 format!(
-                    "`{previous}` holds the same bytes as `{current}`. To rotate, write 32 new random bytes to the secret `{current}` references and keep the old bytes behind `{previous}`."
+                    "{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."
                 )
             }
             "key-is-secret-text" => format!(
