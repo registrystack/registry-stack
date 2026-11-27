@@ -130,27 +130,31 @@ def main() -> None:
         key, previous_key = read_hook_keys(args.key, args.previous_key)
     except ValueError as error:
         parser.error(str(error))
-    try:
-        acceptance = SourceChanges(
-            origin=args.destination_origin, plan=args.plan, projection=args.projection,
-            fields=args.selector_field, token_file=args.token_file,
-        )
-    except (OSError, ValueError):
-        parser.error("check notifier origin, plan, projection, selector fields and credential file")
     else:
-        schema = (
-            f"urn:breg:event-schema:{args.registry_id}:{args.record_type}:"
-            f"{args.event_id}:sha256:{args.schema_digest}"
-        )
-        contract = {
-            "registry_id": args.registry_id, "instance_id": args.instance_id,
-            "record_type": args.record_type, "event_id": args.event_id, "trigger": args.trigger,
-            "data_schema": schema, "event_values": args.selector_field,
-        }
-        with make_server(
-            args.port, key, contract, acceptance, previous_key=previous_key,
-        ) as server:
-            server.serve_forever(poll_interval=0.1)
+        try:
+            acceptance = SourceChanges(
+                origin=args.destination_origin, plan=args.plan, projection=args.projection,
+                fields=args.selector_field, token_file=args.token_file,
+            )
+        except (OSError, ValueError):
+            parser.error(
+                "check notifier origin, plan, projection, selector fields and credential file"
+            )
+        else:
+            schema = (
+                f"urn:breg:event-schema:{args.registry_id}:{args.record_type}:"
+                f"{args.event_id}:sha256:{args.schema_digest}"
+            )
+            contract = {
+                "registry_id": args.registry_id, "instance_id": args.instance_id,
+                "record_type": args.record_type, "event_id": args.event_id,
+                "trigger": args.trigger, "data_schema": schema,
+                "event_values": args.selector_field,
+            }
+            with make_server(
+                args.port, key, contract, acceptance, previous_key=previous_key,
+            ) as server:
+                server.serve_forever(poll_interval=0.1)
 
 
 if __name__ == "__main__":

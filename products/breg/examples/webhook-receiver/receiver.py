@@ -255,16 +255,17 @@ def main() -> None:
         key, previous_key = read_hook_keys(args.key, args.previous_key)
     except ValueError as error:
         parser.error(str(error))
-    parent = args.inbox.parent
-    if not parent.is_dir() or parent.is_symlink() or parent.stat().st_mode & 0o077:
-        parser.error("inbox parent must be an owner-only directory")
-    contract = {"registry_id": args.registry_id, "instance_id": args.instance_id,
-                "record_type": args.record_type, "event_id": args.event_id,
-                "event_values": args.field}
-    with make_server(
-        args.port, key, contract, WebhookInbox(args.inbox), previous_key=previous_key,
-    ) as server:
-        server.serve_forever(poll_interval=0.1)
+    else:
+        parent = args.inbox.parent
+        if not parent.is_dir() or parent.is_symlink() or parent.stat().st_mode & 0o077:
+            parser.error("inbox parent must be an owner-only directory")
+        contract = {"registry_id": args.registry_id, "instance_id": args.instance_id,
+                    "record_type": args.record_type, "event_id": args.event_id,
+                    "event_values": args.field}
+        with make_server(
+            args.port, key, contract, WebhookInbox(args.inbox), previous_key=previous_key,
+        ) as server:
+            server.serve_forever(poll_interval=0.1)
 
 
 if __name__ == "__main__":
