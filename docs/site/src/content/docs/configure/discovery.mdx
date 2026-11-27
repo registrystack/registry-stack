@@ -30,8 +30,8 @@ checkout root for the commands that run beside it.
 
 ## Install the binaries
 
-Each release publishes `discovery` and `discoveryctl` for Linux amd64, Linux arm64, and macOS
-arm64, with an installer. Choose a tag, normally the
+From v0.44.0, each release publishes `discovery` and `discoveryctl` for Linux amd64, Linux arm64,
+and macOS arm64, with an installer. Choose a tag, normally the
 [latest release](https://github.com/registrystack/registry-stack/releases/latest), and
 authenticate the assets with the
 [verification guide](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
@@ -40,13 +40,15 @@ bundles that carry the executable, its AWS-LC-FIPS libraries, and notices.
 Install the pair from one tag with the release-pinned installer:
 
 ```sh test-skip="installs release assets; the runner serves the binaries under test"
-bash discovery-<tag>-install.sh
-discovery --version
-discoveryctl --version
+tag="vX.Y.Z"
+bash "discovery-${tag:?set tag to the release tag}-install.sh"
+"${DISCOVERY_INSTALL_DIR:-$HOME/.local/bin}/discovery" --version
+"${DISCOVERY_INSTALL_DIR:-$HOME/.local/bin}/discoveryctl" --version
 ```
 
 The installer puts both binaries in `~/.local/bin`. Set `DISCOVERY_INSTALL_DIR` to change that.
-Neither path needs a Rust toolchain.
+The version checks run the binaries by that path, so they work before the directory is on your
+`PATH`. Neither path needs a Rust toolchain.
 
 The release also publishes the image `ghcr.io/registrystack/discovery:<tag>` for linux/amd64.
 Deploy it by the digest the release manifest records, not by the tag. It runs `discovery` as a

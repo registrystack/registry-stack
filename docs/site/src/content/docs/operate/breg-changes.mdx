@@ -203,22 +203,24 @@ fingerprint, and rolls back without writing a receipt.
 ## Draft a migration that needs no SQL
 
 `bregctl migration draft` writes the descriptor and the rehearsal receipt for a successor whose
-changes are all access or disclosure changes that alter no table, column, or index, such as an
-access profile, a route, a query, or an Action. It covers every change that is not compatible
-additive, installs the candidate on the disposable database to measure its schema fingerprint and
+changes are access or disclosure changes that alter no table, column, or index. Examples are an
+access profile, a route, a query, or an Action. The successor may also add compatible-additive
+changes, such as an optional field. The registry applies those through its own additive plan, so a
+reviewed migration never covers them and the draft leaves them out. The draft covers every other
+change. It installs the candidate on the disposable database to measure its schema fingerprint and
 the PostgreSQL major version, and binds both to the verified baseline package:
 
 ```sh test-skip="needs the reader's baseline package and disposable database"
 bregctl migration draft ./directory \
   --baseline-package /srv/registry/build-1/package \
   --runtime-config /srv/registry/runtime-test.yaml \
-  --output ./reviewed-migrations \
+  --output /srv/registry/reviewed-migrations \
   --module directory --id describe-email-update
 ```
 
 It prints the covers it wrote and the directory,
 `modules/directory/migrations/describe-email-update/`, under `--output`. Read the covers against
-`diff`, then pass `--output` as `--reviewed-migrations`. The package validator still checks the
+`diff`, then pass the same directory as `--reviewed-migrations`. The package validator still checks the
 coverage and the evidence when you run `test` and `package`.
 
 The command refuses before it reads the runtime configuration or opens a database when:
@@ -229,6 +231,8 @@ The command refuses before it reads the runtime configuration or opens a databas
 - `migration.draft.module-unknown`: the project has no module with that identifier.
 - `migration.draft.output-exists`: the migration directory already exists. A draft never overwrites
   one, so choose another `--id` or review the existing directory.
+- `migration.draft.id-invalid`: `--id` is not a local identifier.
+- `migration.draft.output-invalid`: `--output` is not an absolute path, or holds a `..` component or a symbolic link.
 
 {/* Evidence: crates/registry-bregctl/src/migration_draft.rs, run() and plan_covers();
     crates/registry-bregctl/tests/migration_draft.rs;
@@ -242,7 +246,7 @@ reviewed migration directory as `--reviewed-migrations` when there is one:
 ```sh test-skip="needs the reader's disposable database and schema-test credentials"
 bregctl test ./directory \
   --baseline-package /srv/registry/build-1/package \
-  --reviewed-migrations ./reviewed-migrations \
+  --reviewed-migrations /srv/registry/reviewed-migrations \
   --runtime-config /srv/registry/runtime-test.yaml \
   --credentials /srv/registry/schema-test-credentials.yaml \
   --output /srv/registry/build-2/schema-test-receipt.json
