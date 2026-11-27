@@ -2797,7 +2797,12 @@ impl PostgresStore {
         // earlier round can select a stage, and its approvals are never copied.
         // Stages only advance, so the highest-stage changes-requested decision
         // is the one that settled a changes-requested request. The reviewers of
-        // the stages before it stay excluded where a stage asks for it.
+        // the stages up to and including it stay excluded from the stages above
+        // the one they decided, where a stage asks for it.
+        // Erasure removes a later round's subject, so a later round erased
+        // first (a revision with shorter retention) would no longer match. Any
+        // later erased request of this producer and policy may be that round,
+        // so it stops the resumption and the request starts at the first stage.
         let returning = if policy.resubmission == ReviewResubmissionPolicy::ResumeAtReturningStage {
             transaction
                 .query_opt(
@@ -2809,6 +2814,10 @@ impl PostgresStore {
                      WHERE d.request_id=r.request_id AND d.decision='changes-requested'
                        AND r.lifecycle='changes-requested'
                        AND r.result_erased_at IS NULL AND r.result_available_until>$8
+                       AND NOT EXISTS(SELECT 1 FROM casework_review_requests later
+                         WHERE later.producer_id=r.producer_id AND later.policy_id=r.policy_id
+                           AND later.result_erased_at IS NOT NULL
+                           AND (later.created_at,later.request_id)>(r.created_at,r.request_id))
                      ORDER BY d.stage_index DESC,d.decided_at DESC,d.decision_id DESC LIMIT 1
                  ) settling ON true
                  WHERE r.producer_id=$1 AND r.producer_issuer=$2 AND r.producer_subject=$3
@@ -3003,11 +3012,14 @@ impl PostgresStore {
             let settling_stage_index = settling_stage_index.ok_or(ReviewRuntimeError::Corrupt)?;
             transaction
                 .execute(
-                    "INSERT INTO casework_review_prior_stage_reviewers(request_id,actor_issuer,actor_subject)
-                     SELECT $1::uuid,actor_issuer,actor_subject FROM casework_review_decisions
-                     WHERE request_id=$2 AND stage_index<$3
-                     UNION SELECT $1::uuid,actor_issuer,actor_subject
-                     FROM casework_review_prior_stage_reviewers WHERE request_id=$2",
+                    "INSERT INTO casework_review_prior_stage_reviewers(
+                        request_id,actor_issuer,actor_subject,stage_index)
+                     SELECT $1::uuid,actor_issuer,actor_subject,min(stage_index) FROM (
+                         SELECT actor_issuer,actor_subject,stage_index FROM casework_review_decisions
+                         WHERE request_id=$2 AND stage_index<=$3
+                         UNION ALL SELECT actor_issuer,actor_subject,stage_index
+                         FROM casework_review_prior_stage_reviewers WHERE request_id=$2
+                     ) earlier GROUP BY actor_issuer,actor_subject",
                     &[&request_id, &earlier_request_id, &settling_stage_index],
                 )
                 .await?;
@@ -3414,7 +3426,7 @@ impl PostgresStore {
                  WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
                    AND (stage_index=$4 OR ($5 AND stage_index<$4))
                  UNION ALL SELECT -1 FROM casework_review_prior_stage_reviewers
-                 WHERE $5 AND request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
+                 WHERE $5 AND request_id=$1 AND actor_issuer=$2 AND actor_subject=$3 AND stage_index<$4
                  ORDER BY 1 DESC LIMIT 1",
                 &[
                     &request_id,
@@ -4266,7 +4278,7 @@ impl PostgresStore {
                      WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
                        AND stage_index<$4
                      UNION ALL SELECT 1 FROM casework_review_prior_stage_reviewers
-                     WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
+                     WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3 AND stage_index<$4
                      LIMIT 1",
                     &[
                         &request_id,
@@ -6028,20 +6040,26 @@ async fn load_decisions(
 async fn load_prior_stage_reviewers(
     transaction: &Transaction<'_>,
     request_id: Uuid,
-) -> Result<Vec<IssuerPrincipal>, ReviewRuntimeError> {
-    Ok(transaction
+) -> Result<Vec<PriorStageReviewer>, ReviewRuntimeError> {
+    transaction
         .query(
-            "SELECT actor_issuer,actor_subject FROM casework_review_prior_stage_reviewers
+            "SELECT actor_issuer,actor_subject,stage_index FROM casework_review_prior_stage_reviewers
              WHERE request_id=$1 ORDER BY actor_issuer,actor_subject",
             &[&request_id],
         )
         .await?
         .into_iter()
-        .map(|row| IssuerPrincipal {
-            issuer: row.get(0),
-            subject: row.get(1),
+        .map(|row| {
+            Ok(PriorStageReviewer {
+                reviewer: IssuerPrincipal {
+                    issuer: row.get(0),
+                    subject: row.get(1),
+                },
+                stage_index: u16::try_from(row.get::<_, i32>(2))
+                    .map_err(|_| ReviewRuntimeError::Corrupt)?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 async fn ensure_review_identity_eligible(
@@ -6064,7 +6082,7 @@ async fn ensure_review_identity_eligible(
              WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
                AND (stage_index=$4 OR ($5 AND stage_index<$4))
              UNION ALL SELECT 1 FROM casework_review_prior_stage_reviewers
-             WHERE $5 AND request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
+             WHERE $5 AND request_id=$1 AND actor_issuer=$2 AND actor_subject=$3 AND stage_index<$4
              LIMIT 1",
             &[
                 &record.request_id,
@@ -6922,7 +6940,8 @@ async fn review_task_staffing_shortfalls(
                         (COALESCE((s.stage->>'excludePreviousStageReviewers')::boolean,false) AND d.stage_index<t.stage_index)))
                   AND NOT (COALESCE((s.stage->>'excludePreviousStageReviewers')::boolean,false)
                     AND EXISTS(SELECT 1 FROM casework_review_prior_stage_reviewers p
-                      WHERE p.request_id=t.request_id AND p.actor_issuer=m.issuer AND p.actor_subject=m.subject))
+                      WHERE p.request_id=t.request_id AND p.actor_issuer=m.issuer AND p.actor_subject=m.subject
+                        AND p.stage_index<t.stage_index))
                 UNION SELECT d.actor_issuer,d.actor_subject FROM casework_review_decisions d
                     WHERE d.request_id=t.request_id AND d.stage_index=t.stage_index AND d.decision='approve'
             ) people

@@ -89,9 +89,11 @@
   policy, using the settling decision within result retention, with fresh
   clocks and no carried approvals. Later resubmissions start at the first
   stage. Omission keeps the
-  first-stage default and the policy digest. The reviewers of the earlier
-  stages stay excluded where a stage sets `excludePreviousStageReviewers`, also
-  after the earlier request is erased.
+  first-stage default and the policy digest. Earlier-round reviewers, up to and
+  including the returning stage, stay excluded from the stages above the one
+  they decided where a stage sets `excludePreviousStageReviewers`, also after
+  the earlier request is erased. A later round erased first stops an older
+  round from resuming.
 
 - A reviewer who holds a task can ask the applicant. A stage opts in with
   `asks: {}` (approval policies only), and a producer declares

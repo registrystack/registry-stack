@@ -13302,10 +13302,11 @@ async fn c2_sod_resumed_round_keeps_earlier_stage_reviewers_out_of_the_returning
             "erase={erase}"
         );
         // The set is erased with the resumed request's own decisions, and the
-        // third round keeps its copy.
+        // third round keeps its copy: reviewer_a at stage 0 and reviewer_b at
+        // the returning stage 1.
         expire_review_results(&fixture, &[resumed]).await;
         service.erase_expired_reviews().await.unwrap();
-        for (request_id, expected) in [(resumed, 0_i64), (third, 1)] {
+        for (request_id, expected) in [(resumed, 0_i64), (third, 2)] {
             let retained: i64 = fixture
                 .database
                 .query_one(
@@ -13319,6 +13320,406 @@ async fn c2_sod_resumed_round_keeps_earlier_stage_reviewers_out_of_the_returning
             assert_eq!(retained, expected, "erase={erase}");
         }
     }
+}
+
+/// A resumption service whose policy adds stages after `secondary`, each
+/// excluding previous-stage reviewers, with the given negative-decision mode.
+fn c2_sod2_service(
+    fixture: &Fixture,
+    later_stages: &[(&str, ReviewNegativeDecisionMode)],
+) -> CaseworkService {
+    let mut project = asks_project(true, true);
+    let policy = &mut project.review_policies[0];
+    policy.resubmission = ReviewResubmissionPolicy::ResumeAtReturningStage;
+    for (id, negative_decisions) in later_stages {
+        let mut stage = policy.stages[1].clone();
+        stage.id = (*id).to_owned();
+        stage.negative_decisions = *negative_decisions;
+        policy.stages.push(stage);
+    }
+    CaseworkService::new(fixture.store.clone(), project, Vec::new()).unwrap()
+}
+
+async fn c2_sod2_member(fixture: &Fixture, subject: &str) -> ActorContext {
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('review-team','https://issuer.test',$1,'staff')",
+            &[&subject],
+        )
+        .await
+        .unwrap();
+    actor(subject, CaseworkActsAs::Staff, "staff")
+}
+
+async fn c2_sod2_round(
+    fixture: &Fixture,
+    service: &CaseworkService,
+    label: &str,
+    version: u32,
+) -> Uuid {
+    let mut next = bind_request(service, request(label, &format!("ref-{label}-{version}")));
+    next.subject.version = version.to_string();
+    next.subject.digest = ContentDigest::for_bytes(format!("{label}-{version}").as_bytes());
+    service
+        .create_review_request(
+            &fixture.producer,
+            next,
+            &format!("create-{label}-{version}"),
+        )
+        .await
+        .unwrap()
+        .accepted
+        .request_id
+}
+
+async fn c2_sod2_active_stage(fixture: &Fixture, request_id: Uuid) -> i32 {
+    fixture
+        .database
+        .query_one(
+            "SELECT active_stage_index FROM casework_review_requests WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .unwrap()
+        .get(0)
+}
+
+async fn c2_sod2_claim_and_decide(
+    service: &CaseworkService,
+    reviewer: &ActorContext,
+    task: Uuid,
+    decision: DecisionKind,
+    key: &str,
+) -> ReviewTransition {
+    service
+        .claim_review_task(reviewer, task, None, "", 1, &format!("claim-{key}"))
+        .await
+        .unwrap_or_else(|error| panic!("{key}: claim: {error:?}"));
+    service
+        .decide_review_task(
+            reviewer,
+            task,
+            ReviewTaskDecisionRequest { decision },
+            None,
+            "",
+            2,
+            &format!("decide-{key}"),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{key}: decide: {error:?}"))
+}
+
+async fn c2_sod2_claim_is_refused(
+    service: &CaseworkService,
+    reviewer: &ActorContext,
+    task: Uuid,
+    key: &str,
+) {
+    let claimed = service
+        .claim_review_task(reviewer, task, None, "", 1, &format!("claim-{key}"))
+        .await;
+    assert!(
+        matches!(
+            claimed,
+            Err(ReviewRuntimeError::Forbidden(
+                FailedCheck::SeparationOfDuties
+            ))
+        ),
+        "{key}: {claimed:?}"
+    );
+}
+
+fn c2_sod2_approve() -> DecisionKind {
+    DecisionKind::Approve {
+        outcome: "approved".into(),
+        public_reason: None,
+    }
+}
+
+fn c2_sod2_return() -> DecisionKind {
+    DecisionKind::ChangesRequested {
+        outcome: "needs-correction".into(),
+        public_reason: Some("Correct the form".into()),
+        reason: Some("Check the name".into()),
+        result: Some(json!({"correction":"name"})),
+    }
+}
+
+fn c2_sod2_reject(reason: &str) -> DecisionKind {
+    DecisionKind::Reject {
+        outcome: "incorrect".into(),
+        reason: Some(reason.into()),
+        public_reason: Some("The record is incorrect".into()),
+        result: Some(json!({"correction":"record"})),
+    }
+}
+
+#[tokio::test]
+async fn c2_sod2_returning_stage_reviewers_stay_out_of_later_stages_across_rounds() {
+    let fixture = fixture().await;
+    let service = c2_sod2_service(
+        &fixture,
+        &[("tertiary", ReviewNegativeDecisionMode::Settle)],
+    );
+    let reviewer_c = c2_sod2_member(&fixture, "reviewer-c").await;
+    let reviewer_d = c2_sod2_member(&fixture, "reviewer-d").await;
+    // Round 1: reviewer_a approves stage 0, reviewer_b returns at stage 1.
+    c2_returning_stage_round(&fixture, &service, "strict").await;
+
+    // Round 2 resumes at stage 1. reviewer_c approves it.
+    let second = c2_sod2_round(&fixture, &service, "strict", 2).await;
+    assert_eq!(c2_sod2_active_stage(&fixture, second).await, 1);
+    c2_sod2_claim_and_decide(
+        &service,
+        &reviewer_c,
+        task_id(&fixture, second, 1).await,
+        c2_sod2_approve(),
+        "strict-2-secondary",
+    )
+    .await;
+    // Stage 2 excludes reviewer_b, who decided stage 1 in round 1, exactly as
+    // within one request.
+    let tertiary = task_id(&fixture, second, 2).await;
+    for (reviewer, key) in [
+        (&fixture.reviewer_a, "strict-2-a"),
+        (&fixture.reviewer_b, "strict-2-b"),
+        (&reviewer_c, "strict-2-c"),
+    ] {
+        c2_sod2_claim_is_refused(&service, reviewer, tertiary, key).await;
+    }
+    let assigned = service
+        .assign_review_task(
+            &fixture.supervisor,
+            tertiary,
+            None,
+            "",
+            1,
+            AssignmentRequest {
+                assignee: fixture.reviewer_b.principal.clone(),
+                reason: Some("nominate the earlier returning reviewer".to_owned()),
+            },
+            "assign-strict-2-b",
+        )
+        .await;
+    assert!(
+        matches!(
+            assigned,
+            Err(ReviewRuntimeError::Forbidden(
+                FailedCheck::SeparationOfDuties
+            ))
+        ),
+        "{assigned:?}"
+    );
+    c2_sod2_claim_and_decide(
+        &service,
+        &reviewer_d,
+        tertiary,
+        c2_sod2_return(),
+        "strict-2-tertiary",
+    )
+    .await;
+
+    // Round 3 resumes at stage 2 and carries every stage index forward.
+    let third = c2_sod2_round(&fixture, &service, "strict", 3).await;
+    assert_eq!(c2_sod2_active_stage(&fixture, third).await, 2);
+    let stored = fixture
+        .database
+        .query(
+            "SELECT actor_subject,stage_index FROM casework_review_prior_stage_reviewers
+             WHERE request_id=$1 ORDER BY actor_subject",
+            &[&third],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, i32>(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stored,
+        [
+            ("reviewer-a".to_owned(), 0),
+            ("reviewer-b".to_owned(), 1),
+            ("reviewer-c".to_owned(), 1),
+            ("reviewer-d".to_owned(), 2),
+        ]
+    );
+    let returning = task_id(&fixture, third, 2).await;
+    for (reviewer, key) in [
+        (&fixture.reviewer_b, "strict-3-b"),
+        (&reviewer_c, "strict-3-c"),
+    ] {
+        c2_sod2_claim_is_refused(&service, reviewer, returning, key).await;
+    }
+    // The reviewer who returned stage 2 may review it again.
+    c2_sod2_claim_and_decide(
+        &service,
+        &reviewer_d,
+        returning,
+        c2_sod2_approve(),
+        "strict-3-tertiary",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn c2_sod2_staffing_shortfall_counts_earlier_round_reviewers_out() {
+    // (required approvals at the returning stage, stage flag, shortfall)
+    for (required, exclude, shortfall) in [(2, true, true), (2, false, false), (1, true, false)] {
+        let fixture = fixture().await;
+        let mut project = asks_project(true, true);
+        project.review_policies[0].resubmission = ReviewResubmissionPolicy::ResumeAtReturningStage;
+        project.review_policies[0].stages[1].required_approvals = required;
+        project.review_policies[0].stages[1].exclude_previous_stage_reviewers = exclude;
+        let service = CaseworkService::new(fixture.store.clone(), project, Vec::new()).unwrap();
+        c2_returning_stage_round(&fixture, &service, "staffing").await;
+        let resumed = c2_sod2_round(&fixture, &service, "staffing", 2).await;
+        assert_eq!(c2_sod2_active_stage(&fixture, resumed).await, 1);
+        // reviewer_a decided stage 0 of round 1 and counts out where the stage
+        // asks for it. reviewer_b returned stage 1 and still counts.
+        let task = service
+            .review_task(
+                &fixture.reviewer_b,
+                task_id(&fixture, resumed, 1).await,
+                None,
+                "",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            task.staffing_diagnostic,
+            shortfall.then_some(StaffingDiagnostic::InsufficientDistinctApprovers),
+            "required={required} exclude={exclude}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn c2_sod2_advisory_reasons_stay_hidden_from_earlier_round_reviewers() {
+    let fixture = fixture().await;
+    let service = c2_sod2_service(
+        &fixture,
+        &[
+            ("advice", ReviewNegativeDecisionMode::Advise),
+            ("final", ReviewNegativeDecisionMode::Settle),
+        ],
+    );
+    let reviewer_c = c2_sod2_member(&fixture, "reviewer-c").await;
+    let reviewer_d = c2_sod2_member(&fixture, "reviewer-d").await;
+    let reviewer_e = c2_sod2_member(&fixture, "reviewer-e").await;
+    c2_returning_stage_round(&fixture, &service, "advisory-sod").await;
+    let resumed = c2_sod2_round(&fixture, &service, "advisory-sod", 2).await;
+    c2_sod2_claim_and_decide(
+        &service,
+        &reviewer_c,
+        task_id(&fixture, resumed, 1).await,
+        c2_sod2_approve(),
+        "advisory-sod-secondary",
+    )
+    .await;
+    let advisory_task = task_id(&fixture, resumed, 2).await;
+    assert_eq!(
+        c2_sod2_claim_and_decide(
+            &service,
+            &reviewer_d,
+            advisory_task,
+            c2_sod2_reject("sod2 advisory private reason"),
+            "advisory-sod-advice",
+        )
+        .await,
+        ReviewTransition::StageAdvanced {
+            completed_stage: "advice".to_owned(),
+            next_stage: "final".to_owned(),
+        }
+    );
+    // reviewer_a and reviewer_b decided earlier stages of round 1 and are
+    // excluded from the final stage, so they do not read its accountability.
+    for (reviewer, readable) in [
+        (&fixture.reviewer_a, false),
+        (&fixture.reviewer_b, false),
+        (&reviewer_e, true),
+    ] {
+        let history = service
+            .review_history(reviewer, resumed, None, "", None, 100)
+            .await
+            .unwrap();
+        let advisory = history
+            .items
+            .iter()
+            .find(|entry| entry.task_id == Some(advisory_task) && entry.kind == "review-decided")
+            .expect("the advisory decision is in ordinary history");
+        assert_eq!(
+            advisory.detail.get("privateReason").is_some(),
+            readable,
+            "{}",
+            reviewer.principal.subject
+        );
+    }
+}
+
+#[tokio::test]
+async fn c2_sod2_an_erased_later_round_stops_an_older_round_resuming() {
+    let fixture = fixture().await;
+    let older = c2_resumption_service(&fixture);
+    // A later revision of the same policy keeps terminal results for less time.
+    let mut project = asks_project(true, true);
+    project.project = ProjectIdentity::new("review-test".parse().unwrap(), "asks-2".to_owned());
+    let policy = &mut project.review_policies[0];
+    policy.version = "asks-2".to_owned();
+    policy.resubmission = ReviewResubmissionPolicy::ResumeAtReturningStage;
+    policy.retention.terminal_retention_days = 30;
+    let shorter = CaseworkService::new(fixture.store.clone(), project, Vec::new()).unwrap();
+
+    // Round 1 (90-day results) returns at stage 1.
+    let first = c2_returning_stage_round(&fixture, &older, "erased-later").await;
+    // Round 2 (30-day results) resumes at stage 1 and is rejected.
+    let second = c2_sod2_round(&fixture, &shorter, "erased-later", 2).await;
+    assert_eq!(c2_sod2_active_stage(&fixture, second).await, 1);
+    c2_sod2_claim_and_decide(
+        &shorter,
+        &fixture.reviewer_b,
+        task_id(&fixture, second, 1).await,
+        c2_sod2_reject("rejected in the later round"),
+        "erased-later-2",
+    )
+    .await;
+    // Forty days pass: round 2's results expire, round 1's do not.
+    for statement in [
+        "UPDATE casework_review_requests SET created_at=created_at-interval '40 days',
+             terminal_at=terminal_at-interval '40 days',
+             result_available_until=result_available_until-interval '40 days'
+         WHERE request_id=ANY($1)",
+        "UPDATE casework_review_results SET completed_at=completed_at-interval '40 days',
+             available_until=available_until-interval '40 days'
+         WHERE request_id=ANY($1)",
+        "UPDATE casework_review_terminal_events SET completed_at=completed_at-interval '40 days',
+             retained_until=retained_until-interval '40 days'
+         WHERE request_id=ANY($1)",
+    ] {
+        fixture
+            .database
+            .execute(statement, &[&vec![first, second]])
+            .await
+            .unwrap();
+    }
+    shorter.erase_expired_reviews().await.unwrap();
+    for (request_id, erased) in [(first, false), (second, true)] {
+        let row = fixture
+            .database
+            .query_one(
+                "SELECT result_erased_at IS NOT NULL FROM casework_review_requests
+                 WHERE request_id=$1",
+                &[&request_id],
+            )
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, bool>(0), erased);
+    }
+    // The latest round was rejected, so round 3 starts at the first stage even
+    // though round 1 is still retained.
+    let third = c2_sod2_round(&fixture, &shorter, "erased-later", 3).await;
+    assert_eq!(c2_sod2_active_stage(&fixture, third).await, 0);
 }
 
 /// The protocol carries answer times at microsecond precision.

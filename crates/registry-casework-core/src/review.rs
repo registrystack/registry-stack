@@ -1841,15 +1841,26 @@ pub struct ReviewProgress {
     pub active_stage: u16,
     #[serde(default)]
     pub decisions: Vec<Decision>,
-    /// Reviewers who decided a stage before the returning stage of the
-    /// earlier round a resumed request continues. They count as previous-stage
-    /// reviewers of every stage of this request.
+    /// Reviewers who decided a stage, up to and including the returning stage,
+    /// of the earlier rounds a resumed request continues. Each counts as a
+    /// previous-stage reviewer of every stage of this request above the stage
+    /// they decided.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prior_stage_reviewers: Vec<IssuerPrincipal>,
+    pub prior_stage_reviewers: Vec<PriorStageReviewer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_constraints: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<ReviewSettlement>,
+}
+
+/// A reviewer of an earlier round and the lowest stage index they decided in
+/// it. Earlier rounds' indices are compared with the resumed request's stages.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PriorStageReviewer {
+    pub reviewer: IssuerPrincipal,
+    pub stage_index: u16,
 }
 
 impl ReviewProgress {
@@ -1968,7 +1979,9 @@ pub fn record_review_decision(
     if stage.exclude_previous_stage_reviewers
         && (progress.decisions.iter().any(|recorded| {
             recorded.stage_id != stage.id && recorded.reviewer == decision.reviewer
-        }) || progress.prior_stage_reviewers.contains(&decision.reviewer))
+        }) || progress.prior_stage_reviewers.iter().any(|prior| {
+            prior.reviewer == decision.reviewer && prior.stage_index < progress.active_stage
+        }))
     {
         return Err(ReviewDecisionError::PreviousStageReviewerExcluded);
     }
@@ -3528,24 +3541,42 @@ mod tests {
 
     #[test]
     fn a_resumed_request_excludes_reviewers_of_the_earlier_rounds_prior_stages() {
-        for exclude in [true, false] {
-            let mut second = stage("second", 1);
-            second.exclude_previous_stage_reviewers = exclude;
-            let snapshot = approval_policy(vec![stage("first", 1), second])
+        // (earlier round's stage, active stage, stage flag, excluded)
+        for (decided_stage, active_stage, exclude, excluded) in [
+            (0, 1, true, true),
+            (0, 1, false, false),
+            // A reviewer of the returning stage may review it again.
+            (1, 1, true, false),
+            (1, 2, true, true),
+            (1, 2, false, false),
+        ] {
+            let stages = ["first", "second", "third"]
+                .into_iter()
+                .map(|id| {
+                    let mut policy = stage(id, 1);
+                    policy.exclude_previous_stage_reviewers = exclude;
+                    policy
+                })
+                .collect();
+            let snapshot = approval_policy(stages)
                 .closure_with(crate::ReviewPolicyDependencies::default())
                 .unwrap();
             let request_id = Uuid::from_u128(101);
             let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
-            progress.active_stage = 1;
-            progress.prior_stage_reviewers = vec![person("a")];
-            let returning = task(request_id, 1, "second", 1, "a");
+            progress.active_stage = active_stage;
+            progress.prior_stage_reviewers = vec![PriorStageReviewer {
+                reviewer: person("a"),
+                stage_index: decided_stage,
+            }];
+            let stage_id = snapshot.stages[usize::from(active_stage)].id.clone();
+            let returning = task(request_id, active_stage, &stage_id, 1, "a");
             let decided = record_review_decision(
                 &snapshot,
                 &mut progress,
                 &returning,
                 approve(&returning, person("a")),
             );
-            if exclude {
+            if excluded {
                 assert_eq!(
                     decided,
                     Err(ReviewDecisionError::PreviousStageReviewerExcluded)

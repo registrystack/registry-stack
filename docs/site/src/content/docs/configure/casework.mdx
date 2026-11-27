@@ -468,9 +468,12 @@ Casework reads the stage of the decision that settled the earlier request.
 Casework matches the returning stage by its ID in the new policy.
 If that stage no longer exists, Casework starts at the first stage.
 Casework resumes within the earlier request's result retention, and starts a resubmission at the first stage after that.
+Once any later request of the same producer and policy ID has been erased, Casework also starts at the first stage, because erasure removes the subject that would show whether that request was a later round. A later request whose records are already deleted cannot be detected.
 The `review-resumed-at-stage` history detail carries only `stageId`, without linking to the earlier request.
 Earlier approvals are not carried over.
-The staff who decided the stages before the returning stage still count as previous-stage reviewers, so a stage with `excludePreviousStageReviewers` keeps them out, even after the earlier request is erased.
+The staff who decided a stage of an earlier round, up to and including the returning stage, count as reviewers of that stage, so a later stage with `excludePreviousStageReviewers` keeps them out, as within one request, even after the earlier request is erased.
+A reviewer of the returning stage may review that stage again.
+Casework compares the earlier round's stage positions, not stage IDs, with the new policy's stages, so after a revision that reorders stages the exclusions follow the earlier order.
 The subject clock starts with a fresh budget.
 Omitting `resubmission` preserves the policy digest.
 
