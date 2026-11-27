@@ -338,7 +338,7 @@ impl Workflows {
                             .event_triggers
                             .get(trigger.as_str())
                     });
-                    if !deployed.is_some_and(|trigger| trigger.source == *alias) {
+                    if deployed.is_none_or(|trigger| trigger.source != *alias) {
                         let field = format!(
                             "eventSources.{alias}.triggers.{workflow}.{trigger}.hmacSha256KeyRef"
                         );
