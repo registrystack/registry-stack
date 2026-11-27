@@ -71,6 +71,8 @@
 - The runtime schema declares no empty default for an issuer entry's
   `assertionIssuers`. Omitting the member still means no assertion-issuer rule
   applies.
+- Fix a pre-existing application/database clock mismatch that could delay
+  immediately due review completion deliveries when the host clock ran ahead.
 - Resubmission considers only the latest matching round and records only
   `stageId` in its resume history, without a link to the earlier request.
 - Clock recomputation preserves accumulated ask pauses. Pausing requires

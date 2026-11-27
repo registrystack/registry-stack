@@ -5498,6 +5498,33 @@ async fn insert_review_activity_clock(
     Ok(())
 }
 
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+impl PostgresStore {
+    /// Settle with a supplied application instant for clock-skew regressions.
+    pub async fn settle_review_at_for_test(
+        &self,
+        request_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<ReviewResult, ReviewRuntimeError> {
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let record = load_request_by_id(&transaction, request_id, true).await?;
+        let result = settle_review(
+            &transaction,
+            &record,
+            ReviewResultStatus::Approved,
+            Some("approved".into()),
+            None,
+            None,
+            now,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(result)
+    }
+}
+
 async fn settle_review(
     transaction: &Transaction<'_>,
     record: &ReviewRequestRecord,
@@ -5598,13 +5625,12 @@ async fn settle_review(
                     "INSERT INTO casework_review_completion_outbox(
                     event_id,request_id,destination_id,recipient_binding,generation,state,
                     attempt,next_attempt_at,retained_until)
-                 VALUES($1,$2,$3,$4,1,'pending',0,$5,$6)",
+                 VALUES($1,$2,$3,$4,1,'pending',0,transaction_timestamp(),$5)",
                     &[
                         &event_id,
                         &record.request_id,
                         &destination,
                         &recipient,
-                        &now,
                         &retained_until,
                     ],
                 )

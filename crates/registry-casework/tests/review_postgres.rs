@@ -1827,6 +1827,37 @@ async fn a_completion_past_a_lowered_attempt_limit_is_set_aside_as_exhausted() {
 }
 
 #[tokio::test]
+async fn a_completion_is_immediately_claimable_when_the_application_clock_is_ahead() {
+    let fixture = fixture().await;
+    let created = fixture
+        .service_v1
+        .create_review_request(
+            &fixture.producer,
+            request("completion-clock-skew", "completion-clock-skew"),
+            "create-completion-clock-skew",
+        )
+        .await
+        .unwrap();
+    let database_now: chrono::DateTime<Utc> = fixture
+        .database
+        .query_one("SELECT transaction_timestamp()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let application_now = database_now + TimeDelta::hours(1);
+    let result = fixture
+        .store
+        .settle_review_at_for_test(created.accepted.request_id, application_now)
+        .await
+        .unwrap();
+    assert_eq!(result.completed_at, application_now);
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await.unwrap()
+        .expect("immediate dispatch uses the database clock despite an application clock one hour ahead");
+    assert_eq!(lease.event().request_id, created.accepted.request_id);
+}
+
+#[tokio::test]
 async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
     let fixture = fixture().await;
     let create = request("record-1", "producer-ref-1");
