@@ -954,7 +954,7 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
         ] {
             assert!(
                 !case.log_text.contains(canary) && !case.answer.to_string().contains(canary),
-                "{}: the refusal exposed {canary}",
+                "{}: the refusal exposed a canary value",
                 case.name
             );
         }

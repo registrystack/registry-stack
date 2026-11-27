@@ -3582,7 +3582,7 @@ fn reclaimed_successor_with_missing_inbox_key_starts_a_fresh_session() {
     assert_eq!(refused, "This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
 
     // A successful empty Docker listing models a manually removed container.
-    stop(&state.project, true, Some(Path::new("/bin/true"))).unwrap();
+    stop(&state.project, true, Some(Path::new("/usr/bin/true"))).unwrap();
     let refusal = start_without_binaries(&state.project).unwrap_err();
     assert!(!refusal.to_string().contains("stop --remove"), "{refusal}");
     let fresh = read_state(&root).unwrap();
@@ -3596,7 +3596,7 @@ fn stop_remove_reclaims_an_uncompilable_captured_inbox_project() {
     let (_temporary, state) = retained_inbox_session(1);
     let root = state.root();
     fs::write(root.join("project/registry.yaml"), "not a registry").unwrap();
-    let report = stop(&state.project, true, Some(Path::new("/bin/true"))).unwrap();
+    let report = stop(&state.project, true, Some(Path::new("/usr/bin/true"))).unwrap();
     assert_eq!(report["status"], "stopped");
     let removed = read_state(&root).unwrap();
     assert!(removed.container_id.is_none());
@@ -5004,7 +5004,10 @@ fn local_review_authorities_are_closed_and_bounded() {
         .unwrap_err()
         .to_string();
         assert!(refusal.contains(replacement), "{refusal}");
-        assert!(!refusal.contains("canary-old-value"), "{refusal}");
+        assert!(
+            !refusal.contains("canary-old-value"),
+            "the refusal for {key} repeats the old reference value"
+        );
     }
 }
 
