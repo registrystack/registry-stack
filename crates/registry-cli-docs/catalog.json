@@ -1789,6 +1789,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -5675,6 +5684,15 @@
             {
               "display": "--print-sql",
               "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -10534,6 +10552,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
@@ -12726,6 +12753,15 @@
             {
               "display": "--print-sql",
               "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -15396,6 +15432,15 @@
             {
               "display": "--print-sql",
               "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -22407,6 +22452,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -27431,6 +27485,15 @@
             {
               "display": "--print-sql",
               "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

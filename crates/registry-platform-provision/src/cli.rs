@@ -64,6 +64,9 @@ pub struct ProvisionArgs {
     /// Print the SQL script and connect to nothing
     #[arg(long)]
     pub print_sql: bool,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    pub posture: Option<String>,
 }
 
 /// What a product's loader hands the runner. A loader refuses with one
@@ -1169,6 +1172,17 @@ mod tests {
     }
 
     // ---- flags ----
+
+    #[test]
+    fn posture_is_an_optional_unvalidated_flag() {
+        let unset = parse(&["--runtime-config", "r", "--print-sql"]).expect("arguments parse");
+        assert_eq!(unset.posture, None);
+        for value in ["development", "production", "Production"] {
+            let args = parse(&["--runtime-config", "r", "--print-sql", "--posture", value])
+                .expect("the shared posture crate validates the value, not clap");
+            assert_eq!(args.posture.as_deref(), Some(value));
+        }
+    }
 
     #[test]
     fn print_sql_conflicts_with_both_admin_flags() {

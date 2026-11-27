@@ -103,7 +103,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::path::Path;
 
-use registry_platform_posture::{DEVELOPMENT, POSTURE_ENV, POSTURE_FLAG};
+use registry_platform_posture::POSTURE_FLAG;
 use registry_platform_yaml::{
     escape_pointer_segment, gated_site, Diagnostic, Position, Severity, Source, DEVELOPMENT_ONLY,
 };
@@ -111,7 +111,10 @@ use serde::de::{Deserializer, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-pub use registry_platform_posture::{DeclaredPosture, Posture, PostureSource};
+pub use registry_platform_posture::{
+    declared, declared_from, DeclaredPosture, Posture, PostureError, PostureSource, DEVELOPMENT,
+    POSTURE_ENV,
+};
 
 use crate::RuntimeConfigError;
 

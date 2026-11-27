@@ -60,9 +60,10 @@ pub use package::{
     PackageLimits, VerifiedPackage, REVISION_FILE, SUM_FILE,
 };
 pub use posture::{
-    collect_development_settings, DeclaredPosture, DevelopmentClass, DevelopmentOnlyRefused,
-    DevelopmentSetting, DevelopmentWitness, ExplicitProductionSetting, FoundExplicitSetting,
-    FoundSetting, Gated, Posture, PostureReport, PostureSource, SettingOrigin,
+    collect_development_settings, declared, declared_from, DeclaredPosture, DevelopmentClass,
+    DevelopmentOnlyRefused, DevelopmentSetting, DevelopmentWitness, ExplicitProductionSetting,
+    FoundExplicitSetting, FoundSetting, Gated, Posture, PostureError, PostureReport, PostureSource,
+    SettingOrigin, DEVELOPMENT, POSTURE_ENV,
 };
 pub use secrets::{
     ProtectedSecret, SecretError, SecretFileCheck, SecretProvider, SecretReference, SecretResolver,
