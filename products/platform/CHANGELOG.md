@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A `test-support` feature in `registry-platform-provision` gives the product
+  provision tests one verified-TLS superuser session, so they run against a
+  TLS-only PostgreSQL server. It is enabled only by dev-dependencies.
+
 - One rule for a static key set, in `registry-platform-oidc`
   (`public_jwks_document`, behind `parse_static_jwks`). A key set that holds
   a private or symmetric member (`d`, `k`, `p`, `q`, `dp`, `dq`, `qi`,

@@ -6618,6 +6618,7 @@ dependencies = [
  "registry-cli-report",
  "registry-platform-buildinfo",
  "registry-platform-config",
+ "registry-platform-provision",
  "registry-platform-yaml",
  "registry-rstack-dev",
  "registry-thunderid-tooling",
@@ -6629,6 +6630,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -6739,6 +6741,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-metrics",
  "registry-platform-oidc",
+ "registry-platform-provision",
  "registry-platform-script",
  "registry-platform-testing",
  "registry-platform-yaml",
@@ -7039,6 +7042,7 @@ dependencies = [
  "registry-documents-core",
  "registry-platform-buildinfo",
  "registry-platform-config",
+ "registry-platform-provision",
  "registry-platform-yaml",
  "serde",
  "serde_json",
@@ -7046,6 +7050,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

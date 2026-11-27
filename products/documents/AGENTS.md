@@ -33,6 +33,10 @@ rules that govern it and the invariant rows in `contracts/` that prove them.
   `scripts/check_database_test_isolation.py` refuses a suite that would run
   under default Cargo resolution. A suite skipped for a missing database URL
   is not database verification; the suites fail instead of skipping.
+  The `provision_postgres` target of `registry-documentsctl` needs
+  `PROVISION_TEST_DATABASE_URL`, a disposable superuser URL (`sslmode=verify-full`
+  on a server that offers verified TLS), and
+  `PROVISION_TEST_DATABASE_CA`, the path of the CA PEM. It fails without them.
 - Treat everything under `generated/` as generated output. The schemas and
   the OpenAPI document come from the generators `README.md` names, and the
   `schema` feature's drift test, run by `scripts/check-checkpoint.sh`, fails

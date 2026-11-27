@@ -146,6 +146,7 @@ registry-payment-client.workspace = true
 registry-platform-activation.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-oidc.workspace = true
+registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-calendar.workspace = true
@@ -185,6 +186,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+registry-platform-provision = { workspace = true, features = ["test-support"] }
 registry-platform-testing = { workspace = true, features = ["test-utils", "test-authorization-server", "migration-pins", "token-fixtures"] }
 tempfile.workspace = true
 tower.workspace = true

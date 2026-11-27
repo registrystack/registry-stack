@@ -22,6 +22,7 @@ NAMES = {
     "stack-client": "registry-stack-client",
     "cli-docs": "registry-cli-docs",
     "cli-api": "registry-cli-api",
+    "cli-report": "registry-cli-report",
     "breg": "registry-breg",
     "breg-client": "registry-breg-client",
     "bregctl": "registry-bregctl",
@@ -68,6 +69,7 @@ INTENDED = {
     "stack-client": ["breg-client", "messaging-client", "scheduling-client", "client"],
     "cli-docs": ["runtime", "breg", "bregctl", "messaging", "scheduling", "schedulingctl"],
     "cli-api": ["platform"],
+    "cli-report": ["serde"],
     "breg": ["record", "platform"],
     "breg-client": ["record", "platform"],
     "bregctl": ["breg"],
@@ -128,6 +130,14 @@ class RuntimeTests(unittest.TestCase):
         found = failures(
             runtime=[*INTENDED["runtime"], "cli-api"],
             cli_api=["bregctl"],
+        )
+        self.assertIn("registry-bregctl", found)
+
+    def test_the_shared_cli_report_is_accepted_without_product_authority(self):
+        self.assertEqual(failures(runtime=[*INTENDED["runtime"], "cli-report"]), "")
+        found = failures(
+            runtime=[*INTENDED["runtime"], "cli-report"],
+            cli_report=["bregctl"],
         )
         self.assertIn("registry-bregctl", found)
 

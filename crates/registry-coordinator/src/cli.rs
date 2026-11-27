@@ -192,6 +192,8 @@ enum Command {
         /// Active workflow to retire because its package is no longer listed; repeat for each workflow.
         remove_workflow: Vec<String>,
     },
+    /// Create the database, the migration and runtime roles, and the grants `apply` expects, as a PostgreSQL administrator.
+    Provision(registry_platform_provision::cli::ProvisionArgs),
     /// Apply every listed workflow's package and least-privileged runtime grants using migration credentials.
     Apply {
         #[arg(long = "remove-workflow", value_name = "WORKFLOW")]
@@ -380,6 +382,7 @@ impl Command {
             Self::Test { .. } => "test",
             Self::Package { .. } => "package",
             Self::Plan { .. } => "plan",
+            Self::Provision(_) => "provision",
             Self::Apply { .. } => "apply",
             Self::DeploymentStatus => "deployment-status",
             Self::Openapi => "openapi",
@@ -587,12 +590,15 @@ fn runtime(cli: &Cli) -> Result<RuntimeConfig> {
             .suggest("Add --runtime-config with the deployment's runtime.yaml.")
     })?)
 }
-/// `--runtime-config` made absolute against the working directory, with `.`
-/// and `..` resolved by name, as the runtime loader requires.
 fn runtime_config(cli: &Cli) -> Result<Option<PathBuf>> {
-    let Some(path) = cli.runtime_config.as_deref() else {
-        return Ok(None);
-    };
+    cli.runtime_config
+        .as_deref()
+        .map(absolute_runtime_path)
+        .transpose()
+}
+/// A `--runtime-config` path made absolute against the working directory, with
+/// `.` and `..` resolved by name, as the runtime loader requires.
+pub(crate) fn absolute_runtime_path(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path).map_err(|_| {
         CoordinatorError::new(
             "runtime-config-unresolved",
@@ -610,7 +616,7 @@ fn runtime_config(cli: &Cli) -> Result<Option<PathBuf>> {
             other => normal.push(other),
         }
     }
-    Ok(Some(normal))
+    Ok(normal)
 }
 async fn remote(
     service: &Service,
@@ -817,6 +823,9 @@ async fn execute(cli: &Cli) -> Result<Value> {
         }
         Command::Serve { .. } => {
             unreachable!("serve replaces the ctl process before report dispatch")
+        }
+        Command::Provision(_) => {
+            unreachable!("provision writes its own report before report dispatch")
         }
         Command::Init { directory, id } => {
             let created = project::init(directory, id.as_deref())?;
@@ -1167,6 +1176,13 @@ pub async fn run() -> std::process::ExitCode {
     };
     if let Command::Serve { coordinator_bin } = &cli.command {
         return serve(&cli, coordinator_bin.as_deref(), format_requested);
+    }
+    if let Command::Provision(args) = &cli.command {
+        let format = match cli.format {
+            Format::Human => registry_platform_provision::cli::OutputFormat::Human,
+            Format::Json => registry_platform_provision::cli::OutputFormat::Json,
+        };
+        return crate::provision::run(args.clone(), format).await;
     }
     let cli = match cli {
         Cli {

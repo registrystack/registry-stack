@@ -20,6 +20,9 @@ pub mod cli;
 mod execute;
 mod plan;
 pub mod sql;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_support;
 
 pub use admin::{admin_config, AdminConfig, AdminConfigError};
 pub use execute::{execute, verify_logins, Mode, Outcome, ProvisionError, StatementOutcome};

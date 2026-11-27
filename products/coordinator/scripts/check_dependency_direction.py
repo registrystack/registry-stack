@@ -49,9 +49,10 @@ CLIENT_ONLY_SUPPORT = {
     "registry-payment-protocol": "registry-payment-client",
 }
 
-# The combined Coordinator crate also publishes coordinatorctl. This helper
-# supplies its product-neutral request/connection CLI and reaches no product.
-CLI_SUPPORT = frozenset({"registry-cli-api"})
+# The combined Coordinator crate also publishes coordinatorctl. These helpers
+# supply its product-neutral request/connection CLI and its report
+# serialization, and reach no product.
+CLI_SUPPORT = frozenset({"registry-cli-api", "registry-cli-report"})
 
 # Product cores the runtime reaches only through their product client. The
 # core is in the runtime's forward closure through that client, so only the
