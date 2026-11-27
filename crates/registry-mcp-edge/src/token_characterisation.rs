@@ -32,7 +32,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     inbound::require_caller, token_verifier, AccessTokenAlgorithm, RateLimitOptions,
-    ResourceServer, ResourceServerOptions, TokenBucketOptions,
+    ResourceServer, ResourceServerError, ResourceServerOptions, TokenBucketOptions,
 };
 
 const ISSUER: &str = "https://issuer.example.test";
@@ -53,10 +53,7 @@ fn client_of(fixture: &TokenFixture) -> Option<String> {
 }
 
 fn first_scope(fixture: &TokenFixture) -> Option<String> {
-    literal(fixture, "scope")?
-        .split_whitespace()
-        .next()
-        .map(str::to_owned)
+    fixture.read_scope("scope")
 }
 
 /// The algorithm the fixture declares, when the edge can be configured with
@@ -113,24 +110,27 @@ async fn observe(case: &FixtureCase) -> Outcome {
     let hasher = AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![5; 32]))
         .expect("audit profile")
         .key_hasher();
-    let server = Arc::new(
-        ResourceServer::new(
-            &options,
-            token_verifier(&options, fetcher_for(case)),
-            hasher,
-            RateLimitOptions {
-                per_principal: TokenBucketOptions {
-                    requests_per_minute: 60,
-                    burst: 1000,
-                },
-                per_client: TokenBucketOptions {
-                    requests_per_minute: 60,
-                    burst: 1000,
-                },
+    let server = match ResourceServer::new(
+        &options,
+        token_verifier(&options, fetcher_for(case)),
+        hasher,
+        RateLimitOptions {
+            per_principal: TokenBucketOptions {
+                requests_per_minute: 60,
+                burst: 1000,
             },
-        )
-        .expect("the resource server builds"),
-    );
+            per_client: TokenBucketOptions {
+                requests_per_minute: 60,
+                burst: 1000,
+            },
+        },
+    ) {
+        Ok(server) => Arc::new(server),
+        // The edge serves one MCP path, so an audience that is not an `/mcp`
+        // URL cannot be configured.
+        Err(ResourceServerError::Resource) => return Outcome::None,
+        Err(error) => panic!("the resource server builds: {error:?}"),
+    };
     let router = Router::new()
         .route("/mcp", post(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(server, require_caller));

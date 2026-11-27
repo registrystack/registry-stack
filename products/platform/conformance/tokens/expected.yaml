@@ -107,6 +107,21 @@ rows:
       render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
       mcp-edge: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
+  - fixture: thunderid-client-credentials
+    against: human-only-profile
+    configuration: recipe
+    products:
+      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
+      casework: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
+      messaging: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
+      scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
+      documents: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
+      coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+      adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+      evidence: { main: refused/claims, basis: observed, target: refused/profile, changedBy: M7, landed: false }
+      render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+      mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+      evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
   - fixture: keycloak-user-access
     against: plain-read
     configuration: default
@@ -347,21 +362,6 @@ rows:
       render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
       mcp-edge: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
-  - fixture: thunderid-client-credentials
-    against: human-only-profile
-    configuration: recipe
-    products:
-      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
-      casework: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
-      messaging: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
-      scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
-      documents: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
-      coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence: { main: refused/claims, basis: observed, target: refused/profile, changedBy: M7, landed: false }
-      render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
   - fixture: keycloak-client-credentials
     against: human-only-profile
     configuration: recipe
@@ -602,3 +602,214 @@ rows:
       render: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
       mcp-edge: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
       evidence-oid4vci: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+  - fixture: thunderid-exchanged-holder
+    against: plain-read
+    configuration: default
+    products:
+      breg: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "a token with no actor kind passes authentication as unspecified. The audience, scope claim and client rule are issuer-block lines. The holder profile limits rows by holder_ref, and no national claim is passed through" }
+      casework: { main: refused/audience, basis: observed, target: admitted, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
+      messaging: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
+      scheduling: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
+      documents: { main: refused/audience, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided in M7" }
+      coordinator: { main: refused/audience, basis: observed, target: admitted, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
+      adapter: { main: refused/audience, basis: observed, target: admitted, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
+      evidence: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
+      render: { main: refused/audience, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      mcp-edge: { main: refused/audience, basis: observed, target: admitted, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
+      evidence-oid4vci: { main: refused/audience, basis: observed, target: admitted, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
+  - fixture: thunderid-exchanged-holder
+    against: plain-read
+    configuration: recipe
+    products:
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "a token with no actor kind passes authentication as unspecified. The audience, scope claim and client rule are issuer-block lines. The holder profile limits rows by holder_ref, and no national claim is passed through" }
+      casework: { main: admitted, basis: observed, target: admitted, changedBy: none }
+      messaging: { main: admitted/unspecified, basis: observed, target: admitted/unspecified, changedBy: none }
+      scheduling: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
+      documents: { main: refused/profile, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided in M7" }
+      coordinator: { main: admitted, basis: observed, target: admitted, changedBy: none }
+      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
+      evidence: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      mcp-edge: { main: none, basis: observed, target: admitted, changedBy: none, reason: "observed: the edge serves one MCP path, so the token's literal audience, which is not an /mcp URL, cannot be configured"}
+      evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
+  - fixture: thunderid-exchanged-holder-no-scope
+    against: plain-read
+    configuration: default
+    products:
+      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
+      evidence: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no result is defined yet for a token that carries no scope claim" }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      mcp-edge: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no result is defined yet for a token that carries no scope claim" }
+  - fixture: thunderid-exchanged-holder-no-scope
+    against: plain-read
+    configuration: recipe
+    products:
+      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
+      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      mcp-edge: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+  - fixture: esignet-standin-id-token
+    against: plain-read
+    configuration: default
+    products:
+      breg: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      casework: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      messaging: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      scheduling: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      documents: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      coordinator: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      adapter: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      evidence: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      render: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      mcp-edge: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      evidence-oid4vci: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+  - fixture: esignet-standin-access-token
+    against: plain-read
+    configuration: default
+    products:
+      breg: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      casework: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      messaging: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      scheduling: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      documents: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      coordinator: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      adapter: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      evidence: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      render: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      mcp-edge: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+      evidence-oid4vci: { main: refused/issuer, basis: observed, target: refused/issuer, changedBy: none }
+  - fixture: thunderid-refresh-token
+    against: plain-read
+    configuration: default
+    products:
+      breg: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      casework: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      messaging: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      scheduling: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      documents: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      coordinator: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      adapter: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      evidence: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      render: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      mcp-edge: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      evidence-oid4vci: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+  - fixture: thunderid-user-access-attribute-claims
+    against: plain-read
+    configuration: default
+    products:
+      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none, reason: "observed in the characterisation run: the cause was not traced", targetReason: "authority carried outside scope is not read" }
+      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      scheduling: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
+      evidence: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
+  - fixture: thunderid-user-access-attribute-claims
+    against: plain-read
+    configuration: recipe
+    products:
+      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none, reason: "observed in the characterisation run: the cause was not traced", targetReason: "authority carried outside scope is not read" }
+      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      scheduling: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
+      evidence: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+
+  - fixture: thunderid-client-credentials-attribute-claims
+    against: plain-read
+    configuration: default
+    products:
+      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      scheduling: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
+      evidence: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
+  - fixture: thunderid-client-credentials-attribute-claims
+    against: plain-read
+    configuration: recipe
+    products:
+      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      scheduling: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
+      evidence: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+  - fixture: thunderid-user-access-identity-only
+    against: plain-read
+    configuration: default
+    products:
+      breg: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "the token proves identity only" }
+      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "the token proves identity only" }
+      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
+      scheduling: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "the token proves identity only" }
+      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "the token proves identity only" }
+      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope and no actor kind" }
+      evidence: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "the token proves identity only" }
+      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "the token proves identity only" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope and no actor kind" }
+  - fixture: thunderid-user-access-identity-only
+    against: plain-read
+    configuration: recipe
+    products:
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
+      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
+      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
+      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
+      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+      adapter: { main: admitted, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
+      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+  - fixture: thunderid-user-access-identity-only
+    against: human-only-profile
+    configuration: recipe
+    products:
+      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "decided with the actor kind an operator declares for the client (M7)" }
+      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client (M7)" }
+      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client (M7)" }
+      scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
+      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client (M7)" }
+      coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+      adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client (M7)" }
+      render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+      mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+      evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }

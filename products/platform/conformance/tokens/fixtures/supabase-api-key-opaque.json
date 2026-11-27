@@ -7,10 +7,11 @@
   "tokenUse": "api-key",
   "subjectKind": "unspecified",
   "source": {
-    "basis": "documentation",
-    "consultedOn": "2026-11-27",
-    "url": "https://supabase.com/docs/guides/api/api-keys",
-    "note": "Publishable and secret keys are short strings, not JWTs. The value is synthetic and not a key."
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "self-hosted Supabase stack",
+    "note": "Observed from a self-hosted Supabase Auth issuer on 27 November 2026: the publishable key is an opaque string of 46 characters and the secret key one of 41. The value here is synthetic, not a key, and has the publishable key's length."
   },
-  "opaque": "sb_publishable_synthetic-test-value-not-a-key"
+  "opaque": "sb_publishable_synthetic-test-value-not-a-key0"
 }

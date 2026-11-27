@@ -10,7 +10,7 @@
     "basis": "documentation",
     "consultedOn": "2026-11-27",
     "url": "https://docs.esignet.io/home/esignet-2.x/readme/standards.md",
-    "note": "eSignet 2.x documentation, no lab run. The ID token has iss, sub, aud (the relying party's client ID), exp, iat, auth_time, nonce, acr and at_hash. The header typ is not stated, so it is omitted."
+    "note": "eSignet 2.x documentation. The shape is from documentation and was not observed. The ID token has iss, sub, aud (the relying party's client ID), exp, iat, auth_time, nonce, acr and at_hash. The header typ is not stated, so it is omitted."
   },
   "header": {
     "alg": "RS256",

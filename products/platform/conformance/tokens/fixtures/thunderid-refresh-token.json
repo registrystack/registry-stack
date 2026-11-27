@@ -1,0 +1,56 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "thunderid-refresh-token",
+  "class": "negative",
+  "provider": "thunderid",
+  "kind": "user-refresh",
+  "tokenUse": "refresh",
+  "subjectKind": "unspecified",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "ThunderID 1.1.0",
+    "note": "Observed from a ThunderID 1.1.0 issuer on 27 November 2026. Header members and claim names are the observed ones. Claim values are synthetic. Signed by the corpus test key. ThunderID's refresh token is a JWT, not an opaque string."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "rt+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "access_token_aud": [
+      "licence-registry"
+    ],
+    "access_token_sub": "00000000-0000-4000-8000-000000000001",
+    "aci": "synthetic-aci",
+    "aud": {
+      "bind": "issuer"
+    },
+    "exp": {
+      "offsetSeconds": 86400
+    },
+    "grant_type": "authorization_code",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "iss": {
+      "bind": "issuer"
+    },
+    "jti": "synthetic-jti-0051",
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "scope": "openid email profile",
+    "sub": "journey-app",
+    "tfid": "synthetic-tfid"
+  },
+  "omits": [
+    "client_id",
+    "azp",
+    "registry_actor_kind"
+  ],
+  "notes": "sub is the client, and the user is in access_token_sub. aud is the issuer. The lifetime, 86400 seconds, is the observed one. The grant_type value is inferred, only the claim name was observed."
+}
