@@ -661,7 +661,54 @@ response_wire!(ReviewTaskWire => registry_casework_core::ReviewTask {
     #[serde(default)] staffing_diagnostic: Option<registry_casework_core::StaffingDiagnostic>,
     #[serde(default)] decided_by_caller: Option<bool>,
     #[serde(default)] decision_receipt: Option<ReviewDecisionReceiptWire>,
+    #[serde(default)] marker: Option<registry_casework_core::ReviewTaskMarker>,
 });
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewAskWire {
+    ask_id: uuid::Uuid,
+    request_id: uuid::Uuid,
+    subject: SubjectBindingWire,
+    text: String,
+    wants: Vec<registry_casework_core::ReviewAskWant>,
+    asked_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    due_at: Option<chrono::DateTime<chrono::Utc>>,
+    state: registry_casework_core::ReviewAskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answered_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    closed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReviewTaskAskedWire {
+    task: ReviewTaskWire,
+    ask: ReviewAskWire,
+}
+
+impl ClientResponse for registry_casework_core::ReviewTaskAsked {
+    type Wire = Validated<Self, ReviewTaskAskedWire>;
+
+    fn from_wire(wire: Self::Wire) -> Self {
+        wire.into_inner()
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewContextAskWire {
+    ask_id: uuid::Uuid,
+    task_id: uuid::Uuid,
+    text: String,
+    wants: Vec<registry_casework_core::ReviewAskWant>,
+    asked_at: chrono::DateTime<chrono::Utc>,
+    state: registry_casework_core::ReviewAskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answered_at: Option<chrono::DateTime<chrono::Utc>>,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -942,6 +989,8 @@ pub(crate) struct ReviewTaskContextWire {
     #[serde(default)]
     result_constraints: Option<Value>,
     context: ReviewTaskContextDataWire,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asks: Vec<ReviewContextAskWire>,
 }
 
 impl ClientResponse for registry_casework_core::ReviewTaskContext {
