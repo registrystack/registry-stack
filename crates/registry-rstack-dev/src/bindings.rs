@@ -862,6 +862,7 @@ mod tests {
                     audience: "urn:dev:casework".to_owned(),
                 },
             ],
+            person_audience: None,
             people: BTreeMap::from([
                 (
                     "producer".to_owned(),

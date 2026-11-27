@@ -293,6 +293,10 @@ To adapt a plan to your own project, change these parts and leave the structure 
 - `products` lists each product's project directory and token audience, in any order. Name any
   non-empty subset of `breg`, `casework`, `evidence` and `messaging`. The run starts BReg before
   Casework. An application needs BReg.
+- `personAudience` is optional. It names one audience, an absolute URI, that several products a
+  person calls from a page accept. A product whose `audience` equals it is a member. BReg can be a
+  member. Casework keeps its own audience, Messaging takes no person token, and Evidence cannot
+  join yet, so `check` refuses each of them as a member. Every other audience must stay distinct.
 - `people` declares synthetic test people, each with a subject and one grant per product. A grant
   selects an access profile of that product's project, its scopes, and extra claims. A BReg grant
   must name a profile the BReg project declares. When several people could fill a BReg schema-test
@@ -506,6 +510,7 @@ List the project's issuer, product directories, and audiences in any order (the 
 A grant selects the access profile, scopes, and additional claims.
 Each selected profile gets the test person's subject in its principal claim.
 The products enforce their ordinary permissions.
+Two products cannot share an audience unless it is `personAudience`, which only BReg may share today.
 If several people match a step in the BReg project's `tests/journeys.yaml`, select its alias under `schemaTestPeople.<journey-id>.<step-id>`.
 The run obtains the normal schema-test receipt before packaging.
 
@@ -515,7 +520,7 @@ The error names the plan pointer, for example `/people/NAME/grants/breg/profile`
 A Casework grant must name an access profile of the Casework project, reported at `/people/NAME/grants/casework/profile`.
 The run does not compare scopes with the profile: a profile's required scopes are a per-entity rule, and a mismatch appears as a failed scenario step.
 
-{/* Evidence: crates/registry-rstack-dev/src/plan.rs schemaTestPeople;
+{/* Evidence: crates/registry-rstack-dev/src/plan.rs schemaTestPeople, person_audience;
     products/platform/generated/dev/dev.v1alpha1.schema.json RStackDev. */}
 {/* TODO[evidence]: the plan pointers `/people/NAME/grants/breg/profile` and `/people/NAME/grants/casework/profile` were not located literally. */}
 

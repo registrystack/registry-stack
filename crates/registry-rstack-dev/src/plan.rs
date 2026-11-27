@@ -251,6 +251,10 @@ pub(super) struct Plan {
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
+    /// One audience that several products a person calls from a page accept: an absolute URI of at most 256 characters, with no fragment or user information. A product whose `audience` equals it is a member and shares the audience. Only BReg can be a member today: Casework keeps its own audience, Messaging takes no person token, and Evidence cannot join yet. Every other audience must stay distinct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    pub person_audience: Option<String>,
     /// The test people, keyed by a lowercase local identifier. Define 1 to 256, and give at least one grant to every started product.
     #[cfg_attr(
         feature = "schema",
@@ -320,7 +324,7 @@ pub(super) struct ProductPlan {
     pub product: Product,
     /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework, evidence.yaml for Evidence or messaging.yaml for Messaging.
     pub project: PathBuf,
-    /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences.
+    /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences unless it equals `personAudience`.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub audience: String,
 }
@@ -1123,6 +1127,20 @@ impl Plan {
             "The plan must name at least one product.",
             "Add a BReg, Casework, Evidence or Messaging product to products.",
         )?;
+        if let Some(person_audience) = &self.person_audience {
+            require(
+                bounded_atom(person_audience)
+                    && person_audience.len() <= 256
+                    && ParsedUrl::parse(person_audience).is_ok_and(|url| {
+                        url.username().is_empty()
+                            && url.password().is_none()
+                            && url.fragment().is_none()
+                    }),
+                "/personAudience",
+                "The person audience must be an absolute URI of at most 256 characters, without whitespace, user information, or a fragment.",
+                "Set personAudience to an absolute URI such as `urn:example:people`, or remove it.",
+            )?;
+        }
         let mut products = BTreeSet::new();
         let mut audiences = BTreeSet::new();
         for (index, entry) in self.products.iter().enumerate() {
@@ -1133,8 +1151,29 @@ impl Plan {
                 "The product is repeated.",
                 "Remove the duplicate product entry.",
             )?;
+            let member = self.person_audience.as_deref() == Some(entry.audience.as_str());
+            if member {
+                let (refusal, remedy) = match entry.product {
+                    Product::Breg => (None, ""),
+                    Product::Casework => (
+                        Some("Casework keeps its own audience and cannot be a person audience member."),
+                        "Give Casework an audience other than personAudience.",
+                    ),
+                    Product::Messaging => (
+                        Some("Messaging takes no person token, so it cannot be a person audience member."),
+                        "Give Messaging an audience other than personAudience.",
+                    ),
+                    Product::Evidence => (
+                        Some("Evidence cannot join the person audience yet: its applicant routes have no client rule."),
+                        "Give Evidence an audience other than personAudience.",
+                    ),
+                };
+                if let Some(message) = refusal {
+                    require(false, &format!("{field}/audience"), message, remedy)?;
+                }
+            }
             require(
-                bounded_atom(&entry.audience) && audiences.insert(&entry.audience),
+                bounded_atom(&entry.audience) && (member || audiences.insert(&entry.audience)),
                 &format!("{field}/audience"),
                 "The audience must be distinct, bounded text without whitespace or control characters.",
                 "Set audience to a distinct identifier of at most 256 characters without whitespace or control characters.",
@@ -2064,6 +2103,132 @@ mod tests {
             value["people"]["operator"]["displayName"] = json!(display_name);
             assert!(schema.is_valid(&value), "display name {display_name:?}");
         }
+    }
+
+    /// A valid plan value starting BReg plus one more product, for person-audience rules.
+    fn person_audience_plan(
+        product: &str,
+        manifest: &str,
+        grant: Value,
+    ) -> (tempfile::TempDir, Value) {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        fs::create_dir(root.path().join("other")).unwrap();
+        fs::write(root.path().join("other").join(manifest), "fixture").unwrap();
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["products"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"product": product, "project": "other", "audience": "urn:test:other"}));
+        value["people"]["operator"]["grants"][product] = grant;
+        (root, value)
+    }
+
+    fn refusal_of(root: &tempfile::TempDir, value: Value) -> String {
+        let plan: Plan = serde_json::from_value(value).unwrap();
+        plan.validate(&canonical(root)).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_person_audience_must_be_a_bounded_absolute_uri() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let value = serde_json::to_value(plan).unwrap();
+        for audience in [
+            "people".to_owned(),
+            String::new(),
+            "urn:test:people#fragment".to_owned(),
+            "https://user@people.example.test".to_owned(),
+            "urn:test:with space".to_owned(),
+            format!("urn:test:{}", "p".repeat(250)),
+        ] {
+            let mut refused = value.clone();
+            refused["personAudience"] = json!(audience);
+            let message = refusal_of(&root, refused);
+            assert!(message.contains("/personAudience"), "{audience}: {message}");
+        }
+        for audience in ["urn:test:people", "https://people.example.test/audience"] {
+            let mut accepted = value.clone();
+            accepted["personAudience"] = json!(audience);
+            let plan: Plan = serde_json::from_value(accepted).unwrap();
+            plan.validate(&canonical(&root)).unwrap();
+        }
+    }
+
+    #[test]
+    fn breg_may_be_a_person_audience_member() {
+        let (root, plan) = plan(json!({
+            "id": "read", "product": "breg", "as": "operator",
+            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
+        }));
+        let mut value = serde_json::to_value(plan).unwrap();
+        value["personAudience"] = json!("urn:test:people");
+        value["products"][0]["audience"] = json!("urn:test:people");
+        let plan: Plan = serde_json::from_value(value).unwrap();
+        validate_all(&canonical(&root), &plan).unwrap();
+    }
+
+    #[test]
+    fn casework_messaging_and_evidence_are_refused_as_person_audience_members() {
+        for (product, manifest, grant, expected) in [
+            (
+                "casework",
+                "casework.yaml",
+                json!({"profile": "requester", "scopes": []}),
+                "Casework keeps its own audience",
+            ),
+            (
+                "messaging",
+                "messaging.yaml",
+                json!({"profile": "sender", "scopes": []}),
+                "Messaging takes no person token",
+            ),
+            (
+                "evidence",
+                "evidence.yaml",
+                json!({"profile": "caller", "scopes": []}),
+                "Evidence cannot join the person audience yet",
+            ),
+        ] {
+            let (root, mut value) = person_audience_plan(product, manifest, grant);
+            value["personAudience"] = json!("urn:test:people");
+            value["products"][1]["audience"] = json!("urn:test:people");
+            if product == "evidence" {
+                value["issuer"] = json!("run");
+            }
+            let message = refusal_of(&root, value);
+            assert!(
+                message.contains("/products/1/audience"),
+                "{product}: {message}"
+            );
+            assert!(message.contains(expected), "{product}: {message}");
+        }
+    }
+
+    #[test]
+    fn non_member_products_still_need_distinct_audiences() {
+        let (root, mut value) = person_audience_plan(
+            "casework",
+            "casework.yaml",
+            json!({"profile": "requester", "scopes": []}),
+        );
+        value["products"][1]["audience"] = json!("registry");
+        let message = refusal_of(&root, value.clone());
+        assert!(message.contains("/products/1/audience"), "{message}");
+        assert!(
+            message.contains("The audience must be distinct"),
+            "{message}"
+        );
+        value["personAudience"] = json!("urn:test:people");
+        let message = refusal_of(&root, value);
+        assert!(
+            message.contains("The audience must be distinct"),
+            "{message}"
+        );
     }
 
     #[test]

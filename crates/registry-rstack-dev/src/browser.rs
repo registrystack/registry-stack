@@ -133,6 +133,9 @@ impl BrowserServer {
             "invalid development run ID"
         );
         validate_client(&client.id, &client.secret, &client.redirect_uri)?;
+        // Each audience maps to one product. A person audience shared by several
+        // products would need this map to hold all of them, with the sign-in
+        // choosing among them. Only BReg can be a member today, so one suffices.
         let audiences = input
             .plan
             .products
@@ -918,6 +921,76 @@ mod tests {
             &audiences
         )
         .is_err());
+    }
+
+    #[test]
+    fn browser_sign_in_runs_unchanged_when_breg_is_the_person_audience_member() {
+        let scratch = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let input: RunInput = serde_json::from_value(json!({
+            "run_id": "0123456789abcdef0123456789abcdef", "project": "/project",
+            "ttl_seconds": 1800,
+            "plan": {"issuer": origin,
+                "personAudience": "urn:test:people",
+                "products": [
+                    {"product": "breg", "project": ".", "audience": "urn:test:people"},
+                    {"product": "casework", "project": ".", "audience": "casework-service"}
+                ],
+                "people": {"person": {"subject": "subject-1", "client": "cli-client",
+                    "displayName": "Test Person",
+                    "grants": {"breg": {"profile": "viewer", "scopes": ["registry.read"],
+                        "claims": {"registry_actor_kind": "human", "role": "viewer"}}}}},
+                "scenarioFile": "tests/scenarios.yaml"},
+            "schema_people": [],
+            "breg_authority": {"principal": "registry_principal", "purpose": false,
+                "requires_postgis": false, "encrypts_fields": false, "named_clients": []},
+            "casework_principals": {"viewer": "sub"}, "binaries": {}
+        }))
+        .unwrap();
+        let issuer = Arc::new(Issuer::create(scratch.path()).unwrap());
+        let server = BrowserServer::start(
+            listener,
+            Arc::new(input),
+            issuer,
+            BrowserClient {
+                id: "app".to_owned(),
+                secret: Zeroizing::new("a-secret-longer-than-thirty-two-bytes".to_owned()),
+                redirect_uri: "http://127.0.0.1:4000/callback".to_owned(),
+            },
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+            server.activate(clock().unwrap() + 1800);
+            let verifier = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+            let auth_url = format!("{}/authorize?client_id=app&redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2Fcallback&response_type=code&code_challenge={}&code_challenge_method=S256&state=state-1&nonce=nonce-1&scope=openid%20registry.read&resource=urn%3Atest%3Apeople", server.origin, pkce_challenge(verifier));
+            let page = http.get(auth_url).send().await.unwrap();
+            assert_eq!(page.status(), StatusCode::OK);
+            let page = page.text().await.unwrap();
+            let transaction = page.split("name=\"transaction\" value=\"").nth(1).unwrap().split('"').next().unwrap();
+            let selected = http.post(format!("{}/authorize", server.origin))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(format!("transaction={transaction}&identity=person"))
+                .send().await.unwrap();
+            assert_eq!(selected.status(), StatusCode::SEE_OTHER);
+            let callback = Url::parse(selected.headers().get(header::LOCATION).unwrap().to_str().unwrap()).unwrap();
+            let code = callback.query_pairs().find(|(name, _)| name == "code").unwrap().1.to_string();
+            let exchanged = http.post(format!("{}/token", server.origin))
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(format!("grant_type=authorization_code&client_id=app&client_secret=a-secret-longer-than-thirty-two-bytes&code={code}&redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2Fcallback&code_verifier={verifier}&resource=urn%3Atest%3Apeople"))
+                .send().await.unwrap();
+            assert_eq!(exchanged.status(), StatusCode::OK);
+            let tokens: Value = exchanged.json().await.unwrap();
+            let encoded = tokens["access_token"].as_str().unwrap().split('.').nth(1).unwrap();
+            let access: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap();
+            assert_eq!(access["aud"], "urn:test:people");
+            assert_eq!(access["sub"], "subject-1");
+        });
     }
 
     #[test]

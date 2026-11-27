@@ -215,7 +215,7 @@
       "properties": {
         "audience": {
           "$ref": "#/$defs/ExternalId",
-          "description": "Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences."
+          "description": "Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences unless it equals `personAudience`."
         },
         "product": {
           "$ref": "#/$defs/Product",
@@ -397,6 +397,12 @@
         "$ref": "#/$defs/LocalId"
       },
       "type": "object"
+    },
+    "personAudience": {
+      "description": "One audience that several products a person calls from a page accept: an absolute URI of at most 256 characters, with no fragment or user information. A product whose `audience` equals it is a member and shares the audience. Only BReg can be a member today: Casework keeps its own audience, Messaging takes no person token, and Evidence cannot join yet. Every other audience must stay distinct.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
     },
     "products": {
       "description": "The products to start, each with its project directory and token audience. List each product at most once.",
