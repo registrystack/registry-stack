@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- BREAKING: `authentication.oidc.scopeClaim` defaults to `scope`, aligning
+  Casework with the other products and with hosted generation. It was
+  `registry_scopes`. A deployment whose issuer emits scopes in
+  `registry_scopes` sets `scopeClaim: registry_scopes` explicitly.
 - BREAKING: review completion wakes use Standard Webhooks. Casework signs
   `webhook-id`, `webhook-timestamp` and the exact JSON bytes with
   HMAC-SHA-256. `webhook-id` is the `eventId` and stays the same on every

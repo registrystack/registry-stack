@@ -171,7 +171,7 @@ fn assertion_issuers<'de, D: Deserializer<'de>>(
 }
 
 fn scope_claim() -> String {
-    "registry_scopes".into()
+    "scope".into()
 }
 impl AccessConfig {
     pub fn validate(&self, secrets: &SecretProvidersConfig, local: bool) -> Result<()> {

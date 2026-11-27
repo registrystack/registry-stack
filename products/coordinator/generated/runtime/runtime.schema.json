@@ -67,7 +67,7 @@
         },
         "scopeClaim": {
           "$ref": "#/$defs/ExternalId",
-          "default": "registry_scopes",
+          "default": "scope",
           "maxLength": 128
         }
       },

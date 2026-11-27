@@ -132,7 +132,7 @@ For each service, request the resource it names and make sure the token carries 
   It requires a configured maximum token lifetime of 1 to 7200 seconds and a `leewayMilliseconds` of whole seconds, 0 to 300000 ms.
   The resource server never refreshes; you obtain a replacement token.
 - Casework: `requiredScopes` in the selected Requester, Staff, or Supervisor profile.
-  The scope claim defaults to `registry_scopes`.
+  The scope claim defaults to `scope`.
   Human routes require the configured `humanIdentity`, which defaults to `registry_actor_kind: human`.
   Task clients use their separate actor profile.
   `exp` and `nbf` are enforced, with an optional `maximumTokenLifetimeSeconds` and zero verifier skew.
@@ -148,7 +148,7 @@ For each service, request the resource it names and make sure the token carries 
   You obtain another per-resource token on expiry.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs maximum_token_lifetime_seconds, leeway_milliseconds;
-    crates/registry-casework/src/config.rs registry_scopes;
+    crates/registry-casework/src/config.rs default_scope_claim;
     crates/registry-casework/src/auth.rs required_scopes, registry_actor_kind;
     crates/registry-scheduling/src/config.rs scheduling:read;
     crates/registry-scheduling/src/auth.rs reads_scope;

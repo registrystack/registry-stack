@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- BREAKING: `deployment.authentication.scopeClaim` defaults to `scope`,
+  aligning Coordinator with the other products and with hosted generation. It
+  was `registry_scopes`. A deployment whose issuer emits scopes in
+  `registry_scopes` sets `scopeClaim: registry_scopes` explicitly.
 - BREAKING: protected state schema version 7 records a posture with each
   activation. Every activation records production until the runtime declares
   its posture. Version 6 namespaces are refused; settle their Runs with the

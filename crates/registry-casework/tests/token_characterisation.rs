@@ -19,8 +19,8 @@ use registry_casework_core::{
 use registry_platform_authcommon::FailedCheck;
 use registry_platform_oidc::JwksFetcher;
 use registry_platform_testing::{
-    Against, ClaimValue, Configuration, FixtureCase, Outcome, Stage, TokenCorpus, TokenFixture,
-    TokenSigner,
+    Against, Binding, ClaimValue, Configuration, FixtureCase, Outcome, Stage, TokenCorpus,
+    TokenFixture, TokenSigner,
 };
 use serde_json::{json, Value};
 
@@ -109,7 +109,7 @@ impl Shape {
             (None, false) => vec![LISTED_CLIENT.to_owned()],
         };
         let scope = fixture
-            .read_scope(scope_claim.unwrap_or("registry_scopes"))
+            .read_scope(scope_claim.unwrap_or("scope"))
             .unwrap_or_else(|| FALLBACK_SCOPE.to_owned());
         Self {
             scope_claim,
@@ -199,6 +199,44 @@ fn literal_text(fixture: &TokenFixture, claim: &str) -> Option<String> {
         Some(ClaimValue::Literal(Value::String(text))) => Some(text.clone()),
         _ => None,
     }
+}
+
+#[tokio::test]
+async fn an_unset_scope_claim_reads_scope_and_ignores_registry_scopes() {
+    let corpus = TokenCorpus::load().expect("the corpus loads");
+    let signer = TokenSigner::new();
+    let root = tempfile::tempdir().expect("temporary directory");
+    let secrets = Secrets::write(root.path(), &signer.public_key_set());
+    let source = corpus
+        .fixture("thunderid-user-access")
+        .expect("the user access fixture");
+    let binding = Binding {
+        issuer: ISSUER.to_owned(),
+        audience: AUDIENCE.to_owned(),
+    };
+    let case_for = |fixture: TokenFixture| FixtureCase {
+        token: signer.sign(&fixture, &binding).expect("sign the fixture"),
+        fixture,
+        against: Against::PlainRead,
+        configuration: Configuration::Default,
+        issuer: ISSUER.to_owned(),
+        audience: AUDIENCE.to_owned(),
+        jwks: signer.public_key_set(),
+    };
+
+    let with_scope = case_for(source.clone());
+    assert_eq!(observe(with_scope, &secrets).await, Outcome::Admitted(None));
+
+    let mut legacy = source.clone();
+    let scopes = legacy
+        .claims
+        .remove("scope")
+        .expect("the fixture has scope");
+    legacy.claims.insert("registry_scopes".to_owned(), scopes);
+    assert_eq!(
+        observe(case_for(legacy), &secrets).await,
+        Outcome::Refused(Stage::Scope)
+    );
 }
 
 async fn observe(case: FixtureCase, secrets: &Secrets) -> Outcome {

@@ -83,9 +83,8 @@ Coordinator's outbound payment credential is a confidential OAuth client:
 
 Coordinator's inbound caller tokens are separate:
 
-- The runtime sets `scopeClaim: scope`, so both tokens carry their scopes in
-  the standard `scope` claim rather than Coordinator's default
-  `registry_scopes` claim.
+- The runtime sets `scopeClaim: scope`, the default, so both tokens carry their
+  scopes in the standard `scope` claim.
 - The licence service token has Coordinator's configured issuer and audience,
   exact subject `licence-service`, scope `coordinator:start`, and no `act`
   claim. Policy `licence-service` permits `start` and `status` only for

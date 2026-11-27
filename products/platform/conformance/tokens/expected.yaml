@@ -52,11 +52,11 @@ rows:
     configuration: default
     products:
       breg: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
-      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
+      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: true }
       messaging: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
       scheduling: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
       documents: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
-      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
+      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: true }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence: { main: refused/claims, basis: observed, target: admitted/human, changedBy: caller-contract, landed: false }
       render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
@@ -82,11 +82,11 @@ rows:
     configuration: default
     products:
       breg: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
-      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
+      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: true }
       messaging: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
       scheduling: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
       documents: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
-      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
+      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: true }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence: { main: refused/claims, basis: observed, target: admitted/service, changedBy: caller-contract, landed: false }
       render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
@@ -352,11 +352,11 @@ rows:
     configuration: default
     products:
       breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
+      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: true }
       messaging: { main: admitted/unspecified, basis: observed, target: admitted/unspecified, changedBy: none }
       scheduling: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
       documents: { main: refused/profile, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided by the caller-contract change" }
-      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
+      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: true }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
       render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }

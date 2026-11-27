@@ -389,7 +389,7 @@ deployment:
 Key `authentication.policies` by exact verified client identity.
 Each policy declares the exact token subjects it admits, the required scopes, the actions, and, for run actions, the permitted `workflows`.
 The policy keys are the admitted client set, and each verified client resolves one policy.
-Coordinator reads scopes from `registry_scopes`; set `scopeClaim: scope` when the issuer uses the standard `scope` claim.
+Coordinator reads scopes from `scope`; set `scopeClaim` when the issuer carries them in another claim, such as `registry_scopes`.
 The shared `jwksSource` block selects its variant with `type`, for example `type: discovery`.
 
 Name only confidential backend clients that your institution runs and trusts, never a browser app, mobile app, or other public client.
@@ -417,7 +417,7 @@ A run belongs to its starting token's exact verified `iss` and `sub`, never to a
 The subject decides who owns the run, never which record the start input names.
 Coordinator does not check that a record, subject, or recipient identifier in the input belongs to anyone, so the calling backend must already have authorised every identifier it passes for the person it acts for.
 
-{/* Evidence: crates/registry-coordinator/src/access.rs ClientPolicy, subjects, authenticate, scope_claim, registry_scopes;
+{/* Evidence: crates/registry-coordinator/src/access.rs ClientPolicy, subjects, authenticate, scope_claim;
     crates/registry-coordinator/tests/deployment_surface.rs scope_claim;
     products/coordinator/generated/runtime/runtime.schema.json ClientPolicy. */}
 

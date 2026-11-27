@@ -173,6 +173,8 @@ so a binary that cannot run leaves the installed toolset selected.
    obligations are resolved. When Casework reviews or reads BReg, do this
    during step 4, before the BReg export, and start v0.42.0 Casework only after pairing it with
    the new context export.
+   `authentication.oidc.scopeClaim` now defaults to `scope`, so set it explicitly when your issuer
+   emits `registry_scopes`.
    Rewrite the project in the v0.42.0 format; `caseworkctl check` names each old spelling and its
    replacement. Pair the v0.42.0 BReg context export with `caseworkctl provider pair` and verify
    the exact contract before packaging. Point the runtime file at a fresh database prepared as

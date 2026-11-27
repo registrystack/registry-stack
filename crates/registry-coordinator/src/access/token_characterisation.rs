@@ -11,7 +11,8 @@
 //! the refusal carries.
 use super::*;
 use registry_platform_testing::{
-    ClaimValue, Configuration, FixtureCase, Outcome, TokenCorpus, TokenFixture, TokenSigner,
+    Against, Binding, ClaimValue, Configuration, FixtureCase, Outcome, Stage, TokenCorpus,
+    TokenFixture, TokenSigner,
 };
 use registry_platform_yaml::Url;
 use serde_json::Value;
@@ -41,8 +42,9 @@ fn first_scope(fixture: &TokenFixture) -> Option<String> {
 
 async fn authenticator_for(case: &FixtureCase, secrets: &SecretProvidersConfig) -> Authenticator {
     let scope_claim = match case.configuration {
-        Configuration::Recipe => "scope",
-        _ => "registry_scopes",
+        Configuration::Recipe => "scope".to_owned(),
+        // The file leaves `scopeClaim` out, so the deserialised default applies.
+        _ => scope_claim(),
     };
     let policy = ClientPolicy {
         subjects: vec![literal(&case.fixture, "sub").unwrap_or_else(|| PLACEHOLDER_SUBJECT.into())],
@@ -64,7 +66,7 @@ async fn authenticator_for(case: &FixtureCase, secrets: &SecretProvidersConfig) 
             allow_insecure_http: false,
         },
         assertion_issuers: BTreeMap::new(),
-        scope_claim: scope_claim.into(),
+        scope_claim,
         policies: BTreeMap::from([(client, policy)]),
     };
     access
@@ -132,14 +134,13 @@ fn static_key_document(signer: &TokenSigner) -> String {
     keys.to_string()
 }
 
-#[tokio::test]
-async fn caller_authentication_matches_the_token_corpus() {
-    let corpus = TokenCorpus::load().expect("the token corpus loads");
-    let signer = TokenSigner::new();
+/// A directory holding the corpus public keys as the static key set the
+/// authenticator's `jwksSource` names, and the secret providers that read it.
+fn key_secrets(signer: &TokenSigner) -> (tempfile::TempDir, SecretProvidersConfig) {
     let root = tempfile::tempdir().expect("key directory");
     let root_path = root.path().canonicalize().expect("physical key directory");
     let key_file = root_path.join(KEY_FILE);
-    std::fs::write(&key_file, static_key_document(&signer)).expect("write the key set");
+    std::fs::write(&key_file, static_key_document(signer)).expect("write the key set");
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600))
@@ -149,6 +150,57 @@ async fn caller_authentication_matches_the_token_corpus() {
         file: Some(registry_platform_config::FileSecretProviderConfig { root: root_path }),
         environment: None,
     };
+    (root, secrets)
+}
+
+#[tokio::test]
+async fn an_unset_scope_claim_reads_scope_and_ignores_registry_scopes() {
+    let corpus = TokenCorpus::load().expect("the token corpus loads");
+    let signer = TokenSigner::new();
+    let (_root, secrets) = key_secrets(&signer);
+    let source = corpus
+        .fixture("thunderid-user-access")
+        .expect("the user access fixture");
+    let binding = Binding {
+        issuer: ISSUER.to_owned(),
+        audience: AUDIENCE.to_owned(),
+    };
+    let case_for = |fixture: TokenFixture| FixtureCase {
+        token: signer.sign(&fixture, &binding).expect("sign the fixture"),
+        fixture,
+        against: Against::PlainRead,
+        configuration: Configuration::Default,
+        issuer: ISSUER.to_owned(),
+        audience: AUDIENCE.to_owned(),
+        jwks: signer.public_key_set(),
+    };
+
+    let with_scope = case_for(source.clone());
+    let authenticator = authenticator_for(&with_scope, &secrets).await;
+    assert_eq!(
+        observe(&authenticator, with_scope.token.expose()).await,
+        Outcome::Admitted(None)
+    );
+
+    let mut legacy = source.clone();
+    let scopes = legacy
+        .claims
+        .remove("scope")
+        .expect("the fixture has scope");
+    legacy.claims.insert("registry_scopes".to_owned(), scopes);
+    let only_registry_scopes = case_for(legacy);
+    let authenticator = authenticator_for(&only_registry_scopes, &secrets).await;
+    assert_eq!(
+        observe(&authenticator, only_registry_scopes.token.expose()).await,
+        Outcome::Refused(Stage::Scope)
+    );
+}
+
+#[tokio::test]
+async fn caller_authentication_matches_the_token_corpus() {
+    let corpus = TokenCorpus::load().expect("the token corpus loads");
+    let signer = TokenSigner::new();
+    let (_root, secrets) = key_secrets(&signer);
     let secrets = &secrets;
     let report = corpus
         .run_product_async(

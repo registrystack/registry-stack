@@ -228,8 +228,8 @@ Under `operator-controlled-upstream` the member must list its clients.
 Development loopback accepts `unrestricted` as a local convenience.
 A configured `taskAuthority` requires a list in either mode, and its `issuer` is an absolute `http` or `https` URL with a host and no user information.
 
-`scopeClaim` defaults to `registry_scopes` for compatibility with existing deployments.
-Stock ThunderID emits `scope`, so the maintained example and `caseworkctl init` set that explicit override.
+`scopeClaim` defaults to `scope`, the claim the other products read.
+A deployment whose issuer emits scopes in another claim, such as `registry_scopes`, names that claim in the member.
 `humanIdentity` defaults to claim `registry_actor_kind` with value `human` and applies only to human roles.
 Principal selection belongs exclusively to each authored `accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`.
 The removed runtime field `authentication.oidc.principalClaim` is refused with that replacement.

@@ -33,7 +33,7 @@ and reachable problem code.
 Every caller request presents `Authorization: Bearer <token>` holding an RFC 9068 access token,
 `typ: at+jwt`, signed with RS256 or ES256 by the one issuer the deployment names, for its audience,
 to an exact client keyed in `authentication.policies`, with a lifetime of at most one hour. The token's scopes
-are read from `registry_scopes` unless the deployment sets `scopeClaim`. A missing, malformed, or
+are read from `scope` unless the deployment sets `scopeClaim`. A missing, malformed, or
 unverified token answers `401 authentication.refused` with `WWW-Authenticate: Bearer`.
 
 {/* Evidence: crates/registry-coordinator/src/access.rs, access_token_typ_set, scopeClaim and
