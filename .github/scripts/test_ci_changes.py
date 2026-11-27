@@ -38,6 +38,7 @@ from ci_changes import (
     ADAPTER_PACKAGES,
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
+    PROVISION_JOURNEY_PACKAGES,
     RENDER_TUTORIAL_INPUTS,
     SCHEDULING_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
@@ -117,6 +118,46 @@ def provision_test_variables() -> set[str]:
             ),
         )
     )
+
+
+PROVISION_JOURNEY_STEP = "Product provisioning PostgreSQL journeys"
+
+
+def provision_journeys() -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Each product's provisioning journey: package, test target and tests.
+
+    A journey is an integration test target that reads the shared provisioning
+    test environment. Its tests are every test in a file gated on
+    postgres-test as a whole, or the tests after the first postgres-test gate
+    in a file that also holds ungated command tests.
+    """
+
+    journeys = {}
+    for target in sorted(Path("crates").glob("*/tests/*.rs")):
+        package = target.parts[1]
+        text = target.read_text(encoding="utf-8")
+        if package == "registry-platform-provision" or "provision_test_env" not in text:
+            continue
+        gate = '#![cfg(feature = "postgres-test")]'
+        if gate not in text:
+            text = text[text.index('#[cfg(feature = "postgres-test")]') :]
+        tests = re.findall(
+            r"#\[(?:tokio::)?test[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+(\w+)",
+            text,
+        )
+        journeys[package] = (target.stem, tuple(tests))
+    return journeys
+
+
+def cargo_test_commands(run: str) -> list[str]:
+    """Each cargo test command in a run script, continuation lines joined."""
+
+    commands = []
+    for line in run.replace("\\\n", " ").splitlines():
+        for segment in re.split(r"\||&&|;", line):
+            if "cargo test" in segment:
+                commands.append(" ".join(segment.split()))
+    return commands
 
 
 def journey_products() -> dict[str, Any]:
@@ -4395,6 +4436,116 @@ on:
         stop_run = steps[stop]["run"]
         self.assertIn("org.registrystack.ci.postgres-service", stop_run)
         self.assertIn('docker rm --force "${CONTAINER_ID}"', stop_run)
+
+    def test_product_provisioning_changes_select_the_tls_postgres_lane(self) -> None:
+        # A package that adds a journey adds itself to the classifier's list.
+        journeys = provision_journeys()
+        self.assertEqual(set(PROVISION_JOURNEY_PACKAGES), set(journeys))
+        edgeless = Workspace(without_dependency_edges(self.metadata))
+        paths = [
+            *(f"crates/{package}/src/provision.rs" for package in journeys),
+            *(f"crates/{package}/tests/{target}.rs" for package, (target, _) in journeys.items()),
+            "crates/registry-casework/migrations/0001_review_baseline.sql",
+            "crates/registry-documents/migrations/0001_documents.sql",
+            "crates/registry-messaging/migrations/0001_messaging.sql",
+            "crates/registry-scheduling/migrations/0001_scheduling.sql",
+        ]
+        for graph, workspace in (("real", self.workspace), ("edgeless", edgeless)):
+            for path in paths:
+                for event, outputs in (
+                    ("pull_request", classify(workspace, (path,), pull_request=True)),
+                    ("merge_group", classify(workspace, (path,))),
+                ):
+                    with self.subTest(graph=graph, path=path, event=event):
+                        self.assertTrue(outputs["breg_contracts"])
+                        self.assertIn(
+                            PROVISION_POSTGRES_LANE, outputs["breg_contracts_lanes"]
+                        )
+
+    def test_contracts_journeys_lane_runs_each_product_provisioning_journey(
+        self,
+    ) -> None:
+        steps = self.workflow_jobs["breg-contracts"]["steps"]
+        names = [step.get("name") for step in steps]
+        suite = names.index("Provisioning PostgreSQL suite")
+        journey = names.index(PROVISION_JOURNEY_STEP)
+        stop = names.index("Stop PostgreSQL 16 for the provisioning floor test")
+        self.assertLess(suite, journey)
+        self.assertLess(journey, stop)
+        step = steps[journey]
+        self.assertEqual(f"matrix.lane == '{PROVISION_POSTGRES_LANE}'", step["if"])
+
+        # The journeys read the two variables of the shared test helper, and
+        # the URL verifies the server certificate and its host name.
+        run = step["run"]
+        self.assertRegex(
+            run,
+            r'(?m)^export PROVISION_TEST_DATABASE_URL="postgresql://breg:breg_test@'
+            r'localhost:\$\{DATABASE_PORT\}/postgres\?sslmode=verify-full"$',
+        )
+        self.assertRegex(run, r"(?m)^export PROVISION_TEST_DATABASE_CA=\S")
+
+        journeys = provision_journeys()
+        command = folded_command(step)
+        for package, (target, _) in journeys.items():
+            with self.subTest(package=package):
+                self.assertIn(
+                    f"cargo test --locked -p {package} --features postgres-test "
+                    f'--test {target} | tee "${{RUNNER_TEMP}}/provision-journey-{package}.log"',
+                    command,
+                )
+        # A run that selected no test still exits 0, so every log needs a pass
+        # count, no ignored test, and the journey's own line.
+        self.assertIn(f"for package in {' '.join(journeys)}; do", command)
+        self.assertIn(
+            "grep -Eq '^test result: ok\\. [1-9][0-9]* passed; 0 failed; 0 ignored' "
+            '"${log}"',
+            command,
+        )
+        self.assertIn(
+            "grep -Eq '^test ([a-z_]+::)?provision_then_apply_then_serve_with_[a-z_]+ "
+            "\\.\\.\\. ok$' \"${log}\"",
+            command,
+        )
+
+    def test_other_postgres_steps_leave_the_provisioning_journeys_to_the_tls_lane(
+        self,
+    ) -> None:
+        # Product PostgreSQL lanes serve plaintext, and the journeys refuse a
+        # server they cannot verify. A command there that runs a journey
+        # package's every test target skips the journey's tests.
+        journeys = provision_journeys()
+        sources = []
+        for workflow in sorted(Path(".github/workflows").glob("*.yml")):
+            jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+            for job_name, job in jobs.items():
+                for step in job.get("steps", []):
+                    if step.get("name") != PROVISION_JOURNEY_STEP:
+                        source = f"{workflow.name}:{job_name}:{step.get('name')}"
+                        sources.append((source, step.get("run", "")))
+        for script in sorted(Path("products").glob("*/scripts/*.sh")):
+            sources.append((str(script), script.read_text(encoding="utf-8")))
+
+        checked = 0
+        for source, run in sources:
+            for command in cargo_test_commands(run):
+                for package, (target, tests) in journeys.items():
+                    if not re.search(rf"-p {re.escape(package)}(?=\s|$)", command):
+                        continue
+                    if "postgres-test" not in command:
+                        continue
+                    with self.subTest(source=source, package=package):
+                        self.assertNotIn(f"--test {target} ", f"{command} ")
+                        selectors = re.findall(
+                            r"--(?:test|lib|bins?|examples?|doc)(?=\s|$)", command
+                        )
+                        every_target = "--tests" in command or "--all-targets" in command
+                        if every_target or not selectors:
+                            checked += 1
+                            for test in tests:
+                                self.assertIn(f"--skip {test}", command)
+        # The Messaging lane's messagingctl run is one such command.
+        self.assertGreaterEqual(checked, 1)
 
 
 def edit_lock_package(text: str, name: str, **fields: str) -> str:
