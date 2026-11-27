@@ -6070,6 +6070,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/platform/cli-database-provision-report/cli-database-provision-report.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Registry Stack CLI database provision report",
+      "description": "Report of the shared `provision` command that creates a product's PostgreSQL roles, database, schemas and extensions.",
+      "source": {
+        "path": "crates/registry-platform-provision/src/cli.rs",
+        "sha256": "76bb9ff03c5acfde5c92823721ded6f3587b5185fef95cd4c80c159bbc04be69"
+      },
+      "artifact": {
+        "path": "crates/registry-platform-provision/schema/provision-report.schema.json",
+        "sha256": "6b3a5f1f63ac5bc66ce1d84142cb4004f62cb47e130c57685cdc2fc5d1ec6d15",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/platform/identity-deployment/identity-deployment.v1.schema.json",
       "kind": "schema",
       "status": "active",

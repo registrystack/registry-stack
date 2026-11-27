@@ -8035,10 +8035,17 @@ dependencies = [
 name = "registry-platform-provision"
 version = "0.49.0"
 dependencies = [
+ "clap",
  "getrandom 0.4.3",
  "postgres-protocol",
+ "registry-cli-report",
  "registry-platform-activation",
+ "registry-platform-yaml",
  "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-postgres",

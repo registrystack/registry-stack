@@ -15,6 +15,8 @@
 //! report. [`verify_logins`] then opens a session as each product role.
 
 mod admin;
+#[cfg(feature = "cli")]
+pub mod cli;
 mod execute;
 mod plan;
 pub mod sql;
@@ -26,3 +28,6 @@ pub use plan::{
     plan, render_script, verify_server_version, Needs, Plan, PlanError, Probe, ProductDatabase,
     ProvisionTarget, RoleCredential, SchemaLayout, Scope, Spatial, Statement, UnsupportedPostgres,
 };
+
+#[cfg(feature = "cli")]
+pub use cli::{run_provision, ProvisionArgs, ProvisionInput};
