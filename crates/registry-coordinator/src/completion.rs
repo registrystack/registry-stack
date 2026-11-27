@@ -5,7 +5,7 @@
 //! the connection's producer credential, and only that read can settle it.
 
 use crate::{
-    http::{problem, single_header},
+    http::{bearer_token, problem, single_header},
     metrics::AuthenticationRefusal,
     protocol::AdapterSet,
     store::Store,
@@ -16,6 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
+use registry_platform_authcommon::FailedCheck;
 use registry_review_protocol::ReviewCompletion;
 use uuid::Uuid;
 
@@ -122,19 +123,22 @@ pub(crate) fn authenticate(
     body: Option<&[u8]>,
     now: DateTime<Utc>,
 ) -> Result<(String, Uuid), CoordinatorError> {
-    let refused = || {
+    let refused = |check: FailedCheck| {
         CoordinatorError::new(
             "access.unauthenticated",
             "a configured completion credential and recipient binding are required",
         )
+        .failing(check)
     };
-    let token = single_header(headers, header::AUTHORIZATION.as_str())
-        .and_then(|value| registry_platform_authcommon::parse_bearer_token(value).ok())
-        .ok_or_else(refused)?;
-    let recipient = single_header(headers, RECIPIENT_BINDING_HEADER).ok_or_else(refused)?;
+    let token = bearer_token(headers).map_err(refused)?;
+    if !headers.contains_key(RECIPIENT_BINDING_HEADER) {
+        return Err(refused(FailedCheck::CredentialMissing));
+    }
+    let recipient = single_header(headers, RECIPIENT_BINDING_HEADER)
+        .ok_or_else(|| refused(FailedCheck::CredentialMalformed))?;
     let connection = adapters
         .review_completion(token, recipient)
-        .ok_or_else(refused)?;
+        .ok_or_else(|| refused(FailedCheck::SharedSecret))?;
     if single_header(headers, header::CONTENT_TYPE.as_str()) != Some("application/json") {
         return Err(CoordinatorError::new(
             "request.content-type-invalid",
@@ -295,6 +299,54 @@ mod tests {
                 "access.unauthenticated",
                 "{case}"
             );
+        }
+    }
+
+    #[test]
+    fn a_refused_sender_names_the_check_that_failed() {
+        let event = Uuid::new_v4();
+        let mut forged = headers(event);
+        forged.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer another-synthetic-token-0123456789"),
+        );
+        let mut basic = headers(event);
+        basic.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic c3ludGhldGlj"),
+        );
+        let mut absent = headers(event);
+        absent.remove(header::AUTHORIZATION);
+        let mut doubled = headers(event);
+        doubled.append(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer another-synthetic-token-0123456789"),
+        );
+        let mut other = headers(event);
+        other.insert(
+            RECIPIENT_BINDING_HEADER,
+            HeaderValue::from_static("another-recipient"),
+        );
+        let mut unbound = headers(event);
+        unbound.remove(RECIPIENT_BINDING_HEADER);
+        let mut two = headers(event);
+        two.append(
+            RECIPIENT_BINDING_HEADER,
+            HeaderValue::from_static(RECIPIENT),
+        );
+        for (case, headers, check) in [
+            ("forged token", forged, FailedCheck::SharedSecret),
+            ("another scheme", basic, FailedCheck::CredentialMissing),
+            ("no credential", absent, FailedCheck::CredentialMissing),
+            ("two credentials", doubled, FailedCheck::CredentialMalformed),
+            ("another recipient", other, FailedCheck::SharedSecret),
+            ("no recipient", unbound, FailedCheck::CredentialMissing),
+            ("two recipients", two, FailedCheck::CredentialMalformed),
+        ] {
+            let refusal =
+                authenticate(&Receiver, &headers, Some(b"{"), Utc::now()).expect_err("refused");
+            assert_eq!(refusal.code, "access.unauthenticated", "{case}");
+            assert_eq!(refusal.check, Some(check), "{case}");
         }
     }
 

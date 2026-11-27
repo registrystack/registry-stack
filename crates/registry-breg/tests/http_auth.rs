@@ -47,7 +47,7 @@ use zeroize::Zeroizing;
 const AUDIENCE: &str = "urn:example:breg";
 
 #[tokio::test]
-async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
+async fn compact_token_admission_refuses_malformed_credentials_and_writes_no_line_itself() {
     use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
     use tracing::instrument::WithSubscriber;
     let captured = CapturedDiagnosticLogs::default();
@@ -71,7 +71,9 @@ async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
             ));
         }
     }
-    captured.assert_one_value_free_header_diagnostic(&tokens);
+    // The counted refusal and its one bounded line belong to the request
+    // boundary, which `tests/authentication_refusals.rs` drives.
+    assert_eq!(captured.text(), "", "admission writes no line of its own");
 }
 
 #[tokio::test]
@@ -1976,13 +1978,24 @@ async fn malformed_or_duplicate_bearer_is_refused_before_record_io() {
         assert_eq!(body_json(response).await["code"], "authentication.refused");
         assert_eq!(harness.records.calls.load(Ordering::SeqCst), before);
         let rendered = captured.text();
-        let diagnostics = rendered
+        // The process-wide recorder admits a bounded number of lines per
+        // check, and other tests in this process spend that budget, so the
+        // exact line count is asserted in `tests/authentication_refusals.rs`.
+        let refusals = rendered
             .lines()
-            .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
-            .filter(|event| event["fields"]["message"] == "BReg authentication refused")
+            .map(|line| serde_json::from_str::<Value>(line).expect("JSON log line"))
+            .filter(|event| event["fields"]["message"] == "request refused")
             .collect::<Vec<_>>();
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0]["fields"]["stage"], "header");
+        assert!(refusals.len() <= 1);
+        for refusal in &refusals {
+            assert!(
+                matches!(
+                    refusal["fields"]["failed_check"].as_str(),
+                    Some("credential-missing" | "credential-malformed")
+                ),
+                "{refusal}"
+            );
+        }
         assert!(!rendered.contains("canary"));
         assert!(!rendered.contains("Bearer"));
     }

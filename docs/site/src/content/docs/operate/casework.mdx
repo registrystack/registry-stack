@@ -328,6 +328,7 @@ package digest the process serves, so a rollout can confirm what each process ru
 | `casework_completion_deliveries` | gauge | `state`: `pending`, `retrying`, `leased`, `unknown`, `dead-lettered`, `expired` |
 | `casework_completion_oldest_undelivered_age_seconds` | gauge | none |
 | `casework_metrics_sample_failures_total` | counter | `sample`: `review`, `completion-backlog` |
+| `casework_request_refusals_total` | counter | `check`: the check that refused the request, every value published at zero |
 
 Every gauge except `casework_database_up` is read from the database and cached for 5 seconds.
 The review counts and the completion backlog are read separately, one pool connection at a time,
@@ -350,6 +351,20 @@ expired delivery stays counted until review retention erases it, so a non-zero `
 unknown delivery has waited, or 0 when there are none. It runs from the delivery's next attempt time
 while pending, from its attempt start while leased, and from its last change once it is unknown.
 Dead-lettered and expired deliveries do not set it, because they stay counted until retention erases them.
+
+`casework_request_refusals_total` counts every request the API listener refused, by the check that
+refused it, since the process started: a missing or refused credential or token, an unreachable
+key source, a refused delegated reviewer, and a review the caller may not act on or see. Each
+refusal also writes one `request refused` line with `failed_check` and the request's trace id, at
+most five lines per check per minute across the process. The next line for that check carries
+`suppressed`, the number the minute counted but did not log, so alert on the counter, not the log.
+Neither carries a token, claim, client or subject value, and counting changes nothing the caller
+receives.
+
+{/* Evidence: crates/registry-casework/src/metrics.rs, refusal_recorder() and render();
+    crates/registry-casework/tests/refusal_golden.rs,
+    authentication_and_profile_refusals_match_the_checked_in_answers;
+    crates/registry-platform-authcommon/src/refusal.rs, the recorder's per-check window. */}
 
 {/* Evidence: crates/registry-casework/src/metrics.rs, metrics_router() and render();
     crates/registry-casework/src/runtime/completion.rs, completion_backlog();

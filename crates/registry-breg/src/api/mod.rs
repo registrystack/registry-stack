@@ -21,9 +21,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path, RawQuery, State};
-use axum::http::header::{
-    ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, VARY,
-};
+use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, LINK, VARY};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
@@ -75,6 +73,7 @@ use crate::problem_location::{BatchItemMember, RequestLocation};
 use crate::query as strict_query;
 use crate::query_binding::CursorBindingQuery;
 use crate::record_profile::{self, RecordRepresentation};
+use registry_platform_authcommon::FailedCheck;
 use uuid::Uuid;
 
 use crate::artifacts::{
@@ -312,19 +311,21 @@ async fn review_completion(
     body: Body,
 ) -> Response {
     let Some(receiver) = service.review_completions.as_ref() else {
-        return concealed();
+        return crate::correlation::note_refusal(
+            fixed_problem(ProblemCode::ResourceNotFound),
+            FailedCheck::Visibility,
+        );
     };
-    let Some(authorization) = single_header(&headers, AUTHORIZATION.as_str()) else {
-        return review_completion_refused();
+    let token = match crate::auth::bearer_token(&headers) {
+        Ok(token) => token,
+        Err(check) => return review_completion_refused(check),
     };
-    let Ok(token) = registry_platform_authcommon::parse_bearer_token(authorization) else {
-        return review_completion_refused();
-    };
-    let Some(recipient) = single_header(&headers, REVIEW_COMPLETION_RECIPIENT_HEADER) else {
-        return review_completion_refused();
+    let recipient = match recipient_binding(&headers) {
+        Ok(recipient) => recipient,
+        Err(check) => return review_completion_refused(check),
     };
     let Some((authority, recovery_days)) = receiver.authority(token, recipient) else {
-        return review_completion_refused();
+        return review_completion_refused(FailedCheck::SharedSecret);
     };
     if !single_content_type(&headers, "application/json") {
         return unsupported_media_type();
@@ -387,8 +388,21 @@ mod review_completion_tests {
     }
 }
 
-fn review_completion_refused() -> Response {
-    fixed_problem(ProblemCode::AuthenticationRefused)
+/// The recipient the completion names, or the check the header failed: absent
+/// is a missing credential, repeated or unreadable is a malformed one.
+fn recipient_binding(headers: &HeaderMap) -> Result<&str, FailedCheck> {
+    let mut values = headers.get_all(REVIEW_COMPLETION_RECIPIENT_HEADER).iter();
+    let Some(value) = values.next() else {
+        return Err(FailedCheck::CredentialMissing);
+    };
+    if values.next().is_some() {
+        return Err(FailedCheck::CredentialMalformed);
+    }
+    value.to_str().map_err(|_| FailedCheck::CredentialMalformed)
+}
+
+fn review_completion_refused(check: FailedCheck) -> Response {
+    crate::correlation::note_refusal(fixed_problem(ProblemCode::AuthenticationRefused), check)
 }
 
 async fn health() -> Response {

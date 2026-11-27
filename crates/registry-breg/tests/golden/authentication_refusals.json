@@ -1,0 +1,288 @@
+{
+  "actor-is-not-the-trusted-actor": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "actor-without-a-matched-client": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "basic-scheme": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "double-space-separator": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "expired-token": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "extractor-without-authentication-context": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "missing-actor-kind": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "no-authorization-header": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "principal-claim-is-an-object": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "repeated-authorization-header": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "review-completion-with-two-authorization-headers": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "review-completion-without-authorization": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "review-completion-without-recipient": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "review-completion-wrong-credential": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "review-completion-wrong-recipient": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "tampered-signature": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "task-grant-claims-malformed": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "task-grant-token-issued-for-too-long": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "token-not-compact": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "unknown-key-id": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "wrong-audience": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "wrong-issuer": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 401,
+    "wwwAuthenticate": null
+  }
+}

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BReg counts every refused request by the check that refused it, in
+  `breg_request_refusals_total{check}`, published at zero for every check from
+  the first scrape. Each refusal writes one `request refused` line with
+  `failed_check` and the request's trace id, at most five lines per check per
+  minute. That line replaces the authentication refusal line that carried a
+  `stage` field. Refusal statuses, headers and bodies are unchanged.
+
 - The Rust BReg client decodes `/health` and `/ready` answers that carry
   members besides `status`, and ignores them. `status` is still required and
   checked.

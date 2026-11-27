@@ -12,7 +12,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_casework_core::*;
-use registry_platform_authcommon::parse_bearer_token;
+use registry_platform_authcommon::{
+    parse_bearer_token, record_refusal, BearerParseError, FailedCheck, RefusalNote, RefusalRecorder,
+};
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
     FrameworkRejection, ProblemBody, TraceContext,
@@ -79,6 +81,13 @@ pub struct HttpState {
 }
 
 pub fn router(state: HttpState) -> Router {
+    router_with_recorder(state, crate::metrics::refusal_recorder())
+}
+
+/// The router, counting and logging every refusal through `recorder`. A test
+/// passes its own recorder to read what a request counted. A service uses
+/// [`router`], whose recorder feeds the metrics scrape.
+pub fn router_with_recorder(state: HttpState, recorder: Arc<RefusalRecorder>) -> Router {
     let review = Router::new()
         .route("/v1/review-requests", post(create_review_request))
         .route("/v1/review-results", get(review_result_feed))
@@ -205,16 +214,29 @@ pub fn router(state: HttpState) -> Router {
             post(preview_caseload_move),
         )
         .route("/v1/directory/caseload/apply", post(apply_caseload_move));
-    http_edge(app, Some(state.clone()))
+    http_edge_recording(app, Some(state.clone()), Arc::clone(&recorder))
         .merge(contract_edge(
             review,
             HttpContract::Review,
             Some(state.clone()),
+            recorder,
         ))
         .with_state(state)
 }
 
+#[cfg(test)]
 fn http_edge<S>(router: Router<S>, source_state: Option<HttpState>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    http_edge_recording(router, source_state, crate::metrics::refusal_recorder())
+}
+
+fn http_edge_recording<S>(
+    router: Router<S>,
+    source_state: Option<HttpState>,
+    recorder: Arc<RefusalRecorder>,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -222,6 +244,7 @@ where
         router.fallback(route_not_found),
         HttpContract::Casework,
         source_state,
+        recorder,
     )
 }
 
@@ -229,6 +252,7 @@ fn contract_edge<S>(
     router: Router<S>,
     contract: HttpContract,
     source_state: Option<HttpState>,
+    recorder: Arc<RefusalRecorder>,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -244,12 +268,32 @@ where
     } else {
         router
     };
+    // The one recording point: it sits outside the admission layer, so a
+    // refusal from either is counted once, inside the request's trace scope.
     router
+        .layer(middleware::from_fn_with_state(recorder, record_refusals))
         .layer(request_body_limit_default())
         .layer(middleware::from_fn(move |request, next| {
             http_boundary(contract, request, next)
         }))
         .layer(security_headers(CspBuilder::restrictive()).without_hsts())
+}
+
+/// Counts and logs the refusal a response carries in its extensions. The
+/// extension is never serialized, so the answer's bytes are unchanged.
+async fn record_refusals(
+    State(recorder): State<Arc<RefusalRecorder>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
+        match REQUEST_TRACE.try_with(|trace| trace.trace_id.clone()) {
+            Ok(trace_id) => record_refusal!(recorder, note, trace_id = &trace_id),
+            Err(_) => record_refusal!(recorder, note),
+        }
+    }
+    response
 }
 
 async fn http_boundary(
@@ -1437,18 +1481,14 @@ async fn task_client(
 ) -> Result<registry_platform_oidc::VerifiedToken, HttpError> {
     if headers.contains_key(CASEWORK_PROFILE_HEADER) || headers.contains_key(SOURCE_PROFILE_HEADER)
     {
-        return Err(HttpError::AuthenticationRefused);
+        return Err(HttpError::AuthenticationRefused(FailedCheck::AccessProfile));
     }
-    let raw = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| header_authentication_refused(state))?;
-    let token = parse_bearer_token(raw).map_err(|_| header_authentication_refused(state))?;
+    let token = bearer_credential(headers)?;
     state
         .authenticator
         .authenticate_task_client(token, scope, kind)
         .await
-        .map_err(|_| HttpError::AuthenticationRefused)
+        .map_err(|error| HttpError::AuthenticationRefused(error.failed_check()))
 }
 async fn task_assertion(
     RequestState(state): RequestState,
@@ -1487,23 +1527,13 @@ async fn authenticate<'a>(
     state: &HttpState,
     headers: &'a HeaderMap,
 ) -> Result<(registry_casework_core::ActorContext, &'a str), HttpError> {
-    let authorization = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| header_authentication_refused(state))?;
-    let token =
-        parse_bearer_token(authorization).map_err(|_| header_authentication_refused(state))?;
+    let token = bearer_credential(headers)?;
     let profile = profile_header(headers, HttpContract::current().profile_header())?;
     let actor = state
         .authenticator
         .authenticate(token, profile)
         .await
-        .map_err(|error| match error {
-            AuthenticationError::Refused => HttpError::AuthenticationRefused,
-            AuthenticationError::Profile => HttpError::ProfileNotAuthorized,
-            AuthenticationError::NotHuman => HttpError::ProfileNotHuman,
-            AuthenticationError::Claims => HttpError::AuthenticationRefused,
-        })?;
+        .map_err(HttpError::from)?;
     Ok((actor, token))
 }
 
@@ -1513,33 +1543,39 @@ async fn authenticate_delegated_staff_read<'a>(
     source_profile: Option<&str>,
 ) -> Result<(crate::auth::delegated::DelegatedStaffReader, &'a str), HttpError> {
     if headers.contains_key(CASEWORK_PROFILE_HEADER) {
-        return Err(HttpError::ProfileNotAuthorized);
+        return Err(HttpError::ProfileNotAuthorized(FailedCheck::AccessProfile));
     }
-    let authorization = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| header_authentication_refused(state))?;
-    let token =
-        parse_bearer_token(authorization).map_err(|_| header_authentication_refused(state))?;
+    let token = bearer_credential(headers)?;
     let policy = profile_header(headers, DELEGATED_READER_HEADER)?;
     let reader = state
         .authenticator
         .authenticate_staff_read(token, policy, source_profile)
         .await
-        .map_err(|error| match error {
-            AuthenticationError::Refused | AuthenticationError::Claims => {
-                HttpError::AuthenticationRefused
-            }
-            AuthenticationError::Profile | AuthenticationError::NotHuman => {
-                HttpError::ProfileNotAuthorized
-            }
-        })?;
+        .map_err(HttpError::DelegatedStaff)?;
     Ok((reader, token))
 }
 
-fn header_authentication_refused(state: &HttpState) -> HttpError {
-    state.authenticator.record_header_refusal();
-    HttpError::AuthenticationRefused
+/// The bearer token of a request, or the refusal that names why there is
+/// none: no header, a scheme other than Bearer, or a value that is not a
+/// well-formed bearer credential.
+fn bearer_credential(headers: &HeaderMap) -> Result<&str, HttpError> {
+    let Some(value) = headers.get(AUTHORIZATION) else {
+        return Err(HttpError::AuthenticationRefused(
+            FailedCheck::CredentialMissing,
+        ));
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| HttpError::AuthenticationRefused(FailedCheck::CredentialMalformed))?;
+    parse_bearer_token(value).map_err(bearer_refusal)
+}
+
+/// The refusal for an `Authorization` value that is not a bearer credential.
+fn bearer_refusal(error: BearerParseError) -> HttpError {
+    HttpError::AuthenticationRefused(match error {
+        BearerParseError::InvalidScheme => FailedCheck::CredentialMissing,
+        _ => FailedCheck::CredentialMalformed,
+    })
 }
 
 fn source_profile(headers: &HeaderMap) -> Result<&str, HttpError> {
@@ -1643,11 +1679,16 @@ fn if_match_with_minimum(headers: &HeaderMap, minimum: i64) -> Result<i64, HttpE
 
 #[derive(Debug)]
 pub enum HttpError {
-    AuthenticationRefused,
-    ProfileNotAuthorized,
-    ProfileNotHuman,
-    Forbidden,
-    NotFound,
+    AuthenticationRefused(FailedCheck),
+    ProfileNotAuthorized(FailedCheck),
+    ProfileNotHuman(FailedCheck),
+    /// A refusal of the delegated staff read, which answers a person's
+    /// refusal as a profile refusal and carries its own operator hint.
+    DelegatedStaff(AuthenticationError),
+    Forbidden(FailedCheck),
+    /// A target that is absent or that the caller may not see, answered
+    /// alike.
+    NotFound(FailedCheck),
     PreconditionFailed,
     PreconditionRequired,
     IdempotencyKeyReused,
@@ -1674,6 +1715,9 @@ pub enum HttpError {
     Internal,
     Validation(ReviewValidationError),
 }
+// Store, service and review errors do not yet carry their own check: a refused
+// operation is recorded as `operation`, and an absent or concealed target as
+// `visibility`.
 impl From<StoreError> for HttpError {
     fn from(e: StoreError) -> Self {
         match e {
@@ -1681,8 +1725,8 @@ impl From<StoreError> for HttpError {
             StoreError::CursorExpired => Self::CursorExpired,
             StoreError::CursorInvalid => Self::CursorInvalid,
             StoreError::IdempotencyExpired => Self::IdempotencyExpired,
-            StoreError::NotFound => Self::NotFound,
-            StoreError::Forbidden => Self::Forbidden,
+            StoreError::NotFound => Self::NotFound(FailedCheck::Visibility),
+            StoreError::Forbidden => Self::Forbidden(FailedCheck::Operation),
             StoreError::Conflict => Self::PreconditionFailed,
             StoreError::AlreadyClaimed | StoreError::NotHolder => Self::ReviewTaskNotHeld,
             StoreError::IdempotencyConflict => Self::IdempotencyKeyReused,
@@ -1701,8 +1745,8 @@ impl From<ServiceError> for HttpError {
     fn from(e: ServiceError) -> Self {
         match e {
             ServiceError::Store(e) => e.into(),
-            ServiceError::NotFound => Self::NotFound,
-            ServiceError::Forbidden => Self::Forbidden,
+            ServiceError::NotFound => Self::NotFound(FailedCheck::Visibility),
+            ServiceError::Forbidden => Self::Forbidden(FailedCheck::Operation),
             ServiceError::ReviewValidation(e) => Self::Validation(e),
             ServiceError::Configuration => Self::Internal,
             ServiceError::Context(ReviewContextError::VersionMismatch) => {
@@ -1715,15 +1759,15 @@ impl From<ServiceError> for HttpError {
             ServiceError::Context(
                 ReviewContextError::Invalid | ReviewContextError::Unsupported,
             ) => Self::SourceBadGateway,
-            ServiceError::Context(_) => Self::NotFound,
+            ServiceError::Context(_) => Self::NotFound(FailedCheck::Visibility),
         }
     }
 }
 impl From<ReviewRuntimeError> for HttpError {
     fn from(e: ReviewRuntimeError) -> Self {
         match e {
-            ReviewRuntimeError::NotFound => Self::NotFound,
-            ReviewRuntimeError::Forbidden => Self::Forbidden,
+            ReviewRuntimeError::NotFound => Self::NotFound(FailedCheck::Visibility),
+            ReviewRuntimeError::Forbidden => Self::Forbidden(FailedCheck::Operation),
             ReviewRuntimeError::SubmissionConflict => Self::ReviewSubmissionConflict,
             ReviewRuntimeError::ResultExpired => Self::ReviewResultExpired,
             ReviewRuntimeError::TaskNotHeld => Self::ReviewTaskNotHeld,
@@ -1751,14 +1795,107 @@ impl From<ReviewRuntimeError> for HttpError {
         }
     }
 }
+impl From<AuthenticationError> for HttpError {
+    fn from(error: AuthenticationError) -> Self {
+        match error {
+            AuthenticationError::Refused(check) | AuthenticationError::Claims(check) => {
+                Self::AuthenticationRefused(check)
+            }
+            AuthenticationError::Profile(check) => Self::ProfileNotAuthorized(check),
+            AuthenticationError::NotHuman(check) => Self::ProfileNotHuman(check),
+        }
+    }
+}
+
+/// Operator hint on a scope refusal.
+const SCOPE_REMEDY: &str = "check authentication.oidc.scopeClaim and accessProfiles requiredScopes";
+/// Operator hint on a refusal of the selected profile or of a person's session.
+const PROFILE_REMEDY: &str =
+    "check selected accessProfiles and authentication.oidc.humanIdentity profile category";
+/// Operator hint on a delegated staff read refused by its configured bindings.
+const DELEGATED_STAFF_REMEDY: &str = "check delegatedStaffReaders and authentication.oidc client, assertion, actor, scope and lifetime bindings";
+
 impl HttpError {
+    /// The check a refused request failed, for the operator's counter and
+    /// log line. `None` for an answer that is not an authentication or
+    /// authorization refusal. Never written to a response.
+    #[deny(clippy::wildcard_enum_match_arm)]
+    fn failed_check(&self) -> Option<FailedCheck> {
+        match self {
+            Self::AuthenticationRefused(check)
+            | Self::ProfileNotAuthorized(check)
+            | Self::ProfileNotHuman(check)
+            | Self::Forbidden(check)
+            | Self::NotFound(check) => Some(*check),
+            Self::DelegatedStaff(error) => Some(error.failed_check()),
+            Self::ReviewDistinctApproverRequired | Self::ReviewInitiatorExcluded => {
+                Some(FailedCheck::SeparationOfDuties)
+            }
+            Self::PreconditionFailed
+            | Self::PreconditionRequired
+            | Self::IdempotencyKeyReused
+            | Self::IdempotencyExpired
+            | Self::Invalid
+            | Self::LimitOutOfRange
+            | Self::ServiceUnavailable
+            | Self::SourceProfileNotApplicable
+            | Self::SourceProfileRequired
+            | Self::SourceBadGateway
+            | Self::SourceVersionMismatch
+            | Self::SourceVersionUnavailable
+            | Self::ReviewInitiatorRequired
+            | Self::ReviewResultExpired
+            | Self::ReviewSubmissionConflict
+            | Self::ReviewTaskNotHeld
+            | Self::ReviewPolicyMismatch
+            | Self::ReviewQueryTooBroad
+            | Self::CursorInvalid
+            | Self::CursorExpired
+            | Self::Absence(_)
+            | Self::Internal
+            | Self::Validation(_) => None,
+        }
+    }
+
+    /// The fixed operator hint that goes with the refusal, if there is one.
+    fn remedy(&self) -> Option<&'static str> {
+        match self {
+            Self::ProfileNotAuthorized(FailedCheck::Scope) => Some(SCOPE_REMEDY),
+            Self::ProfileNotAuthorized(FailedCheck::AccessProfile)
+            | Self::ProfileNotHuman(FailedCheck::ActorKind) => Some(PROFILE_REMEDY),
+            Self::DelegatedStaff(error) => matches!(
+                error.failed_check(),
+                FailedCheck::AccessProfile
+                    | FailedCheck::TokenAssertionIssuer
+                    | FailedCheck::TokenClient
+                    | FailedCheck::TaskGrantClaims
+                    | FailedCheck::TokenAudience
+                    | FailedCheck::TokenClaims
+                    | FailedCheck::TokenTime
+                    | FailedCheck::Delegation
+                    | FailedCheck::Scope
+                    | FailedCheck::ActorKind
+            )
+            .then_some(DELEGATED_STAFF_REMEDY),
+            _ => None,
+        }
+    }
+
     fn problem(&self) -> ProblemCode {
         match self {
-            Self::AuthenticationRefused => ProblemCode::AuthenticationRefused,
-            Self::ProfileNotAuthorized => ProblemCode::ProfileNotAuthorized,
-            Self::ProfileNotHuman => ProblemCode::ProfileNotHuman,
-            Self::Forbidden => ProblemCode::OperationNotAuthorized,
-            Self::NotFound => ProblemCode::RequestNotFound,
+            Self::AuthenticationRefused(_) => ProblemCode::AuthenticationRefused,
+            Self::ProfileNotAuthorized(_) => ProblemCode::ProfileNotAuthorized,
+            Self::ProfileNotHuman(_) => ProblemCode::ProfileNotHuman,
+            Self::DelegatedStaff(error) => match error {
+                AuthenticationError::Refused(_) | AuthenticationError::Claims(_) => {
+                    ProblemCode::AuthenticationRefused
+                }
+                AuthenticationError::Profile(_) | AuthenticationError::NotHuman(_) => {
+                    ProblemCode::ProfileNotAuthorized
+                }
+            },
+            Self::Forbidden(_) => ProblemCode::OperationNotAuthorized,
+            Self::NotFound(_) => ProblemCode::RequestNotFound,
             Self::PreconditionFailed => ProblemCode::PreconditionFailed,
             Self::PreconditionRequired => ProblemCode::PreconditionRequired,
             Self::IdempotencyKeyReused => ProblemCode::IdempotencyKeyReused,
@@ -1797,7 +1934,18 @@ impl IntoResponse for HttpError {
             Self::Validation(v) => Some(v),
             _ => None,
         };
-        problem_response(self.problem(), None, validation)
+        let note = self.failed_check().map(|check| {
+            let note = RefusalNote::new(check);
+            match self.remedy() {
+                Some(remedy) => note.with_remedy(remedy),
+                None => note,
+            }
+        });
+        let mut response = problem_response(self.problem(), None, validation);
+        if let Some(note) = note {
+            response.extensions_mut().insert(note);
+        }
+        response
     }
 }
 
@@ -1955,6 +2103,7 @@ mod tests {
                 Router::new().route("/review", post(selected_profile)),
                 HttpContract::Review,
                 None,
+                crate::metrics::refusal_recorder(),
             ),
         );
         for (path, selected, other, base) in [
@@ -2058,6 +2207,7 @@ mod tests {
             ),
             HttpContract::Review,
             None,
+            crate::metrics::refusal_recorder(),
         );
         for (method, path, media, body, expected) in [
             (
@@ -2414,7 +2564,9 @@ mod tests {
                 .route(
                     "/authentication",
                     axum::routing::get(|| async {
-                        Err::<StatusCode, _>(HttpError::AuthenticationRefused)
+                        Err::<StatusCode, _>(HttpError::AuthenticationRefused(
+                            FailedCheck::TokenSignature,
+                        ))
                     }),
                 )
                 .route(
@@ -2648,5 +2800,238 @@ mod tests {
                 "{word}"
             );
         }
+    }
+
+    fn refusing_router(recorder: Arc<RefusalRecorder>) -> Router {
+        let answer = |error: fn() -> HttpError| {
+            axum::routing::get(move || async move { Err::<StatusCode, _>(error()) })
+        };
+        http_edge_recording(
+            Router::new()
+                .route(
+                    "/signature",
+                    answer(|| HttpError::AuthenticationRefused(FailedCheck::TokenSignature)),
+                )
+                .route(
+                    "/scope",
+                    answer(|| HttpError::ProfileNotAuthorized(FailedCheck::Scope)),
+                )
+                .route(
+                    "/not-human",
+                    answer(|| HttpError::ProfileNotHuman(FailedCheck::ActorKind)),
+                )
+                .route(
+                    "/delegated",
+                    answer(|| {
+                        HttpError::DelegatedStaff(AuthenticationError::Profile(
+                            FailedCheck::AccessProfile,
+                        ))
+                    }),
+                )
+                .route(
+                    "/forbidden",
+                    answer(|| HttpError::Forbidden(FailedCheck::Operation)),
+                )
+                .route(
+                    "/concealed",
+                    answer(|| HttpError::NotFound(FailedCheck::Visibility)),
+                )
+                .route(
+                    "/distinct",
+                    answer(|| HttpError::ReviewDistinctApproverRequired),
+                )
+                .route("/excluded", answer(|| HttpError::ReviewInitiatorExcluded))
+                .route("/invalid", answer(|| HttpError::Invalid))
+                .route("/outage", answer(|| HttpError::ServiceUnavailable)),
+            None,
+            recorder,
+        )
+    }
+
+    async fn refused(app: &Router, path: &str) -> StatusCode {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("traceparent", TRACEPARENT)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response")
+            .status()
+    }
+
+    fn recorder() -> Arc<RefusalRecorder> {
+        Arc::new(RefusalRecorder::new("casework").expect("the casework recorder"))
+    }
+
+    #[tokio::test]
+    async fn each_refusal_is_counted_once_under_its_own_check() {
+        let recorder = recorder();
+        let app = refusing_router(Arc::clone(&recorder));
+        for (path, status, check) in [
+            ("/signature", 401, "token-signature"),
+            ("/scope", 403, "scope"),
+            ("/not-human", 403, "actor-kind"),
+            ("/delegated", 403, "access-profile"),
+            ("/forbidden", 403, "operation"),
+            ("/concealed", 404, "visibility"),
+            ("/distinct", 403, "separation-of-duties"),
+            ("/excluded", 403, "separation-of-duties"),
+        ] {
+            let before = recorder.counter().get(&[check]).expect("a declared check");
+            assert_eq!(refused(&app, path).await.as_u16(), status, "{path}");
+            assert_eq!(
+                recorder.counter().get(&[check]),
+                Some(before + 1),
+                "{path} counts under {check}"
+            );
+        }
+        let counted: u64 = FailedCheck::ALL
+            .iter()
+            .map(|check| recorder.counter().get(&[check.as_str()]).unwrap_or(0))
+            .sum();
+        assert_eq!(counted, 8, "no other check moved");
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_is_not_a_refusal_is_not_counted() {
+        let recorder = recorder();
+        let app = refusing_router(Arc::clone(&recorder));
+        assert_eq!(refused(&app, "/invalid").await, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            refused(&app, "/outage").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(refused(&app, "/unrouted").await, StatusCode::NOT_FOUND);
+        let counted: u64 = FailedCheck::ALL
+            .iter()
+            .map(|check| recorder.counter().get(&[check.as_str()]).unwrap_or(0))
+            .sum();
+        assert_eq!(counted, 0);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_logs_one_value_free_line_with_its_check_remedy_and_trace() {
+        use registry_platform_testing::CapturedDiagnosticLogs;
+        use tracing::instrument::WithSubscriber;
+
+        let app = refusing_router(recorder());
+        let captured = CapturedDiagnosticLogs::default();
+        let subscriber = captured.subscriber();
+        for path in ["/scope", "/delegated", "/signature"] {
+            refused(&app, path)
+                .with_subscriber(subscriber.clone())
+                .await;
+        }
+        let lines: Vec<serde_json::Value> = captured
+            .text()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSON log line"))
+            .collect();
+        assert_eq!(lines.len(), 3, "{}", captured.text());
+        for (line, check, remedy) in [
+            (&lines[0], "scope", Some(SCOPE_REMEDY)),
+            (&lines[1], "access-profile", Some(DELEGATED_STAFF_REMEDY)),
+            (&lines[2], "token-signature", None),
+        ] {
+            let fields = &line["fields"];
+            assert_eq!(fields["message"], "request refused");
+            assert_eq!(fields["decision"], "refused");
+            assert_eq!(fields["failed_check"], check);
+            assert_eq!(fields["suppressed"], 0);
+            assert_eq!(fields["trace_id"], "0123456789abcdef0123456789abcdef");
+            assert_eq!(
+                fields.get("remedy").and_then(|value| value.as_str()),
+                remedy
+            );
+            assert_eq!(
+                fields.as_object().expect("fields").len(),
+                if remedy.is_some() { 6 } else { 5 },
+                "{line}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_one_check_logs_five_lines_and_counts_every_refusal() {
+        use registry_platform_testing::CapturedDiagnosticLogs;
+        use tracing::instrument::WithSubscriber;
+
+        let recorder = recorder();
+        let app = refusing_router(Arc::clone(&recorder));
+        let captured = CapturedDiagnosticLogs::default();
+        let subscriber = captured.subscriber();
+        for _ in 0..20 {
+            refused(&app, "/signature")
+                .with_subscriber(subscriber.clone())
+                .await;
+        }
+        assert_eq!(recorder.counter().get(&["token-signature"]), Some(20));
+        assert_eq!(captured.text().lines().count(), 5, "{}", captured.text());
+    }
+
+    #[test]
+    fn an_authentication_error_maps_to_the_answer_it_always_had() {
+        for (error, problem) in [
+            (
+                AuthenticationError::Refused(FailedCheck::TokenKey),
+                ProblemCode::AuthenticationRefused,
+            ),
+            (
+                AuthenticationError::Claims(FailedCheck::TokenClaims),
+                ProblemCode::AuthenticationRefused,
+            ),
+            (
+                AuthenticationError::Profile(FailedCheck::Scope),
+                ProblemCode::ProfileNotAuthorized,
+            ),
+            (
+                AuthenticationError::NotHuman(FailedCheck::ActorKind),
+                ProblemCode::ProfileNotHuman,
+            ),
+        ] {
+            assert_eq!(HttpError::from(error).problem(), problem);
+        }
+        // The delegated staff read answers a person's refusal as a profile one.
+        assert_eq!(
+            HttpError::DelegatedStaff(AuthenticationError::NotHuman(FailedCheck::ActorKind))
+                .problem(),
+            ProblemCode::ProfileNotAuthorized
+        );
+    }
+
+    #[test]
+    fn a_bearer_header_is_missing_when_absent_or_not_bearer_and_malformed_otherwise() {
+        let check = |value: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(AUTHORIZATION, value.parse().expect("a header value"));
+            }
+            match bearer_credential(&headers) {
+                Err(HttpError::AuthenticationRefused(check)) => check,
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        };
+        assert_eq!(check(None), FailedCheck::CredentialMissing);
+        assert_eq!(check(Some("Basic abc")), FailedCheck::CredentialMissing);
+        assert_eq!(check(Some("Bearer")), FailedCheck::CredentialMalformed);
+        assert_eq!(check(Some("Bearer a b")), FailedCheck::CredentialMalformed);
+        assert_eq!(check(Some("Bearer  a")), FailedCheck::CredentialMalformed);
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, "Bearer token".parse().unwrap());
+        assert_eq!(bearer_credential(&headers).unwrap(), "token");
+        let mut unreadable = HeaderMap::new();
+        unreadable.insert(
+            AUTHORIZATION,
+            axum::http::HeaderValue::from_bytes(b"Bearer \xff").unwrap(),
+        );
+        assert!(matches!(
+            bearer_credential(&unreadable),
+            Err(HttpError::AuthenticationRefused(
+                FailedCheck::CredentialMalformed
+            ))
+        ));
     }
 }
