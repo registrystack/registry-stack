@@ -44,6 +44,17 @@ pub const RUNTIME_KIND: &str = "PlatformSessionRuntimeConfig";
 /// page prefix may sit at or below it.
 pub const SESSION_PREFIX: &str = "/session/";
 
+/// The session cookie's name in production: `__Host-` pins it to the exact
+/// host over https.
+pub const SESSION_COOKIE: &str = "__Host-registry-session";
+/// The session cookie's name under `development-loopback`: plain http cannot
+/// carry a `Secure` cookie, and a `__Host-` name requires one.
+pub const DEVELOPMENT_SESSION_COOKIE: &str = "registry-session";
+/// The sign-in flow cookie's name in production.
+pub const FLOW_COOKIE: &str = "__Host-registry-signin";
+/// The sign-in flow cookie's name under `development-loopback`.
+pub const DEVELOPMENT_FLOW_COOKIE: &str = "registry-signin";
+
 /// The most audiences one sign-in kind may hold. Each further audience is one
 /// more top-level token request at sign-in.
 pub const MAXIMUM_AUDIENCES_PER_KIND: usize = 4;
@@ -223,7 +234,8 @@ impl<'de> Deserialize<'de> for ModuleAudience {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModuleConfig {
-    pub name: LocalId,
+    /// The module's name in this file, unique among its modules.
+    pub id: LocalId,
     /// The path prefix the module owns: it starts and ends with `/`.
     pub prefix: String,
     /// The audience of the token the service attaches to calls to the module.
@@ -645,6 +657,26 @@ impl RuntimeConfig {
         self.listener.tls_termination == TlsTermination::DevelopmentLoopback
     }
 
+    /// The session cookie's name for the declared transport.
+    #[must_use]
+    pub fn session_cookie(&self) -> &'static str {
+        if self.development() {
+            DEVELOPMENT_SESSION_COOKIE
+        } else {
+            SESSION_COOKIE
+        }
+    }
+
+    /// The sign-in flow cookie's name for the declared transport.
+    #[must_use]
+    pub fn flow_cookie(&self) -> &'static str {
+        if self.development() {
+            DEVELOPMENT_FLOW_COOKIE
+        } else {
+            FLOW_COOKIE
+        }
+    }
+
     /// The browser-facing origin, without a trailing slash.
     #[must_use]
     pub fn origin(&self) -> String {
@@ -975,7 +1007,7 @@ fn clean_prefix(prefix: &str) -> bool {
 }
 
 /// Prefix rules for modules and pages: clean, outside the service's own
-/// routes, and not shared. Module names are unique, and a module that takes
+/// routes, and not shared. Module ids are unique, and a module that takes
 /// the person audience needs one declared.
 fn route_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
     let prefixes = config
@@ -1021,13 +1053,13 @@ fn route_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
     for (index, module) in config.modules.iter().enumerate() {
         if config.modules[..index]
             .iter()
-            .any(|earlier| earlier.name == module.name)
+            .any(|earlier| earlier.id == module.id)
         {
             findings.push(Finding::new(
-                "platform.session-runtime.duplicate-module-name",
-                &format!("/modules/{index}/name"),
-                "another module has the same name",
-                "Give each module its own name.",
+                "platform.session-runtime.duplicate-module-id",
+                &format!("/modules/{index}/id"),
+                "another module has the same id",
+                "Give each module its own id.",
             ));
         }
         if module.audience == ModuleAudience::Person && config.person_audience.is_none() {
@@ -1263,13 +1295,13 @@ issuer:
   jwks: https://id.example/oauth2/jwks
 personAudience: https://api.example/person
 modules:
-  - name: registry
+  - id: registry
     prefix: /api/registry/
     audience: person
-  - name: scheduling
+  - id: scheduling
     prefix: /api/scheduling/
     audience: person
-  - name: casework
+  - id: casework
     prefix: /api/casework/
     audience: https://casework.example/api
     signIns: [staff]
@@ -1763,11 +1795,11 @@ audit:
     }
 
     #[test]
-    fn two_modules_cannot_share_a_name() {
+    fn two_modules_cannot_share_an_id() {
         refused(
-            &document().replace("name: scheduling", "name: registry"),
-            &code("duplicate-module-name"),
-            "/modules/1/name",
+            &document().replace("id: scheduling", "id: registry"),
+            &code("duplicate-module-id"),
+            "/modules/1/id",
         );
     }
 
@@ -1857,7 +1889,7 @@ audit:
             let modules: String = (0..count)
                 .map(|index| {
                     format!(
-                        "  - name: extra{index}\n    prefix: /api/extra{index}/\n    audience: \
+                        "  - id: extra{index}\n    prefix: /api/extra{index}/\n    audience: \
                          https://extra{index}.example/api\n"
                     )
                 })
@@ -1889,9 +1921,9 @@ audit:
     #[test]
     fn the_person_audience_is_first_even_when_a_module_of_another_audience_comes_first() {
         let text = document().replace(
-            "modules:\n  - name: registry\n    prefix: /api/registry/\n    audience: person\n",
-            "modules:\n  - name: other\n    prefix: /api/other/\n    audience: https://other.example/api\n  - \
-             name: registry\n    prefix: /api/registry/\n    audience: person\n",
+            "modules:\n  - id: registry\n    prefix: /api/registry/\n    audience: person\n",
+            "modules:\n  - id: other\n    prefix: /api/other/\n    audience: https://other.example/api\n  - \
+             id: registry\n    prefix: /api/registry/\n    audience: person\n",
         );
         let config = load(&text).expect("valid document");
         assert_eq!(
@@ -1954,7 +1986,7 @@ audit:
         );
         let config = load(&text).expect("valid document");
         let module = |path: &str| match config.route(path) {
-            Some(Route::Module(module)) => module.name.as_str().to_owned(),
+            Some(Route::Module(module)) => module.id.as_str().to_owned(),
             other => panic!("{path}: {other:?}"),
         };
         assert_eq!(module("/api/registry/records/1"), "registry");
@@ -2037,6 +2069,16 @@ audit:
             "config.invalid-value",
             "/signIns/Citizen",
         );
+    }
+
+    #[test]
+    fn cookie_names_follow_the_declared_transport() {
+        let production = load(&document()).expect("production");
+        assert_eq!(production.session_cookie(), "__Host-registry-session");
+        assert_eq!(production.flow_cookie(), "__Host-registry-signin");
+        let development = load(&development()).expect("development");
+        assert_eq!(development.session_cookie(), "registry-session");
+        assert_eq!(development.flow_cookie(), "registry-signin");
     }
 
     #[test]

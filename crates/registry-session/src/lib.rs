@@ -7,4 +7,8 @@
 //! on every call to a signed-in route, which bearer token to attach: the service
 //! checks, it never proxies.
 
+pub mod check;
+pub mod clock;
 pub mod config;
+pub mod grants;
+pub mod store;
