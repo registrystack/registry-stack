@@ -40,6 +40,7 @@ SHARDS = {
         "registry-platform-metrics",
         "registry-platform-objectstore",
         "registry-platform-oidc",
+        "registry-platform-posture",
         "registry-platform-provision",
         "registry-platform-ratelimit",
         "registry-platform-resilience",
