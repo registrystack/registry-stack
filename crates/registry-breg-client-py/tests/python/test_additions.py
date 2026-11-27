@@ -84,6 +84,14 @@ class AdditionTests(unittest.TestCase):
             headers = {key.lower(): value for key, value in upload[2].items()}
             self.assertEqual(headers['if-match'], '"condition"')
             self.assertEqual(headers['idempotency-key'], 'addition-one')
+            slot = document['additions']['other']
+            slot['maximumCount'] = 1
+            slot['items'].append({**slot['items'][0], 'id': '00000000-0000-4000-8000-000000000003', 'links': {}})
+            slot['links']['add']['availability'] = {'available': False, 'observedRevision': document['revision'],
+                'reason': 'limit-reached', 'recovery': 'receipt-only'}
+            retained = client.get_proposal(contract.select_proposal_get('writer'), proposal_id)
+            self.assertEqual(len(retained.document['additions']['other']['items']), 2)
+            self.assertEqual(client.download_proposal_addition(retained, addition_id)['body'], content)
         finally:
             server.shutdown()
             thread.join()

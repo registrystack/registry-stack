@@ -84,6 +84,9 @@ impl MutationTransaction {
                 || document.header.current_proposal_erased
             {
                 Some(("stale-revision", "receipt-only"))
+            } else if metadata.len() > slot.maximum_count as usize {
+                // Retained files remain visible after a lower current limit.
+                Some(("limit-reached", "receipt-only"))
             } else if document.blocked_reason.as_deref() == Some("application-refused") {
                 Some(("invalid-input", "correct-input"))
             } else if document.blocked_reason.is_some()

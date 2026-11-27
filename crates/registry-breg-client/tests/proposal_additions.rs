@@ -32,6 +32,22 @@ fn additions_decode_and_keep_the_limit_reason_closed() {
 }
 
 #[test]
+fn additions_retain_files_when_the_current_count_limit_is_lowered() {
+    let mut source = proposal();
+    let slot = &mut source["additions"]["other"];
+    slot["maximumCount"] = json!(1);
+    let mut second = slot["items"][0].clone();
+    second["id"] = json!("00000000-0000-4000-8000-000000000003");
+    second["links"] = json!({});
+    slot["items"].as_array_mut().unwrap().push(second);
+    slot["links"]["add"]["availability"] = json!({
+        "available":false,"observedRevision":3,"reason":"limit-reached","recovery":"receipt-only"});
+    let decoded = BRegProposal::from_slice(&serde_json::to_vec(&source).unwrap())
+        .expect("a lower current limit must not hide retained files");
+    assert_eq!(decoded.addition_slot("other").unwrap().items().len(), 2);
+}
+
+#[test]
 fn additions_refuse_wrong_paths_versions_bounds_and_unknown_members() {
     for mutation in 0..7 {
         let mut source = proposal();

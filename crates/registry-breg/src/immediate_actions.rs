@@ -3060,6 +3060,13 @@ fn compile_execution(
     );
     let attachments = crate::compiler::attachments::compile_slots(&proposal.attachments);
     if let Some(slot) = &proposal.additions {
+        if matches!(proposal.review, ProposalReviewSource::None {}) {
+            errors.push(Diagnostic::error(
+                "breg.addition.review-required",
+                format!("actions[id={}].execution.proposal.additions", action.id),
+                "an additions slot requires review.type: required; configure required review or remove additions",
+            ));
+        }
         crate::compiler::attachments::validate_additions(
             slot,
             &proposal.attachments,

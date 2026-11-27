@@ -214,7 +214,7 @@ impl BRegProposal {
                 || !identifier(id)
                 || !(1..=MAX_BREG_ATTACHMENT_BYTES).contains(&slot.maximum_bytes)
                 || !(1..=32).contains(&slot.maximum_count)
-                || slot.items.len() > slot.maximum_count as usize
+                || slot.items.len() > 32
                 || slot.content_types.is_empty()
                 || slot.content_types.len() > MAX_BREG_ATTACHMENT_CONTENT_TYPES
                 || slot

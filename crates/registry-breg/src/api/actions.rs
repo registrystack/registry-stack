@@ -822,16 +822,16 @@ fn maximum_action_body_bytes(action: &CompiledAction, kind: ActionRouteKind) -> 
 }
 
 /// Why an Action request body was not read.
-enum ActionBodyError {
+pub(super) enum ActionBodyError {
     /// The body is longer than the route reads.
     TooLarge,
     /// The body is empty or its stream failed.
     Invalid,
 }
 
-/// Reads at most `maximum_bytes` of an Action request body. Unlike a plain
+/// Reads at most `maximum_bytes` of an Action or attachment body. Unlike a plain
 /// bounded read, it tells a body that is too long apart from a broken one.
-async fn read_action_body(
+pub(super) async fn read_action_body(
     mut body: Body,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, ActionBodyError> {

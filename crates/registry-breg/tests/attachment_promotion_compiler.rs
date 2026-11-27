@@ -52,6 +52,10 @@ fn source() -> Value {
 
 fn addition_source() -> Value {
     mutated(|source| {
+        source["reviewAuthorities"] =
+            json!({"local-review":{"protocol":"id.registrystack.org/protocols/review/v1"}});
+        source["actions"]["amend"]["execution"]["proposal"]["review"] = json!({
+            "type":"required","authority":"local-review","source":"promotion-compiler","policy":{"id":"addition-review"}});
         source["actions"]["amend"]["execution"]["proposal"]["additions"] = json!({
             "id":"supporting","maximumBytes":64,"maximumCount":2,
             "contentTypes":["text/plain"],"classification":"restricted"});
@@ -69,6 +73,54 @@ fn addition_source() -> Value {
             .unwrap()
             .push(json!("supporting"));
     })
+}
+
+#[test]
+fn additions_require_a_review_that_can_accept_supporting_files() {
+    let mut source = addition_source();
+    source["actions"]["amend"]["execution"]["proposal"]["review"] = json!({"type":"none"});
+    let failure = compile(&source).expect_err("an additions slot requires review");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(
+                |diagnostic| diagnostic.code == "breg.addition.review-required"
+                    && diagnostic.path == "actions[id=amend].execution.proposal.additions"
+            ),
+        "{:?}",
+        failure.diagnostics()
+    );
+}
+
+#[test]
+fn additions_declaration_and_slot_changes_advance_the_action_revision() {
+    let mut declared = addition_source();
+    let grant = &mut declared["accessProfiles"]["clerk"]["permissions"]["proposals"][0];
+    grant["operations"] = json!(["get", "list", "edit", "submit", "apply"]);
+    grant["readableAttachments"] = json!(["document"]);
+    grant["writableAttachments"] = json!(["document"]);
+    let mut absent = declared.clone();
+    absent["actions"]["amend"]["execution"]["proposal"]
+        .as_object_mut()
+        .unwrap()
+        .remove("additions");
+    let before = compile(&absent).unwrap().actions().actions[0]
+        .definition_revision
+        .clone();
+    let current = compile(&declared).unwrap().actions().actions[0]
+        .definition_revision
+        .clone();
+    assert_ne!(
+        before, current,
+        "declaring the slot changes the Action revision"
+    );
+    declared["actions"]["amend"]["execution"]["proposal"]["additions"]["maximumCount"] = json!(1);
+    assert_ne!(
+        current,
+        compile(&declared).unwrap().actions().actions[0].definition_revision,
+        "changing the slot changes the Action revision"
+    );
 }
 
 #[test]

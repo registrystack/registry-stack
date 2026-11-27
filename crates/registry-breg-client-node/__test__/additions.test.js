@@ -53,5 +53,12 @@ test('additions preserve the submitted version and use exact binary exchanges', 
     assert.equal(upload.method, 'POST'); assert.equal(upload.headers['if-match'], '"condition"');
     assert.equal(upload.headers['idempotency-key'], 'addition-one'); assert.deepEqual(upload.body, bytes);
     assert.equal(upload.url, `/tenant/v1/proposals/${id}/additions/other?accessProfile=writer`);
+    const slot = document.additions.other;
+    slot.maximumCount = 1;
+    slot.items.push({...slot.items[0], id: '00000000-0000-4000-8000-000000000003', links: {}});
+    slot.links.add.availability = {available: false, observedRevision: document.revision, reason: 'limit-reached', recovery: 'receipt-only'};
+    const retained = await client.getProposal(contract.selectProposalGet('writer'), id);
+    assert.equal(JSON.parse(retained.documentJson).additions.other.items.length, 2);
+    assert.deepEqual((await client.downloadProposalAddition(retained, file)).body, bytes);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });

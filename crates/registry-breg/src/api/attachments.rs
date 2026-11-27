@@ -314,31 +314,26 @@ async fn mutate(
             )
             .await;
         };
-        let Ok(bytes) = to_bytes(body, maximum_bytes as usize).await else {
-            return super::proposals::admitted_http_refusal(
-                mutations,
-                &authority,
-                mutation_method(removal, addition),
-                &correlation,
-                if addition {
-                    fixed_problem(ProblemCode::AttachmentTooLarge)
-                } else {
-                    invalid_request()
-                },
-            )
-            .await;
+        let bytes = match super::actions::read_action_body(body, maximum_bytes as usize).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let problem =
+                    if addition && matches!(error, super::actions::ActionBodyError::TooLarge) {
+                        fixed_problem(ProblemCode::AttachmentTooLarge)
+                    } else {
+                        invalid_request()
+                    };
+                return super::proposals::admitted_http_refusal(
+                    mutations,
+                    &authority,
+                    mutation_method(removal, addition),
+                    &correlation,
+                    problem,
+                )
+                .await;
+            }
         };
-        if bytes.is_empty() {
-            return super::proposals::admitted_http_refusal(
-                mutations,
-                &authority,
-                mutation_method(removal, addition),
-                &correlation,
-                invalid_request(),
-            )
-            .await;
-        }
-        (Some(content_type.to_owned()), Some(bytes.to_vec()))
+        (Some(content_type.to_owned()), Some(bytes))
     };
     let input = super::proposals::ProposalMutationInput {
         action_id: &action_id,

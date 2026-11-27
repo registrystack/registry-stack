@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 
+#[path = "proposal_additions_authority.rs"]
+mod authority;
+
 fn addition_source() -> Value {
     let mut source = registry_source(false);
     source["reviewAuthorities"] =
@@ -61,6 +64,152 @@ async fn add(
         .send()
         .await
         .unwrap()
+}
+
+async fn submitted_addition_proposal(
+    fixture: &client_http::ClientFixture,
+    prefix: &str,
+) -> registry_breg_client::BRegProposal {
+    let draft = start(fixture, "Supporting files", &format!("{prefix}-start")).await;
+    fixture
+        .http
+        .client
+        .execute_proposal(
+            &fixture
+                .http
+                .client
+                .prepare_proposal(
+                    &draft,
+                    "submit",
+                    json!({}),
+                    &key(&format!("{prefix}-submit")),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value
+}
+
+#[tokio::test]
+async fn additions_remain_readable_after_the_operator_lowers_the_count_limit() {
+    let fixture = fixture().await;
+    let mut proposal = submitted_addition_proposal(&fixture, "count-lowered").await;
+    for index in 0..2 {
+        proposal = fixture
+            .http
+            .client
+            .add_proposal_addition(
+                &proposal,
+                "other",
+                "text/plain",
+                b"retained",
+                &key(&format!("count-lowered-{index}")),
+            )
+            .await
+            .unwrap()
+            .value;
+    }
+    let mut next = addition_source();
+    next["actions"]["correct-name"]["execution"]["proposal"]["additions"]["maximumCount"] =
+        json!(1);
+    let (registry, identity) = proposal_activation::activate_successor(&fixture, &next).await;
+    let current = successor_client(&fixture, registry, identity).await;
+    let raw = reqwest::get(format!(
+        "{}/v1/proposals/{}?accessProfile=clerk",
+        current.base_url,
+        proposal.id()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(raw.status(), 200);
+    let value: Value = raw.json().await.unwrap();
+    assert_eq!(value["additions"]["other"]["maximumCount"], 1);
+    assert_eq!(
+        value["additions"]["other"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        value["additions"]["other"]["links"]["add"]["availability"]["reason"],
+        "limit-reached"
+    );
+    let contract = current
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let retained = current
+        .client
+        .get_proposal(
+            &contract.select_proposal_get("clerk").unwrap(),
+            proposal.id(),
+        )
+        .await
+        .expect("a lower limit preserves readable retained additions")
+        .value;
+    let file = retained.addition_slot("other").unwrap().items()[0].id();
+    assert_eq!(
+        current
+            .client
+            .download_proposal_addition(&retained, file)
+            .await
+            .unwrap()
+            .value
+            .as_bytes(),
+        b"retained"
+    );
+    drop(current);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn additions_report_a_failed_body_read_as_an_invalid_request() {
+    use tower::util::ServiceExt;
+    struct FailedBody;
+    impl futures_core::Stream for FailedBody {
+        type Item = Result<axum::body::Bytes, std::io::Error>;
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::task::Poll::Ready(Some(Err(std::io::Error::other("synthetic aborted body"))))
+        }
+    }
+    let fixture = fixture().await;
+    let proposal = submitted_addition_proposal(&fixture, "aborted-body").await;
+    let value = serde_json::to_value(&proposal).unwrap();
+    let etag = value["additions"]["other"]["links"]["add"]["ifMatch"]
+        .as_str()
+        .unwrap();
+    let app = registry_breg::api::router(fixture.service())
+        .layer(axum::Extension(claims("author", "zone-a")));
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v1/proposals/{}/additions/other?accessProfile=clerk",
+                    proposal.id()
+                ))
+                .header("if-match", etag)
+                .header("idempotency-key", "aborted-file")
+                .header("content-type", "text/plain")
+                .body(axum::body::Body::from_stream(FailedBody))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["code"], "request.invalid");
+    fixture.finish().await;
 }
 
 #[tokio::test]
