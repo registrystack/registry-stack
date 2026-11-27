@@ -72,7 +72,8 @@ async fn compact_token_admission_refuses_malformed_credentials_and_writes_no_lin
         }
     }
     // The counted refusal and its one bounded line belong to the request
-    // boundary, which `tests/authentication_refusals.rs` drives.
+    // boundary, which `tests/authentication_refusals.rs` drives with this
+    // same corpus.
     assert_eq!(captured.text(), "", "admission writes no line of its own");
 }
 

@@ -345,6 +345,9 @@ pub enum ActorKind {
 }
 
 impl ActorKind {
+    /// Every actor kind, so a caller that sweeps the kinds follows a new one.
+    pub const ALL: [Self; 2] = [Self::Service, Self::Human];
+
     /// The spelling the project and the store use.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

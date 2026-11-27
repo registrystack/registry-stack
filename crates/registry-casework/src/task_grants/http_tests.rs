@@ -1094,6 +1094,71 @@ async fn eligible_officer_can_revoke_without_holding_the_task_or_reading_the_sou
 }
 
 #[tokio::test]
+async fn a_revoke_refusal_names_the_template_or_the_profile_that_refused_it() {
+    let f = fixture(900).await;
+    let holder = token("human", "human-client", "human", "casework:staff");
+    let base = format!("/v1/review-tasks/{}/task-grants", f.review_task);
+    let (status, grant) = request(
+        &f,
+        "POST",
+        &base,
+        &holder,
+        true,
+        Some(json!({"templateId":"summary","templateVersion":"1"})),
+        Some("approval-for-refused-revocation"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+    let grant_id = Uuid::parse_str(grant["id"].as_str().unwrap()).unwrap();
+    let actor = |subject: &str| ActorContext {
+        principal: IssuerPrincipal {
+            issuer: ISSUER.into(),
+            subject: subject.into(),
+        },
+        profile_id: "staff".into(),
+        role: CaseworkActsAs::Staff,
+    };
+    let db = f.store.client().await.unwrap();
+    db.execute(
+        "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team',$1,'revoker','staff')",
+        &[&ISSUER],
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "UPDATE casework_meta SET directory_revision=directory_revision+1",
+        &[],
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(
+            f.store
+                .invalidate_review_task_grant(grant_id, "revoked", Some(&actor("outsider")))
+                .await,
+            Err(StoreError::Forbidden(FailedCheck::AccessProfile))
+        ),
+        "a caller outside the eligible team is refused under access-profile"
+    );
+    db.execute("UPDATE casework_task_templates SET active=false", &[])
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            f.store
+                .invalidate_review_task_grant(grant_id, "revoked", Some(&actor("revoker")))
+                .await,
+            Err(StoreError::Forbidden(FailedCheck::Operation))
+        ),
+        "an inactive template is refused under operation"
+    );
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn review_task_grants_bind_holder_revision_subject_and_revocation() {
     let f = fixture(900).await;
     let human = token("human", "human-client", "human", "casework:staff");
@@ -1848,7 +1913,7 @@ async fn review_task_grant_approval_recovers_a_lost_response_after_the_task_revi
         f.store
             .approve_review_task_grant(&actor, "lost-response", grant)
             .await,
-        Err(StoreError::Forbidden(_))
+        Err(StoreError::Forbidden(FailedCheck::AccessProfile))
     ));
 
     f.admin

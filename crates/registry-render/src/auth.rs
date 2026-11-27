@@ -61,7 +61,16 @@ pub(crate) async fn verifier(
         }
         registry_platform_config::JwksSource::Static { document_ref } => {
             let bytes = crate::runtime::resolve_secret(runtime, document_ref)?;
-            let keys = registry_platform_oidc::parse_static_jwks(&bytes).map_err(|_| refuse())?;
+            let keys =
+                registry_platform_oidc::parse_static_jwks(&bytes).map_err(|error| match error {
+                    OidcError::StaticKeySet(refused) => RenderProblem::new(
+                        ProblemKind::RuntimeInvalid,
+                        format!(
+                            "authentication.oidc.jwksSource.documentRef was refused: {refused}"
+                        ),
+                    ),
+                    _ => refuse(),
+                })?;
             JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())
         }
     };
@@ -90,6 +99,7 @@ pub(crate) enum AuthenticationError {
 impl AuthenticationError {
     /// The check that refused the caller. A key source that cannot answer is
     /// the verifier's own outage.
+    #[deny(clippy::wildcard_enum_match_arm)]
     pub(crate) fn failed_check(&self) -> FailedCheck {
         match self {
             Self::Refused(check) | Self::Forbidden { check, .. } => *check,
@@ -99,21 +109,10 @@ impl AuthenticationError {
 }
 
 fn verifier_failure(error: OidcError) -> AuthenticationError {
-    let check = error.failed_check();
-    match error {
-        OidcError::Transport(_)
-        | OidcError::BoundedRead(_)
-        | OidcError::FetchUrl(_)
-        | OidcError::HttpStatus(_)
-        | OidcError::InvalidUrl
-        | OidcError::Parse
-        | OidcError::InvalidJwk
-        | OidcError::EmptyKeySet
-        | OidcError::MissingIssuer
-        | OidcError::ConflictingEndpointConfiguration
-        | OidcError::InsecureHttpRequiresOptIn
-        | OidcError::EndpointRefused { .. } => AuthenticationError::Unavailable,
-        _ => AuthenticationError::Refused(check),
+    if error.is_key_source_unavailable() {
+        AuthenticationError::Unavailable
+    } else {
+        AuthenticationError::Refused(error.failed_check())
     }
 }
 
@@ -335,5 +334,77 @@ pub(crate) mod tests {
                 .unwrap();
             assert_eq!(verified.client_id.as_deref(), client);
         }
+    }
+
+    /// Builds the verifier from a runtime file whose static key set is `keys`.
+    async fn verifier_over_static_keys(
+        keys: &Value,
+    ) -> Result<Option<TokenVerifier>, RenderProblem> {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = tempfile::tempdir().expect("home directory");
+        let home = scratch
+            .path()
+            .canonicalize()
+            .expect("physical home directory");
+        std::fs::create_dir(home.join("bundle")).expect("package directory");
+        std::fs::create_dir(home.join("audit")).expect("audit directory");
+        let key_file = home.join("jwks.json");
+        std::fs::write(&key_file, keys.to_string()).expect("write the key set");
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600))
+            .expect("owner-only key file");
+        let runtime = format!(
+            "apiVersion: {}\nkind: {}\nlistener:\n  bind: 127.0.0.1:18080\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauthentication:\n  oidc:\n    issuer: https://issuer.example.test\n    audience: urn:render:test\n    allowedClients: [portal]\n    jwksSource:\n      type: static\n      documentRef: secret:file/jwks.json\naudit:\n  path: {}\n",
+            crate::runtime::RUNTIME_API_VERSION,
+            crate::runtime::RUNTIME_KIND,
+            home.join("bundle").display(),
+            home.display(),
+            home.join("audit").join("render.jsonl").display(),
+        );
+        let path = home.join("runtime.yaml");
+        std::fs::write(&path, runtime).expect("write the runtime file");
+        let (runtime, _) = crate::runtime::load(&path).expect("the runtime file loads");
+        verifier(&runtime).await
+    }
+
+    fn ec_public_key() -> Value {
+        let set = registry_platform_testing::TokenSigner::new().public_key_set();
+        set["keys"]
+            .as_array()
+            .expect("a key set lists keys")
+            .iter()
+            .find(|key| key["kty"] == "EC")
+            .expect("the corpus holds an EC key")
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn a_static_key_set_with_unknown_public_members_loads() {
+        let mut key = ec_public_key();
+        key["ext"] = json!(true);
+        let verifier = verifier_over_static_keys(&json!({ "keys": [key] }))
+            .await
+            .expect("a public member the verifier does not read is ignored");
+        assert!(verifier.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_static_key_set_with_a_private_member_is_refused_with_the_reason() {
+        let mut key = ec_public_key();
+        key["d"] = json!("private");
+        let problem = match verifier_over_static_keys(&json!({ "keys": [key] })).await {
+            Err(problem) => problem,
+            Ok(_) => panic!("a key set holding a private member must be refused"),
+        };
+        assert_eq!(problem.kind, ProblemKind::RuntimeInvalid);
+        assert!(
+            problem.detail.contains("private-key member \"d\""),
+            "the detail names the refused member: {}",
+            problem.detail
+        );
+        assert!(
+            problem.detail.contains("authentication.oidc.jwksSource"),
+            "the detail names the setting: {}",
+            problem.detail
+        );
     }
 }

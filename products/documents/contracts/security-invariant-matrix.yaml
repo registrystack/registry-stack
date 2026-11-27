@@ -85,7 +85,12 @@ invariants:
       admits exactly those clients. The unrestricted form is refused.
     refusal: >-
       Refuse with documents.runtime.allowed-clients-required at
-      /authentication/oidc/allowedClients.
+      /authentication/oidc/allowedClients. An explicit list that omits a
+      requester client a package profile names is refused with
+      documents.runtime.profile-client-not-allowed, held by
+      explicit_list_missing_a_package_client_is_refused and
+      from_package_admits_exactly_the_package_clients in
+      crates/registry-documents/src/config.rs (DOCUMENTS-DEC-36).
     negativeTest:
       path: crates/registry-documents/src/config.rs
       name: unrestricted_clients_are_refused

@@ -148,7 +148,15 @@ impl DocumentService {
             access.standing.may_list_grants()
         };
         if !allowed {
-            return Err(ServiceError::not_authorized(FailedCheck::Operation));
+            // A caller that sees the document and does not hold custody of it
+            // is refused because the document belongs to another caller. A
+            // custodian is refused because its profile has no grant authority.
+            let check = if access.standing.custodian {
+                FailedCheck::Operation
+            } else {
+                FailedCheck::Ownership
+            };
+            return Err(ServiceError::not_authorized(check));
         }
         Ok(record)
     }

@@ -480,7 +480,7 @@ async fn every_refusal_is_a_problem_document() {
         ),
     ];
     for (refusal, status, title, code, challenged) in cases {
-        let response = server.refusal_response(refusal);
+        let response = server.refuse(refusal);
         assert_eq!(response.status().as_u16(), status, "{code}");
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE),
@@ -566,7 +566,7 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
     );
     let logs = logs.text();
     assert!(
-        logs.contains("the access-token key set is unavailable"),
+        logs.contains("\"failed_check\":\"key-source-unavailable\""),
         "{logs}"
     );
     assert!(!logs.contains("citizen-a"), "{logs}");

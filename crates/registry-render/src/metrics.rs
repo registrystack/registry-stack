@@ -5,8 +5,9 @@
 //! reaching the series requires reaching a different, private address.
 //!
 //! Every label is closed by construction. `operation` is `render` or `seal`,
-//! `result` is a coarse status class, and `seal` is a seal id the operator
-//! wrote in the runtime file, so the set is bounded by that file. Document
+//! `result` is a coarse status class, `check` is one of the shared refusal
+//! checks, and `seal` is a seal id the operator wrote in the runtime file, so
+//! the set is bounded by that file. Document
 //! data, caller identities, request paths and problem details never become
 //! labels.
 //!

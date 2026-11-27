@@ -260,7 +260,7 @@ Secret values never appear in a diagnostic or a log.
 
 Use PostgreSQL 17 or newer; `apply` and startup refuse an older server.
 `provision` creates what the two database URLs in your runtime file name: the migration role, the runtime role, and the database, and it lets only those two roles connect.
-It takes the role names, the database name, and the passwords from `database.migrationUrlRef` and `database.runtimeUrlRef`, so you write each of them once.
+It takes the role names, the database name, and the passwords from `database.migrationUrlRef` and `database.runtimeUrlRef`, so you write each of them once, except that when the runtime file has a `deployment` block, the user of the runtime URL must be `deployment.runtimeRole`: `provision` refuses a different user before it connects, with `coordinator.runtime-config.runtime-role-mismatch`.
 
 Run it as a PostgreSQL administrator that can create roles and databases (`CREATEROLE` and `CREATEDB`).
 It needs no superuser.
@@ -646,8 +646,8 @@ curl -fsS http://127.0.0.1:8108/ready
 coordinatorctl doctor --url https://coordinator.example.org --token-file /run/operator-token
 ```
 
-`/health` answers `{"live":true}` while the process answers.
-`/ready` answers `{"ready":true}`, or HTTP 503 with `{"ready":false}` while the service cannot accept work.
+`/health` answers `{"live":true,"status":"ok"}` while the process answers.
+`/ready` answers `{"ready":true,"status":"ready"}`, or HTTP 503 with `{"ready":false}` while the service cannot accept work.
 Every `/ready` probe checks mutable schema, activation, role, state-key custody, audit, and recovery holds; a held run does not make the service unready.
 The retained live-binding scan is coalesced and cached for 30 seconds, including failures.
 A cache miss still waits for that scan, so the cache bounds frequency rather than latency.
@@ -767,7 +767,10 @@ They expose every label value from the first scrape.
 - An authentication refusal is a bearer credential refused before a caller is resolved.
   `refused` is a missing, malformed, or unverified token, or a completion event without a configured completion token and recipient binding.
   `policy` is a verified token no caller policy admits, and `unavailable` means the token verifier cannot answer.
-  A resolved caller refused an action is not counted here.
+  A resolved caller refused an action is not counted here, but `coordinator_request_refusals_total` counts it.
+- `coordinator_request_refusals_total` counts every refused request under the check that refused it, and no label carries caller text.
+  It covers a refused credential, a policy denial after authentication, a refused signed event delivery or completion callback, a key source the service cannot reach or use (the token verifier's keys or the signed-event key), and a run the caller cannot see.
+  Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute.
 
 `coordinator_dispatch_jobs` is read from the database on each scrape.
 `pending` steps wait for their next attempt, `leased` steps are being attempted, and `unknown` steps wait for an operator to settle an uncertain effect.
@@ -799,7 +802,8 @@ Bind the metrics listener where only your monitoring can reach it: the counts de
 
 {/* Evidence: crates/registry-coordinator/src/metrics.rs coordinator_runs_admitted_total,
     coordinator_runs_finished_total, coordinator_step_attempts_total,
-    coordinator_authentication_refusals_total, coordinator_metrics_sample_failures_total,
+    coordinator_authentication_refusals_total, coordinator_request_refusals_total,
+    coordinator_metrics_sample_failures_total,
     coordinator_dispatch_jobs,
     coordinator_runs_attention, coordinator_runs_restore_review_required,
     coordinator_hold_active, coordinator_oldest_due_age_seconds;

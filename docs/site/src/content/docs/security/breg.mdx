@@ -160,12 +160,14 @@ A request batch audits both items as not available, and the metric still counts 
     declared_existence_disclosure_mode_governs_the_public_collapse,
     a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it. */}
 
-BReg counts every refused request by the check that refused it, in `breg_request_refusals_total{check}` on the private metrics listener.
+BReg counts each request it refuses by the check that refused it, in `breg_request_refusals_total{check}` on the private metrics listener.
 The `check` label is a closed set of 45 names, every one published at zero, and no caller value becomes a label.
 Each refusal also writes one `request refused` log line with `failed_check` and the request's trace id when it has one, at most five lines per check per minute, with `suppressed` counting what a window held back.
 A request that BReg answers `404 resource.not_found` because the caller may not see the target reads the same to the caller whatever the reason.
 The operator can tell the reasons apart: the counter holds the request under the rule that refused it, for example `scope`, `purpose`, `requester-client`, `row-boundary`, `task-grant-binding`, `disclosure` or `visibility`.
 A refused write the engine answers with `write.outside-boundary` counts under `row-boundary`, and a Proposal outside the caller's scope counts under `ownership`.
+A batch of Proposal review contexts answers `200`, and each concealed item counts once under its own check.
+A generic `412` precondition answer, which also covers a stale version, and a request for an unknown route are not counted.
 Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and recording a refusal changes nothing the caller receives.
 A `visibility` count is a record that is absent or outside the boundary, and BReg does not say which, so it also counts a caller probing for identifiers.
 The audit journal's `refusalReason` stays the three values it lists below.
@@ -173,6 +175,8 @@ The audit journal's `refusalReason` stays the three values it lists below.
 {/* Evidence: crates/registry-breg/tests/concealment_refusals.rs,
     every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wire;
     crates/registry-breg/src/api/mod.rs, concealed(), refusal_check_tests;
+    crates/registry-breg/tests/postgres_proposal.rs,
+    review_context_projects_an_omitted_optional_input_as_null;
     crates/registry-breg/src/mutation.rs, MutationError::failed_check. */}
 
 ### Public check export
@@ -508,13 +512,17 @@ The residuals refer to these obligations by number.
    Loopback HTTP is accepted for an issuer; anything else needs
    `authentication.oidc.allowInsecureHttp: true`, which is logged at startup and reported by
    `bregctl doctor` (`BREG-RES-17`).
-   Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which BReg connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
+   For an issuer and for `listener.publicOrigin`, loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which BReg connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
    A pinned key set (`authentication.oidc.jwksSource.type: static`) holds public keys only.
    BReg refuses a key that carries a private or symmetric member (`d`, `p`, `q`, `dp`, `dq`, `qi`,
    `oth`, `k`), a repeated member name, a missing or repeated `kid`, or a key that does not match
    `allowedAlgorithm`.
-   It ignores members it does not name, such as `x5c` or `ext`.
-   A refusal names the rule and the key's position, never a value.
+   It also requires `use` to be `sig` and `key_ops` to be `["verify"]` when a key carries either,
+   and refuses a denied `kid`, a `kid` over the bound and more than 128 keys.
+   It ignores other members it does not name, such as `x5c` or `ext`.
+   When the shared public-key rule refuses a key, the startup log and `bregctl doctor` name the rule
+   and, for a rule about one key, the key's position, never a value.
+   The algorithm, `use`, `key_ops`, `kid` and key-count rules name no position.
    {/* Evidence: crates/registry-breg/src/runtime_config.rs, PlaintextDatabase,
         validate_static_jwks, PublicOrigin::parse;
         crates/registry-breg/tests/runtime_config.rs,

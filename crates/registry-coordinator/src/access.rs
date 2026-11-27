@@ -7,8 +7,8 @@ use registry_platform_config::{
 };
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifier,
-    TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
@@ -315,7 +315,17 @@ impl AccessConfig {
                     .resolve(document_ref)
                     .map_err(|_| refused())?;
                 Arc::new(JwksFetcher::new_static(
-                    parse_static_jwks(value.expose_secret()).map_err(|_| refused())?,
+                    parse_static_jwks(value.expose_secret()).map_err(|error| match error {
+                        // The text names the key position and member, never key material.
+                        OidcError::StaticKeySet(_) => CoordinatorError::new(
+                            "access.configuration",
+                            error.to_string(),
+                        )
+                        .suggest(
+                            "Correct the document that deployment.authentication.jwksSource.documentRef names.",
+                        ),
+                        _ => refused(),
+                    })?,
                     JwksFetcherConfig::defaults(),
                 ))
             }
@@ -465,9 +475,11 @@ impl Authenticator {
     pub async fn authenticate(&self, token: &str) -> Result<Caller> {
         registry_platform_authcommon::validate_compact_access_token(token)
             .map_err(|_| unauthenticated(FailedCheck::CredentialMalformed))?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            use registry_platform_oidc::OidcError;
-            match error {
+        let verified = self
+            .verifier
+            .verify(token)
+            .await
+            .map_err(|error| match error {
                 OidcError::Transport(_)
                 | OidcError::BoundedRead(_)
                 | OidcError::FetchUrl(_)
@@ -483,8 +495,7 @@ impl Authenticator {
                 )
                 .failing(FailedCheck::KeySourceUnavailable),
                 _ => unauthenticated(error.failed_check()),
-            }
-        })?;
+            })?;
         if !self.assertion_issuers && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM) {
             return Err(unauthenticated(FailedCheck::TokenAssertionIssuer));
         }

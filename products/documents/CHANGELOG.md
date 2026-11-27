@@ -21,8 +21,26 @@
   `authentication.oidc.scopeClaim`. Refusal statuses, headers and bodies are
   unchanged.
 - A static key set with a private key member or a repeated member name is
-  refused at startup, and the error names the rule it broke and the key's
-  position, never a key value.
+  refused at startup, and the error names the rule it broke, and the key's
+  position for a rule about one key, never a key value.
+- A token verifier that cannot reach its key source still answers 503, and the
+  operator's record of it is the `request refused` line with `failed_check`
+  `key-source-unavailable` and the counter, not a warning per request, so
+  `DOCUMENTS_LOG=warn` writes no line for it.
+- A caller that sees a document and does not hold custody of it is counted
+  under `ownership` when it lists or issues grants, as it is when it downloads
+  or requests erasure. A custodian without grant authority is counted under
+  `operation`. The answer is unchanged.
+- `documentsctl provision` creates the migration and runtime login roles and
+  the database that the runtime file's two database URLs name, grants both roles
+  `CONNECT`, gives the migration role `USAGE` and `CREATE` on the `public`
+  schema and the runtime role `USAGE` on it, from a PostgreSQL administrator
+  URL. Running it again restores the runtime role's `USAGE`. It creates only
+  what is missing,
+  refuses a role whose password differs from its URL, refuses an administrator
+  URL that names another host or port than the product URLs, and with
+  `--print-sql` prints the script without connecting or printing a password.
+  `documentsctl apply` still grants the runtime role what serving needs.
 
 - The Rust Documents client accepts a `/health` answer with an empty body or a
   JSON object body of at most 4096 bytes, and ignores the object's members. A

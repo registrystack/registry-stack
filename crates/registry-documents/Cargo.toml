@@ -57,6 +57,11 @@ name = "refusal_golden"
 path = "tests/refusal_golden.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "refusal_key_source"
+path = "tests/refusal_key_source.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []

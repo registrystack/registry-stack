@@ -756,6 +756,10 @@ pub enum StoreError {
     AuditUnavailable,
     #[error("the requested resource was not found")]
     NotFound,
+    /// A record the caller named is absent and the answer conceals nothing,
+    /// so it is not a refusal the operator counts.
+    #[error("the requested resource was not found")]
+    Absent,
     #[error("the caller is not authorized for this operation")]
     Forbidden(FailedCheck),
     #[error("the expected revision is no longer current")]

@@ -297,6 +297,8 @@ pub fn verify_delivery(
             ReceiverError::Stale | ReceiverError::InvalidDeliveryTime => {
                 FailedCheck::DeliveryFreshness
             }
+            // A key the receiver cannot use is its own fault, not the sender's.
+            ReceiverError::InvalidKey => FailedCheck::KeySourceUnavailable,
             _ => FailedCheck::DeliverySignature,
         })
     })?;
@@ -495,6 +497,7 @@ fn source_unavailable() -> CoordinatorError {
         "event-source-unavailable",
         "the configured event source authentication is unavailable",
     )
+    .failing(FailedCheck::KeySourceUnavailable)
 }
 fn configuration(field: &str, advice: &str) -> CoordinatorError {
     CoordinatorError::new(

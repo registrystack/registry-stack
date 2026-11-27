@@ -366,7 +366,8 @@ pub enum RuntimeConfigError {
     UnsafePackageRoot,
     #[error("runtime configuration contains an invalid OIDC binding")]
     InvalidOidc,
-    #[error("the static OIDC key set was refused: {0}")]
+    // The cause is the remedy `diagnostics` reports, so the message does not repeat it.
+    #[error("the static OIDC key set was refused")]
     InvalidStaticJwks(StaticJwksError),
     #[error("the OIDC leeway must be a whole number of seconds from 0 to 300000 milliseconds")]
     InvalidOidcLeeway,

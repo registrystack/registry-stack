@@ -2,20 +2,26 @@
 
 ## Unreleased
 
-- BReg counts every refused request by the check that refused it, in
+- BReg counts the requests it refuses by the check that refused it, in
   `breg_request_refusals_total{check}`, published at zero for every check from
-  the first scrape. Each refusal writes one `request refused` line with
-  `failed_check` and the request's trace id, at most five lines per check per
-  minute. That line replaces the authentication refusal line that carried a
-  `stage` field. A request answered `404 resource.not_found` because the caller
-  may not see the target counts under the rule that hid it, and so does a write
-  refused as outside the caller's boundary. Refusal statuses, headers and bodies
-  are unchanged.
+  the first scrape. Each refusal writes one `request refused` line at `INFO`
+  level with `failed_check` and the request's trace id, at most five lines per
+  check per minute. That line replaces the authentication refusal line that
+  carried a `stage` field. A request answered `404 resource.not_found` because
+  the caller may not see the target counts under the rule that hid it, and so
+  does a write refused as outside the caller's boundary. A batch of Proposal
+  review contexts answers `200` and counts each concealed item once. An expired
+  task grant counts under `task-grant-expired`, a grant bound to another client
+  or resource under `task-grant-binding`, and a grant token with no `iat`, an
+  `iat` ahead of the clock or an `exp` not after `iat` under
+  `task-grant-claims`. A generic `412` precondition answer and an unknown route
+  are not counted. Refusal statuses, headers and bodies are unchanged.
 
 - The BReg MCP gateway and the review page read loopback the way every
-  other service does. Under `development-loopback`, plain HTTP to
-  `127.0.0.2`, `[::1]` or `[::ffff:127.0.0.1]` is accepted as well as
-  `127.0.0.1` and `localhost`. `localhost.` and `*.localhost` stay refused. A
+  other service does. Under `development-loopback`, plain HTTP to the
+  IPv4-mapped form of a loopback address, for example `[::ffff:127.0.0.1]`, is
+  now accepted. The rest of `127.0.0.0/8`, `[::1]` and `localhost` were already
+  accepted. `localhost.` and `*.localhost` stay refused. A
   static key set the BReg MCP gateway refuses is logged with the reason, and
   its startup code is unchanged.
 
@@ -35,9 +41,13 @@
 - A pinned static key set (`authentication.oidc.jwksSource.type: static`)
   follows the shared public-key rule every product uses. Members BReg does not
   name, such as `x5c` or `ext`, and members beside `keys` no longer refuse the
-  document. A private or symmetric key member, a repeated member name, and a
-  missing or repeated `kid` are still refused, and the startup refusal names
-  the rule and the key's position. A listener origin treats an IPv4-mapped
+  document. BReg still reads `use` and `key_ops`, and refuses a `use` other
+  than `sig` and a `key_ops` other than `["verify"]`. A private or symmetric
+  key member, a repeated member name, and a missing or repeated `kid` are still
+  refused. When the shared rule refuses a key set, the startup log and
+  `bregctl doctor` name the rule and, for a rule about one key, the key's
+  position, and the refusal keeps the `startup.oidc.refused` code. A listener
+  origin treats an IPv4-mapped
   loopback literal, such as `[::ffff:127.0.0.1]`, as loopback.
 
 - Refused Record file downloads use the same attachment audit operation as

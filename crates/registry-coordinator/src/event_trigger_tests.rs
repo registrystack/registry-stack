@@ -393,6 +393,38 @@ fn a_refused_delivery_names_the_check_that_failed() {
 }
 
 #[test]
+fn a_verification_key_the_receiver_cannot_use_is_its_own_key_fault() {
+    let value = event();
+    let (body, headers) = signed(&value, TARGET, 1, "delivery");
+    let error = verify_delivery(
+        &source(),
+        "registry",
+        &trigger(),
+        "record-saved",
+        &Method::POST,
+        TARGET,
+        &headers,
+        &body,
+        b"short",
+        SystemTime::now(),
+    )
+    .err()
+    .expect("a key shorter than the signature minimum is refused");
+    assert_eq!(error.code, "event-unauthenticated");
+    assert_eq!(error.check, Some(FailedCheck::KeySourceUnavailable));
+}
+
+#[test]
+fn an_event_key_outage_answers_503_and_counts_as_a_key_source_outage() {
+    let response = event_problem(source_unavailable());
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.extensions().get::<RefusalNote>().map(|n| n.check),
+        Some(FailedCheck::KeySourceUnavailable)
+    );
+}
+
+#[test]
 fn an_event_refusal_carries_its_check_in_the_response_extensions() {
     for check in [
         FailedCheck::DeliverySignature,

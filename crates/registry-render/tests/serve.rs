@@ -406,6 +406,10 @@ fn the_metrics_listener_serves_the_series_and_the_api_listener_does_not() {
         "{body}"
     );
     assert!(
+        body.contains("render_request_refusals_total{check=\"credential-missing\"} 1"),
+        "{body}"
+    );
+    assert!(
         body.contains("\nrender_audit_write_failures_total 0\n"),
         "{body}"
     );

@@ -283,7 +283,7 @@ async fn assignment_roles_stay_pinned_and_activation_refuses_changed_deciding_au
     let before = f.holders().await;
     assert!(matches!(
         assign(&service, task, "supervisor", "wrong-role").await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     assert_eq!(f.holders().await, before);
     let candidate = ActivationCandidate {
