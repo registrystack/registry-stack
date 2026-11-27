@@ -1188,6 +1188,42 @@ const URL_HOOK_DESTINATION: &str = "url: https://events.example.test/hooks\n\
 hmacSha256KeyRef: secret:file/hook-key\n";
 
 #[test]
+fn a_url_hook_destination_accepts_a_previous_key_reference() {
+    let yaml =
+        format!("{URL_HOOK_DESTINATION}previousHmacSha256KeyRef: secret:file/old-hook-key\n");
+    let destination: UrlHookDestinationConfig = read_block(&yaml).unwrap();
+    assert_eq!(
+        destination
+            .previous_hmac_sha256_key_ref
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "secret:file/old-hook-key"
+    );
+    let serialized = serde_json::to_string(&destination).unwrap();
+    assert_eq!(
+        read_block::<UrlHookDestinationConfig>(&serialized).unwrap(),
+        destination
+    );
+}
+
+#[test]
+fn a_url_hook_destination_refuses_an_unknown_member_beside_the_previous_key_reference() {
+    let yaml = format!(
+        "{URL_HOOK_DESTINATION}previousHmacSha256KeyRef: secret:file/old-hook-key\nunknown: true\n"
+    );
+    assert!(read_block::<UrlHookDestinationConfig>(&yaml).is_err());
+}
+
+#[test]
+fn a_url_hook_destination_can_omit_the_previous_key_reference() {
+    let destination: UrlHookDestinationConfig = read_block(URL_HOOK_DESTINATION).unwrap();
+    assert!(destination.previous_hmac_sha256_key_ref.is_none());
+    let serialized = serde_json::to_value(&destination).unwrap();
+    assert!(serialized.get("previousHmacSha256KeyRef").is_none());
+}
+
+#[test]
 fn url_hook_destination_defaults_its_delivery_budget_and_never_prints_its_binding() {
     let defaults: UrlHookDestinationConfig = read_block(URL_HOOK_DESTINATION).unwrap();
     assert_eq!(defaults.url.as_str(), "https://events.example.test/hooks");

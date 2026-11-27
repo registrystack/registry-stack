@@ -1777,7 +1777,7 @@ pub const MAX_HOOK_ATTEMPTS: u8 = 20;
 pub const DEFAULT_HOOK_MAXIMUM_ATTEMPTS: u8 = 8;
 
 /// One URL hook destination a runtime signs and sends hook deliveries to:
-/// the URL, the HMAC-SHA256 key reference, and the delivery budget. The
+/// the URL, the HMAC-SHA256 key references, and the delivery budget. The
 /// outbound policy is fixed: `registry-platform-hooks` activates it with no
 /// private address range and no client certificate. A runtime whose
 /// destinations need either configures its own full outbound policy instead.
@@ -1789,6 +1789,11 @@ pub struct UrlHookDestinationConfig {
     /// query or fragment.
     pub url: Url,
     pub hmac_sha256_key_ref: SecretReference,
+    /// Optional previous signing key for rotation, excluded from the
+    /// destination binding digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
     /// How long one delivery attempt may take, from 100 through 10000
     /// milliseconds.
     #[serde(
