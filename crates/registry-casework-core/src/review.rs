@@ -1256,6 +1256,92 @@ pub struct ReviewTask {
     /// context remains subject to the source's current disclosure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_receipt: Option<ReviewDecisionReceipt>,
+    /// Set while the task has an ask the applicant has not answered
+    /// (`waiting`) or has answered (`answered`). It stays with the task
+    /// through release and reassignment and clears when the task is decided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<ReviewTaskMarker>,
+}
+
+/// What an ask of the applicant means for the task that made it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewTaskMarker {
+    Waiting,
+    Answered,
+}
+
+impl ReviewTaskMarker {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Answered => "answered",
+        }
+    }
+}
+
+/// A reviewer's ask of the applicant, sent by the task holder.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskAskRequest {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            length(min = 1, max = MAXIMUM_PUBLIC_REASON_BYTES),
+            extend("x-maximum-utf8-bytes" = MAXIMUM_PUBLIC_REASON_BYTES)
+        )
+    )]
+    pub text: String,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = registry_review_protocol::MAXIMUM_ASK_WANTS))
+    )]
+    pub wants: Vec<registry_review_protocol::ReviewAskWant>,
+}
+
+impl ReviewTaskAskRequest {
+    /// The text is plain and bounded like a public reason. The wants are
+    /// distinct and at most the protocol's bound.
+    pub fn check(&self) -> Result<(), registry_review_protocol::ProtocolError> {
+        check_public_reason(&self.text)?;
+        let distinct = self
+            .wants
+            .iter()
+            .enumerate()
+            .all(|(index, want)| !self.wants[..index].contains(want));
+        if self.wants.len() > registry_review_protocol::MAXIMUM_ASK_WANTS || !distinct {
+            return Err(registry_review_protocol::ProtocolError::AskWants);
+        }
+        Ok(())
+    }
+}
+
+/// The ask a holder opened and the task as it now stands.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskAsked {
+    pub task: ReviewTask,
+    pub ask: registry_review_protocol::ReviewAsk,
+}
+
+/// An ask as a reviewer reads it in the task context.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewContextAsk {
+    pub ask_id: Uuid,
+    /// The task that asked.
+    pub task_id: Uuid,
+    pub text: String,
+    pub wants: Vec<registry_review_protocol::ReviewAskWant>,
+    pub asked_at: DateTime<Utc>,
+    pub state: registry_review_protocol::ReviewAskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1371,6 +1457,9 @@ pub struct ReviewTaskContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_constraints: Option<Value>,
     pub context: ReviewTaskContextData,
+    /// The asks of the applicant on this request, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asks: Vec<ReviewContextAsk>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -3145,6 +3234,7 @@ mod tests {
             staffing_diagnostic: None,
             decided_by_caller: None,
             decision_receipt: None,
+            marker: None,
         }
     }
 
@@ -4526,6 +4616,36 @@ mod tests {
             .find(|finding| finding.code == "casework.review-policy.asks-in-answer-policy")
             .expect("an answer policy that asks is reported");
         assert_eq!(finding.pointer, "/stages/0/asks");
+    }
+
+    #[test]
+    fn an_ask_request_bounds_its_text_and_wants() {
+        use registry_review_protocol::ReviewAskWant;
+        let ask = |text: &str, wants: Vec<ReviewAskWant>| ReviewTaskAskRequest {
+            text: text.to_owned(),
+            wants,
+        };
+        assert_eq!(
+            ask("Send the form.", vec![ReviewAskWant::Answer {}]).check(),
+            Ok(())
+        );
+        assert_eq!(ask("Send the form.", vec![]).check(), Ok(()));
+        assert!(ask("", vec![]).check().is_err());
+        assert!(ask("  ", vec![]).check().is_err());
+        assert!(ask("bell\u{7}", vec![]).check().is_err());
+        assert!(ask(&"x".repeat(MAXIMUM_PUBLIC_REASON_BYTES + 1), vec![])
+            .check()
+            .is_err());
+        assert!(ask(
+            "ok",
+            vec![ReviewAskWant::Answer {}, ReviewAskWant::Answer {}]
+        )
+        .check()
+        .is_err());
+        let refused = serde_json::from_value::<ReviewTaskAskRequest>(
+            json!({"text": "ok", "wants": [], "dueAt": "2026-12-01T00:00:00Z"}),
+        );
+        assert!(refused.is_err());
     }
 
     #[test]

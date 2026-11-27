@@ -1,6 +1,8 @@
+mod asks;
 mod inbox;
 mod maintenance;
 mod staffing;
+use asks::close_open_asks;
 use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::GenericClient;
 use deadpool_postgres::Transaction;
@@ -116,6 +118,18 @@ pub enum ReviewRuntimeError {
     SubmissionConflict,
     #[error("the retained review result has expired")]
     ResultExpired,
+    #[error("the request already has an open ask")]
+    ReviewAskAlreadyOpen,
+    #[error("the answer time precedes the ask or lies in the future")]
+    ReviewAskAnswerTimeInvalid,
+    #[error("the stage of this task does not offer asks")]
+    ReviewAskNotOffered,
+    #[error("the ask is not open")]
+    ReviewAskNotOpen,
+    #[error("the producer of this request does not read asks")]
+    ReviewAskProducerUnsupported,
+    #[error("the task is not at the active stage of a request under review")]
+    ReviewAskTaskInactive,
     #[error("the review task must be held by the caller")]
     TaskNotHeld,
     #[error("the caller initiated this review and its stage excludes them")]
@@ -1090,6 +1104,13 @@ impl CaseworkService {
         if retained_author_required && !decision_author(&final_task) {
             return Err(ReviewRuntimeError::NotFound);
         }
+        // Delegated institutional readers get the task context without the
+        // reviewers' asks of the applicant.
+        let asks = if delegated.is_some() {
+            Vec::new()
+        } else {
+            self.store.review_context_asks(record.request_id).await?
+        };
         Ok(ReviewTaskContext {
             task_id,
             request_id: record.request_id,
@@ -1099,6 +1120,7 @@ impl CaseworkService {
             policy_closure: record.policy,
             result_constraints: record.result_constraints,
             context,
+            asks,
         })
     }
 
@@ -1918,7 +1940,7 @@ impl PostgresStore {
             .query(
                 "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
                         t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
-                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic
+                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic,t.ask_marker
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -2004,7 +2026,7 @@ impl PostgresStore {
             .query(
                 "SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
                     t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
-                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic
+                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic,t.ask_marker
              FROM casework_review_decisions d
              JOIN casework_review_tasks t ON t.task_id=d.task_id
              JOIN casework_review_requests r ON r.request_id=t.request_id
@@ -2197,7 +2219,7 @@ impl PostgresStore {
                         t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
                         r.lifecycle,r.result_available_until,r.result_erased_at,
                         d.decision,d.outcome,d.decided_at,
-                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic
+                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic,t.ask_marker
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -3375,7 +3397,7 @@ impl PostgresStore {
         }
         let metadata = transaction
             .query_one(
-                "SELECT deadline_at,created_at,staffing_diagnostic,state FROM casework_review_tasks WHERE task_id=$1",
+                "SELECT deadline_at,created_at,staffing_diagnostic,state,ask_marker FROM casework_review_tasks WHERE task_id=$1",
                 &[&task_id],
             )
             .await?;
@@ -3398,6 +3420,7 @@ impl PostgresStore {
             staffing_diagnostic: staffing_diagnostic_from_row(&metadata)?,
             decided_by_caller: None,
             decision_receipt: None,
+            marker: task_marker(metadata.get::<_, Option<String>>(4))?,
         };
         let claim_event_id = Uuid::new_v4();
         {
@@ -3724,7 +3747,7 @@ impl PostgresStore {
         )?;
         let metadata = transaction
             .query_one(
-                "SELECT deadline_at,created_at,staffing_diagnostic,state FROM casework_review_tasks WHERE task_id=$1",
+                "SELECT deadline_at,created_at,staffing_diagnostic,state,ask_marker FROM casework_review_tasks WHERE task_id=$1",
                 &[&task_id],
             )
             .await?;
@@ -3749,6 +3772,7 @@ impl PostgresStore {
             staffing_diagnostic: staffing_diagnostic_from_row(&metadata)?,
             decided_by_caller: None,
             decision_receipt: None,
+            marker: task_marker(metadata.get::<_, Option<String>>(4))?,
         };
         insert_review_idempotency(
             &transaction,
@@ -4551,7 +4575,7 @@ impl PostgresStore {
             .await?;
         let metadata = transaction
             .query_one(
-                "SELECT deadline_at,created_at,staffing_diagnostic,state FROM casework_review_tasks WHERE task_id=$1",
+                "SELECT deadline_at,created_at,staffing_diagnostic,state,ask_marker FROM casework_review_tasks WHERE task_id=$1",
                 &[&task_id],
             )
             .await?;
@@ -4572,6 +4596,7 @@ impl PostgresStore {
             staffing_diagnostic: staffing_diagnostic_from_row(&metadata)?,
             decided_by_caller: None,
             decision_receipt: None,
+            marker: task_marker(metadata.get::<_, Option<String>>(4))?,
         };
         let actor_ref = actor_reference(&actor.principal);
         let release_event_id = Uuid::new_v4();
@@ -4695,7 +4720,7 @@ impl PostgresStore {
             .await?;
         let metadata = transaction
             .query_one(
-                "SELECT deadline_at,created_at,staffing_diagnostic,state FROM casework_review_tasks WHERE task_id=$1",
+                "SELECT deadline_at,created_at,staffing_diagnostic,state,ask_marker FROM casework_review_tasks WHERE task_id=$1",
                 &[&task_id],
             )
             .await?;
@@ -4730,6 +4755,7 @@ impl PostgresStore {
             staffing_diagnostic: staffing_diagnostic_from_row(&metadata)?,
             decided_by_caller: None,
             decision_receipt: None,
+            marker: task_marker(metadata.get::<_, Option<String>>(4))?,
         };
         check_task_holder(&task.state, &actor.principal).map_err(map_review_decision_error)?;
         let mut progress = ReviewProgress::new(
@@ -4782,11 +4808,12 @@ impl PostgresStore {
         transaction
             .execute(
                 "UPDATE casework_review_tasks
-                 SET state='decided',staffing_diagnostic=NULL,settled_at=$2,revision=revision+1,updated_at=$2
+                 SET state='decided',ask_marker=NULL,staffing_diagnostic=NULL,settled_at=$2,revision=revision+1,updated_at=$2
                  WHERE task_id=$1",
                 &[&task_id, &now],
             )
             .await?;
+        close_open_asks(&transaction, &record, Some(task_id), None, now).await?;
         let actor_ref = actor_reference(&actor.principal);
         let result_digest = result
             .as_ref()
@@ -4837,7 +4864,7 @@ impl PostgresStore {
                 transaction
                     .execute(
                         "UPDATE casework_review_tasks
-                         SET state='closed',staffing_diagnostic=NULL,settled_at=COALESCE(settled_at,$3),updated_at=$3,
+                         SET state='closed',ask_marker=NULL,staffing_diagnostic=NULL,settled_at=COALESCE(settled_at,$3),updated_at=$3,
                              revision=revision+1
                          WHERE request_id=$1 AND stage_index=$2 AND state IN ('open','claimed')",
                         &[&request_id, &i32::from(stage_index), &now],
@@ -4854,6 +4881,14 @@ impl PostgresStore {
                         &[&request_id, &i32::from(stage_index), &now],
                     )
                     .await?;
+                close_open_asks(
+                    &transaction,
+                    &record,
+                    None,
+                    Some(i32::from(stage_index)),
+                    now,
+                )
+                .await?;
                 let next_stage = progress.active_stage;
                 let tasks = insert_stage_tasks(
                     &transaction,
@@ -5470,12 +5505,13 @@ async fn settle_review(
     transaction
         .execute(
             "UPDATE casework_review_tasks
-             SET state='closed',staffing_diagnostic=NULL,settled_at=COALESCE(settled_at,$2),updated_at=$2,
+             SET state='closed',ask_marker=NULL,staffing_diagnostic=NULL,settled_at=COALESCE(settled_at,$2),updated_at=$2,
                  revision=revision+1
              WHERE request_id=$1 AND state IN ('open','claimed')",
             &[&record.request_id, &now],
         )
         .await?;
+    close_open_asks(transaction, record, None, None, now).await?;
     let lifecycle = result_status_name(status);
     transaction
         .execute(
@@ -5755,6 +5791,17 @@ fn staffing_diagnostic_from_row(
     }
 }
 
+fn task_marker(
+    stored: Option<String>,
+) -> Result<Option<registry_casework_core::ReviewTaskMarker>, ReviewRuntimeError> {
+    match stored.as_deref() {
+        None => Ok(None),
+        Some("waiting") => Ok(Some(registry_casework_core::ReviewTaskMarker::Waiting)),
+        Some("answered") => Ok(Some(registry_casework_core::ReviewTaskMarker::Answered)),
+        Some(_) => Err(ReviewRuntimeError::Corrupt),
+    }
+}
+
 fn reviewer_task_from_row(
     row: &Row,
     policy: &ReviewPolicyClosure,
@@ -5790,6 +5837,7 @@ fn reviewer_task_from_row(
         staffing_diagnostic: staffing_diagnostic_from_row(row)?,
         decided_by_caller: None,
         decision_receipt: None,
+        marker: task_marker(row.get::<_, Option<String>>("ask_marker"))?,
     })
 }
 

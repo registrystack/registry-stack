@@ -25,6 +25,8 @@ pub struct ReviewStaffingQuery {
     pub subject_version: Option<String>,
     pub subject_digest: Option<ContentDigest>,
     pub reference: Option<String>,
+    /// Lists only the tasks that wait for an applicant or that an applicant answered.
+    pub marker: Option<crate::ReviewTaskMarker>,
     #[serde(default)]
     pub sort: ReviewTaskSort,
     pub cursor: Option<Uuid>,

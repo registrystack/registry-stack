@@ -12315,3 +12315,935 @@ async fn staffing_diagnostic_is_disclosed_and_clears_when_responsibility_resumes
         None
     );
 }
+
+fn asks_project(stage_asks: bool, producer_reads_asks: bool) -> CaseworkProject {
+    let mut project = project("asks-1");
+    if stage_asks {
+        project.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {});
+    }
+    project.trusted_producers[0].reads_asks = producer_reads_asks;
+    project.trusted_producers[0].completion = None;
+    project
+        .access_profiles
+        .push(profile("other-producer", CaseworkActsAs::Requester));
+    let mut other = project.trusted_producers[0].clone();
+    other.id = "other".to_owned();
+    other.profile = "other-producer".to_owned();
+    other.subject = "other-service".to_owned();
+    other.completion = None;
+    other.reads_asks = true;
+    project.trusted_producers.push(other);
+    project
+}
+
+fn asks_service(fixture: &Fixture, stage_asks: bool, producer_reads_asks: bool) -> CaseworkService {
+    CaseworkService::new(
+        fixture.store.clone(),
+        asks_project(stage_asks, producer_reads_asks),
+        Vec::<Arc<dyn registry_casework_core::ReviewContextProvider>>::new(),
+    )
+    .expect("asks service")
+}
+
+/// The protocol carries answer times at microsecond precision.
+fn now_micros() -> chrono::DateTime<Utc> {
+    let now = Utc::now();
+    now - TimeDelta::nanoseconds(i64::from(now.timestamp_subsec_nanos() % 1_000))
+}
+
+fn other_producer() -> ActorContext {
+    actor("other-service", CaseworkActsAs::Requester, "other-producer")
+}
+
+fn ask_request(text: &str) -> ReviewTaskAskRequest {
+    ReviewTaskAskRequest {
+        text: text.to_owned(),
+        wants: vec![
+            registry_casework_core::ReviewAskWant::Answer {},
+            registry_casework_core::ReviewAskWant::Document {},
+        ],
+    }
+}
+
+/// A review at its first stage, claimed by reviewer A. The task is at revision 2.
+async fn claimed_for_asks(
+    fixture: &Fixture,
+    service: &CaseworkService,
+    label: &str,
+) -> (Uuid, Uuid, ReviewCreateRequest) {
+    let create = bind_request(service, request(label, &format!("ref-{label}")));
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            create.clone(),
+            &format!("create-{label}"),
+        )
+        .await
+        .expect("create review");
+    let request_id = created.accepted.request_id;
+    let task = task_id(fixture, request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            &format!("claim-{label}"),
+        )
+        .await
+        .expect("claim review task");
+    (request_id, task, create)
+}
+
+async fn ask_states(fixture: &Fixture, request_id: Uuid) -> Vec<String> {
+    fixture
+        .database
+        .query(
+            "SELECT state FROM casework_review_asks WHERE request_id=$1 ORDER BY asked_at",
+            &[&request_id],
+        )
+        .await
+        .expect("ask states")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+async fn ask_marker(fixture: &Fixture, task: Uuid) -> Option<String> {
+    fixture
+        .database
+        .query_one(
+            "SELECT ask_marker FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("ask marker")
+        .get(0)
+}
+
+async fn ask_changes(fixture: &Fixture, request_id: Uuid) -> Vec<String> {
+    fixture
+        .database
+        .query(
+            "SELECT change FROM casework_review_ask_events WHERE request_id=$1 ORDER BY feed_position",
+            &[&request_id],
+        )
+        .await
+        .expect("ask events")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_holder_asks_the_applicant_and_the_producer_reads_the_ask() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, _) = claimed_for_asks(&fixture, &service, "ask-open").await;
+
+    let asked = service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Send the signed form."),
+            None,
+            "",
+            2,
+            "ask-1",
+        )
+        .await
+        .expect("holder asks");
+    assert_eq!(asked.task.revision, 3);
+    assert_eq!(
+        asked.task.marker,
+        Some(registry_casework_core::ReviewTaskMarker::Waiting)
+    );
+    assert!(
+        matches!(asked.task.state, ReviewTaskState::Held { ref holder }
+        if holder == &fixture.reviewer_a.principal)
+    );
+    assert_eq!(
+        asked.ask.state,
+        registry_casework_core::ReviewAskState::Open
+    );
+    assert_eq!(ask_states(&fixture, request_id).await, ["open"]);
+    assert_eq!(ask_changes(&fixture, request_id).await, ["opened"]);
+    assert_eq!(ask_marker(&fixture, task).await.as_deref(), Some("waiting"));
+
+    // The history row names the ask and holds no text.
+    let history = fixture
+        .database
+        .query_one(
+            "SELECT detail::text FROM casework_review_history
+             WHERE request_id=$1 AND kind='ask-opened'",
+            &[&request_id],
+        )
+        .await
+        .expect("ask-opened history")
+        .get::<_, String>(0);
+    assert!(history.contains(&asked.ask.ask_id.to_string()));
+    assert!(!history.contains("signed form"));
+
+    // The producer sees it in its feed and reads it; another producer does not.
+    let feed = service
+        .review_ask_feed(&fixture.producer, None, 10)
+        .await
+        .expect("feed");
+    assert_eq!(feed.items.len(), 1);
+    assert_eq!(feed.items[0].ask_id, asked.ask.ask_id);
+    assert!(service
+        .review_ask_feed(&other_producer(), None, 10)
+        .await
+        .expect("other feed")
+        .items
+        .is_empty());
+    let read = service
+        .review_ask(&fixture.producer, request_id, asked.ask.ask_id)
+        .await
+        .expect("read ask");
+    assert_eq!(read, asked.ask);
+    assert!(matches!(
+        service
+            .review_ask(&other_producer(), request_id, asked.ask.ask_id)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert!(matches!(
+        service
+            .review_ask(&fixture.producer, request_id, Uuid::new_v4())
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+
+    // The context lists the ask for the reviewer, and the task carries its marker.
+    let context = service
+        .review_task_context(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("context");
+    assert_eq!(context.asks.len(), 1);
+    assert_eq!(context.asks[0].task_id, task);
+    assert_eq!(context.asks[0].text, "Send the signed form.");
+    let read_task = service
+        .review_task(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("task");
+    assert_eq!(
+        read_task.marker,
+        Some(registry_casework_core::ReviewTaskMarker::Waiting)
+    );
+
+    // An exact replay under the same key returns the stored response.
+    let replay = service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Send the signed form."),
+            None,
+            "",
+            2,
+            "ask-1",
+        )
+        .await
+        .expect("replay");
+    assert_eq!(replay, asked);
+    assert_eq!(ask_states(&fixture, request_id).await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_ask_is_refused_unless_every_condition_holds() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+
+    // Unclaimed task.
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&service, request("ask-unclaimed", "ref-unclaimed")),
+            "create-unclaimed",
+        )
+        .await
+        .expect("create");
+    let unclaimed = task_id(&fixture, created.accepted.request_id, 0).await;
+    assert!(matches!(
+        service
+            .ask_applicant(
+                &fixture.reviewer_a,
+                unclaimed,
+                ask_request("Why?"),
+                None,
+                "",
+                1,
+                "k"
+            )
+            .await,
+        Err(ReviewRuntimeError::TaskNotHeld)
+    ));
+
+    // Not the holder, stale revision, then a second open ask.
+    let (request_id, task, _) = claimed_for_asks(&fixture, &service, "ask-refusals").await;
+    assert!(matches!(
+        service
+            .ask_applicant(
+                &fixture.reviewer_b,
+                task,
+                ask_request("Why?"),
+                None,
+                "",
+                2,
+                "k-b"
+            )
+            .await,
+        Err(ReviewRuntimeError::TaskNotHeld)
+    ));
+    assert!(matches!(
+        service
+            .ask_applicant(
+                &fixture.reviewer_a,
+                task,
+                ask_request("Why?"),
+                None,
+                "",
+                1,
+                "k-stale"
+            )
+            .await,
+        Err(ReviewRuntimeError::RevisionConflict)
+    ));
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "k-first",
+        )
+        .await
+        .expect("first ask");
+    assert!(matches!(
+        service
+            .ask_applicant(
+                &fixture.reviewer_a,
+                task,
+                ask_request("Again?"),
+                None,
+                "",
+                3,
+                "k-second"
+            )
+            .await,
+        Err(ReviewRuntimeError::ReviewAskAlreadyOpen)
+    ));
+    assert_eq!(ask_states(&fixture, request_id).await, ["open"]);
+
+    // Invalid text and wants.
+    assert!(matches!(
+        service
+            .ask_applicant(
+                &fixture.reviewer_a,
+                task,
+                ask_request("  "),
+                None,
+                "",
+                3,
+                "k-empty"
+            )
+            .await,
+        Err(ReviewRuntimeError::Invalid)
+    ));
+}
+
+#[tokio::test]
+async fn an_ask_needs_a_stage_that_offers_it_and_a_producer_that_reads_it() {
+    let fixture = fixture().await;
+    // A policy without asks behaves as before: the stage offers none.
+    let plain = asks_service(&fixture, false, true);
+    let (_, task, _) = claimed_for_asks(&fixture, &plain, "ask-plain").await;
+    assert!(matches!(
+        plain
+            .ask_applicant(
+                &fixture.reviewer_a,
+                task,
+                ask_request("Why?"),
+                None,
+                "",
+                2,
+                "k"
+            )
+            .await,
+        Err(ReviewRuntimeError::ReviewAskNotOffered)
+    ));
+    assert_eq!(ask_marker(&fixture, task).await, None);
+
+    // The stage offers asks and the producer does not read them.
+    // A project that checks refuses this combination, so the runtime check
+    // answers for a request accepted under an earlier project.
+    let reading = asks_service(&fixture, true, true);
+    let (_, task, _) = claimed_for_asks(&fixture, &reading, "ask-deaf").await;
+    let deaf = asks_service(&fixture, true, false);
+    assert!(matches!(
+        deaf.ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "k"
+        )
+        .await,
+        Err(ReviewRuntimeError::ReviewAskProducerUnsupported)
+    ));
+}
+
+#[tokio::test]
+async fn an_ask_from_a_task_that_left_the_active_stage_is_refused_and_a_later_stage_offers_none() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, first, _) = claimed_for_asks(&fixture, &service, "ask-stage").await;
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            first,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-first",
+        )
+        .await
+        .expect("advance the stage");
+    assert!(matches!(
+        service
+            .ask_applicant(
+                &fixture.reviewer_a,
+                first,
+                ask_request("Why?"),
+                None,
+                "",
+                3,
+                "k-old"
+            )
+            .await,
+        Err(ReviewRuntimeError::ReviewAskTaskInactive)
+    ));
+    // The second stage declares no asks.
+    let second = task_id(&fixture, request_id, 1).await;
+    service
+        .claim_review_task(&fixture.reviewer_b, second, None, "", 1, "claim-second")
+        .await
+        .expect("claim second stage");
+    assert!(matches!(
+        service
+            .ask_applicant(
+                &fixture.reviewer_b,
+                second,
+                ask_request("Why?"),
+                None,
+                "",
+                2,
+                "k-new"
+            )
+            .await,
+        Err(ReviewRuntimeError::ReviewAskNotOffered)
+    ));
+}
+
+#[tokio::test]
+async fn the_producer_answer_marks_the_task_answered_and_obeys_its_rules() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, create) = claimed_for_asks(&fixture, &service, "ask-answer").await;
+    let asked = service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Send the form."),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    let ask_id = asked.ask.ask_id;
+    let answer = |at: chrono::DateTime<Utc>| registry_casework_core::ReviewAskAnswer {
+        subject: create.subject.clone(),
+        answered_at: at,
+    };
+
+    // Another producer cannot answer it: concealed.
+    assert!(matches!(
+        service
+            .answer_review_ask(
+                &other_producer(),
+                request_id,
+                ask_id,
+                answer(now_micros()),
+                "o-1"
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    // The subject must equal the request's binding.
+    let mut moved = answer(now_micros());
+    moved.subject.id = "another-subject".to_owned();
+    assert!(matches!(
+        service
+            .answer_review_ask(&fixture.producer, request_id, ask_id, moved, "m-1")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    // The ask must belong to the request.
+    assert!(matches!(
+        service
+            .answer_review_ask(
+                &fixture.producer,
+                request_id,
+                Uuid::new_v4(),
+                answer(now_micros()),
+                "u-1"
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    // The answer time lies between the ask and a small skew ahead of now.
+    assert!(matches!(
+        service
+            .answer_review_ask(
+                &fixture.producer,
+                request_id,
+                ask_id,
+                answer(asked.ask.asked_at - TimeDelta::seconds(1)),
+                "t-1"
+            )
+            .await,
+        Err(ReviewRuntimeError::ReviewAskAnswerTimeInvalid)
+    ));
+    assert!(matches!(
+        service
+            .answer_review_ask(
+                &fixture.producer,
+                request_id,
+                ask_id,
+                answer(now_micros() + TimeDelta::minutes(30)),
+                "t-2"
+            )
+            .await,
+        Err(ReviewRuntimeError::ReviewAskAnswerTimeInvalid)
+    ));
+    assert_eq!(ask_states(&fixture, request_id).await, ["open"]);
+    assert_eq!(ask_marker(&fixture, task).await.as_deref(), Some("waiting"));
+
+    let answered_at = now_micros();
+    let answered = service
+        .answer_review_ask(
+            &fixture.producer,
+            request_id,
+            ask_id,
+            answer(answered_at),
+            "a-1",
+        )
+        .await
+        .expect("answer");
+    assert_eq!(
+        answered.state,
+        registry_casework_core::ReviewAskState::Answered
+    );
+    // The response serves the stored microsecond time, as the read does.
+    let stored = service
+        .review_ask(&fixture.producer, request_id, ask_id)
+        .await
+        .expect("read answered ask");
+    assert_eq!(stored, answered);
+    assert_eq!(answered.answered_at, Some(answered_at));
+    assert_eq!(
+        ask_marker(&fixture, task).await.as_deref(),
+        Some("answered")
+    );
+    assert_eq!(
+        ask_changes(&fixture, request_id).await,
+        ["opened", "answered"]
+    );
+    // The task returns to its holder at the next revision.
+    let task_now = service
+        .review_task(&fixture.reviewer_a, task, None, "")
+        .await
+        .expect("task");
+    assert_eq!(task_now.revision, 4);
+    assert_eq!(
+        task_now.marker,
+        Some(registry_casework_core::ReviewTaskMarker::Answered)
+    );
+    assert!(matches!(task_now.state, ReviewTaskState::Held { .. }));
+    let history: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_review_history
+             WHERE request_id=$1 AND kind='ask-answered'",
+            &[&request_id],
+        )
+        .await
+        .expect("history")
+        .get(0);
+    assert_eq!(history, 1);
+
+    // An exact replay returns the stored response and changes nothing.
+    let replay = service
+        .answer_review_ask(
+            &fixture.producer,
+            request_id,
+            ask_id,
+            answer(answered_at),
+            "a-1",
+        )
+        .await
+        .expect("replay");
+    assert_eq!(replay, answered);
+    // A second answer under another key cannot reopen or redo it.
+    assert!(matches!(
+        service
+            .answer_review_ask(
+                &fixture.producer,
+                request_id,
+                ask_id,
+                answer(now_micros()),
+                "a-2"
+            )
+            .await,
+        Err(ReviewRuntimeError::ReviewAskNotOpen)
+    ));
+    assert_eq!(
+        ask_changes(&fixture, request_id).await,
+        ["opened", "answered"]
+    );
+    assert_eq!(
+        service
+            .review_task(&fixture.reviewer_a, task, None, "")
+            .await
+            .expect("task")
+            .revision,
+        4
+    );
+}
+
+#[tokio::test]
+async fn deciding_the_task_closes_its_ask_and_clears_the_marker() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, _) = claimed_for_asks(&fixture, &service, "ask-decide").await;
+    let asked = service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
+            },
+            None,
+            "",
+            3,
+            "decide",
+        )
+        .await
+        .expect("decide");
+    assert_eq!(ask_states(&fixture, request_id).await, ["closed"]);
+    assert_eq!(ask_marker(&fixture, task).await, None);
+    assert_eq!(
+        ask_changes(&fixture, request_id).await,
+        ["opened", "closed"]
+    );
+    // A closed ask cannot be answered.
+    let read = service
+        .review_ask(&fixture.producer, request_id, asked.ask.ask_id)
+        .await
+        .expect("read closed ask");
+    assert_eq!(read.state, registry_casework_core::ReviewAskState::Closed);
+    assert!(read.closed_at.is_some());
+    assert!(matches!(
+        service
+            .answer_review_ask(
+                &fixture.producer,
+                request_id,
+                asked.ask.ask_id,
+                registry_casework_core::ReviewAskAnswer {
+                    subject: read.subject.clone(),
+                    answered_at: now_micros(),
+                },
+                "late"
+            )
+            .await,
+        Err(ReviewRuntimeError::ReviewAskNotOpen)
+    ));
+}
+
+#[tokio::test]
+async fn settling_or_cancelling_the_request_closes_its_open_ask() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, create) = claimed_for_asks(&fixture, &service, "ask-cancel").await;
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    service
+        .cancel_review_request(
+            &fixture.producer,
+            request_id,
+            ReviewCancelRequest {
+                subject: create.subject.clone(),
+                reason: "withdrawn".to_owned(),
+            },
+            "cancel",
+        )
+        .await
+        .expect("cancel");
+    assert_eq!(ask_states(&fixture, request_id).await, ["closed"]);
+    assert_eq!(ask_marker(&fixture, task).await, None);
+    assert_eq!(
+        ask_changes(&fixture, request_id).await,
+        ["opened", "closed"]
+    );
+
+    // A rejection settles the request and closes the ask the same way.
+    let (request_id, task, _) = claimed_for_asks(&fixture, &service, "ask-reject").await;
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask-2",
+        )
+        .await
+        .expect("ask");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Reject {
+                    outcome: "incorrect".to_owned(),
+                    public_reason: Some("The record could not be matched.".to_owned()),
+                    reason: Some("private reason".to_owned()),
+                    result: Some(json!({"correction": "bounded correction"})),
+                },
+            },
+            None,
+            "",
+            3,
+            "reject",
+        )
+        .await
+        .expect("reject settles");
+    assert_eq!(ask_states(&fixture, request_id).await, ["closed"]);
+    assert_eq!(ask_marker(&fixture, task).await, None);
+}
+
+#[tokio::test]
+async fn a_released_task_keeps_its_ask_and_marker_for_the_next_holder() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, _) = claimed_for_asks(&fixture, &service, "ask-release").await;
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    let released = service
+        .release_review_task(&fixture.reviewer_a, task, 3, "release")
+        .await
+        .expect("release");
+    assert_eq!(
+        released.marker,
+        Some(registry_casework_core::ReviewTaskMarker::Waiting)
+    );
+    assert_eq!(ask_states(&fixture, request_id).await, ["open"]);
+    let claimed = service
+        .claim_review_task(&fixture.reviewer_b, task, None, "", 4, "claim-b")
+        .await
+        .expect("next holder claims");
+    assert_eq!(
+        claimed.marker,
+        Some(registry_casework_core::ReviewTaskMarker::Waiting)
+    );
+    let context = service
+        .review_task_context(&fixture.reviewer_b, task, None, "")
+        .await
+        .expect("context");
+    assert_eq!(context.asks.len(), 1);
+}
+
+#[tokio::test]
+async fn staff_list_tasks_that_wait_for_an_applicant_or_were_answered() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, create) = claimed_for_asks(&fixture, &service, "ask-list").await;
+    let (_, plain_task, _) = claimed_for_asks(&fixture, &service, "ask-list-plain").await;
+    let list = |marker: Option<registry_casework_core::ReviewTaskMarker>| {
+        let service = &service;
+        let reviewer = &fixture.reviewer_a;
+        async move {
+            service
+                .review_staffing_tasks(
+                    reviewer,
+                    None,
+                    "",
+                    ReviewStaffingQuery {
+                        marker,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("list tasks")
+                .items
+        }
+    };
+    use registry_casework_core::ReviewTaskMarker::{Answered, Waiting};
+    assert!(list(Some(Waiting)).await.is_empty());
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    let waiting = list(Some(Waiting)).await;
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].task_id, task);
+    assert_eq!(waiting[0].marker, Some(Waiting));
+    assert!(list(Some(Answered)).await.is_empty());
+    assert_eq!(list(None).await.len(), 2);
+    let ask_id = fixture
+        .database
+        .query_one(
+            "SELECT ask_id FROM casework_review_asks WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("ask")
+        .get::<_, Uuid>(0);
+    service
+        .answer_review_ask(
+            &fixture.producer,
+            request_id,
+            ask_id,
+            registry_casework_core::ReviewAskAnswer {
+                subject: create.subject.clone(),
+                answered_at: now_micros(),
+            },
+            "answer",
+        )
+        .await
+        .expect("answer");
+    assert!(list(Some(Waiting)).await.is_empty());
+    let answered = list(Some(Answered)).await;
+    assert_eq!(answered.len(), 1);
+    assert_eq!(answered[0].task_id, task);
+    assert_ne!(answered[0].task_id, plain_task);
+    assert_eq!(
+        list(None)
+            .await
+            .iter()
+            .filter(|item| item.marker.is_none())
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn ask_rows_and_events_leave_with_the_expired_review() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, create) = claimed_for_asks(&fixture, &service, "ask-erase").await;
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    service
+        .cancel_review_request(
+            &fixture.producer,
+            request_id,
+            ReviewCancelRequest {
+                subject: create.subject,
+                reason: "withdrawn".to_owned(),
+            },
+            "cancel",
+        )
+        .await
+        .expect("cancel");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET terminal_at=now()-interval '2 days',
+                 result_available_until=now()-interval '1 day' WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("expire the result");
+    assert!(
+        service
+            .review_ask_feed(&fixture.producer, None, 10)
+            .await
+            .expect("feed")
+            .items
+            .is_empty(),
+        "an expired review leaves the feed before erasure runs"
+    );
+    service.erase_expired_reviews().await.expect("erase");
+    for table in ["casework_review_asks", "casework_review_ask_events"] {
+        assert_eq!(count_for_request(&fixture, table, request_id).await, 0);
+    }
+}

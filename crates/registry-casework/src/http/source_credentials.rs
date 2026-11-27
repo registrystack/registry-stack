@@ -66,7 +66,15 @@ fn target(method: &Method, path: &str) -> Option<Target> {
         let admitted = (method == Method::GET
             && ["", "context", "draft", "task-templates", "task-grants"].contains(&suffix))
             || (method == Method::POST
-                && ["claim", "assign", "delegate", "decisions", "task-grants"].contains(&suffix))
+                && [
+                    "claim",
+                    "assign",
+                    "delegate",
+                    "decisions",
+                    "asks",
+                    "task-grants",
+                ]
+                .contains(&suffix))
             || ((method == Method::PUT || method == Method::DELETE) && suffix == "draft");
         return admitted.then_some(Target::Task(id));
     }
@@ -313,7 +321,14 @@ mod tests {
                 Some(Target::Task(Uuid::parse_str(id).unwrap()))
             );
         }
-        for suffix in ["claim", "assign", "delegate", "decisions", "task-grants"] {
+        for suffix in [
+            "claim",
+            "assign",
+            "delegate",
+            "decisions",
+            "asks",
+            "task-grants",
+        ] {
             assert!(target(&Method::POST, &format!("/v1/review-tasks/{id}/{suffix}")).is_some());
         }
         for method in [Method::PUT, Method::DELETE] {

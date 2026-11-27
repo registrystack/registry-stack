@@ -607,6 +607,22 @@ impl PostgresStore {
             .await?;
         transaction
             .execute(
+                "DELETE FROM casework_review_ask_events e USING casework_review_requests r
+                 WHERE e.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
+                "DELETE FROM casework_review_asks a USING casework_review_requests r
+                 WHERE a.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
                 "DELETE FROM casework_review_task_drafts d
                   USING casework_review_tasks t,casework_review_requests r
                  WHERE d.task_id=t.task_id AND t.request_id=r.request_id

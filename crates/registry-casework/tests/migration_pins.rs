@@ -17,6 +17,10 @@ const PINS: &[(&str, &str)] = &[
         "0201_activation_posture.sql",
         "3eacf388a3ebcc488315291f17c466bcc877932fd2a3c83c2333b36d2d02f85f",
     ),
+    (
+        "0202_review_asks.sql",
+        "fb7240010946db2ae0316fe8640807b80c735bc81b79353e416841ba54f46b09",
+    ),
 ];
 
 #[test]

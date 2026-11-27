@@ -1,0 +1,58 @@
+-- SPDX-License-Identifier: Apache-2.0
+--
+-- A reviewer who holds a task can ask the subject's owner for more. The ask
+-- belongs to the request and names the task that asked. The producer reads the
+-- ask through its own feed and reports the answer without carrying its text.
+
+CREATE TABLE casework_review_asks (
+    ask_id uuid PRIMARY KEY,
+    request_id uuid NOT NULL REFERENCES casework_review_requests(request_id) ON DELETE CASCADE,
+    task_id uuid NOT NULL,
+    stage_index integer NOT NULL CHECK (stage_index >= 0),
+    text text NOT NULL CHECK (octet_length(text) BETWEEN 1 AND 2000),
+    wants jsonb NOT NULL CHECK (jsonb_typeof(wants) = 'array' AND jsonb_array_length(wants) <= 8),
+    state text NOT NULL CHECK (state IN ('open','answered','expired','closed')),
+    asked_at timestamptz NOT NULL,
+    asked_by_ref text NOT NULL CHECK (octet_length(asked_by_ref) BETWEEN 1 AND 256),
+    answered_at timestamptz,
+    closed_at timestamptz,
+    UNIQUE (ask_id, request_id),
+    FOREIGN KEY (task_id, request_id, stage_index)
+        REFERENCES casework_review_tasks(task_id, request_id, stage_index) ON DELETE CASCADE,
+    CHECK ((state = 'answered') = (answered_at IS NOT NULL)),
+    CHECK ((state IN ('expired','closed')) = (closed_at IS NOT NULL)),
+    CHECK (answered_at IS NULL OR answered_at >= asked_at)
+);
+-- One ask is open on a request at a time.
+CREATE UNIQUE INDEX casework_review_ask_open_idx
+    ON casework_review_asks(request_id)
+    WHERE state = 'open';
+CREATE INDEX casework_review_ask_request_idx
+    ON casework_review_asks(request_id, asked_at, ask_id);
+
+-- The producer's ask feed. An event announces that an ask opened, was answered
+-- or closed. The producer reads the ask next.
+CREATE TABLE casework_review_ask_events (
+    event_id uuid PRIMARY KEY,
+    feed_position bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
+    request_id uuid NOT NULL,
+    ask_id uuid NOT NULL,
+    producer_id text NOT NULL,
+    change text NOT NULL CHECK (change IN ('opened','answered','expired','closed')),
+    changed_at timestamptz NOT NULL,
+    FOREIGN KEY (ask_id, request_id)
+        REFERENCES casework_review_asks(ask_id, request_id) ON DELETE CASCADE,
+    FOREIGN KEY (request_id, producer_id)
+        REFERENCES casework_review_requests(request_id, producer_id) ON DELETE CASCADE
+);
+CREATE INDEX casework_review_ask_feed_idx
+    ON casework_review_ask_events(producer_id, feed_position);
+
+-- A task marker tells reviewers that the task waits for the applicant or that
+-- the applicant answered. It stays with the task through release and
+-- reassignment and clears when the task is decided or closed.
+ALTER TABLE casework_review_tasks
+    ADD COLUMN ask_marker text CHECK (ask_marker IN ('waiting','answered'));
+ALTER TABLE casework_review_tasks
+    ADD CONSTRAINT casework_review_task_ask_marker_check
+    CHECK (ask_marker IS NULL OR state IN ('open','claimed'));

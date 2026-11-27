@@ -107,6 +107,15 @@ pub fn router_with_recorder(state: HttpState, recorder: Arc<RefusalRecorder>) ->
         .route(
             "/v1/review-requests/{request_id}/cancel",
             post(cancel_review_request),
+        )
+        .route("/v1/review-asks", get(review_ask_feed))
+        .route(
+            "/v1/review-requests/{request_id}/asks/{ask_id}",
+            get(get_review_ask),
+        )
+        .route(
+            "/v1/review-requests/{request_id}/asks/{ask_id}/answer",
+            post(answer_review_ask),
         );
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
@@ -176,6 +185,7 @@ pub fn router_with_recorder(state: HttpState, recorder: Arc<RefusalRecorder>) ->
             "/v1/review-tasks/{task_id}/decisions",
             post(decide_review_task),
         )
+        .route("/v1/review-tasks/{task_id}/asks", post(ask_applicant))
         .route(
             "/v1/review-requests/{request_id}/history",
             get(review_history),
@@ -910,6 +920,87 @@ async fn cancel_review_request(
         state
             .service
             .cancel_review_request(&actor, request_id, request, idempotency_key(&headers)?)
+            .await
+            .map_err(HttpError::from)?,
+    )
+    .into_response())
+}
+
+async fn review_ask_feed(
+    RequestState(state): RequestState,
+    headers: HeaderMap,
+    Query(query): Query<ReviewFeedQuery>,
+) -> Result<Json<ReviewAskFeedPage>, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .review_ask_feed(&actor, query.cursor, page_limit(&state, query.limit)?)
+            .await
+            .map_err(HttpError::from)?,
+    ))
+}
+
+async fn get_review_ask(
+    RequestState(state): RequestState,
+    headers: HeaderMap,
+    Path((request_id, ask_id)): Path<(Uuid, Uuid)>,
+) -> Result<Response, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    match state.service.review_ask(&actor, request_id, ask_id).await {
+        Ok(ask) => Ok(Json(ask).into_response()),
+        Err(ReviewRuntimeError::NotFound) => Ok(bare_not_found()),
+        Err(error) => Err(HttpError::from(error)),
+    }
+}
+
+async fn answer_review_ask(
+    RequestState(state): RequestState,
+    headers: HeaderMap,
+    Path((request_id, ask_id)): Path<(Uuid, Uuid)>,
+    StrictJson(answer): StrictJson<ReviewAskAnswer>,
+) -> Result<Response, HttpError> {
+    reject_source_profile(&headers)?;
+    let (actor, _) = authenticate(&state, &headers).await?;
+    match state
+        .service
+        .answer_review_ask(
+            &actor,
+            request_id,
+            ask_id,
+            answer,
+            idempotency_key(&headers)?,
+        )
+        .await
+    {
+        Ok(ask) => Ok(Json(ask).into_response()),
+        Err(ReviewRuntimeError::NotFound) => Ok(bare_not_found()),
+        Err(error) => Err(HttpError::from(error)),
+    }
+}
+
+async fn ask_applicant(
+    RequestState(state): RequestState,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    StrictJson(request): StrictJson<ReviewTaskAskRequest>,
+) -> Result<Response, HttpError> {
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .ask_applicant(
+                &actor,
+                task_id,
+                request,
+                source_profile_id,
+                token,
+                if_match(&headers)?,
+                idempotency_key(&headers)?,
+            )
             .await
             .map_err(HttpError::from)?,
     )
@@ -1744,6 +1835,12 @@ pub enum HttpError {
     SourceBadGateway,
     SourceVersionMismatch,
     SourceVersionUnavailable,
+    ReviewAskAlreadyOpen,
+    ReviewAskAnswerTimeInvalid,
+    ReviewAskNotOffered,
+    ReviewAskNotOpen,
+    ReviewAskProducerUnsupported,
+    ReviewAskTaskInactive,
     ReviewDistinctApproverRequired,
     ReviewInitiatorExcluded,
     ReviewInitiatorRequired,
@@ -1817,6 +1914,12 @@ impl From<ReviewRuntimeError> for HttpError {
             ReviewRuntimeError::SubmissionConflict => Self::ReviewSubmissionConflict,
             ReviewRuntimeError::ResultExpired => Self::ReviewResultExpired,
             ReviewRuntimeError::TaskNotHeld => Self::ReviewTaskNotHeld,
+            ReviewRuntimeError::ReviewAskAlreadyOpen => Self::ReviewAskAlreadyOpen,
+            ReviewRuntimeError::ReviewAskAnswerTimeInvalid => Self::ReviewAskAnswerTimeInvalid,
+            ReviewRuntimeError::ReviewAskNotOffered => Self::ReviewAskNotOffered,
+            ReviewRuntimeError::ReviewAskNotOpen => Self::ReviewAskNotOpen,
+            ReviewRuntimeError::ReviewAskProducerUnsupported => Self::ReviewAskProducerUnsupported,
+            ReviewRuntimeError::ReviewAskTaskInactive => Self::ReviewAskTaskInactive,
             ReviewRuntimeError::DistinctApproverRequired => Self::ReviewDistinctApproverRequired,
             ReviewRuntimeError::InitiatorExcluded => Self::ReviewInitiatorExcluded,
             ReviewRuntimeError::InitiatorRequired => Self::ReviewInitiatorRequired,
@@ -1891,6 +1994,12 @@ impl HttpError {
             | Self::SourceVersionMismatch
             | Self::SourceVersionUnavailable
             | Self::ReviewInitiatorRequired
+            | Self::ReviewAskAlreadyOpen
+            | Self::ReviewAskAnswerTimeInvalid
+            | Self::ReviewAskNotOffered
+            | Self::ReviewAskNotOpen
+            | Self::ReviewAskProducerUnsupported
+            | Self::ReviewAskTaskInactive
             | Self::ReviewResultExpired
             | Self::ReviewSubmissionConflict
             | Self::ReviewTaskNotHeld
@@ -1954,6 +2063,12 @@ impl HttpError {
             Self::SourceBadGateway => ProblemCode::SourceBadGateway,
             Self::SourceVersionMismatch => ProblemCode::SourceVersionMismatch,
             Self::SourceVersionUnavailable => ProblemCode::SourceVersionUnavailable,
+            Self::ReviewAskAlreadyOpen => ProblemCode::ReviewAskAlreadyOpen,
+            Self::ReviewAskAnswerTimeInvalid => ProblemCode::ReviewAskAnswerTimeInvalid,
+            Self::ReviewAskNotOffered => ProblemCode::ReviewAskNotOffered,
+            Self::ReviewAskNotOpen => ProblemCode::ReviewAskNotOpen,
+            Self::ReviewAskProducerUnsupported => ProblemCode::ReviewAskProducerUnsupported,
+            Self::ReviewAskTaskInactive => ProblemCode::ReviewAskTaskInactive,
             Self::ReviewDistinctApproverRequired => ProblemCode::ReviewDistinctApproverRequired,
             Self::ReviewInitiatorExcluded => ProblemCode::ReviewInitiatorExcluded,
             Self::ReviewInitiatorRequired => ProblemCode::ReviewInitiatorRequired,
@@ -3098,6 +3213,12 @@ mod tests {
             HttpError::SourceBadGateway,
             HttpError::SourceVersionMismatch,
             HttpError::SourceVersionUnavailable,
+            HttpError::ReviewAskAlreadyOpen,
+            HttpError::ReviewAskAnswerTimeInvalid,
+            HttpError::ReviewAskNotOffered,
+            HttpError::ReviewAskNotOpen,
+            HttpError::ReviewAskProducerUnsupported,
+            HttpError::ReviewAskTaskInactive,
             HttpError::ReviewDistinctApproverRequired,
             HttpError::ReviewInitiatorExcluded,
             HttpError::ReviewInitiatorRequired,

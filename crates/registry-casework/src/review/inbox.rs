@@ -316,7 +316,7 @@ impl PostgresStore {
                         t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
                         r.lifecycle,r.result_available_until,r.result_erased_at,
                         d.decision,d.outcome,d.decided_at,
-                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic
+                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic,t.ask_marker
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
@@ -434,7 +434,7 @@ impl PostgresStore {
             .query(
                 &format!("SELECT t.task_id,t.request_id,t.stage_index,t.stage_id,t.queue_id,t.state,
                         t.holder_issuer,t.holder_subject,t.revision,r.policy_snapshot,
-                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic
+                        r.subject_source,r.subject_type,r.subject_id,r.subject_version,r.subject_digest,r.requester_reference,t.deadline_at,t.created_at,t.staffing_diagnostic,t.ask_marker
                  FROM casework_review_tasks t
                  JOIN casework_review_requests r ON r.request_id=t.request_id
                  WHERE NOT $6 AND r.result_erased_at IS NULL
@@ -452,6 +452,7 @@ impl PostgresStore {
                    AND ($11::uuid IS NULL OR t.request_id=$11)
                    AND ($12::text IS NULL OR (r.subject_source=$12 AND r.subject_type=$13
                         AND r.subject_id=$14 AND r.subject_version=$15 AND r.subject_digest=$16))
+                   AND ($17::text IS NULL OR t.ask_marker=$17)
                  ORDER BY {order} LIMIT $7"),
                 &[
                     &actor.principal.issuer,
@@ -470,6 +471,7 @@ impl PostgresStore {
                     &subject.map(|s|s.id.as_str()),
                     &subject.map(|s|s.version.as_str()),
                     &subject.map(|s|s.digest.as_str()),
+                    &query.marker.map(ReviewTaskMarker::as_str),
                 ],
             )
             .await?;
