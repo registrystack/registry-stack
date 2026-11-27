@@ -241,6 +241,9 @@ PATH = ["request.invalid"]
 CURSOR = ["cursor.expired", "cursor.invalid"]
 STORAGE = ["service.unavailable"]
 AUTHORITY = ["operation.not-authorized"]
+# An operation that asks the task grant's own status answers a grant that is
+# unexpired but has more than fifteen minutes left on the offline path.
+GRANT_LIFETIME = ["grant.lifetime-too-long"]
 IDEMPOTENCY = ["idempotency.expired", "idempotency.key-reused"]
 # An operation that resolves a caller-named offering against the deployed
 # policy answers for one the policy does not publish. The offering listing is
@@ -278,29 +281,29 @@ OPERATION_PROBLEMS = {
     + ["revision.mismatch", "precondition.failed", "resource.unavailable"],
     ("GET", "/v1/availability/explain"): EDGE + AUTHENTICATION + QUERY + STORAGE + OFFERING,
     ("GET", "/v1/operational/appointments"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
-    ("POST", "/v1/holds"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
+    ("POST", "/v1/holds"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME
     + OFFERING + ["service.unavailable"],
     # A release carries no caller-chosen key, so `idempotency.key-reused` is
     # not reachable: the key and the request hash are both the hold's own id.
-    ("DELETE", "/v1/holds/{hold_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY
+    ("DELETE", "/v1/holds/{hold_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + GRANT_LIFETIME
     + ["hold.released", "idempotency.expired", "service.unavailable"],
-    ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
+    ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME
     + OFFERING + ["hold.expired", "hold.released", "service.unavailable"],
     ("POST", "/v1/appointments/receipt"): EDGE + AUTHENTICATION + JSON_BODY + ["receipt.unresolved", "service.unavailable"],
     ("GET", "/v1/appointments"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
-    ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + STORAGE,
+    ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + GRANT_LIFETIME + STORAGE,
     # A reschedule resolves its offering from the appointment rather than from
     # the caller, so an unknown offering is operator state, not a refusal the
     # caller can read.
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): EDGE + AUTHENTICATION + PATH + JSON_BODY
-    + ADMISSION + IDEMPOTENCY + AUTHORITY + ["hold.released", "service.unavailable"],
+    + ADMISSION + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME + ["hold.released", "service.unavailable"],
     # Cancellation is guarded by the observed revision and the cutoff, never by
     # the policy revision, so it answers no admission refusal at all.
     ("POST", "/v1/appointments/{appointment_id}/cancel"): EDGE + AUTHENTICATION + PATH + JSON_BODY
-    + IDEMPOTENCY + AUTHORITY
+    + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME
     + ["cancellation.cutoff-passed", "hold.released", "revision.mismatch", "service.unavailable"],
     ("PUT", "/v1/appointments/{appointment_id}/attendance"): EDGE + AUTHENTICATION + PATH + JSON_BODY
-    + IDEMPOTENCY + AUTHORITY + ["revision.mismatch", "service.unavailable"],
+    + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME + ["revision.mismatch", "service.unavailable"],
     ("GET", "/v1/appointments/{appointment_id}/history"): EDGE + AUTHENTICATION + PATH + AUTHORITY + QUERY
     + CURSOR + STORAGE,
 }

@@ -26,6 +26,7 @@ pub const CAPACITY_EXHAUSTED_PROBLEM: &str = "capacity.exhausted";
 pub const CURSOR_EXPIRED_PROBLEM: &str = "cursor.expired";
 pub const CURSOR_INVALID_PROBLEM: &str = "cursor.invalid";
 pub const ELIGIBILITY_UNAVAILABLE_PROBLEM: &str = "eligibility.unavailable";
+pub const GRANT_LIFETIME_TOO_LONG_PROBLEM: &str = "grant.lifetime-too-long";
 pub const HOLD_EXPIRED_PROBLEM: &str = "hold.expired";
 pub const HOLD_RELEASED_PROBLEM: &str = "hold.released";
 pub const HORIZON_OUTSIDE_PROBLEM: &str = "horizon.outside";
@@ -63,6 +64,7 @@ pub enum ProblemCode {
     CursorExpired,
     CursorInvalid,
     EligibilityUnavailable,
+    GrantLifetimeTooLong,
     HoldExpired,
     HoldReleased,
     HookUnavailable,
@@ -101,6 +103,7 @@ impl ProblemCode {
         Self::CursorExpired,
         Self::CursorInvalid,
         Self::EligibilityUnavailable,
+        Self::GrantLifetimeTooLong,
         Self::HoldExpired,
         Self::HoldReleased,
         Self::HookUnavailable,
@@ -139,6 +142,7 @@ impl ProblemCode {
             Self::CursorExpired => CURSOR_EXPIRED_PROBLEM,
             Self::CursorInvalid => CURSOR_INVALID_PROBLEM,
             Self::EligibilityUnavailable => ELIGIBILITY_UNAVAILABLE_PROBLEM,
+            Self::GrantLifetimeTooLong => GRANT_LIFETIME_TOO_LONG_PROBLEM,
             Self::HoldExpired => HOLD_EXPIRED_PROBLEM,
             Self::HoldReleased => HOLD_RELEASED_PROBLEM,
             Self::HorizonOutside => HORIZON_OUTSIDE_PROBLEM,
@@ -195,7 +199,9 @@ impl ProblemCode {
         match self {
             Self::CursorInvalid | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
-            Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
+            Self::GrantLifetimeTooLong
+            | Self::OperationNotAuthorized
+            | Self::ProfileNotAuthorized => 403,
             Self::RequestNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::ReceiptUnresolved => 409,
@@ -236,6 +242,7 @@ impl ProblemCode {
             Self::CursorExpired => "Cursor expired",
             Self::CursorInvalid => "Cursor invalid",
             Self::EligibilityUnavailable => "Eligibility unavailable",
+            Self::GrantLifetimeTooLong => "Task grant lifetime too long",
             Self::HoldExpired => "Hold expired",
             Self::HoldReleased => "Hold released",
             Self::HookUnavailable => "Hook unavailable",
@@ -289,6 +296,9 @@ impl ProblemCode {
             Self::CursorInvalid => "The cursor is invalid for this request.",
             Self::EligibilityUnavailable => {
                 "A required eligibility check could not run. Retry; do not treat this as permission."
+            }
+            Self::GrantLifetimeTooLong => {
+                "The task grant has more than 900 seconds left before it expires. Present a task grant that expires within 900 seconds."
             }
             Self::HoldExpired => {
                 "The hold expired before confirmation. Its capacity is bookable again; start a new request."
@@ -368,7 +378,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 33);
+        assert_eq!(ProblemCode::ALL.len(), 34);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -434,6 +444,19 @@ mod tests {
     /// The request-edge family is Casework's, pinned one status per code, so
     /// the runtime's edge and every client agree on what a rejected request
     /// looks like.
+    #[test]
+    fn a_grant_with_too_much_lifetime_left_has_its_own_code_and_keeps_the_status() {
+        let code = ProblemCode::GrantLifetimeTooLong;
+        assert_eq!(code.code(), "grant.lifetime-too-long");
+        assert_eq!(code.http_status(), 403);
+        assert_eq!(
+            type_uri(code.code()),
+            format!("{SCHEDULING_PROBLEM_TYPE_BASE}grant/lifetime-too-long")
+        );
+        assert_eq!(code.title(), "Task grant lifetime too long");
+        assert!(code.detail().contains("900 seconds"));
+    }
+
     #[test]
     fn the_request_edge_family_pins_casework_s_statuses() {
         assert_eq!(ProblemCode::RequestInvalid.http_status(), 400);
