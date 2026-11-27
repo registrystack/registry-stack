@@ -473,7 +473,8 @@ Once any later request of the same producer and policy ID has been erased, Casew
 The `review-resumed-at-stage` history detail carries only `stageId`, without linking to the earlier request.
 Earlier approvals are not carried over.
 The staff who decided a stage of an earlier round, up to and including the returning stage, count as reviewers of that stage, so a later stage with `excludePreviousStageReviewers` keeps them out, as within one request, even after the earlier request is erased.
-A reviewer of the returning stage may review that stage again.The subject clock starts with a fresh budget.
+A reviewer of the returning stage may review that stage again.
+The subject clock starts with a fresh budget.
 Omitting `resubmission` preserves the policy digest.
 
 {/* Evidence: crates/registry-casework-core/src/review.rs ReviewNegativeDecisionMode;
