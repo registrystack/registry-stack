@@ -10,41 +10,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use registry_platform_httputil::BearerToken;
-use zeroize::Zeroizing;
+use serde_json::{Map, Value};
 
-/// The refresh token type the session holds. One alias is the whole boundary
-/// to the shared client's own type.
-pub type RefreshToken = HeldRefreshToken;
-
-/// A refresh token held for one audience: zeroized on drop, never printed.
-pub struct HeldRefreshToken(Zeroizing<String>);
-
-impl HeldRefreshToken {
-    #[must_use]
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(Zeroizing::new(value.into()))
-    }
-
-    /// The token text, for the one request that presents it to the issuer.
-    #[must_use]
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Clone for HeldRefreshToken {
-    fn clone(&self) -> Self {
-        Self::new(self.0.as_str())
-    }
-}
-
-impl fmt::Debug for HeldRefreshToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RefreshToken")
-            .finish_non_exhaustive()
-    }
-}
+/// The refresh token type the session holds: zeroized on drop, never printed.
+pub use registry_platform_httputil::client::RefreshToken;
 
 /// Why the issuer did not renew or revoke a token.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,6 +83,58 @@ impl<G: Grants> Grants for Arc<G> {
     }
 }
 
+/// One authorization code to redeem, with everything the redemption must bind
+/// it to.
+pub struct Redemption<'a> {
+    /// The kind of sign-in, which names the confidential client.
+    pub kind: &'a str,
+    pub code: &'a str,
+    /// The PKCE verifier of the authorization request.
+    pub verifier: &'a str,
+    pub redirect_uri: &'a str,
+    /// The audience the authorization request named.
+    pub resource: &'a str,
+    /// The nonce the ID token must carry.
+    pub nonce: &'a str,
+}
+
+/// What a redeemed code yields. The ID token was verified (signature, issuer,
+/// audience, expiry, nonce) before this value existed; it is not kept.
+pub struct Redeemed {
+    pub access_token: BearerToken,
+    pub expires_at: Instant,
+    pub refresh_token: Option<RefreshToken>,
+    /// The verified ID token's `sub`.
+    pub subject: String,
+    /// Every claim of the verified ID token.
+    pub claims: Map<String, Value>,
+}
+
+impl fmt::Debug for Redeemed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("Redeemed").finish_non_exhaustive()
+    }
+}
+
+/// Redeeming an authorization code and verifying the ID token it returns.
+/// [`GrantError::Refused`] covers a code the issuer refused and an ID token
+/// that failed verification.
+pub trait Redeemer: Send + Sync + 'static {
+    fn redeem(
+        &self,
+        redemption: &Redemption<'_>,
+    ) -> impl Future<Output = Result<Redeemed, GrantError>> + Send;
+}
+
+impl<G: Redeemer> Redeemer for Arc<G> {
+    fn redeem(
+        &self,
+        redemption: &Redemption<'_>,
+    ) -> impl Future<Output = Result<Redeemed, GrantError>> + Send {
+        (**self).redeem(redemption)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod fake;
 
@@ -123,7 +144,7 @@ mod tests {
 
     #[test]
     fn a_refresh_token_never_prints() {
-        let token = HeldRefreshToken::new("refresh-canary-value");
+        let token = RefreshToken::new("refresh-canary-value").expect("token");
         assert!(!format!("{token:?}").contains("canary"));
         let renewed = Renewed {
             access_token: BearerToken::new("access-canary-value").expect("token"),

@@ -68,7 +68,7 @@ impl FakeIssuer {
         (
             BearerToken::new(access).expect("token"),
             self.clock.now() + TOKEN_LIFETIME,
-            RefreshToken::new(refresh),
+            RefreshToken::new(refresh).expect("token"),
         )
     }
 
@@ -150,7 +150,7 @@ impl Grants for FakeIssuer {
             access_token: BearerToken::new(format!("access-{resource}-{family}-{generation}"))
                 .expect("token"),
             expires_at: self.clock.now() + TOKEN_LIFETIME,
-            refresh_token: Some(RefreshToken::new(rotated)),
+            refresh_token: Some(RefreshToken::new(rotated).expect("token")),
         })
     }
 
@@ -209,7 +209,7 @@ mod tests {
         let issuer = issuer();
         assert_eq!(
             issuer
-                .refresh("k", &RefreshToken::new("nope"), "api")
+                .refresh("k", &RefreshToken::new("nope").expect("token"), "api")
                 .await
                 .unwrap_err(),
             GrantError::Refused

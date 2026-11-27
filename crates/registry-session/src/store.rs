@@ -63,15 +63,32 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// A sign-in the service started and the issuer has not yet returned.
+/// A sign-in the service started and the issuer has not yet returned. A kind
+/// of sign-in with several audiences signs in once per audience, so the
+/// pending sign-in also carries what the earlier hops obtained.
 pub struct PendingSignIn {
     pub kind: String,
     /// The path the person returns to after sign-in.
     pub return_to: String,
+    /// The audience of each hop, in the order the hops run.
+    pub audiences: Vec<String>,
+    /// The index of the hop in flight.
+    pub hop: usize,
     pub state: Zeroizing<String>,
     pub nonce: Zeroizing<String>,
     pub verifier: Zeroizing<String>,
+    /// The person's identifier and allow-listed claims, learned at hop 0.
+    pub person: Option<Person>,
+    /// What the hops already finished obtained.
+    pub grants: Vec<AudienceGrant>,
     expires_at: Option<Instant>,
+}
+
+/// Who the first hop of a sign-in established.
+#[derive(Clone, Debug)]
+pub struct Person {
+    pub subject: String,
+    pub claims: Map<String, Value>,
 }
 
 impl PendingSignIn {
@@ -79,6 +96,7 @@ impl PendingSignIn {
     pub fn new(
         kind: String,
         return_to: String,
+        audiences: Vec<String>,
         state: String,
         nonce: String,
         verifier: String,
@@ -86,11 +104,43 @@ impl PendingSignIn {
         Self {
             kind,
             return_to,
+            audiences,
+            hop: 0,
             state: Zeroizing::new(state),
             nonce: Zeroizing::new(nonce),
             verifier: Zeroizing::new(verifier),
+            person: None,
+            grants: Vec::new(),
             expires_at: None,
         }
+    }
+
+    /// The audience of the hop in flight.
+    #[must_use]
+    pub fn audience(&self) -> Option<&str> {
+        self.audiences.get(self.hop).map(String::as_str)
+    }
+
+    /// Whether the hop in flight is the last one.
+    #[must_use]
+    pub fn is_last_hop(&self) -> bool {
+        self.hop + 1 >= self.audiences.len()
+    }
+
+    /// Record what the hop in flight obtained and move to the next hop with a
+    /// fresh `state`, `nonce` and `verifier`.
+    pub fn advance(
+        &mut self,
+        grant: AudienceGrant,
+        state: String,
+        nonce: String,
+        verifier: String,
+    ) {
+        self.grants.push(grant);
+        self.hop += 1;
+        self.state = Zeroizing::new(state);
+        self.nonce = Zeroizing::new(nonce);
+        self.verifier = Zeroizing::new(verifier);
     }
 }
 
@@ -99,6 +149,7 @@ impl fmt::Debug for PendingSignIn {
         formatter
             .debug_struct("PendingSignIn")
             .field("kind", &self.kind)
+            .field("hop", &self.hop)
             .finish_non_exhaustive()
     }
 }
@@ -158,6 +209,24 @@ impl Session {
         }
     }
 
+    /// The kind of sign-in the session was opened by.
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// The issuer that identified the person.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// The person's identifier at the issuer.
+    #[must_use]
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+
     /// Every refresh token the session holds, for revocation at sign-out.
     #[must_use]
     pub fn refresh_tokens(&self) -> Vec<RefreshToken> {
@@ -197,8 +266,8 @@ pub struct Access {
 #[derive(Debug, Eq, PartialEq)]
 pub struct Exhausted;
 
-/// The person's sessions an insert ended to keep their share, held so a
-/// sign-in that fails afterwards can put them back.
+/// The person's sessions an insert ended to keep their share. They stay
+/// ended: the caller revokes their refresh tokens at the issuer.
 #[must_use]
 pub struct Replaced(Vec<([u8; 32], Session)>);
 
@@ -221,6 +290,12 @@ impl Replaced {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// The sessions the insert ended, whose refresh tokens are still live at
+    /// the issuer until the caller revokes them.
+    pub fn sessions(&self) -> impl Iterator<Item = &Session> {
+        self.0.iter().map(|(_, session)| session)
     }
 }
 
@@ -289,8 +364,8 @@ impl Store {
     /// their expired sessions go, and at [`MAXIMUM_SESSIONS_PER_PERSON`] their
     /// oldest one ends. Only then is the store's own bound checked, so a person
     /// signing in again never takes another slot. A refused insert changes
-    /// nothing; an admitted one returns the sessions it ended, for
-    /// [`Store::restore`].
+    /// nothing; an admitted one returns the sessions it ended. Insert is the last
+    /// fallible step of a sign-in, because nothing brings an ended session back.
     pub fn insert(&self, cookie: &str, session: Session) -> Result<Replaced, Exhausted> {
         let mut session = session;
         let mut sessions = lock(&self.sessions);
@@ -323,12 +398,6 @@ impl Store {
         session.admitted = self.admitted.fetch_add(1, Ordering::Relaxed);
         sessions.insert(digest(cookie), session);
         Ok(Replaced(replaced))
-    }
-
-    /// Put back the sessions an insert replaced, once the session that
-    /// replaced them has been removed.
-    pub fn restore(&self, replaced: Replaced) {
-        lock(&self.sessions).extend(replaced.0);
     }
 
     /// The live session behind `cookie`. A session past its absolute deadline
@@ -374,9 +443,15 @@ impl Store {
     }
 
     /// Store a renewal for `audience`: the new access token and expiry, and
-    /// the rotated refresh token when the issuer rotated it. Returns `false`
-    /// when the session or the audience is gone.
-    pub fn apply_renewed(&self, cookie: &str, audience: &str, renewed: Renewed) -> bool {
+    /// the rotated refresh token when the issuer rotated it. When the session or
+    /// the audience is gone the renewal is handed back, so the caller can
+    /// revoke the rotated refresh token it carries.
+    pub fn apply_renewed(
+        &self,
+        cookie: &str,
+        audience: &str,
+        renewed: Renewed,
+    ) -> Result<(), Renewed> {
         let mut sessions = lock(&self.sessions);
         let Some(grant) = sessions.get_mut(&digest(cookie)).and_then(|session| {
             session
@@ -384,14 +459,21 @@ impl Store {
                 .iter_mut()
                 .find(|grant| grant.audience == audience)
         }) else {
-            return false;
+            return Err(renewed);
         };
         grant.access_token = renewed.access_token;
         grant.expires_at = renewed.expires_at;
         if renewed.refresh_token.is_some() {
             grant.refresh_token = renewed.refresh_token;
         }
-        true
+        Ok(())
+    }
+
+    /// The issuer and subject of the live session's person.
+    pub fn person(&self, cookie: &str) -> Option<(String, String)> {
+        let sessions = lock(&self.sessions);
+        let session = sessions.get(&digest(cookie))?;
+        (session.deadline > self.now()).then(|| (session.issuer.clone(), session.subject.clone()))
     }
 
     /// The allow-listed who-am-I claims of the live session.
@@ -428,6 +510,7 @@ mod tests {
         PendingSignIn::new(
             "citizen".to_owned(),
             "/apply/".to_owned(),
+            vec!["urn:person".to_owned(), "urn:other".to_owned()],
             "state".to_owned(),
             "nonce".to_owned(),
             "verifier".to_owned(),
@@ -444,7 +527,7 @@ mod tests {
             audience: audience.to_owned(),
             access_token: BearerToken::new(access).expect("token"),
             expires_at,
-            refresh_token: refresh.map(RefreshToken::new),
+            refresh_token: refresh.map(|token| RefreshToken::new(token).expect("token")),
         }
     }
 
@@ -496,6 +579,28 @@ mod tests {
         assert!(!tokens_match(&token, &token[..42]));
         assert!(!tokens_match(&token[..42], &token));
         assert!(!tokens_match("", &token));
+    }
+
+    #[test]
+    fn a_pending_sign_in_advances_hop_by_hop_with_fresh_secrets() {
+        let mut pending = pending();
+        assert_eq!(pending.audience(), Some("urn:person"));
+        assert!(!pending.is_last_hop());
+        let now = Instant::now();
+        pending.advance(
+            grant("urn:person", "access-person", now, Some("refresh-person")),
+            "state-two".to_owned(),
+            "nonce-two".to_owned(),
+            "verifier-two".to_owned(),
+        );
+        assert_eq!(pending.hop, 1);
+        assert_eq!(pending.audience(), Some("urn:other"));
+        assert!(pending.is_last_hop());
+        assert_eq!(pending.grants.len(), 1);
+        assert_eq!(pending.state.as_str(), "state-two");
+        assert_eq!(pending.nonce.as_str(), "nonce-two");
+        assert_eq!(pending.verifier.as_str(), "verifier-two");
+        assert!(!format!("{pending:?}").contains("state-two"));
     }
 
     #[test]
@@ -602,9 +707,11 @@ mod tests {
         let renewed = |refresh: Option<&str>| Renewed {
             access_token: BearerToken::new("access-new").expect("token"),
             expires_at: later,
-            refresh_token: refresh.map(RefreshToken::new),
+            refresh_token: refresh.map(|token| RefreshToken::new(token).expect("token")),
         };
-        assert!(store.apply_renewed("a", "urn:person", renewed(Some("refresh-new"))));
+        assert!(store
+            .apply_renewed("a", "urn:person", renewed(Some("refresh-new")))
+            .is_ok());
         let access = store.access("a", "urn:person").expect("token");
         assert_eq!(
             access.token.authorization_header_value(),
@@ -619,7 +726,9 @@ mod tests {
             "refresh-new"
         );
         // An issuer that does not rotate leaves the held refresh token alone.
-        assert!(store.apply_renewed("a", "urn:person", renewed(None)));
+        assert!(store
+            .apply_renewed("a", "urn:person", renewed(None))
+            .is_ok());
         assert_eq!(
             store
                 .refresh_token("a", "urn:person")
@@ -627,8 +736,18 @@ mod tests {
                 .expose(),
             "refresh-new"
         );
-        assert!(!store.apply_renewed("a", "urn:missing", renewed(None)));
-        assert!(!store.apply_renewed("unknown", "urn:person", renewed(None)));
+        assert!(store
+            .apply_renewed("a", "urn:missing", renewed(None))
+            .is_err());
+        // A renewal for a session that is gone comes back with its rotated
+        // refresh token.
+        let handed_back = store
+            .apply_renewed("unknown", "urn:person", renewed(Some("refresh-rotated")))
+            .expect_err("the session is gone");
+        assert_eq!(
+            handed_back.refresh_token.expect("rotated").expose(),
+            "refresh-rotated"
+        );
     }
 
     #[test]
@@ -709,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn a_restore_puts_back_the_sessions_an_insert_ended() {
+    fn a_session_an_insert_ended_stays_ended_and_is_handed_over_for_revocation() {
         let (clock, store) = store(8, 1);
         for index in 0..MAXIMUM_SESSIONS_PER_PERSON {
             let _ = store
@@ -723,9 +842,12 @@ mod tests {
             .insert("new", session_for(&clock, "https://id.example", "a"))
             .expect("replaces the oldest");
         assert!(store.live("a0").is_none());
+        assert_eq!(replaced.sessions().count(), 1);
+        assert!(replaced
+            .sessions()
+            .all(|session| !session.refresh_tokens().is_empty()));
         store.remove("new").expect("the new session");
-        store.restore(replaced);
-        assert!(store.live("a0").is_some());
+        assert!(store.live("a0").is_none());
     }
 
     #[test]
@@ -760,7 +882,8 @@ mod tests {
         let (clock, store) = store(4, 1);
         let mut session = session_for(&clock, "https://id.example", "subject-canary");
         session.audiences[0].access_token = BearerToken::new("access-canary").expect("token");
-        session.audiences[0].refresh_token = Some(RefreshToken::new("refresh-canary"));
+        session.audiences[0].refresh_token =
+            Some(RefreshToken::new("refresh-canary").expect("token"));
         let printed = format!("{session:?} {:?}", session.audiences[0]);
         assert!(!printed.contains("canary"), "{printed}");
         let printed = format!(
@@ -768,6 +891,7 @@ mod tests {
             PendingSignIn::new(
                 "citizen".to_owned(),
                 "/x/".to_owned(),
+                vec!["urn:x".to_owned()],
                 "state-canary".to_owned(),
                 "nonce-canary".to_owned(),
                 "verifier-canary".to_owned()

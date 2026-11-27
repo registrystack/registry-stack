@@ -20,13 +20,14 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode}
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
-use registry_platform_httpsec::Problem;
 use registry_platform_httputil::BearerToken;
 use zeroize::Zeroizing;
 
 use crate::config::{ModuleConfig, Route, RuntimeConfig};
 use crate::grants::{GrantError, Grants};
+use crate::journal::{Action, Journal, Outcome};
 use crate::store::{well_formed_token, Store};
+use crate::wire::{problem, ProblemKind, ANSWER_MARKER_HEADER, ANSWER_MARKER_VALUE};
 
 /// The path prefix the gateway adds to the original path.
 pub const CHECK_PREFIX: &str = "/check";
@@ -77,15 +78,15 @@ impl Decision {
                         .expect("a percent-encoded return path is header-safe"),
                 );
                 headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                headers.insert(
+                    HeaderName::from_static(ANSWER_MARKER_HEADER),
+                    HeaderValue::from_static(ANSWER_MARKER_VALUE),
+                );
                 response
             }
-            Self::Refused => problem(StatusCode::FORBIDDEN, "refused", "Forbidden"),
-            Self::Expired => problem(StatusCode::UNAUTHORIZED, "expired", "Session expired"),
-            Self::Unavailable => problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "unavailable",
-                "Session service unavailable",
-            ),
+            Self::Refused => problem(ProblemKind::Refused, StatusCode::FORBIDDEN),
+            Self::Expired => problem(ProblemKind::Expired, StatusCode::UNAUTHORIZED),
+            Self::Unavailable => problem(ProblemKind::Unavailable, StatusCode::SERVICE_UNAVAILABLE),
         }
     }
 
@@ -101,22 +102,6 @@ impl Decision {
     }
 }
 
-/// A no-store problem with the fixed `session.<suffix>` code. Nothing from the
-/// request is echoed.
-fn problem(status: StatusCode, suffix: &str, title: &str) -> Response {
-    let mut response = Problem::new(
-        &format!("https://id.registrystack.org/problems/registry-platform/session/{suffix}"),
-        title,
-        status,
-    )
-    .with_extra("code", serde_json::Value::from(format!("session.{suffix}")))
-    .into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
-}
-
 /// What a spawned renewal reports back to the check that started it.
 enum Renewal {
     Token(BearerToken),
@@ -128,6 +113,8 @@ struct Inner<G> {
     config: Arc<RuntimeConfig>,
     store: Arc<Store>,
     grants: G,
+    /// Where a session ended by a refused renewal is recorded.
+    journal: Option<Arc<Journal>>,
 }
 
 /// Decides each request the gateway forwards.
@@ -151,8 +138,19 @@ impl<G: Grants> Checker<G> {
                 config,
                 store,
                 grants,
+                journal: None,
             }),
         }
+    }
+
+    /// Record sessions that end because the issuer refused their renewal.
+    /// Only call this before the checker is cloned.
+    #[must_use]
+    pub fn with_journal(mut self, journal: Arc<Journal>) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.journal = Some(journal);
+        }
+        self
     }
 
     /// Decide the request the gateway forwarded: `target` is the path with
@@ -230,6 +228,10 @@ impl<G: Grants> Checker<G> {
             return Decision::Refused;
         };
         let Some(access) = inner.store.access(cookie, audience) else {
+            if inner.store.live(cookie).is_none() {
+                // The session ended between the two reads.
+                return Decision::Expired;
+            }
             tracing::warn!(
                 module = module.id.as_str(),
                 "a session holds no token for the module audience"
@@ -298,14 +300,27 @@ async fn renew<G: Grants>(
     match inner.grants.refresh(&kind, &refresh_token, &audience).await {
         Ok(renewed) => {
             let token = renewed.access_token.clone();
-            if store.apply_renewed(&cookie, &audience, renewed) {
-                Renewal::Token(token)
-            } else {
-                Renewal::Expired
+            match store.apply_renewed(&cookie, &audience, renewed) {
+                Ok(()) => Renewal::Token(token),
+                Err(gone) => {
+                    // The session ended during the renewal. The rotated
+                    // refresh token would stay live at the issuer, so it is
+                    // revoked here.
+                    if let Some(rotated) = gone.refresh_token {
+                        if inner.grants.revoke(&kind, &rotated).await.is_err() {
+                            tracing::warn!(
+                                "a rotated refresh token could not be revoked at the issuer"
+                            );
+                        }
+                    }
+                    Renewal::Expired
+                }
             }
         }
         Err(GrantError::Refused) => {
-            store.remove(&cookie);
+            if let Some(session) = store.remove(&cookie) {
+                record_ended(&inner, &session).await;
+            }
             Renewal::Expired
         }
         Err(GrantError::Unavailable) => {
@@ -318,6 +333,29 @@ async fn renew<G: Grants>(
     }
 }
 
+/// Audit a session the issuer ended. The session is already gone, so a
+/// failure to record it is logged, never hidden behind an answer.
+async fn record_ended<G>(inner: &Inner<G>, session: &crate::store::Session) {
+    let Some(journal) = &inner.journal else {
+        return;
+    };
+    let Ok(person) = journal.person_at(session.issuer(), session.subject()) else {
+        tracing::error!("a person pseudonym could not be derived");
+        return;
+    };
+    if let Err(error) = journal
+        .record(
+            Action::SessionEnded,
+            session.kind(),
+            Some(&person),
+            Outcome::Refused,
+        )
+        .await
+    {
+        tracing::error!(%error, "a session end could not be audited");
+    }
+}
+
 fn sign_in(original: &str) -> Decision {
     Decision::SignIn(format!(
         "{SIGN_IN_PATH}?return={}",
@@ -327,7 +365,7 @@ fn sign_in(original: &str) -> Decision {
 
 /// The one value of the named header, or `None` when it is absent. A repeated
 /// or non-text header is `Err`.
-fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, ()> {
+pub(crate) fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, ()> {
     let mut values = headers.get_all(name).iter();
     let Some(first) = values.next() else {
         return Ok(None);
@@ -350,7 +388,7 @@ fn same_origin_page_call(headers: &HeaderMap, origin: &str) -> bool {
 
 /// The one value of cookie `name` a request presents, when it presents
 /// exactly one value of the shape this service issues.
-fn session_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+pub(crate) fn session_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut found = None;
     for value in headers.get_all(header::COOKIE) {
         let Ok(value) = value.to_str() else {
@@ -380,7 +418,7 @@ fn strip_check_prefix(target: &str) -> Option<&str> {
 
 /// Whether `path` (no query) is safe to match: no dot segment, empty segment,
 /// backslash, or percent-encoded `/`, `\` or `.`.
-fn clean_path(path: &str) -> bool {
+pub(crate) fn clean_path(path: &str) -> bool {
     let Some(segments) = path.strip_prefix('/') else {
         return false;
     };
@@ -401,7 +439,7 @@ fn clean_path(path: &str) -> bool {
 }
 
 /// Percent-encode everything but the RFC 3986 unreserved characters.
-fn percent_encode(value: &str) -> String {
+pub(crate) fn percent_encode(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
@@ -610,6 +648,42 @@ mod tests {
         }
     }
 
+    /// A module route is called by scripts that cannot follow a sign-in
+    /// redirect, so it answers a problem, never a 3xx.
+    #[tokio::test]
+    async fn a_module_route_never_redirects() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("citizen");
+        let header = harness.cookie_header(&cookie);
+        for method in ["GET", "POST", "PUT", "DELETE"] {
+            for path in ["/check/api/registry/x", "/check/api/casework/x"] {
+                let anonymous = harness.call(method, path, &[]).await;
+                let signed_in = harness.call(method, path, &[("cookie", &header)]).await;
+                for reply in [anonymous, signed_in] {
+                    assert!(!reply.status.is_redirection(), "{method} {path}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_redirect_carries_the_answer_marker_and_an_allow_does_not() {
+        let harness = Harness::new();
+        let redirect = harness.call("GET", "/check/apply/", &[]).await;
+        assert_eq!(redirect.status, StatusCode::FOUND);
+        assert_eq!(
+            redirect.header(ANSWER_MARKER_HEADER),
+            Some(ANSWER_MARKER_VALUE)
+        );
+        let cookie = harness.sign_in("citizen");
+        let header = harness.cookie_header(&cookie);
+        let allowed = harness
+            .call("GET", "/check/api/registry/x", &[("cookie", &header)])
+            .await;
+        assert_eq!(allowed.status, StatusCode::OK);
+        assert!(allowed.header(ANSWER_MARKER_HEADER).is_none());
+    }
+
     fn assert_problem(reply: &Reply, status: StatusCode, code: &str) {
         assert_eq!(reply.status, status);
         assert_eq!(
@@ -622,7 +696,15 @@ mod tests {
         let body = reply.json();
         assert_eq!(body["code"], code);
         assert_eq!(body["status"], status.as_u16());
-        assert!(body["type"].as_str().is_some_and(|value| !value.is_empty()));
+        let suffix = code.strip_prefix("session.").expect("a session code");
+        assert_eq!(
+            body["type"],
+            format!("https://id.registrystack.org/problems/registry-platform/session/{suffix}")
+        );
+        assert_eq!(
+            reply.header(ANSWER_MARKER_HEADER),
+            Some(ANSWER_MARKER_VALUE)
+        );
         assert!(body["title"]
             .as_str()
             .is_some_and(|value| !value.is_empty()));
@@ -1102,6 +1184,49 @@ mod tests {
         assert!(tokens.iter().all(|token| *token == tokens[0]));
         assert_ne!(tokens[0], old);
         assert_eq!(tokens[0], harness.bearer(&cookie, PERSON));
+    }
+
+    #[tokio::test]
+    async fn a_session_ended_during_a_renewal_has_its_rotated_token_revoked() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("citizen");
+        let original = harness
+            .store
+            .refresh_token(&cookie, PERSON)
+            .expect("refresh");
+        harness.clock.advance(Duration::from_secs(250));
+        harness.issuer.close_gate();
+        let request = Request::builder()
+            .uri("/check/api/registry/records")
+            .header("cookie", harness.cookie_header(&cookie))
+            .body(Body::empty())
+            .expect("request");
+        let router = harness.router.clone();
+        let call = tokio::spawn(async move { router.oneshot(request).await.expect("response") });
+        harness.issuer.refresh_started().await;
+        assert!(harness.store.remove(&cookie).is_some());
+        harness.issuer.open_gate();
+        let reply = reply(call.await.expect("task")).await;
+        assert_problem(&reply, StatusCode::UNAUTHORIZED, "session.expired");
+        assert_eq!(harness.issuer.refresh_calls(), 1);
+        assert_eq!(harness.issuer.revoke_calls(), 1);
+        assert!(harness.issuer.family_revoked(&original));
+    }
+
+    #[tokio::test]
+    async fn a_session_removed_between_the_two_store_reads_is_expired_not_forbidden() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("citizen");
+        let checker = Checker::new(
+            harness.config.clone(),
+            harness.store.clone(),
+            harness.issuer.clone(),
+        );
+        let live = harness.store.live(&cookie).expect("live");
+        harness.store.remove(&cookie);
+        let module = &harness.config.modules[0];
+        let decision = checker.module_call(module, &cookie, &live).await;
+        assert!(matches!(decision, Decision::Expired), "{decision:?}");
     }
 
     #[tokio::test]
