@@ -340,6 +340,12 @@ fn install_deployment_constraints(schema: &mut Value) {
         "/$defs/SessionApp/properties/products",
         json!({"minItems": 1, "maxItems": deployment::MAXIMUM_SESSION_PRODUCTS}),
     );
+    // Any absolute URI, as the reader accepts: not only http or https.
+    install_bounds(
+        schema,
+        "/properties/personAudience",
+        json!({"pattern": RESOURCE_PATTERN, "maxLength": 4096}),
+    );
     install_bounds(
         schema,
         "/$defs/SessionApp/properties/postLogoutRedirectUris",
@@ -633,6 +639,27 @@ mod tests {
         // The reader needs the key file beside the example only at generation
         // time; reading the document alone does not open it.
         assert!(reads_deployment("example.yaml", text.as_bytes()));
+    }
+
+    #[test]
+    fn the_person_audience_is_any_absolute_uri_in_schema_and_reader() {
+        for (audience, accepted) in [
+            ("urn:registry:person", true),
+            ("https://id.registry.example/person", true),
+            ("not a uri", false),
+            ("urn:registry:person#fragment", false),
+            ("person", false),
+        ] {
+            let mut document = identity_example("identity-deployment.yaml");
+            document["personAudience"] = Value::String(audience.to_owned());
+            identity_judged_alike(
+                IDENTITY_DEPLOYMENT_SCHEMA_FILE,
+                reads_deployment,
+                &document,
+                accepted,
+                audience,
+            );
+        }
     }
 
     #[test]

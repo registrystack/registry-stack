@@ -892,16 +892,17 @@ pub fn merge(documents: Vec<IdentityFacts>) -> Result<MergedFacts, ToolingError>
 
 /// The product that always keeps its own audience.
 const CASEWORK: &str = "casework";
-/// The only products that may share the person audience: the ones a person
-/// calls from a page.
 /// The one member that may check task grants.
 const REGISTER: &str = "breg";
+/// The only products that may share the person audience: the ones a person
+/// calls from a page.
 const PERSON_AUDIENCE_PRODUCTS: [&str; 2] = ["breg", "documents"];
 
 /// [`merge`], where the products whose audience is `person_audience` may
 /// share it. Each such member must pass the membership checks: it is one of
 /// [`PERSON_AUDIENCE_PRODUCTS`], states no exchange profile and no
-/// institutional-grant assertion issuer, lists its clients, and states no
+/// institutional-grant assertion issuer unless it is the register, lists its
+/// clients, and states no
 /// scope another member states. No exchange may name the person audience as
 /// its bootstrap resource, and a declared person audience needs a member.
 /// Every other shared audience is refused.
@@ -949,7 +950,15 @@ pub fn merge_with_person_audience(
             }
         }
     }
-    let mut members = 0;
+    if person_audience
+        .is_some_and(|audience| documents.iter().all(|facts| facts.audience != audience))
+    {
+        return Err(refuse(
+            "identity.person-audience.unused",
+            "no product's facts state the declared personAudience as their audience, so it is a typo or no product shares it. Correct personAudience or the products' audience.",
+            "deployment/personAudience".to_owned(),
+        ));
+    }
     let mut audiences = BTreeSet::new();
     let mut member_scopes = BTreeSet::new();
     let mut issuer_urls: BTreeMap<String, String> = BTreeMap::new();
@@ -971,7 +980,6 @@ pub fn merge_with_person_audience(
         }
         let member = person_audience == Some(facts.audience.as_str());
         if member {
-            members += 1;
             check_person_member(&facts, &location, &mut member_scopes)?;
         }
         if !member && !audiences.insert(facts.audience.clone()) {
@@ -1035,13 +1043,6 @@ pub fn merge_with_person_audience(
                 claims: facts.claims,
             },
         );
-    }
-    if members == 0 && person_audience.is_some() {
-        return Err(refuse(
-            "identity.person-audience.unused",
-            "no product's audience is the declared personAudience. Correct personAudience or the products' audience.",
-            "deployment/personAudience".to_owned(),
-        ));
     }
     Ok(merged)
 }

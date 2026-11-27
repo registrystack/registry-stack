@@ -249,10 +249,6 @@ pub struct IdentityDeployment {
     /// The audience that the products a person calls from a page may share
     /// (an absolute URI). Omitted: every product keeps its own audience.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
-    )]
     pub person_audience: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub users: Vec<User>,

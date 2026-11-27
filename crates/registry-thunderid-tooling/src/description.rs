@@ -553,9 +553,10 @@ impl IssuerDescription {
                 return refuse("local browser application identity, audience, redirect or attributes are invalid");
             }
             if let Some(session) = &app.session {
-                if development
-                    || session.audiences.first() != Some(&app.audience)
-                    || session.audiences.len() > 8
+                if development {
+                    return refuse("a development session has no session application");
+                }
+                if session.audiences.first() != Some(&app.audience)
                     || !all_distinct(&session.audiences)
                     || session
                         .audiences
@@ -1241,7 +1242,12 @@ mod tests {
             app.origin = "http://127.0.0.1:3000".into();
             app.redirect_uris = vec!["http://127.0.0.1:3000/cb".into()];
         }
-        assert!(development.validate().is_err());
+        assert!(matches!(
+            development.validate(),
+            Err(ToolingError::InvalidDescription {
+                reason: "a development session has no session application"
+            })
+        ));
     }
 
     #[test]
@@ -1263,6 +1269,11 @@ mod tests {
         assert!(refused(&|d| {
             let first = d.interactive_applications[0].audience.clone();
             session_mut(d).audiences = vec![first.clone(), first];
+        }));
+        // A second audience that names no resource server.
+        assert!(refused(&|d| {
+            let first = d.interactive_applications[0].audience.clone();
+            session_mut(d).audiences = vec![first, "urn:not-a-resource-server".into()];
         }));
         assert!(refused(&|d| session_mut(d).audiences.clear()));
         assert!(refused(&|d| session_mut(d)

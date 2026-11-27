@@ -928,61 +928,53 @@ fn check_permission_bound(
     }
 }
 
-/// On the person audience a user's tokens carry the user's own permissions,
-/// whichever client signed them in, and a product picks the access profile
-/// from the client id. Refuse a user whose grants already hold every scope
-/// of a profile that a client reaching them selects but who is not granted
-/// that profile: signing in through that client would resolve to it.
-fn check_person_selection(
+/// On the person audience every member's tokens carry the same audience, and
+/// a product picks the access profile from the client id. A profile that an
+/// interactive client selects must therefore state a scope that no other
+/// profile of the product states: otherwise a token another application
+/// obtained for another profile would also resolve to this one. The rule
+/// needs no user model, so it holds for every user and user type.
+fn check_person_profiles(
     findings: &mut Findings<'_>,
     facts: &MergedFacts,
     person_audience: &str,
-    pointer: &str,
-    grants: &[Grant],
-    granted: &Granted<'_>,
-    reaching: &dyn Fn(&str) -> Vec<String>,
+    interactive: &[(String, &str)],
 ) {
     for (name, product) in facts
         .products
         .iter()
         .filter(|(_, product)| product.audience == person_audience)
     {
-        let held: BTreeSet<&str> = granted
-            .iter()
-            .filter(|(granted_product, profile)| {
-                granted_product == name && profile.exchange.is_none()
-            })
-            .flat_map(|(_, profile)| profile.scopes.iter().map(String::as_str))
-            .collect();
-        let Some(grant) = grants.iter().position(|grant| &grant.product == name) else {
-            continue;
-        };
-        let clients = reaching(name);
         for profile in product.access_profiles.values() {
             let Some(selected) = &profile.requester_clients else {
                 continue;
             };
-            let is_granted = granted.iter().any(|(granted_product, held_profile)| {
-                granted_product == name && held_profile.id == profile.id
-            });
+            let Some((pointer, _)) = interactive
+                .iter()
+                .find(|(_, client)| selected.iter().any(|named| named == client))
+            else {
+                continue;
+            };
+            let others: BTreeSet<&String> = product
+                .access_profiles
+                .values()
+                .filter(|other| other.id != profile.id)
+                .flat_map(|other| other.scopes.iter())
+                .collect();
             if profile.exchange.is_some()
                 || profile.scopes.is_empty()
-                || is_granted
-                || !profile
-                    .scopes
-                    .iter()
-                    .all(|scope| held.contains(scope.as_str()))
-                || !clients.iter().any(|client| {
-                    selected.contains(client) && product.allowed_clients.admits(client)
-                })
+                || profile.scopes.iter().any(|scope| !others.contains(scope))
             {
                 continue;
             }
             findings.error(
-                &format!("{pointer}/grants/{grant}"),
-                "identity.person-audience.client-selects-ungranted-profile",
-                "a client that signs this user in selects an access profile the user is not granted, whose scopes the user already holds",
-                "Grant the user that profile too, give the products' profiles distinct scopes, or remove the client from the profile's requesterClients.",
+                pointer,
+                "identity.person-audience.profile-without-own-scope",
+                &format!(
+                    "the {name} access profile {} is selected by this application but states no scope that another profile of the product lacks, so a token obtained for another profile would also resolve to it",
+                    profile.id
+                ),
+                "Give the profile a scope of its own, so no other profile's token carries all of it.",
             );
         }
     }
@@ -1061,15 +1053,46 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         .map(|source| facts_file::read(source.label, source.bytes))
         .collect::<Result<Vec<_>, _>>()?;
     // The deployment declares the audience that products may share, so it is
-    // decoded before the facts merge. Its checks run after the merge, so the
-    // facts' refusal still comes first, and a refused member never hides the
-    // declared audience.
+    // decoded before the facts merge. A refusal of the facts and one of the
+    // deployment are reported together.
     let decoded = deployment_file::decode(inputs.deployment.label, inputs.deployment.bytes);
     let person_audience = decoded
         .as_ref()
         .ok()
-        .and_then(|decoded| decoded.value.person_audience.as_deref());
-    let facts = facts_file::merge_with_person_audience(documents, person_audience)?;
+        .and_then(|decoded| decoded.value.person_audience.clone());
+    let checked = decoded.and_then(deployment_file::check_decoded);
+    let facts = match facts_file::merge_with_person_audience(documents, person_audience.as_deref())
+    {
+        Ok(facts) => facts,
+        Err(ToolingError::IdentityRefused {
+            code,
+            message,
+            location,
+        }) => {
+            return Err(match checked {
+                Ok(_) => ToolingError::IdentityRefused {
+                    code,
+                    message,
+                    location,
+                },
+                Err(ToolingError::FileRefused {
+                    what,
+                    fix,
+                    mut report,
+                }) => {
+                    report.push(Diagnostic::error(
+                        code,
+                        location,
+                        message,
+                        "Correct the products' identity facts, or the deployment file member the location names.",
+                    ));
+                    ToolingError::FileRefused { what, fix, report }
+                }
+                Err(other) => other,
+            });
+        }
+        Err(other) => return Err(other),
+    };
     if !https_url(&facts.issuer) {
         return Err(ToolingError::IdentityRefused {
             code: "identity.facts.issuer-not-https",
@@ -1077,7 +1100,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             location: "facts/issuer".to_owned(),
         });
     }
-    let (deployment, document) = deployment_file::check_decoded(decoded?)?;
+    let (deployment, document) = checked?;
     let mut findings = Findings {
         document: &document,
         found: Vec::new(),
@@ -1200,6 +1223,23 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
     // receipt: its products and the audiences it fetches tokens for.
     let mut session_receipts: BTreeMap<String, Value> = BTreeMap::new();
 
+    if let Some(person) = deployment.person_audience.as_deref() {
+        let interactive: Vec<(String, &str)> = deployment
+            .browser_apps
+            .iter()
+            .enumerate()
+            .map(|(index, app)| (format!("/browserApps/{index}"), app.id.as_str()))
+            .chain(
+                deployment
+                    .session_apps
+                    .iter()
+                    .enumerate()
+                    .map(|(index, app)| (format!("/sessionApps/{index}"), app.id.as_str())),
+            )
+            .collect();
+        check_person_profiles(&mut findings, &facts, person, &interactive);
+    }
+
     for (index, client) in deployment.clients.iter().enumerate() {
         let pointer = format!("/clients/{index}");
         let reaching = |_: &str| vec![client.id.clone()];
@@ -1261,6 +1301,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             .collect();
         let agent_id = local::derived_uuid(&format!("{sid}:machine:{}", client.id));
         let mut role_permissions = permissions(&description, &facts, &granted);
+        check_permission_bound(&mut findings, &pointer, &role_permissions);
         let mut token_exchange = None;
         if !exchanges.is_empty() && client.side != Some(Side::Registry) {
             findings.error(
@@ -1313,6 +1354,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             assigned_users: vec![],
             assigned_applications: vec![],
         });
+        let holds_exchange = token_exchange.is_some();
         description.machine_clients.push(MachineClient {
             agent_id: agent_id.clone(),
             name: format!("Client {}", client.id),
@@ -1324,10 +1366,13 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             access_token_lifetime_seconds: 300,
             token_exchange,
         });
-        identities.insert(
-            client.id.clone(),
-            json!({"kind": "machine", "sub": agent_id}),
-        );
+        let mut identity = json!({"kind": "machine", "sub": agent_id});
+        if holds_exchange {
+            // Only a client declaring `side: registry` reaches here.
+            identity["exchange"] = json!(true);
+            identity["side"] = json!("registry");
+        }
+        identities.insert(client.id.clone(), identity);
     }
 
     for user_type in &deployment.user_types {
@@ -1393,11 +1438,13 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 token_attributes,
                 session: None,
             });
+        let role_permissions = permissions(&description, &facts, &granted);
+        check_permission_bound(&mut findings, &pointer, &role_permissions);
         description.roles.push(Role {
             id: local::derived_uuid(&format!("{sid}:role:application:{}", app.id)),
             name: format!("Browser {}", app.id),
             description: "Explicit deployment browser application permissions".to_owned(),
-            permissions: permissions(&description, &facts, &granted),
+            permissions: role_permissions,
             assigned_agents: vec![],
             assigned_users: vec![],
             assigned_applications: vec![app_id.clone()],
@@ -1608,17 +1655,6 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 &pointer,
                 &permissions(&description, &facts, &granted),
             );
-            if let Some(person) = deployment.person_audience.as_deref() {
-                check_person_selection(
-                    &mut findings,
-                    &facts,
-                    person,
-                    &pointer,
-                    &user.grants,
-                    &granted,
-                    &reaching,
-                );
-            }
             check_selection(
                 &mut findings,
                 &facts,

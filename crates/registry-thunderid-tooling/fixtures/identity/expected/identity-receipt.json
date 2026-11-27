@@ -14,7 +14,9 @@
       "sub": "fbc5ffd9-a8ee-76c3-8d0f-443fe31ac655"
     },
     "task-agent": {
+      "exchange": true,
       "kind": "machine",
+      "side": "registry",
       "sub": "b0e1d7c3-c123-7d24-82e0-724d1e98c3f6"
     }
   },

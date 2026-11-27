@@ -5972,3 +5972,34 @@ fn external_review_executor_credentials_are_not_a_dev_client_contract() {
     value["reviewExecutors"] = json!({"legacy":{"accessProfile":"operator","client":"operator"}});
     assert!(config::clients("dev-clients.yaml", &serde_json::to_vec(&value).unwrap()).is_err());
 }
+
+#[test]
+fn only_the_declared_exchange_clients_hold_the_token_exchange_grant() {
+    // The dev issuer hands the token-exchange grant to the clients the dev
+    // client file lists under `issuer.exchange_clients` (and to multi-purpose
+    // clients) and to no other client: a client that can exchange can
+    // re-audience a person token, so the set must not widen silently.
+    let (_temp, state, base, files) = fixture();
+    let clients = machine_grant_inventory(base);
+    let clients = config::clients(
+        "dev-clients.yaml",
+        serde_norway::to_string(&clients).unwrap().as_bytes(),
+    )
+    .unwrap();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let description = config::issuer_description(&state, &clients, &state.root()).unwrap();
+    let holders: std::collections::BTreeSet<&str> = description
+        .machine_clients
+        .iter()
+        .filter(|client| client.token_exchange.is_some())
+        .map(|client| client.client_id.as_str())
+        .collect();
+    let declared: std::collections::BTreeSet<&str> = clients
+        .issuer
+        .exchange_clients
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(!declared.is_empty());
+    assert_eq!(holders, declared);
+}

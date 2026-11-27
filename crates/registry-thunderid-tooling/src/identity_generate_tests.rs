@@ -10,6 +10,7 @@ fn fixture(name: &str) -> String {
     fs::read_to_string(Path::new(DIR).join(name)).expect("fixture")
 }
 
+#[derive(Clone)]
 struct Case {
     deployment: String,
     facts: Vec<(String, String)>,
@@ -1957,22 +1958,6 @@ fn a_user_reaches_a_product_through_a_session_application_that_lists_it() {
 }
 
 #[test]
-fn a_session_application_signs_in_only_the_user_types_it_lists() {
-    let mut case = session_case();
-    case.deployment = session_deployment_with(SESSION_USER).replace(
-        "    claims:\n      registry_actor_kind: human\n    grants:\n      - product: breg\n        accessProfiles: [read]\n",
-        "    userType: farmer\n    claims:\n      registry_actor_kind: human\n    grants:\n      - product: breg\n        accessProfiles: [read]\n",
-    ) + "userTypes:\n  - id: farmer\n    name: Farmer\n";
-    assert!(case
-        .refusal()
-        .contains(&"identity.deployment.client-not-admitted".to_owned()));
-    case.deployment = case
-        .deployment
-        .replace("    tokenAttributes: [registry_actor_kind]\n", "    tokenAttributes: [registry_actor_kind]\n    userTypes: [farmer]\n");
-    assert!(case.run().is_ok());
-}
-
-#[test]
 fn a_session_application_must_project_the_claims_its_granted_profiles_require() {
     let mut case = session_case();
     case.facts[0].1 = case.facts[0]
@@ -2033,24 +2018,67 @@ fn two_clients_case(user_profiles: &str) -> Case {
 }
 
 #[test]
-fn a_user_cannot_use_another_client_to_reach_a_profile_they_were_not_granted() {
-    // `staff-read` shares `documents:get` with the granted `citizen-read`, so
-    // signing in through `staff-pages` would select a profile the user holds
-    // no grant for.
+fn a_profile_an_interactive_client_selects_holds_a_scope_of_its_own() {
+    // `staff-read` shares `documents:get` with `citizen-read`: a token from
+    // either application would carry the scope the other's profile needs.
     assert!(two_clients_case("citizen-read")
         .refusal()
-        .contains(&"identity.person-audience.client-selects-ungranted-profile".to_owned()));
-    assert!(two_clients_case("citizen-read, staff-read").run().is_ok());
-}
-
-#[test]
-fn a_profile_with_a_scope_the_user_lacks_does_not_block_the_grant() {
-    let mut case = two_clients_case("citizen-read");
-    case.facts[0].1 = case.facts[0].1.replace(
+        .contains(&"identity.person-audience.profile-without-own-scope".to_owned()));
+    // A superset profile leaves the smaller one without a scope of its own.
+    let mut superset = two_clients_case("citizen-read");
+    superset.facts[0].1 = superset.facts[0].1.replace(
         "scopes: [documents:get]\n    requesterClients: [staff-pages]",
         "scopes: [documents:get, documents:put]\n    requesterClients: [staff-pages]",
     );
-    assert!(case.run().is_ok());
+    assert!(superset
+        .refusal()
+        .contains(&"identity.person-audience.profile-without-own-scope".to_owned()));
+    // Distinct scopes pass, whoever is granted what.
+    let mut distinct = two_clients_case("citizen-read");
+    distinct.facts[0].1 = distinct.facts[0].1.replace(
+        "scopes: [documents:get]\n    requesterClients: [staff-pages]",
+        "scopes: [documents:put]\n    requesterClients: [staff-pages]",
+    );
+    assert!(distinct.run().is_ok());
+    // The rule holds with no user in the file and for a typed user.
+    let mut no_users = two_clients_case("citizen-read");
+    no_users.deployment = no_users.deployment.split("users:\n").next().unwrap().to_owned();
+    assert!(no_users
+        .refusal()
+        .contains(&"identity.person-audience.profile-without-own-scope".to_owned()));
+}
+
+#[test]
+fn a_profile_only_a_machine_client_selects_needs_no_scope_of_its_own() {
+    let mut case = two_clients_case("citizen-read");
+    case.facts[0].1 = documents_by_client()
+        .replace(
+            "scopes: [documents:get]\n    requesterClients: [citizen-pages]",
+            "scopes: [documents:get, documents:own]\n    requesterClients: [citizen-pages]",
+        )
+        .replace(
+            "  - id: staff-read\n    scopes: [documents:get]\n    requesterClients: [staff-pages]\n",
+            "  - id: staff-read\n    scopes: [documents:staff]\n    requesterClients: [staff-pages]\n  - id: machine-read\n    scopes: [documents:get]\n    requesterClients: [machine-reader]\n",
+        );
+    case.deployment = case.deployment.replace("citizen-read, staff-read", "citizen-read");
+    assert!(case.run().is_ok(), "{:?}", case.run().err());
+}
+
+#[test]
+fn a_browser_application_counts_as_an_interactive_client_of_a_shared_scope() {
+    let mut case = two_clients_case("citizen-read");
+    // `staff-pages` becomes a browser application of the other member.
+    let sessions = case.deployment.find("  - id: staff-pages").unwrap();
+    let users = case.deployment.find("users:\n").unwrap();
+    case.deployment = format!(
+        "{}browserApps:\n  - id: staff-pages\n    clientSecretRef: secret:env/STAFF_SECRET\n    origin: https://staff-pages.registry.example\n    redirectUris: [https://staff-pages.registry.example/cb]\n    product: breg\n    tokenAttributes: [registry_actor_kind]\n    grants:\n      - product: breg\n        accessProfiles: [read]\n{}",
+        &case.deployment[..sessions],
+        &case.deployment[users..]
+    );
+    case.facts.push(("breg".into(), person_facts("breg", "records:get").replace("- citizen-pages", "- staff-pages")));
+    assert!(case
+        .refusal()
+        .contains(&"identity.person-audience.profile-without-own-scope".to_owned()));
 }
 
 #[test]
@@ -2063,15 +2091,36 @@ fn a_deployment_error_is_reported_even_when_a_person_audience_is_declared() {
 }
 
 #[test]
-fn a_declared_person_audience_no_product_uses_is_refused() {
+fn a_declared_person_audience_no_product_uses_is_refused_as_unused() {
     let mut case = session_case();
     case.deployment = case
         .deployment
-        .replace("personAudience: urn:person:example", "personAudience: urn:person:other");
-    assert_eq!(case.refusal(), ["identity.facts.duplicate-audience"]);
-    case.facts[1].1 = case.facts[1].1.replace("urn:person:example", "urn:documents:example");
-    case.facts[0].1 = case.facts[0].1.replace("urn:person:example", "urn:breg:example");
+        .replace("personAudience: urn:person:example", "personAudience: urn:person:exmaple");
     assert_eq!(case.refusal(), ["identity.person-audience.unused"]);
+}
+
+#[test]
+fn a_deployment_that_does_not_decode_is_reported_beside_a_facts_refusal() {
+    let mut case = session_case();
+    // The facts disagree on the issuer, and the deployment states an
+    // unknown member.
+    case.facts[1].1 = case.facts[1].1.replace("https://id.registry.example", "https://other.example");
+    case.deployment = case.deployment.replace("organizationUnit:", "organizationUnits:");
+    let codes = case.refusal();
+    assert!(codes.contains(&"identity.facts.issuer-mismatch".to_owned()), "{codes:?}");
+    assert!(codes.len() >= 2, "{codes:?}");
+}
+
+#[test]
+fn a_facts_refusal_and_a_deployment_check_are_both_reported() {
+    let mut case = session_case();
+    case.facts[1].1 = case.facts[1].1.replace("https://id.registry.example", "https://other.example");
+    case.deployment = case
+        .deployment
+        .replace("origin: https://pages.registry.example", "origin: http://pages.registry.example");
+    let codes = case.refusal();
+    assert!(codes.contains(&"identity.facts.issuer-mismatch".to_owned()), "{codes:?}");
+    assert!(codes.contains(&"identity.deployment.invalid-origin".to_owned()), "{codes:?}");
 }
 
 #[test]
@@ -2188,4 +2237,64 @@ fn a_browser_application_is_never_granted_an_exchange_profile() {
     assert!(case
         .refusal()
         .contains(&"identity.deployment.exchange-not-interactive".to_owned()));
+}
+
+#[test]
+fn the_receipt_shows_which_machine_clients_hold_an_exchange_grant_and_their_side() {
+    let generated = case().run().unwrap();
+    let receipt: serde_json::Value =
+        serde_json::from_str(&text(&generated, "identity-receipt.json")).unwrap();
+    assert_eq!(receipt["clients"]["task-agent"]["exchange"], true);
+    assert_eq!(receipt["clients"]["task-agent"]["side"], "registry");
+    assert!(receipt["clients"]["field-agent"].get("exchange").is_none());
+    assert!(receipt["clients"]["staff-portal"].get("exchange").is_none());
+}
+
+/// Documents facts with `profiles` named `p00`.. of `each` scopes.
+fn many_scope_documents(profiles: usize, each: usize) -> String {
+    let mut text = "apiVersion: id.registrystack.org/formats/platform/identity-facts/v1\nkind: PlatformIdentityFacts\nproduct: documents\nissuer: https://id.registry.example\naudience: urn:person:example\nallowedClients:\n  - citizen-pages\n  - citizen-portal\n  - case-portal\nclaims:\n  registry_actor_kind: string\naccessProfiles:\n".to_owned();
+    for profile in 0..profiles {
+        let scopes: Vec<String> = (0..each).map(|n| format!("documents:p{profile}s{n:02}")).collect();
+        text.push_str(&format!("  - id: p{profile:02}\n    scopes: [{}]\n", scopes.join(", ")));
+    }
+    text
+}
+
+fn grants_of_every_documents_profile(profiles: usize) -> String {
+    let names: Vec<String> = (0..profiles).map(|n| format!("p{n:02}")).collect();
+    format!("      - product: breg\n        accessProfiles: [read]\n      - product: documents\n        accessProfiles: [{}]\n", names.join(", "))
+}
+
+#[test]
+fn a_browser_application_a_machine_client_and_a_user_stay_within_the_permission_bound() {
+    let over = grants_of_every_documents_profile(3);
+    // 3 profiles of 11 scopes and breg's one make 34 permissions on one server.
+    let mut base = session_case();
+    base.facts[1].1 = many_scope_documents(3, 11);
+    base.facts[0].1 = base.facts[0].1.replace("- citizen-pages", "- citizen-pages\n  - citizen-portal\n  - case-portal");
+    base.jwks = case().jwks;
+
+    // A browser application.
+    let mut browser = base.clone();
+    browser.deployment = "apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1\nkind: PlatformIdentityDeployment\norganizationUnit:\n  handle: registry\n  name: Registry\npersonAudience: urn:person:example\nbrowserApps:\n  - id: citizen-portal\n    clientSecretRef: secret:env/CITIZEN_PORTAL_SECRET\n    origin: https://portal.registry.example\n    redirectUris: [https://portal.registry.example/cb]\n    product: breg\n    tokenAttributes: [registry_actor_kind]\n    grants:\n".to_owned() + &over;
+    assert!(browser
+        .refusal()
+        .contains(&"identity.deployment.too-many-permissions".to_owned()));
+
+    // A machine client.
+    let mut machine = base.clone();
+    machine.deployment = "apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1\nkind: PlatformIdentityDeployment\norganizationUnit:\n  handle: registry\n  name: Registry\npersonAudience: urn:person:example\nclients:\n  - id: case-portal\n    publicJwksFile: keys/case-portal.jwks.json\n    claims:\n      registry_actor_kind: service\n    grants:\n".to_owned() + &over;
+    assert!(machine
+        .refusal()
+        .contains(&"identity.deployment.too-many-permissions".to_owned()));
+
+    // A user, reaching both products through a session application whose own
+    // grants are small.
+    let mut user = base.clone();
+    user.deployment = SESSION_DEPLOYMENT.replace("accessProfiles: [read]\n      - product: documents\n        accessProfiles: [read]", "accessProfiles: [read]\n      - product: documents\n        accessProfiles: [p00]")
+        + "users:\n  - id: citizen-one\n    username: citizen-one\n    email: citizen.one@agency.example\n    passwordRef: secret:env/CITIZEN_ONE_PASSWORD\n    claims:\n      registry_actor_kind: human\n    grants:\n"
+        + &over;
+    assert!(user
+        .refusal()
+        .contains(&"identity.deployment.too-many-permissions".to_owned()));
 }

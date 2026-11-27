@@ -583,7 +583,7 @@ fn two_products_on_one_audience_are_refused_unless_the_deployment_declares_it() 
             vec![breg_like(), store_like()],
             Some("urn:other:example")
         )),
-        "identity.facts.duplicate-audience"
+        "identity.person-audience.unused"
     );
     let merged = person_merge(vec![breg_like(), store_like()], Some(PERSON)).expect("accepted");
     assert_eq!(merged.products["breg"].audience, PERSON);
@@ -633,8 +633,8 @@ fn only_breg_and_documents_may_join_the_person_audience() {
     );
 }
 
-/// Evidence facts as its generator writes them: a profile reached by an
-/// exchange and an institutional-grant assertion issuer.
+/// Evidence facts as its generator writes them in this fixture: an
+/// institutional-grant assertion issuer.
 fn evidence_on_the_person_audience() -> String {
     EVIDENCE
         .replace("urn:evidence:example", PERSON)
@@ -733,4 +733,29 @@ fn a_refusal_names_the_offending_member_and_a_remedy() {
     };
     assert_eq!(location, "facts[1]/allowedClients");
     assert!(message.contains("List"), "{message}");
+}
+
+#[test]
+fn an_exchange_profile_alone_keeps_a_non_register_member_out() {
+    // A first-party issuer is not a task-grant issuer, so only the exchange
+    // profile marks the member.
+    let with_exchange = store_like().replace(
+        "accessProfiles:\n  - id: read\n",
+        "accessProfiles:\n  - id: read\n    exchange:\n      assertionIssuerId: signer\n      bootstrapAudience: urn:bootstrap:example\n      bootstrapScope: bootstrap:assert\n",
+    ) + "assertionIssuers:\n  - id: signer\n    issuer: https://signer.example\n    jwksUrl: https://signer.example/jwks\n    mapping: first-party\n";
+    assert_eq!(
+        refusal(person_merge(vec![breg_like(), with_exchange], Some(PERSON))),
+        "identity.person-audience.task-grant-member"
+    );
+}
+
+#[test]
+fn a_typo_in_the_person_audience_is_reported_as_unused_not_as_a_duplicate() {
+    assert_eq!(
+        refusal(person_merge(
+            vec![breg_like(), store_like()],
+            Some("urn:person:exmaple")
+        )),
+        "identity.person-audience.unused"
+    );
 }

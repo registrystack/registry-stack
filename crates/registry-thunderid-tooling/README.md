@@ -255,11 +255,16 @@ resolves no secret.
   states (`...shared-scope`). No exchange may name the person audience as its
   bootstrap resource (`...bootstrap-audience`), a declared `personAudience`
   that no product uses is refused (`...unused`), and one that is not an
-  absolute URI is `identity.person-audience.invalid`. A user whose grants
-  already hold every scope of a profile that a client reaching them selects,
-  without being granted that profile, is refused
-  (`...client-selects-ungranted-profile`): on a shared audience the token
-  carries the user's own permissions whichever client signed them in.
+  absolute URI is `identity.person-audience.invalid`. On a shared audience
+  every member's tokens carry the same audience, and a product picks the
+  access profile from the client id, so every profile that a browser or
+  session application selects (its `requesterClients` names one) must state a
+  scope that no other profile of the product states
+  (`identity.person-audience.profile-without-own-scope`). The rule needs no
+  user model, so it holds for every user and user type. ThunderID 1.1.0 uses
+  an application's user types for registration only, not to limit who signs
+  in, so `userTypes` on an application is never a control for reach. The
+  membership rule covers products that bring identity facts only.
 - A session application (`sessionApps`) is the confidential client a session
   service uses for one kind of sign-in. Beside a browser application's members
   it states `postLogoutRedirectUris` and `products` (1 to 8 distinct product
@@ -278,7 +283,7 @@ resolves no secret.
   sign-in tokens: ThunderID gives an authorization-code token the permissions
   of the signed-in user, so the user's grants decide. A role holds at most 32
   permissions per resource server, which a shared server pools across its
-  members (`identity.deployment.too-many-permissions`).
+  members (`identity.deployment.too-many-permissions`), checked for machine clients, browser and session applications and users.
 - `side` on a client (`registry` or `host`) says which side of the trust line
   it sits on. Only a client that declares `side: registry` may be granted an
   exchange profile (`identity.deployment.exchange-on-host-client`): a client
@@ -292,7 +297,10 @@ resolves no secret.
   `sessionApps` maps each session application's client id to
   `{"products": [...], "audiences": [...]}`, where `audiences` are the distinct
   audiences of its products with the person audience first and the others
-  sorted. A session service cross-checks its runtime file against them.
+  sorted. A machine client holding an exchange grant carries `"exchange": true`
+  and `"side": "registry"` in `clients`, so a reviewer can see that no host
+  client holds it. A session service cross-checks its runtime file against
+  them.
 
 - The output directory must not exist. It holds `deployment.yaml` (server
   members to merge into the environment's own file), `resources/resources.yaml`
