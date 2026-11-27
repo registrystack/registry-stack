@@ -3,7 +3,7 @@
 use crate::{GrantBounds, GrantClaims};
 use registry_platform_httputil::{
     client::{build_client, OutboundOptions, PrivateKeyJwt, ServiceBaseUrl, TokenProvider},
-    read_bounded, validate_response_headers_without_peer_policy,
+    read_bounded, validate_response_headers, PeerPolicy, ResponseHeaderError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,6 +12,10 @@ use thiserror::Error;
 use uuid::Uuid;
 mod config;
 pub use config::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry};
+
+/// Machine-readable code for a status answer refused because its peer declares
+/// the development posture.
+pub const DEVELOPMENT_PEER_CODE: &str = "platform.task-grant.development-peer";
 
 #[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -102,6 +106,19 @@ pub enum TaskGrantError {
     Unavailable,
     #[error("task authority status configuration is invalid")]
     Configuration,
+    #[error("task authority status peer declares the development posture")]
+    DevelopmentPeer,
+}
+
+impl TaskGrantError {
+    /// The machine-readable code of a refusal that has one.
+    #[must_use]
+    pub const fn code(self) -> Option<&'static str> {
+        match self {
+            Self::DevelopmentPeer => Some(DEVELOPMENT_PEER_CODE),
+            Self::Refused | Self::Unavailable | Self::Configuration => None,
+        }
+    }
 }
 
 /// A status route appended to the service base's path, parsed from a template
@@ -154,6 +171,7 @@ pub struct TaskGrantStatusClient {
     status_path: StatusPath,
     http: reqwest::Client,
     token: Arc<PrivateKeyJwt>,
+    peer_policy: PeerPolicy,
 }
 impl fmt::Debug for TaskGrantStatusClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -162,7 +180,9 @@ impl fmt::Debug for TaskGrantStatusClient {
 }
 impl TaskGrantStatusClient {
     /// `status_path` is the status route appended to `base`'s path: it starts
-    /// with `/` and has exactly one whole `{grantId}` segment.
+    /// with `/` and has exactly one whole `{grantId}` segment. `peer_policy`
+    /// decides whether a status answer from a development-posture peer is
+    /// accepted.
     pub fn new(
         source_issuer: String,
         resource: String,
@@ -170,6 +190,7 @@ impl TaskGrantStatusClient {
         status_path: &str,
         token: Arc<PrivateKeyJwt>,
         trusted_roots: Option<&[u8]>,
+        peer_policy: PeerPolicy,
     ) -> Result<Self, TaskGrantError> {
         if !registry_platform_httputil::valid_resource_uri(&source_issuer)
             || !registry_platform_httputil::valid_resource_uri(&resource)
@@ -192,7 +213,29 @@ impl TaskGrantStatusClient {
             status_path,
             http,
             token,
+            peer_policy,
         })
+    }
+
+    /// [`Self::new`] under [`PeerPolicy::RefuseDevelopmentPeer`], for a caller
+    /// that has no runtime peer policy yet.
+    pub fn new_without_peer_policy(
+        source_issuer: String,
+        resource: String,
+        base: reqwest::Url,
+        status_path: &str,
+        token: Arc<PrivateKeyJwt>,
+        trusted_roots: Option<&[u8]>,
+    ) -> Result<Self, TaskGrantError> {
+        Self::new(
+            source_issuer,
+            resource,
+            base,
+            status_path,
+            token,
+            trusted_roots,
+            PeerPolicy::RefuseDevelopmentPeer,
+        )
     }
 }
 #[derive(Deserialize)]
@@ -236,8 +279,12 @@ impl TaskGrantStatusClient {
                 .send()
                 .await
                 .map_err(|_| TaskGrantError::Unavailable)?;
-            validate_response_headers_without_peer_policy(response.headers())
-                .map_err(|_| TaskGrantError::Unavailable)?;
+            validate_response_headers(response.headers(), self.peer_policy).map_err(|error| {
+                match error {
+                    ResponseHeaderError::DevelopmentPeer => TaskGrantError::DevelopmentPeer,
+                    _ => TaskGrantError::Unavailable,
+                }
+            })?;
             // A concealed or absent grant is a refusal. Rejected status-service
             // credentials do not establish inactive authority and remain unavailable.
             if response.status() == reqwest::StatusCode::NOT_FOUND {

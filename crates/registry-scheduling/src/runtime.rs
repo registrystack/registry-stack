@@ -274,7 +274,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let task_grant_status = match &config.task_grant_status {
         Some(TaskGrantStatus::UncheckedFinalFifteenMinutes) => None,
         Some(TaskGrantStatus::Authorities(authorities)) => Some(Arc::new(
-            TaskGrantStatusRegistry::activate(
+            TaskGrantStatusRegistry::activate_without_peer_policy(
                 &crate::config::task_grant_status_endpoints(authorities),
                 &config.authentication.oidc.provider.audience,
                 &secrets,

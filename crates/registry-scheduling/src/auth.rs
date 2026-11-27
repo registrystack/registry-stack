@@ -285,7 +285,7 @@ impl SchedulingAuthenticator {
             })?;
         if let Some(grant) = &grant {
             grant
-                .verify_context(&verified, &self.audience)
+                .verify_context_without_peer_policy(&verified, &self.audience)
                 .map_err(|_| AuthenticationError::Profile(FailedCheck::TaskGrantBinding))?;
         }
         let client = verified

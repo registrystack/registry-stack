@@ -581,7 +581,7 @@ async fn activated_task_status(
             "statusResource": "urn:casework:test"
         }))
         .expect("the status authority configuration");
-    let registry = TaskGrantStatusRegistry::activate(
+    let registry = TaskGrantStatusRegistry::activate_without_peer_policy(
         &[TaskGrantStatusEndpoint::from(&status)],
         AUDIENCE,
         &secrets,

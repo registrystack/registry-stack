@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- `registry-platform-oidc` can refuse task authority that comes from a
+  development peer. `TaskGrantStatusClient::new` and
+  `TaskGrantStatusRegistry::activate` take a `PeerPolicy`. Under
+  `RefuseDevelopmentPeer`, a status answer carrying
+  `Registry-Posture: development` is refused as
+  `TaskGrantError::DevelopmentPeer` (`platform.task-grant.development-peer`).
+  `GrantClaims` reads the optional `registry_posture` claim, whose only valid
+  value is `development`; any other value is malformed.
+  `GrantClaims::verify_context` takes a `PeerPolicy` and, under
+  `RefuseDevelopmentPeer`, refuses a development assertion as
+  `GrantContextError::DevelopmentAssertion`
+  (`platform.task-grant.development-assertion`).
+  `TaskGrantStatusClient::new_without_peer_policy`,
+  `TaskGrantStatusRegistry::activate_without_peer_policy` and
+  `GrantClaims::verify_context_without_peer_policy` refuse development
+  peers, and every runtime uses them until it declares its posture.
+
 - The shared activation ledger records a posture with every activation.
   `registry-platform-activation` adds `Activation.posture` and
   `NewActivation.posture`, and `check_active_package` takes the declared
