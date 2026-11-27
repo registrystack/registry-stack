@@ -877,10 +877,17 @@ fn driven_tool(cli: &Cli, product: &ProductSpec) -> Result<DrivenTool, Failure> 
         });
     }
     let missing = || {
-        Failure::Domain(format!(
-            "component {} is missing; run rstack install {}",
-            product.name, product.name
-        ))
+        Failure::Domain(if product.installable {
+            format!(
+                "component {} is missing; run rstack install {}",
+                product.name, product.name
+            )
+        } else {
+            format!(
+                "the {} tool is not installable through rstack yet; set {} to a local build of {}",
+                product.name, product.variable, product.binary
+            )
+        })
     };
     let Some((lease, selection, _)) = selected_state(cli).map_err(|failure| {
         if failure.code == 1 {

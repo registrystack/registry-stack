@@ -860,3 +860,44 @@ fn a_documents_runtime_config_selects_the_documents_tool_alone() {
     );
     assert_ne!(run.status.code(), Some(2), "{}", text(&run.stderr));
 }
+
+#[test]
+fn an_installable_component_is_missing_with_the_install_command_unchanged() {
+    let workspace = Workspace::new();
+    let run = workspace.generate("out", None);
+    assert_eq!(run.status.code(), Some(1));
+    assert!(
+        text(&run.stderr).contains("component breg is missing; run rstack install breg"),
+        "{}",
+        text(&run.stderr)
+    );
+}
+
+#[test]
+fn a_missing_document_store_tool_names_the_variable_and_not_install() {
+    let workspace = Workspace::new();
+    let deployment = workspace.deployment();
+    let output = workspace.path("out");
+    let run = workspace.rstack(
+        &[
+            "identity",
+            "generate",
+            "thunderid",
+            "--deployment",
+            deployment.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--documents-runtime-config",
+            "documents-runtime.yaml",
+        ],
+        None,
+    );
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = text(&run.stderr);
+    assert!(
+        stderr.contains("not installable through rstack yet")
+            && stderr.contains("RSTACK_DOCUMENTSCTL_BIN")
+            && !stderr.contains("rstack install"),
+        "{stderr}"
+    );
+}

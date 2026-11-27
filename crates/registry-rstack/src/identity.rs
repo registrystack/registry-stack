@@ -64,6 +64,8 @@ pub(crate) struct ProductSpec {
     /// Whether the configuration file is a runtime configuration, which
     /// substitutes `${NAME}` expressions from the environment.
     substitutes_environment: bool,
+    /// Whether the product is a release component `rstack install` provides.
+    pub(crate) installable: bool,
 }
 
 /// The products that admit OIDC tokens, in the order their facts are merged:
@@ -80,6 +82,7 @@ pub(crate) const PRODUCTS: [ProductSpec; 5] = [
         takes_project: true,
         takes_production: true,
         substitutes_environment: true,
+        installable: true,
     },
     ProductSpec {
         name: "casework",
@@ -89,6 +92,7 @@ pub(crate) const PRODUCTS: [ProductSpec; 5] = [
         takes_project: true,
         takes_production: false,
         substitutes_environment: true,
+        installable: true,
     },
     ProductSpec {
         name: "documents",
@@ -98,6 +102,7 @@ pub(crate) const PRODUCTS: [ProductSpec; 5] = [
         takes_project: false,
         takes_production: false,
         substitutes_environment: true,
+        installable: false,
     },
     ProductSpec {
         name: "evidence",
@@ -107,6 +112,7 @@ pub(crate) const PRODUCTS: [ProductSpec; 5] = [
         takes_project: true,
         takes_production: false,
         substitutes_environment: false,
+        installable: true,
     },
     ProductSpec {
         name: "messaging",
@@ -116,6 +122,7 @@ pub(crate) const PRODUCTS: [ProductSpec; 5] = [
         takes_project: false,
         takes_production: false,
         substitutes_environment: true,
+        installable: true,
     },
 ];
 
