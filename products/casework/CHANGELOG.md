@@ -89,7 +89,10 @@
   policy, using the settling decision within result retention, with fresh
   clocks and no carried approvals. Later resubmissions start at the first
   stage. Omission keeps the
-  first-stage default and the policy digest.
+  first-stage default and the policy digest. The reviewers of the earlier
+  stages stay excluded where a stage sets `excludePreviousStageReviewers`, also
+  after the earlier request is erased.
+
 - A reviewer who holds a task can ask the applicant. A stage opts in with
   `asks: {}` (approval policies only), and a producer declares
   `readsAsks: true`. `POST /v1/review-tasks/{task_id}/asks` opens the ask. The

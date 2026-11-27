@@ -1841,6 +1841,11 @@ pub struct ReviewProgress {
     pub active_stage: u16,
     #[serde(default)]
     pub decisions: Vec<Decision>,
+    /// Reviewers who decided a stage before the returning stage of the
+    /// earlier round a resumed request continues. They count as previous-stage
+    /// reviewers of every stage of this request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_stage_reviewers: Vec<IssuerPrincipal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_constraints: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1863,6 +1868,7 @@ impl ReviewProgress {
             initiator,
             active_stage: 0,
             decisions: Vec::new(),
+            prior_stage_reviewers: Vec::new(),
             result_constraints,
             settlement: None,
         })
@@ -1960,10 +1966,9 @@ pub fn record_review_decision(
         return Err(ReviewDecisionError::InitiatorExcluded);
     }
     if stage.exclude_previous_stage_reviewers
-        && progress
-            .decisions
-            .iter()
-            .any(|recorded| recorded.stage_id != stage.id && recorded.reviewer == decision.reviewer)
+        && (progress.decisions.iter().any(|recorded| {
+            recorded.stage_id != stage.id && recorded.reviewer == decision.reviewer
+        }) || progress.prior_stage_reviewers.contains(&decision.reviewer))
     {
         return Err(ReviewDecisionError::PreviousStageReviewerExcluded);
     }
@@ -3519,6 +3524,36 @@ mod tests {
             ),
             Err(ReviewDecisionError::PreviousStageReviewerExcluded)
         );
+    }
+
+    #[test]
+    fn a_resumed_request_excludes_reviewers_of_the_earlier_rounds_prior_stages() {
+        for exclude in [true, false] {
+            let mut second = stage("second", 1);
+            second.exclude_previous_stage_reviewers = exclude;
+            let snapshot = approval_policy(vec![stage("first", 1), second])
+                .closure_with(crate::ReviewPolicyDependencies::default())
+                .unwrap();
+            let request_id = Uuid::from_u128(101);
+            let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+            progress.active_stage = 1;
+            progress.prior_stage_reviewers = vec![person("a")];
+            let returning = task(request_id, 1, "second", 1, "a");
+            let decided = record_review_decision(
+                &snapshot,
+                &mut progress,
+                &returning,
+                approve(&returning, person("a")),
+            );
+            if exclude {
+                assert_eq!(
+                    decided,
+                    Err(ReviewDecisionError::PreviousStageReviewerExcluded)
+                );
+            } else {
+                assert!(decided.is_ok(), "{decided:?}");
+            }
+        }
     }
 
     #[test]

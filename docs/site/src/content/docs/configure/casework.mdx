@@ -470,6 +470,7 @@ If that stage no longer exists, Casework starts at the first stage.
 Casework resumes within the earlier request's result retention, and starts a resubmission at the first stage after that.
 The `review-resumed-at-stage` history detail carries only `stageId`, without linking to the earlier request.
 Earlier approvals are not carried over.
+The staff who decided the stages before the returning stage still count as previous-stage reviewers, so a stage with `excludePreviousStageReviewers` keeps them out, even after the earlier request is erased.
 The subject clock starts with a fresh budget.
 Omitting `resubmission` preserves the policy digest.
 

@@ -576,6 +576,14 @@ impl PostgresStore {
             .await?;
         transaction
             .execute(
+                "DELETE FROM casework_review_prior_stage_reviewers p USING casework_review_requests r
+                 WHERE p.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
                 "UPDATE casework_idempotency i SET response=NULL
                   FROM casework_review_requests r
                  WHERE i.review_request_id=r.request_id AND r.request_id=ANY($2)

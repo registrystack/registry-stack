@@ -76,3 +76,16 @@ ALTER TABLE casework_review_clock_occurrences
         CHECK ((state='paused') = (paused_at IS NOT NULL)
             AND (state='paused') = (paused_state IS NOT NULL)
             AND (state='paused') = (paused_ask_id IS NOT NULL));
+
+-- A request that resumes an earlier round at its returning stage keeps the
+-- staff who decided the earlier round's stages before that stage. They count
+-- as previous-stage reviewers of every stage of the resumed request, so
+-- separation of duties holds across rounds and outlives the erasure of the
+-- earlier round. The rows hold staff identifiers only and are erased with the
+-- resumed request's own decisions.
+CREATE TABLE casework_review_prior_stage_reviewers (
+    request_id uuid NOT NULL REFERENCES casework_review_requests(request_id) ON DELETE CASCADE,
+    actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 2048),
+    actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 2048),
+    PRIMARY KEY (request_id, actor_issuer, actor_subject)
+);

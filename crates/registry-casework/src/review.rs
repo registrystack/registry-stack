@@ -2796,14 +2796,15 @@ impl PostgresStore {
         // The subject lock already serializes submissions. Only this producer's
         // earlier round can select a stage, and its approvals are never copied.
         // Stages only advance, so the highest-stage changes-requested decision
-        // is the one that settled a changes-requested request.
+        // is the one that settled a changes-requested request. The reviewers of
+        // the stages before it stay excluded where a stage asks for it.
         let returning = if policy.resubmission == ReviewResubmissionPolicy::ResumeAtReturningStage {
             transaction
                 .query_opt(
-                    "SELECT settling.stage_id
+                    "SELECT settling.stage_id,r.request_id,settling.stage_index
                  FROM casework_review_requests r
                  LEFT JOIN LATERAL (
-                     SELECT t.stage_id FROM casework_review_decisions d
+                     SELECT t.stage_id,d.stage_index FROM casework_review_decisions d
                      JOIN casework_review_tasks t ON t.task_id=d.task_id
                      WHERE d.request_id=r.request_id AND d.decision='changes-requested'
                        AND r.lifecycle='changes-requested'
@@ -2828,18 +2829,19 @@ impl PostgresStore {
                 .await?
                 .and_then(|row| {
                     let stage_id: Option<String> = row.get(0);
+                    let earlier = (row.get::<_, Uuid>(1), row.get::<_, Option<i32>>(2));
                     stage_id.and_then(|id| {
                         policy
                             .stages
                             .iter()
                             .position(|stage| stage.id == id)
-                            .map(|index| (index, id))
+                            .map(|index| (index, id, earlier))
                     })
                 })
         } else {
             None
         };
-        let initial_stage = returning.as_ref().map_or(0, |(index, _)| *index);
+        let initial_stage = returning.as_ref().map_or(0, |(index, _, _)| *index);
         let initial_stage =
             u16::try_from(initial_stage).map_err(|_| ReviewRuntimeError::Corrupt)?;
         let retained_until = now
@@ -2992,12 +2994,23 @@ impl PostgresStore {
             now,
         )
         .await?;
-        if let Some((_, stage_id)) = returning {
+        if let Some((_, stage_id, (earlier_request_id, settling_stage_index))) = returning {
             transaction.execute(
                 "INSERT INTO casework_review_history(event_id,request_id,kind,actor_ref,detail,occurred_at)
                  VALUES($1,$2,'review-resumed-at-stage',NULL,$3,$4)",
                 &[&Uuid::new_v4(),&request_id,&json!({"stageId":stage_id}),&now],
             ).await?;
+            let settling_stage_index = settling_stage_index.ok_or(ReviewRuntimeError::Corrupt)?;
+            transaction
+                .execute(
+                    "INSERT INTO casework_review_prior_stage_reviewers(request_id,actor_issuer,actor_subject)
+                     SELECT $1::uuid,actor_issuer,actor_subject FROM casework_review_decisions
+                     WHERE request_id=$2 AND stage_index<$3
+                     UNION SELECT $1::uuid,actor_issuer,actor_subject
+                     FROM casework_review_prior_stage_reviewers WHERE request_id=$2",
+                    &[&request_id, &earlier_request_id, &settling_stage_index],
+                )
+                .await?;
         }
         insert_initial_review_clocks(
             &transaction,
@@ -3399,7 +3412,10 @@ impl PostgresStore {
             .query_opt(
                 "SELECT stage_index FROM casework_review_decisions
                  WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
-                   AND (stage_index=$4 OR ($5 AND stage_index<$4)) LIMIT 1",
+                   AND (stage_index=$4 OR ($5 AND stage_index<$4))
+                 UNION ALL SELECT -1 FROM casework_review_prior_stage_reviewers
+                 WHERE $5 AND request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
+                 ORDER BY 1 DESC LIMIT 1",
                 &[
                     &request_id,
                     &actor.principal.issuer,
@@ -4248,7 +4264,10 @@ impl PostgresStore {
                 .query_opt(
                     "SELECT 1 FROM casework_review_decisions
                      WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
-                       AND stage_index<$4 LIMIT 1",
+                       AND stage_index<$4
+                     UNION ALL SELECT 1 FROM casework_review_prior_stage_reviewers
+                     WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
+                     LIMIT 1",
                     &[
                         &request_id,
                         &actor.principal.issuer,
@@ -4836,6 +4855,8 @@ impl PostgresStore {
         .map_err(|_| ReviewRuntimeError::Corrupt)?;
         progress.active_stage = record.active_stage.ok_or(ReviewRuntimeError::Corrupt)?;
         progress.decisions = load_decisions(&transaction, request_id).await?;
+        progress.prior_stage_reviewers =
+            load_prior_stage_reviewers(&transaction, request_id).await?;
         let decision = Decision {
             task_id,
             request_id,
@@ -6004,6 +6025,25 @@ async fn load_decisions(
         .collect()
 }
 
+async fn load_prior_stage_reviewers(
+    transaction: &Transaction<'_>,
+    request_id: Uuid,
+) -> Result<Vec<IssuerPrincipal>, ReviewRuntimeError> {
+    Ok(transaction
+        .query(
+            "SELECT actor_issuer,actor_subject FROM casework_review_prior_stage_reviewers
+             WHERE request_id=$1 ORDER BY actor_issuer,actor_subject",
+            &[&request_id],
+        )
+        .await?
+        .into_iter()
+        .map(|row| IssuerPrincipal {
+            issuer: row.get(0),
+            subject: row.get(1),
+        })
+        .collect())
+}
+
 async fn ensure_review_identity_eligible(
     transaction: &Transaction<'_>,
     record: &ReviewRequestRecord,
@@ -6022,7 +6062,10 @@ async fn ensure_review_identity_eligible(
         .query_opt(
             "SELECT 1 FROM casework_review_decisions
              WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
-               AND (stage_index=$4 OR ($5 AND stage_index<$4)) LIMIT 1",
+               AND (stage_index=$4 OR ($5 AND stage_index<$4))
+             UNION ALL SELECT 1 FROM casework_review_prior_stage_reviewers
+             WHERE $5 AND request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
+             LIMIT 1",
             &[
                 &record.request_id,
                 &person.issuer,
@@ -6877,6 +6920,9 @@ async fn review_task_staffing_shortfalls(
                     WHERE d.request_id=t.request_id AND d.actor_issuer=m.issuer AND d.actor_subject=m.subject
                       AND (d.stage_index=t.stage_index OR
                         (COALESCE((s.stage->>'excludePreviousStageReviewers')::boolean,false) AND d.stage_index<t.stage_index)))
+                  AND NOT (COALESCE((s.stage->>'excludePreviousStageReviewers')::boolean,false)
+                    AND EXISTS(SELECT 1 FROM casework_review_prior_stage_reviewers p
+                      WHERE p.request_id=t.request_id AND p.actor_issuer=m.issuer AND p.actor_subject=m.subject))
                 UNION SELECT d.actor_issuer,d.actor_subject FROM casework_review_decisions d
                     WHERE d.request_id=t.request_id AND d.stage_index=t.stage_index AND d.decision='approve'
             ) people

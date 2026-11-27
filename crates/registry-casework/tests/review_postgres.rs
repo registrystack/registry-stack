@@ -13145,6 +13145,182 @@ async fn c2_resubmission_starts_at_first_stage_after_result_retention() {
     }
 }
 
+#[tokio::test]
+async fn c2_sod_resumed_round_keeps_earlier_stage_reviewers_out_of_the_returning_stage() {
+    for (exclude, erase) in [(true, false), (true, true), (false, false)] {
+        let fixture = fixture().await;
+        let mut project = asks_project(true, true);
+        project.review_policies[0].resubmission = ReviewResubmissionPolicy::ResumeAtReturningStage;
+        project.review_policies[0].stages[1].exclude_previous_stage_reviewers = exclude;
+        let service = CaseworkService::new(fixture.store.clone(), project, Vec::new()).unwrap();
+        let earlier = c2_returning_stage_round(&fixture, &service, "sod").await;
+        let mut next = bind_request(&service, request("sod", "ref-sod-2"));
+        next.subject.version = "2".into();
+        next.subject.digest = ContentDigest::for_bytes(b"sod-2");
+        let resumed = service
+            .create_review_request(&fixture.producer, next, "create-sod-2")
+            .await
+            .unwrap()
+            .accepted
+            .request_id;
+        if erase {
+            expire_review_results(&fixture, &[earlier]).await;
+            service.erase_expired_reviews().await.unwrap();
+            let earlier_decisions: i64 = fixture
+                .database
+                .query_one(
+                    "SELECT count(*) FROM casework_review_decisions WHERE request_id=$1",
+                    &[&earlier],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(earlier_decisions, 0, "the earlier round is erased");
+        }
+        let returning = task_id(&fixture, resumed, 1).await;
+        let claimed = service
+            .claim_review_task(
+                &fixture.reviewer_a,
+                returning,
+                None,
+                "",
+                1,
+                "claim-sod-returning",
+            )
+            .await;
+        if !exclude {
+            claimed.expect("the policy lets an earlier-stage reviewer claim");
+            service
+                .decide_review_task(
+                    &fixture.reviewer_a,
+                    returning,
+                    ReviewTaskDecisionRequest {
+                        decision: DecisionKind::Approve {
+                            outcome: "approved".into(),
+                            public_reason: None,
+                        },
+                    },
+                    None,
+                    "",
+                    2,
+                    "approve-sod-returning",
+                )
+                .await
+                .expect("the policy lets an earlier-stage reviewer decide");
+            continue;
+        }
+        assert!(
+            matches!(
+                claimed,
+                Err(ReviewRuntimeError::Forbidden(
+                    FailedCheck::SeparationOfDuties
+                ))
+            ),
+            "erase={erase}: {claimed:?}"
+        );
+        let assigned = service
+            .assign_review_task(
+                &fixture.supervisor,
+                returning,
+                None,
+                "",
+                1,
+                AssignmentRequest {
+                    assignee: fixture.reviewer_a.principal.clone(),
+                    reason: Some("nominate the earlier primary reviewer".to_owned()),
+                },
+                "assign-sod-returning",
+            )
+            .await;
+        assert!(
+            matches!(
+                assigned,
+                Err(ReviewRuntimeError::Forbidden(
+                    FailedCheck::SeparationOfDuties
+                ))
+            ),
+            "erase={erase}: {assigned:?}"
+        );
+        // Another reviewer still decides the returning stage.
+        service
+            .claim_review_task(
+                &fixture.reviewer_b,
+                returning,
+                None,
+                "",
+                1,
+                "claim-sod-other",
+            )
+            .await
+            .expect("a reviewer outside the earlier stages claims");
+        service
+            .decide_review_task(
+                &fixture.reviewer_b,
+                returning,
+                ReviewTaskDecisionRequest {
+                    decision: DecisionKind::ChangesRequested {
+                        outcome: "needs-correction".into(),
+                        public_reason: Some("Correct the form again".into()),
+                        reason: Some("Check the name again".into()),
+                        result: Some(json!({"correction":"name"})),
+                    },
+                },
+                None,
+                "",
+                2,
+                "return-again",
+            )
+            .await
+            .unwrap();
+        // A third round inherits the second round's prior-stage reviewers.
+        let mut third = bind_request(&service, request("sod", "ref-sod-3"));
+        third.subject.version = "3".into();
+        third.subject.digest = ContentDigest::for_bytes(b"sod-3");
+        let third = service
+            .create_review_request(&fixture.producer, third, "create-sod-3")
+            .await
+            .unwrap()
+            .accepted
+            .request_id;
+        let third_task = task_id(&fixture, third, 1).await;
+        assert!(
+            matches!(
+                service
+                    .claim_review_task(
+                        &fixture.reviewer_a,
+                        third_task,
+                        None,
+                        "",
+                        1,
+                        "claim-sod-third",
+                    )
+                    .await,
+                Err(ReviewRuntimeError::Forbidden(
+                    FailedCheck::SeparationOfDuties
+                ))
+            ),
+            "erase={erase}"
+        );
+        // The set is erased with the resumed request's own decisions, and the
+        // third round keeps its copy.
+        expire_review_results(&fixture, &[resumed]).await;
+        service.erase_expired_reviews().await.unwrap();
+        for (request_id, expected) in [(resumed, 0_i64), (third, 1)] {
+            let retained: i64 = fixture
+                .database
+                .query_one(
+                    "SELECT count(*) FROM casework_review_prior_stage_reviewers
+                     WHERE request_id=$1",
+                    &[&request_id],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            assert_eq!(retained, expected, "erase={erase}");
+        }
+    }
+}
+
 /// The protocol carries answer times at microsecond precision.
 fn now_micros() -> chrono::DateTime<Utc> {
     let now = Utc::now();
