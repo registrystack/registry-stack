@@ -90,6 +90,13 @@ prefix, so one file may not hold both. A prefix and its `upstream.prefixRewrite`
 both end with `/` or neither does, so `/` rewrites only a prefix that ends with
 `/` (`platform.session-runtime.prefix-rewrite-slash-mismatch`).
 
+Page route names replace each inner slash with a hyphen. The runtime check
+refuses prefixes such as `/a/b/` and `/a-b/`, which both become `page-a-b`.
+
+| Finding | Meaning and recovery |
+| --- | --- |
+| `platform.session-runtime.route-name-collision` | Two prefixes derive the same gateway route name. The finding points at the second prefix and names both. Change one prefix so the names differ. |
+
 ## Build and test
 
 Run from the workspace root:

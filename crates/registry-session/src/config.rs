@@ -927,6 +927,14 @@ pub enum Route<'a> {
     Page(&'a PageConfig),
 }
 
+/// The generated gateway route name, shared by validation and generation.
+pub(crate) fn gateway_route_name(route: Route<'_>) -> String {
+    match route {
+        Route::Module(module) => format!("module-{}", module.id.as_str()),
+        Route::Page(page) => format!("page-{}", page.prefix.trim_matches('/').replace('/', "-")),
+    }
+}
+
 impl RuntimeConfig {
     /// Load and validate the operator document through the shared loader,
     /// with the process environment, as `serve` does at startup.
@@ -1522,6 +1530,28 @@ fn route_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
                 "Declare personAudience, or write the module's own audience as an absolute URI.",
             ));
         }
+    }
+    // Module names use ids whose uniqueness is checked above. Page names
+    // also need uniqueness after their path separators become hyphens.
+    let mut names: Vec<(String, &str)> = Vec::new();
+    for (index, page) in config.pages.iter().enumerate() {
+        let name = gateway_route_name(Route::Page(page));
+        if let Some((_, earlier)) = names.iter().find(|(seen, _)| *seen == name) {
+            // Equal prefixes, with or without the closing slash, already
+            // carry the duplicate-prefix finding.
+            if earlier.trim_end_matches('/') != page.prefix.trim_end_matches('/') {
+                findings.push(Finding::new(
+                    "platform.session-runtime.route-name-collision",
+                    &format!("/pages/{index}/prefix"),
+                    &format!(
+                        "the prefixes {earlier:?} and {:?} would give two routes the name {name:?}",
+                        page.prefix
+                    ),
+                    "Change one prefix so the generated gateway route names differ.",
+                ));
+            }
+        }
+        names.push((name, &page.prefix));
     }
 }
 
@@ -2526,6 +2556,24 @@ audit:
             &document().replace("/staff/", "/apply/"),
             &code("duplicate-prefix"),
             "/pages/1/prefix",
+        );
+    }
+
+    #[test]
+    fn two_page_prefixes_with_the_same_gateway_name_are_refused_at_load() {
+        let text = document()
+            .replace("prefix: /apply/", "prefix: /a/b/")
+            .replace("prefix: /staff/", "prefix: /a-b/");
+        refused(&text, &code("route-name-collision"), "/pages/1/prefix");
+        let error = load(&text).expect_err("colliding page route names are refused");
+        assert_eq!(error.diagnostics.len(), 1);
+        let finding = &error.diagnostics[0];
+        assert_eq!(finding.code, code("route-name-collision"));
+        assert_eq!(finding.path, "/pages/1/prefix");
+        assert!(
+            finding.message.contains("/a/b/") && finding.message.contains("/a-b/"),
+            "{}",
+            finding.message
         );
     }
 

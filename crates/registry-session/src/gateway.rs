@@ -17,8 +17,9 @@ use serde_json::Value;
 use crate::{
     check::CHECK_PREFIX,
     config::{
-        clean_prefix, RuntimeConfig, RuntimeConfigError, UpstreamConfig, DEVELOPMENT_FLOW_COOKIE,
-        DEVELOPMENT_SESSION_COOKIE, FLOW_COOKIE, SESSION_COOKIE, SESSION_PREFIX,
+        clean_prefix, gateway_route_name, Route, RuntimeConfig, RuntimeConfigError, UpstreamConfig,
+        DEVELOPMENT_FLOW_COOKIE, DEVELOPMENT_SESSION_COOKIE, FLOW_COOKIE, SESSION_COOKIE,
+        SESSION_PREFIX,
     },
     wire::{ProblemKind, ANSWER_MARKER_HEADER, ANSWER_MARKER_VALUE, CHECK_REQUEST_HEADERS},
 };
@@ -425,7 +426,7 @@ struct GuardedRoute<'a> {
 fn guarded_routes(config: &RuntimeConfig) -> Result<Vec<GuardedRoute<'_>>, GatewayError> {
     let modules = config.modules.iter().filter_map(|module| {
         Some(GuardedRoute {
-            name: format!("module-{}", module.id.as_str()),
+            name: gateway_route_name(Route::Module(module)),
             prefix: &module.prefix,
             upstream: module.upstream.as_ref()?,
             page: false,
@@ -433,7 +434,7 @@ fn guarded_routes(config: &RuntimeConfig) -> Result<Vec<GuardedRoute<'_>>, Gatew
     });
     let pages = config.pages.iter().filter_map(|page| {
         Some(GuardedRoute {
-            name: format!("page-{}", page.prefix.trim_matches('/').replace('/', "-")),
+            name: gateway_route_name(Route::Page(page)),
             prefix: &page.prefix,
             upstream: page.upstream.as_ref()?,
             page: true,
@@ -1553,10 +1554,9 @@ end
 
     #[test]
     fn two_routes_that_would_share_a_name_are_refused_naming_both() {
-        let clash = FIXTURE
-            .replacen("prefix: /apply/", "prefix: /a/b/", 1)
-            .replacen("prefix: /staff/", "prefix: /a-b/", 1);
-        let config = crate::config::tests::load(&clash).expect("the clashing fixture loads");
+        let mut config = fixture();
+        config.pages[0].prefix = "/a/b/".to_owned();
+        config.pages[1].prefix = "/a-b/".to_owned();
         let found = refusal(&config);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(

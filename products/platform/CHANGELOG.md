@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `registry-session check` refuses page prefixes that derive the same
+  gateway route name, such as `/a/b/` and `/a-b/`, with
+  `platform.session-runtime.route-name-collision`. The finding points at
+  the second prefix and names both. Runtime validation and gateway generation
+  share the route-name derivation, so this clash is reported before generating
+  the gateway fragments. Generated names and fragment bytes are unchanged.
+
 - The session runtime schema accepts module and page prefixes without a
   trailing slash. Such a prefix covers its exact path and descendants at a
   segment boundary: `/api/functions/renew` covers
