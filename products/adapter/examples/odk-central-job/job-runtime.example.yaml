@@ -45,7 +45,8 @@ destinations:
   submissions-workflow:
     type: signed-coordinator-event
     baseUrl: https://coordinator.example.invalid
-    signingKeyRef: secret:env/COORDINATOR_EVENT_KEY
+    hmacSha256KeyRef: secret:env/COORDINATOR_EVENT_KEY
+    # previousHmacSha256KeyRef: secret:env/COORDINATOR_PREVIOUS_EVENT_KEY
     attemptTimeoutMilliseconds: 5000
 store:
   runtimeUrlRef: secret:env/ADAPTER_JOB_DB

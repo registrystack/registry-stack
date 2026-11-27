@@ -3430,7 +3430,7 @@ fn add_unresolved_non_store_secrets(fixture: &JobFixture) {
         "coordinator-test": {
             "type": "signed-coordinator-event",
             "baseUrl": "https://coordinator.example.invalid",
-            "signingKeyRef": "secret:env/JOB_UNRESOLVED_DESTINATION_KEY",
+            "hmacSha256KeyRef": "secret:env/JOB_UNRESOLVED_DESTINATION_KEY",
             "attemptTimeoutMilliseconds": 3000
         }
     });

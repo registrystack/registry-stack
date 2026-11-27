@@ -25,7 +25,7 @@ Delivery is not approval, and approval is not application: a job reports what it
   It is also the buffer a retry reads again.
   Source data is not registry authority.
 - The Adapter ingestion job reads the source, compares items, maps for the direct destination, hands off, keeps the source position and reports status.
-  It holds a source credential and, per destination, a BReg credential or a signing key.
+  It holds a source credential and either a BReg credential or signing keys for the Coordinator triggers.
   It holds no other product's client or credential, and it has no steps, branches, waits or business timers.
 - Coordinator, when used, owns admission, one Run per item, lookup, choice, waits, recovery of its own commands and reaching a person.
   No product depends on it.
@@ -293,7 +293,7 @@ There are exactly two destinations, chosen per job by what its items need.
 | | Direct to BReg | Signed event to Coordinator |
 | --- | --- | --- |
 | Use when | The item maps to one BReg operation with no lookup: an immediate Action, or a Proposal start and submit | The item needs a lookup, a choice between operations, a wait, a person, or a write outside BReg |
-| Adapter holds | The BReg client behind the `direct-breg` feature, and a BReg credential | A signing key, no product client and no Coordinator crate |
+| Adapter holds | The BReg client behind the `direct-breg` feature, and a BReg credential | One signing key per trigger, no product client and no Coordinator crate |
 | Mapping runs | In the job, as a Rhai script | In the workflow, as a Rhai Function on the same engine |
 | Retry identity | Command keys derived from the job, the item key and its sequence | An event ID derived from the same three |
 | Accepted means | BReg committed the Action, or the Proposal is submitted | Coordinator admitted the event and opened a Run |
@@ -346,7 +346,13 @@ A metadata mismatch or operation refusal never selects another operation or dest
 {/* Evidence: crates/registry-adapter-core/src/job.rs RevisedEventReceiver */}
 {/* Evidence: crates/registry-adapter-core/src/job.rs revised_receiver_refuses_the_registration_trigger */}
 
-The job sends one signed event per item, in the platform's `HookEnvelope` format signed with `sign_v1`.
+{/* Evidence: crates/registry-adapter-connectors/src/coordinator_event.rs a_signed_event_signs_id_timestamp_and_the_exact_body */}
+{/* Evidence: crates/registry-adapter-connectors/src/coordinator_event.rs a_rotating_trigger_sends_the_current_signature_first */}
+{/* Evidence: crates/registry-adapter-job/src/runtime_destination.rs resolve_trigger_keys */}
+
+The job sends one event per item as a canonical JSON `HookEnvelope` in a Standard Webhooks POST to `/v1/events/{workflow}/{trigger}`.
+The request carries `accept: application/json`, `content-type: application/json`, `webhook-id`, `webhook-timestamp`, and `webhook-signature`.
+The signature covers the envelope ID, the send time in Unix seconds, and the exact body bytes.
 It admits one Run of a reviewed workflow through `workflow.eventTriggers`.
 Admission and Run commit together, and a repeat of the same event recovers the same Run.
 The workflow maps, resolves the target, calls one typed operation such as `breg.submit-proposal/v1`, and follows the outcome with `wait-for`.
@@ -354,7 +360,7 @@ Coordinator recovers its own commands, and the job tracks only the admission.
 
 The event data has one fixed wrapper: `job: {id, version}`, `key`, `sequence`, `digest`, `item` (the declared projection), and `priorRunId` only when known.
 Event identity and event time are stable for one item sequence.
-Transport time, signature and the monotonically increasing delivery attempt are renewed for retry.
+Each retry keeps the envelope ID as `webhook-id` and signs with the time of that send as `webhook-timestamp`. The job tracks the delivery attempt in its item table.
 The selected public receiver identity is frozen durably before sending.
 A pending sequence with a frozen receiver cannot be retargeted by configuration changes: when the selected receiver differs, the pass stops as `adapter.job.coordinator-receiver-changed` without advancing position, and restoring the original receiver permits recovery.
 A rescan of an item whose refusal answered its last attempt clears its frozen receiver, and the receiver selected when the item is next sent is frozen in its place.
@@ -363,8 +369,16 @@ A rescan sends it only to that receiver with that body, and a changed receiver o
 A possibly accepted item on a job with no revised trigger has no receiver to select: it is held as `adapter.job.revised-item` and sent nowhere, even when its revised event was sent and that answer was lost, and restoring the revised trigger does not resend a held item.
 
 `destination.revisedReceiver` optionally selects a revised-item `trigger`, `eventType` and `dataSchema` inside the same workflow and runtime binding.
-Its trigger must be distinct from the registration trigger.
-Without it, revised items remain held.
+Its trigger must be distinct from the registration trigger. Without a revised receiver, revised items remain held.
+Set `hmacSha256KeyRef` on the runtime destination for the registration trigger.
+When the job declares a revised receiver, set `revisedReceiver.hmacSha256KeyRef` on the runtime destination for that trigger. Omit the runtime block when the job has no revised receiver.
+
+Generate a separate key file for each trigger. Set `umask 077` in your shell before running `openssl rand -hex 32 | tr -d '\n' > key` to create a private file.
+Each key must contain 32 to 64 exact bytes. Supply the same key file to the Coordinator trigger that receives the event.
+To rotate a trigger's key, set its `hmacSha256KeyRef` to the new key and set `previousHmacSha256KeyRef` in the same block to the old key.
+The job sends two `v1,<base64>` signature entries, separated by a space, with the current key first.
+Remove the previous reference after the receiving trigger has switched to the current key.
+
 A revised event may have no prior Run ID after an uncertain admission.
 The workflow must handle that case without creating a second registration or acquiring a person's authority.
 
@@ -414,7 +428,7 @@ The job keeps no payload at rest, so there is nothing to seal and no vault to ru
 | No payload in the item table | A dump or backup exposes personal data | A retry needs the source; a source that deletes early loses the item |
 | Field projection | A whole form reaches BReg, Coordinator, or their operators | One declared field list |
 | Narrow grants | An ingestion credential approves or applies | BReg Start, Submit and Get, or one Action; no Apply, no List |
-| Signed events, Coordinator destination only | A forged event starts a Run | One rotatable signing key; a clock within 30 seconds |
+| Signed events, Coordinator destination only | A forged event starts a Run | One rotatable signing key per trigger and a synchronized clock |
 | Value-free logs and status | Personal data reaches log aggregation | None |
 
 Four properties are never cut:
@@ -462,7 +476,7 @@ Aggregate `status` names only a count and a code, so it points you to `inspect` 
 
 The mode packages as one native companion executable on PostgreSQL.
 For a small IT team, a direct job adds one binary, one database, one source credential and one BReg credential.
-A Coordinator job swaps the BReg credential for a signing key and a clock within 30 seconds of Coordinator's.
+A Coordinator job needs a signing key per trigger and a clock synchronized with Coordinator's.
 
 ## Webhook ingress
 
