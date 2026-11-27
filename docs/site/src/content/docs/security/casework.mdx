@@ -224,10 +224,15 @@ The residuals refer to these obligations by number.
    Keep deferred lifetimes no longer than the work needs.
    {/* Evidence: crates/registry-casework/src/task_grants/http_tests.rs,
        deferred_review_grants_ignore_drafts_but_never_revive_after_responsibility_changes. */}
-6. Make completion receivers idempotent on the `Idempotency-Key` header (the `eventId`), and fall
-   back to `GET /v1/review-results` when a wake-up is missed.
+6. Give each completion destination distinct signing keys.
+   Select the verification keys by the unsigned `registry-recipient-binding` and authenticate the
+   exact body, event ID and timestamp with Standard Webhooks HMAC-SHA256.
+   Require a timestamp within 300 seconds of the receiver's clock in either direction.
+   Persist the verified `webhook-id` and payload before acknowledging, and deduplicate by that ID.
+   Fall back to `GET /v1/review-results` when a wake-up is missed.
    See [Receive Casework completion wakes](../../configure/casework-completion-receivers/).
-   {/* Evidence: crates/registry-casework/src/runtime/completion.rs;
+   {/* Evidence: crates/registry-casework/src/runtime.rs, review_completion_targets, review_completion_signs_the_exact_bytes_it_sends;
+       crates/registry-casework/tests/review_postgres.rs, at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhausts_bounded_retries;
        crates/registry-casework/src/http.rs, review_result_feed. */}
 7. Treat reviewer-written public reasons as released text (`CASEWORK-RES-06`).
    {/* Evidence: crates/registry-review-protocol/src/lib.rs, check_public_reason. */}
@@ -346,7 +351,7 @@ identifiers.
 
 ### `CASEWORK-RES-07`: completion delivery is at-least-once
 
-- Condition: a send whose response is lost is retried under the same `Idempotency-Key`; an attempt
+- Condition: a send whose response is lost is retried under the same `webhook-id` with a fresh signature timestamp. An attempt
   interrupted by a crash or restart counts as a failed attempt, so an interrupted final attempt ends
   `dead-lettered` and is not retried.
   One worker serves each runtime process with a one-second idle poll.

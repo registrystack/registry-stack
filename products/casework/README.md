@@ -163,8 +163,8 @@ resumable result feed. A `ReviewResult` repeats the subject, policy, and
 submission digest and carries a terminal status such as `approved`,
 `rejected`, `answered`, `cancelled`, or `superseded`. A decided result names
 its `outcome` and any `publicReason`; a cancelled or superseded one carries
-neither. A completion destination,
-when configured, receives an authenticated [completion wake](https://docs.registrystack.org/configure/casework-completion-receivers/)
+neither. A configured completion destination receives a Standard Webhooks-signed
+[completion wake](https://docs.registrystack.org/configure/casework-completion-receivers/)
 with event, request and result identifiers. Delivery is at-least-once. A wake carries
 no decision payload; the producer fetches the result and authorizes any later
 mutation independently.

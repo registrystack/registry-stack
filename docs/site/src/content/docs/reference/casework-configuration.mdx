@@ -436,23 +436,18 @@ A facade version or a silently ignored extra argument is not capability evidence
 ## Review completion destinations
 
 `reviewCompletionDestinations` is keyed by the logical destination ids a producer's `completion` block names, kept as written: 1 to 512 characters without control characters.
-Each destination has one `url` and exactly one secret:
-
-- `bearerTokenRef` presents the secret as `Authorization: Bearer <secret>`.
-- `auth: {secretRef}` does the same.
-- `auth: {header, secretRef}` presents the raw secret as the value of that header instead, with no `Authorization` header.
-  Use it for a receiver that authenticates with a header such as `x-api-key`.
-
-The header name is HTTP token characters, at most 64 bytes, and compared case-insensitively against a reserved set the runtime refuses at load.
-The reserved set covers authentication, host, cookie, framing, hop-by-hop, forwarding, proxy and tracing headers, plus the completion contract's own `idempotency-key` and every `registry-` header.
-The secret is visible ASCII, is never logged, and redirects are not followed.
-`caseworkctl doctor` reports the same refusal before the runtime starts.
+Set `url` and `hmacSha256KeyRef` for each destination.
+Replace `bearerTokenRef` or `auth` with `hmacSha256KeyRef` when updating an existing destination.
+Use a secret reference that resolves to 32 through 64 exact bytes.
+During rotation, set `previousHmacSha256KeyRef` to also sign with the previous key.
+Give each destination distinct keys, including any previous key.
+Casework loads these keys at startup, so restart the service to pick up a rotation.
 
 [Receive Casework completion wakes](../../configure/casework-completion-receivers/) defines the POST payload, headers, bounded retries, acknowledgement and durable receiver deduplication.
 Delivery is at-least-once.
 
-{/* Evidence: crates/registry-casework/src/config.rs ReviewCompletionRuntimeConfig, ReviewCompletionAuthConfig, MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES;
-    crates/registry-casework/src/runtime.rs completion_acknowledged */}
+{/* Evidence: crates/registry-casework/src/config.rs ReviewCompletionRuntimeConfig;
+    crates/registry-casework/src/runtime.rs review_completion_targets, completion_acknowledged */}
 
 ## Generated key reference
 

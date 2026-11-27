@@ -1546,7 +1546,7 @@ mod doctor_tests {
                 "postgresql://casework@127.0.0.1:1/casework?sslmode=require&connect_timeout=1",
             ),
             ("audit-key", CANARY),
-            ("completion-token", CANARY),
+            ("completion-key", CANARY),
         ] {
             write_secret(&secrets.join(name), bytes.as_bytes(), 0o600);
         }
@@ -1558,7 +1558,7 @@ mod doctor_tests {
             "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/absent-migration-url"},
             "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
             "audit":{"path":root.path().join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"},
-            "reviewCompletionDestinations":{"receiver":{"url":"https://completion.example.test/reviews","bearerTokenRef":"secret:file/completion-token"}}
+            "reviewCompletionDestinations":{"receiver":{"url":"https://completion.example.test/reviews","hmacSha256KeyRef":"secret:file/completion-key"}}
         });
         let runtime = root.path().join("runtime.yaml");
         fs::write(&runtime, serde_norway::to_string(&config).unwrap()).unwrap();
@@ -1575,8 +1575,8 @@ mod doctor_tests {
         for (name, field) in [
             ("audit-key", "audit.hashKeyRef"),
             (
-                "completion-token",
-                "reviewCompletionDestinations.receiver.bearerTokenRef",
+                "completion-key",
+                "reviewCompletionDestinations.receiver.hmacSha256KeyRef",
             ),
         ] {
             let (root, runtime) = setup();
@@ -1658,7 +1658,7 @@ mod doctor_tests {
                 }
                 _ => unreachable!(),
             }
-            fs::remove_file(root.path().join("secrets/completion-token")).unwrap();
+            fs::remove_file(root.path().join("secrets/completion-key")).unwrap();
             let config = load_runtime_config(&runtime).unwrap();
             let resolver = secret_resolver(&config).unwrap();
             let report = config.check_runtime_secrets(&resolver).unwrap_err();
@@ -1671,7 +1671,7 @@ mod doctor_tests {
                 paths,
                 [
                     "/audit/hashKeyRef",
-                    "/reviewCompletionDestinations/receiver/bearerTokenRef"
+                    "/reviewCompletionDestinations/receiver/hmacSha256KeyRef"
                 ],
                 "{condition}"
             );

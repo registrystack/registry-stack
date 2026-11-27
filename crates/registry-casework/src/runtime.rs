@@ -3,16 +3,17 @@ use std::future::Future;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use clap::{Arg, Command};
 use registry_casework_core::ReviewContextProvider;
 use registry_platform_audit::{AuditProfile, AuditWriter};
-use registry_platform_config::SecretResolver;
+use registry_platform_config::{SecretReference, SecretResolver};
+use registry_platform_crypto::delivery_signature::{self, DeliveryKey, DeliveryKeys};
 #[cfg(feature = "postgres-test")]
 use registry_platform_dispatch::postgres::DispatchOutcome;
 use registry_platform_dispatch::postgres::{DispatchWorker, Disposition, WorkerConfig};
-use registry_platform_httputil::{BearerToken, OutboundClientBuilder};
+use registry_platform_httputil::OutboundClientBuilder;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -27,83 +28,98 @@ use crate::{
 
 struct ReviewCompletionTarget {
     url: String,
-    credential: ReviewCompletionCredential,
+    keys: DeliveryKeys,
     timeout: Duration,
     maximum_attempts: u32,
     retry: Duration,
 }
 
-const MAXIMUM_COMPLETION_SECRET_BYTES: usize = 8 * 1024;
-
-/// The secret a completion destination presents on every wake-up.
-enum ReviewCompletionCredential {
-    Bearer(BearerToken),
-    Header {
-        name: reqwest::header::HeaderName,
-        value: reqwest::header::HeaderValue,
-    },
+fn completion_key_path(id: &str, member: &str) -> String {
+    format!("reviewCompletionDestinations.{id}.{member}")
 }
 
-impl ReviewCompletionCredential {
-    fn from_config(header: Option<&str>, secret: &[u8]) -> Result<Self, RuntimeError> {
-        let Some(header) = header else {
-            return completion_bearer_token(secret).map(Self::Bearer);
-        };
-        let name = reqwest::header::HeaderName::from_bytes(header.as_bytes())
-            .map_err(|_| RuntimeError::CompletionConfiguration)?;
-        // The same header-safe subset a bearer credential is held to: visible
-        // ASCII only, so the secret cannot fold or inject a header.
-        if secret.is_empty()
-            || secret.len() > MAXIMUM_COMPLETION_SECRET_BYTES
-            || !secret.iter().all(u8::is_ascii_graphic)
-        {
-            return Err(RuntimeError::CompletionConfiguration);
-        }
-        let mut value = reqwest::header::HeaderValue::from_bytes(secret)
-            .map_err(|_| RuntimeError::CompletionConfiguration)?;
-        value.set_sensitive(true);
-        Ok(Self::Header { name, value })
-    }
-
-    fn header(&self) -> (reqwest::header::HeaderName, reqwest::header::HeaderValue) {
-        match self {
-            Self::Bearer(token) => (
-                reqwest::header::AUTHORIZATION,
-                token.authorization_header_value(),
-            ),
-            Self::Header { name, value } => (name.clone(), value.clone()),
-        }
-    }
+fn resolve_completion_key(
+    secrets: &SecretResolver,
+    path: &str,
+    reference: &SecretReference,
+) -> Result<(DeliveryKey, usize, bool), RuntimeError> {
+    let secret = secrets
+        .resolve_binary_reference(reference)
+        .map_err(|_| RuntimeError::CompletionKeyUnavailable(path.to_owned()))?;
+    let bytes = secret.expose_secret();
+    let length = bytes.len();
+    let trailing_newline = bytes.ends_with(b"\n");
+    let key = DeliveryKey::new(bytes).map_err(|source| RuntimeError::InvalidCompletionKey {
+        path: path.to_owned(),
+        length,
+        trailing_newline,
+        source,
+    })?;
+    Ok((key, length, trailing_newline))
 }
 
-/// Resolve every configured completion destination and its credential.
+/// Resolve every configured completion destination and its signing keys.
 fn review_completion_targets(
     configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
     secrets: &SecretResolver,
 ) -> Result<BTreeMap<String, Arc<ReviewCompletionTarget>>, RuntimeError> {
+    use crate::config::{CURRENT_COMPLETION_KEY, PREVIOUS_COMPLETION_KEY};
+
     let mut targets = BTreeMap::new();
     for (id, target) in configured {
-        let reference = target
-            .secret_ref()
-            .ok_or(RuntimeError::CompletionConfiguration)?;
-        let secret = secrets
-            .resolve(reference)
-            .map_err(|_| RuntimeError::CompletionConfiguration)?;
-        let credential = ReviewCompletionCredential::from_config(
-            target.secret_header(),
-            secret.expose_secret(),
+        let (current, _, _) = resolve_completion_key(
+            secrets,
+            &completion_key_path(id, CURRENT_COMPLETION_KEY),
+            &target.hmac_sha256_key_ref,
         )?;
+        let keys = if let Some(reference) = &target.previous_hmac_sha256_key_ref {
+            let path = completion_key_path(id, PREVIOUS_COMPLETION_KEY);
+            let (previous, length, trailing_newline) =
+                resolve_completion_key(secrets, &path, reference)?;
+            DeliveryKeys::new(current, Some(previous)).map_err(|source| {
+                RuntimeError::InvalidCompletionKey {
+                    path,
+                    length,
+                    trailing_newline,
+                    source,
+                }
+            })?
+        } else {
+            DeliveryKeys::new(current, None).expect("one validated key")
+        };
         targets.insert(
             id.clone(),
             Arc::new(ReviewCompletionTarget {
                 url: target.url.clone(),
-                credential,
+                keys,
                 timeout: Duration::from_millis(target.attempt_timeout_milliseconds),
                 maximum_attempts: target.maximum_attempts,
                 retry: Duration::from_secs(target.retry_delay_seconds),
             }),
         );
     }
+    let labeled_keys = targets
+        .iter()
+        .flat_map(|(id, target)| {
+            std::iter::once((
+                completion_key_path(id, CURRENT_COMPLETION_KEY),
+                target.keys.current(),
+            ))
+            .chain(
+                target
+                    .keys
+                    .previous()
+                    .map(|key| (completion_key_path(id, PREVIOUS_COMPLETION_KEY), key)),
+            )
+        })
+        .collect::<Vec<_>>();
+    delivery_signature::distinct_delivery_keys(
+        labeled_keys.iter().map(|(path, key)| (path.as_str(), *key)),
+    )
+    .map_err(|error| RuntimeError::RepeatedCompletionKey {
+        first: error.first().to_owned(),
+        second: error.second().to_owned(),
+    })?;
     Ok(targets)
 }
 
@@ -156,11 +172,6 @@ fn completion_failure_diagnostic(destination: &str, attempt: i32, disposition: D
     }
 }
 
-fn completion_bearer_token(bytes: &[u8]) -> Result<BearerToken, RuntimeError> {
-    let token = std::str::from_utf8(bytes).map_err(|_| RuntimeError::CompletionConfiguration)?;
-    BearerToken::new(token.to_owned()).map_err(|_| RuntimeError::CompletionConfiguration)
-}
-
 async fn validate_retained_completion_destinations(
     store: &PostgresStore,
     configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
@@ -199,8 +210,8 @@ pub async fn validate_retained_completion_destinations_for_test(
                 (*id).to_owned(),
                 crate::ReviewCompletionRuntimeConfig {
                     url: "http://127.0.0.1/completion".to_owned(),
-                    bearer_token_ref: Some("secret:env/TEST".to_owned()),
-                    auth: None,
+                    hmac_sha256_key_ref: SecretReference::parse("secret:env/TEST").unwrap(),
+                    previous_hmac_sha256_key_ref: None,
                     attempt_timeout_milliseconds: 1_000,
                     maximum_attempts: 1,
                     retry_delay_seconds: 1,
@@ -215,17 +226,19 @@ pub async fn validate_retained_completion_destinations_for_test(
 fn test_completion_targets(
     destination_id: &str,
     url: String,
-    bearer_token: &str,
+    signing_key: &str,
     maximum_attempts: u32,
 ) -> Result<completion::CompletionTargets, crate::ReviewRuntimeError> {
     Ok(Arc::new(BTreeMap::from([(
         destination_id.to_owned(),
         Arc::new(ReviewCompletionTarget {
             url,
-            credential: ReviewCompletionCredential::Bearer(
-                BearerToken::new(bearer_token.to_owned())
+            keys: DeliveryKeys::new(
+                DeliveryKey::new(signing_key.as_bytes())
                     .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
-            ),
+                None,
+            )
+            .expect("one validated key"),
             timeout: Duration::from_secs(30),
             maximum_attempts,
             retry: Duration::from_secs(1),
@@ -241,9 +254,9 @@ pub async fn dispatch_review_completions_once_for_test(
     store: PostgresStore,
     destination_id: &str,
     url: String,
-    bearer_token: &str,
+    signing_key: &str,
 ) -> Result<(), crate::ReviewRuntimeError> {
-    let targets = test_completion_targets(destination_id, url, bearer_token, 3)?;
+    let targets = test_completion_targets(destination_id, url, signing_key, 3)?;
     let dispatcher = completion::completion_dispatcher(store, Arc::clone(&targets)).await?;
     let client = review_completion_client().map_err(|_| crate::ReviewRuntimeError::Invalid)?;
     let transport = completion::CompletionTransport::new(client, targets);
@@ -300,7 +313,7 @@ pub async fn claim_review_completion_for_test(
     let targets = test_completion_targets(
         destination_id,
         "http://127.0.0.1/completion".to_owned(),
-        "completion-secret",
+        "synthetic-test-key-not-for-use!!",
         maximum_attempts,
     )?;
     let dispatcher = completion::completion_dispatcher(store, targets).await?;
@@ -324,7 +337,7 @@ pub async fn finish_review_completion_for_test(
     let targets = test_completion_targets(
         destination_id,
         "http://127.0.0.1/completion".to_owned(),
-        "completion-secret",
+        "synthetic-test-key-not-for-use!!",
         maximum_attempts,
     )?;
     let dispatcher = completion::completion_dispatcher(store, targets).await?;
@@ -353,14 +366,27 @@ async fn deliver_review_completion(
     target: &ReviewCompletionTarget,
     delivery: &crate::LeasedReviewCompletion,
 ) -> bool {
-    let (credential_name, credential_value) = target.credential.header();
+    let Ok(body) = serde_json::to_vec(&delivery.event) else {
+        return false;
+    };
+    let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
+        return false;
+    };
+    let timestamp = now.as_secs();
+    let id = delivery.event.event_id.to_string();
+    let Ok(signature) = delivery_signature::sign(&target.keys, &id, timestamp, &body) else {
+        return false;
+    };
     let Ok(response) = client
         .post(&target.url)
         .timeout(target.timeout)
-        .header(credential_name, credential_value)
-        .header("idempotency-key", delivery.event.event_id.to_string())
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("webhook-id", id)
+        .header("webhook-timestamp", timestamp.to_string())
+        .header("webhook-signature", signature)
         .header("registry-recipient-binding", &delivery.recipient_binding)
-        .json(&delivery.event)
+        .body(body)
         .send()
         .await
     else {
@@ -822,6 +848,85 @@ mod tests {
 
     use super::*;
 
+    fn completion_test_keys() -> DeliveryKeys {
+        DeliveryKeys::new(DeliveryKey::new(&[b'k'; 32]).unwrap(), None).unwrap()
+    }
+
+    fn completion_config(
+        current: &str,
+        previous: Option<&str>,
+    ) -> crate::ReviewCompletionRuntimeConfig {
+        let mut value = serde_json::json!({
+            "url": "https://receiver.example.test/completions",
+            "hmacSha256KeyRef": current,
+        });
+        if let Some(previous) = previous {
+            value["previousHmacSha256KeyRef"] = serde_json::json!(previous);
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn completion_key_file(root: &Path, name: &str, bytes: &[u8]) {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(root.join(name))
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+    }
+
+    #[test]
+    fn completion_destinations_cannot_share_a_current_or_previous_signing_key() {
+        let root = tempfile::tempdir().unwrap();
+        completion_key_file(root.path(), "current", &[0; 32]);
+        completion_key_file(root.path(), "other", &[1; 32]);
+        completion_key_file(root.path(), "previous", &[0; 32]);
+        let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
+        let destinations = BTreeMap::from([
+            (
+                "first".to_owned(),
+                completion_config("secret:file/current", None),
+            ),
+            (
+                "second".to_owned(),
+                completion_config("secret:file/other", Some("secret:file/previous")),
+            ),
+        ]);
+        let error = review_completion_targets(&destinations, &secrets)
+            .err()
+            .unwrap();
+        assert!(matches!(error, RuntimeError::RepeatedCompletionKey { .. }));
+        let message = error.to_string();
+        assert!(message.contains("reviewCompletionDestinations.first.hmacSha256KeyRef"));
+        assert!(message.contains("reviewCompletionDestinations.second.previousHmacSha256KeyRef"));
+    }
+
+    #[test]
+    fn a_65_byte_completion_signing_key_reports_its_length_and_trailing_newline() {
+        let root = tempfile::tempdir().unwrap();
+        let mut bytes = [b'k'; 65];
+        bytes[64] = b'\n';
+        completion_key_file(root.path(), "oversized", &bytes);
+        let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
+        let destinations = BTreeMap::from([(
+            "receiver".to_owned(),
+            completion_config("secret:file/oversized", None),
+        )]);
+        let error = review_completion_targets(&destinations, &secrets)
+            .err()
+            .unwrap();
+        assert!(matches!(error, RuntimeError::InvalidCompletionKey { .. }));
+        let message = error.to_string();
+        assert!(message.contains("reviewCompletionDestinations.receiver.hmacSha256KeyRef"));
+        assert!(message.contains("65 bytes"));
+        assert!(message.contains("trailing newline: true"));
+    }
+
     #[tokio::test]
     async fn completion_acknowledgement_does_not_read_an_unfinished_body() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -843,9 +948,7 @@ mod tests {
             });
             let target = ReviewCompletionTarget {
                 url: format!("http://{address}/completion"),
-                credential: ReviewCompletionCredential::Bearer(
-                    BearerToken::new("canary-secret").unwrap(),
-                ),
+                keys: completion_test_keys(),
                 timeout: Duration::from_secs(5),
                 maximum_attempts: 3,
                 retry: Duration::from_secs(1),
@@ -875,7 +978,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn review_completion_delivery_is_minimal_authenticated_and_stable_after_lost_ack() {
+    async fn review_completion_delivery_is_signed_and_stable_after_lost_ack() {
         let server = MockServer::start().await;
         let event = registry_casework_core::ReviewCompletion {
             event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
@@ -890,11 +993,7 @@ mod tests {
         };
         Mock::given(method("POST"))
             .and(path("/completion"))
-            .and(header("authorization", "Bearer dispatch-secret"))
-            .and(header(
-                "idempotency-key",
-                "11111111-1111-4111-8111-111111111111",
-            ))
+            .and(header("webhook-id", "11111111-1111-4111-8111-111111111111"))
             .and(header("registry-recipient-binding", "registry-service"))
             .and(body_json(&event))
             .respond_with(ResponseTemplate::new(503))
@@ -905,11 +1004,7 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/completion"))
-            .and(header("authorization", "Bearer dispatch-secret"))
-            .and(header(
-                "idempotency-key",
-                "11111111-1111-4111-8111-111111111111",
-            ))
+            .and(header("webhook-id", "11111111-1111-4111-8111-111111111111"))
             .and(header("registry-recipient-binding", "registry-service"))
             .and(body_json(&event))
             .respond_with(ResponseTemplate::new(204))
@@ -922,9 +1017,7 @@ mod tests {
             .expect("completion client");
         let target = ReviewCompletionTarget {
             url: format!("{}/completion", server.uri()),
-            credential: ReviewCompletionCredential::Bearer(
-                BearerToken::new("dispatch-secret").expect("completion token"),
-            ),
+            keys: completion_test_keys(),
             timeout: Duration::from_secs(1),
             maximum_attempts: 3,
             retry: Duration::from_secs(1),
@@ -946,9 +1039,7 @@ mod tests {
             .await;
         let nonempty_success_target = ReviewCompletionTarget {
             url: format!("{}/nonempty-success", server.uri()),
-            credential: ReviewCompletionCredential::Bearer(
-                BearerToken::new("dispatch-secret").expect("completion token"),
-            ),
+            keys: completion_test_keys(),
             timeout: Duration::from_secs(1),
             maximum_attempts: 3,
             retry: Duration::from_secs(1),
@@ -980,9 +1071,7 @@ mod tests {
             .await;
         let redirect_target = ReviewCompletionTarget {
             url: format!("{}/redirect", server.uri()),
-            credential: ReviewCompletionCredential::Bearer(
-                BearerToken::new("dispatch-secret").expect("completion token"),
-            ),
+            keys: completion_test_keys(),
             timeout: Duration::from_secs(1),
             maximum_attempts: 3,
             retry: Duration::from_secs(1),
@@ -991,15 +1080,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn review_completion_presents_its_secret_in_a_configured_header_without_authorization() {
+    async fn review_completion_signs_the_exact_bytes_it_sends() {
+        use registry_platform_crypto::delivery_signature::{
+            verify, SignedContent, DELIVERY_TOLERANCE,
+        };
+
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/completion"))
-            .and(header("x-api-key", "dispatch-key"))
-            .and(header(
-                "idempotency-key",
-                "11111111-1111-4111-8111-111111111111",
-            ))
+            .and(header("webhook-id", "11111111-1111-4111-8111-111111111111"))
             .and(header("registry-recipient-binding", "registry-service"))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
@@ -1008,14 +1097,20 @@ mod tests {
         let client = OutboundClientBuilder::new()
             .try_build()
             .expect("completion client");
-        let target = ReviewCompletionTarget {
-            url: format!("{}/completion", server.uri()),
-            credential: ReviewCompletionCredential::from_config(Some("X-Api-Key"), b"dispatch-key")
-                .expect("header credential"),
-            timeout: Duration::from_secs(1),
-            maximum_attempts: 3,
-            retry: Duration::from_secs(1),
-        };
+        let root = tempfile::tempdir().unwrap();
+        let current_bytes = [0; 32];
+        let previous_bytes = [0xff; 32];
+        completion_key_file(root.path(), "current", &current_bytes);
+        completion_key_file(root.path(), "previous", &previous_bytes);
+        let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
+        let mut configured = completion_config("secret:file/current", Some("secret:file/previous"));
+        configured.url = format!("{}/completion", server.uri());
+        let targets = review_completion_targets(
+            &BTreeMap::from([("receiver".to_owned(), configured)]),
+            &secrets,
+        )
+        .unwrap();
+        let target = &targets["receiver"];
         let delivery = crate::LeasedReviewCompletion {
             event: registry_casework_core::ReviewCompletion {
                 event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
@@ -1034,49 +1129,37 @@ mod tests {
             recipient_binding: "registry-service".to_owned(),
         };
 
-        assert!(deliver_review_completion(&client, &target, &delivery).await);
+        assert!(deliver_review_completion(&client, target, &delivery).await);
         let received = server.received_requests().await.expect("recorded requests");
         assert_eq!(received.len(), 1);
-        assert!(
-            !received[0].headers.contains_key("authorization"),
-            "a configured header replaces Authorization"
-        );
-
-        let (name, value) = ReviewCompletionCredential::from_config(None, b"dispatch-secret")
-            .expect("default credential")
-            .header();
-        assert_eq!(name, reqwest::header::AUTHORIZATION);
-        assert_eq!(value, "Bearer dispatch-secret");
-        assert!(value.is_sensitive());
-        let (_, value) =
-            ReviewCompletionCredential::from_config(Some("x-api-key"), b"dispatch-key")
-                .expect("header credential")
-                .header();
-        assert_eq!(value, "dispatch-key");
-        assert!(value.is_sensitive());
-        for invalid in [
-            b"".as_slice(),
-            b"dispatch key",
-            b"dispatch-key\r\nhost: other",
-            &[0xff],
-            &[b'k'; MAXIMUM_COMPLETION_SECRET_BYTES + 1],
-        ] {
-            assert!(matches!(
-                ReviewCompletionCredential::from_config(Some("x-api-key"), invalid),
-                Err(RuntimeError::CompletionConfiguration)
-            ));
+        let request = &received[0];
+        let header = |name: &str| request.headers[name].to_str().unwrap();
+        let content = SignedContent {
+            id: header("webhook-id"),
+            timestamp: header("webhook-timestamp"),
+            signature: header("webhook-signature"),
+            body: &request.body,
+        };
+        let entries: Vec<_> = content.signature.split(' ').collect();
+        assert_eq!(entries.len(), 2);
+        for (signature, key_bytes) in entries.into_iter().zip([current_bytes, previous_bytes]) {
+            let keys = DeliveryKeys::new(DeliveryKey::new(&key_bytes).unwrap(), None).unwrap();
+            verify(
+                &keys,
+                SignedContent {
+                    signature,
+                    ..content
+                },
+                SystemTime::now(),
+                DELIVERY_TOLERANCE,
+            )
+            .unwrap();
         }
-    }
-
-    #[test]
-    fn review_completion_bearer_tokens_are_validated_before_dispatch() {
-        assert!(completion_bearer_token(b"dispatch-secret").is_ok());
-        for invalid in [b"dispatch-secret\n".as_slice(), &[0xff]] {
-            assert!(matches!(
-                completion_bearer_token(invalid),
-                Err(RuntimeError::CompletionConfiguration)
-            ));
-        }
+        assert_eq!(header("webhook-id"), delivery.event.event_id.to_string());
+        assert_eq!(header("accept"), "application/json");
+        assert_eq!(header("content-type"), "application/json");
+        assert!(!request.headers.contains_key("authorization"));
+        assert!(!request.headers.contains_key("idempotency-key"));
     }
 
     #[test]
@@ -1311,6 +1394,17 @@ pub enum RuntimeError {
     AuditDestination(String),
     #[error("the Casework review completion destination configuration is invalid")]
     CompletionConfiguration,
+    #[error("could not resolve {0}. Check the configured secret reference")]
+    CompletionKeyUnavailable(String),
+    #[error("{path} has {length} bytes (trailing newline: {trailing_newline}). {source}")]
+    InvalidCompletionKey {
+        path: String,
+        length: usize,
+        trailing_newline: bool,
+        source: delivery_signature::DeliveryKeyError,
+    },
+    #[error("{first} and {second} share the same signing key bytes. Configure distinct keys")]
+    RepeatedCompletionKey { first: String, second: String },
     #[error("the CASEWORK_LOG level is invalid; it must be one of error, warn, or info")]
     Logging,
     #[error(transparent)]
