@@ -1645,6 +1645,7 @@ fn breg_authority(
     };
     validate_breg_binding_ids(&plan.bindings, &facts)?;
     check_breg_grants(&facts, &plan.people)?;
+    check_person_audience_member(plan, &facts)?;
     let principal = breg_principal(plan, &facts.principal_claims)?;
     Ok(Some(BregAuthority {
         principal,
@@ -1743,6 +1744,21 @@ fn check_breg_grants(
         }
     }
     Ok(())
+}
+
+/// A product that checks task grants keeps its own audience: a task grant is
+/// bound to the resource of the product that receives it, so sharing that
+/// audience with other products would let them accept the grant.
+fn check_person_audience_member(plan: &Plan, facts: &BregFacts) -> plan::SemanticResult<()> {
+    let Some((index, entry)) = breg_entry(plan) else {
+        return Ok(());
+    };
+    plan::require(
+        !(facts.checks_task_grants && plan.person_audience.as_deref() == Some(entry.audience.as_str())),
+        &format!("/products/{index}/audience"),
+        "BReg checks task grants, which are bound to its own audience, so it cannot be a person audience member.",
+        "Give BReg an audience other than personAudience, or remove the task grants from its access profiles.",
+    )
 }
 
 fn casework_principals(
@@ -4123,6 +4139,31 @@ mod tests {
         assert!(!error.contains("directory-edtor"), "{error}");
         let valid = BTreeMap::from([("editor".to_owned(), breg_person("directory-editor"))]);
         check_breg_grants(&facts, &valid).unwrap();
+    }
+
+    #[test]
+    fn breg_checking_task_grants_is_refused_as_a_person_audience_member() {
+        let mut plan = authority_plan(json!({}), json!({}), false);
+        plan.person_audience = Some("urn:test:people".to_owned());
+        plan.products[0].audience = "urn:test:people".to_owned();
+        let tasked = BregFacts {
+            checks_task_grants: true,
+            ..BregFacts::default()
+        };
+        let error = check_person_audience_member(&plan, &tasked)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("/products/0/audience"), "{error}");
+        assert!(error.contains("checks task grants"), "{error}");
+        assert!(
+            error.contains("Give BReg an audience other than personAudience"),
+            "{error}"
+        );
+        check_person_audience_member(&plan, &BregFacts::default()).unwrap();
+        plan.products[0].audience = "registry".to_owned();
+        check_person_audience_member(&plan, &tasked).unwrap();
+        plan.person_audience = None;
+        check_person_audience_member(&plan, &tasked).unwrap();
     }
 
     fn breg_input(encrypts_fields: bool) -> RunInput {

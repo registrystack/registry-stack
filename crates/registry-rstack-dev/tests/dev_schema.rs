@@ -196,6 +196,36 @@ fn project_dev_schema_refuses_identifiers_the_reader_refuses() {
 }
 
 #[test]
+fn project_dev_schema_refuses_person_audiences_the_reader_refuses() {
+    let documents = documents().expect("the development schemas generate");
+    let schema = compile(&documents["dev.v1alpha1.schema.json"]);
+    let mut plan = project_dev_with_studio_identifiers();
+
+    let at_limit = format!("urn:test:{}", "p".repeat(256 - "urn:test:".len()));
+    for accepted in [
+        "urn:test:people",
+        "https://people.example.test/audience",
+        &at_limit,
+    ] {
+        plan["personAudience"] = json!(accepted);
+        assert!(schema.is_valid(&plan), "personAudience: {accepted}");
+    }
+    for refused in [
+        "people",
+        "",
+        "urn:test:people#fragment",
+        "urn:test:with space",
+        "urn:test:p\u{e9}ople",
+        "https:\\people.example.test",
+        "urn:test:a|b",
+        &format!("{at_limit}p"),
+    ] {
+        plan["personAudience"] = json!(refused);
+        assert!(!schema.is_valid(&plan), "personAudience: {refused}");
+    }
+}
+
+#[test]
 fn scenarios_schema_refuses_identifiers_the_reader_refuses() {
     let documents = documents().expect("the development schemas generate");
     let schema = compile(&documents["scenarios.v1alpha1.schema.json"]);

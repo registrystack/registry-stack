@@ -136,12 +136,15 @@ impl BrowserServer {
         // Each audience maps to one product. A person audience shared by several
         // products would need this map to hold all of them, with the sign-in
         // choosing among them. Only BReg can be a member today, so one suffices.
-        let audiences = input
-            .plan
-            .products
-            .iter()
-            .map(|entry| (entry.audience.clone(), entry.product))
-            .collect();
+        let mut audiences = BTreeMap::new();
+        for entry in &input.plan.products {
+            ensure!(
+                audiences
+                    .insert(entry.audience.clone(), entry.product)
+                    .is_none(),
+                "one audience maps to two products"
+            );
+        }
         let expires = Arc::new(AtomicU64::new(0));
         let state = Arc::new(BrowserState {
             cookie_name: cookie_name(&input.run_id),
@@ -991,6 +994,44 @@ mod tests {
             assert_eq!(access["aud"], "urn:test:people");
             assert_eq!(access["sub"], "subject-1");
         });
+    }
+
+    #[test]
+    fn start_refuses_one_audience_shared_by_two_products() {
+        let scratch = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let input: RunInput = serde_json::from_value(json!({
+            "run_id": "0123456789abcdef0123456789abcdef", "project": "/project",
+            "ttl_seconds": 1800,
+            "plan": {"issuer": origin,
+                "products": [
+                    {"product": "breg", "project": ".", "audience": "urn:test:people"},
+                    {"product": "casework", "project": ".", "audience": "urn:test:people"}
+                ],
+                "people": {"person": {"subject": "subject-1", "client": "cli-client",
+                    "grants": {"breg": {"profile": "viewer", "scopes": []}}}},
+                "scenarioFile": "tests/scenarios.yaml"},
+            "schema_people": [],
+            "breg_authority": {"principal": "registry_principal", "purpose": false,
+                "requires_postgis": false, "encrypts_fields": false, "named_clients": []},
+            "casework_principals": {"viewer": "sub"}, "binaries": {}
+        }))
+        .unwrap();
+        let error = BrowserServer::start(
+            listener,
+            Arc::new(input),
+            Arc::new(Issuer::create(scratch.path()).unwrap()),
+            BrowserClient {
+                id: "app".to_owned(),
+                secret: Zeroizing::new("a-secret-longer-than-thirty-two-bytes".to_owned()),
+                redirect_uri: "http://127.0.0.1:4000/callback".to_owned(),
+            },
+        )
+        .err()
+        .expect("a shared audience is refused")
+        .to_string();
+        assert_eq!(error, "one audience maps to two products");
     }
 
     #[test]

@@ -22,6 +22,9 @@ pub(super) struct BregFacts {
     pub access_profiles: BTreeSet<String>,
     pub actions: BTreeSet<String>,
     pub review_authorities: BTreeSet<String>,
+    /// Whether any access profile declares a task grant, so the product checks
+    /// task grants bound to its own audience.
+    pub checks_task_grants: bool,
 }
 
 /// The owning tool refused the project. `findings` carries its own diagnostics
@@ -152,6 +155,12 @@ fn facts_from_reports(access: &Value, model: &Value) -> Result<BregFacts> {
         access_profiles: ids(model, "accessProfiles")?,
         actions: ids(model, "actions")?,
         review_authorities: ids(model, "reviewAuthorities")?,
+        checks_task_grants: access["recordTypes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|record| record["profiles"].as_array().into_iter().flatten())
+            .any(|profile| profile["taskGrant"].is_object()),
     })
 }
 
@@ -233,7 +242,31 @@ mod tests {
                 access_profiles: set(&["operator", "reviewer"]),
                 actions: set(&["correct-status"]),
                 review_authorities: set(&["casework"]),
+                checks_task_grants: false,
             }
+        );
+    }
+
+    #[test]
+    fn a_task_grant_on_any_access_profile_is_reported() {
+        let (mut access, model) = reports();
+        access["explanation"]["recordTypes"] = json!([
+            {"recordType": "plain", "profiles": [{"id": "operator"}]},
+            {"recordType": "tasked", "profiles": [
+                {"id": "reviewer"},
+                {"id": "worker", "taskGrant": {"sourceIssuer": "https://casework.example"}}
+            ]}
+        ]);
+        assert!(
+            facts_from_reports(&access, &model)
+                .unwrap()
+                .checks_task_grants
+        );
+        access["explanation"]["recordTypes"][1]["profiles"][1]["taskGrant"] = Value::Null;
+        assert!(
+            !facts_from_reports(&access, &model)
+                .unwrap()
+                .checks_task_grants
         );
     }
 

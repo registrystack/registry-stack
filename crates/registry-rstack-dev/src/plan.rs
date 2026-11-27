@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use registry_platform_config::contains_environment_expression;
-use registry_platform_httputil::valid_scope_token;
+use registry_platform_httputil::{valid_resource_uri, valid_scope_token};
 use registry_platform_yaml::{
     escape_pointer_segment, ApiVersion, BoundedU32, Decoded, EnvelopeRule, Expect, FormatSpec,
     Identified, LocalId, Reader, Refusal, RemovedKey, Report, ScalarHook, ScalarSite, Severity,
@@ -215,6 +215,19 @@ fn issuer_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema 
     })
 }
 
+/// An absolute ASCII URI of at most 256 characters. User information is left to
+/// the reader.
+#[cfg(feature = "schema")]
+fn person_audience_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "format": "uri",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=%-]+$",
+    })
+}
+
 /// A product the development run can start.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -251,9 +264,9 @@ pub(super) struct Plan {
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
-    /// One audience that several products a person calls from a page accept: an absolute URI of at most 256 characters, with no fragment or user information. A product whose `audience` equals it is a member and shares the audience. Only BReg can be a member today: Casework keeps its own audience, Messaging takes no person token, and Evidence cannot join yet. Every other audience must stay distinct.
+    /// The audience that products a person calls from a page will share: an absolute URI of at most 256 characters, with no fragment or user information. Today only BReg can be a member, by setting its `audience` to the same value. Casework keeps its own audience, Messaging takes no person token, and Evidence cannot join yet. Declaring `personAudience` alone changes nothing at run time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "person_audience_schema"))]
     pub person_audience: Option<String>,
     /// The test people, keyed by a lowercase local identifier. Define 1 to 256, and give at least one grant to every started product.
     #[cfg_attr(
@@ -324,7 +337,7 @@ pub(super) struct ProductPlan {
     pub product: Product,
     /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework, evidence.yaml for Evidence or messaging.yaml for Messaging.
     pub project: PathBuf,
-    /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences unless it equals `personAudience`.
+    /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences. BReg may instead equal `personAudience`.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub audience: String,
 }
@@ -1129,15 +1142,9 @@ impl Plan {
         )?;
         if let Some(person_audience) = &self.person_audience {
             require(
-                bounded_atom(person_audience)
-                    && person_audience.len() <= 256
-                    && ParsedUrl::parse(person_audience).is_ok_and(|url| {
-                        url.username().is_empty()
-                            && url.password().is_none()
-                            && url.fragment().is_none()
-                    }),
+                person_audience.len() <= 256 && valid_resource_uri(person_audience),
                 "/personAudience",
-                "The person audience must be an absolute URI of at most 256 characters, without whitespace, user information, or a fragment.",
+                "The person audience must be an absolute ASCII URI (RFC 3986) of at most 256 characters, without whitespace, user information, or a fragment.",
                 "Set personAudience to an absolute URI such as `urn:example:people`, or remove it.",
             )?;
         }
@@ -2138,18 +2145,38 @@ mod tests {
             "method": "GET", "path": "/v1/records", "expect": {"status": 200}
         }));
         let value = serde_json::to_value(plan).unwrap();
+        let at_limit = format!("urn:test:{}", "p".repeat(256 - "urn:test:".len()));
+        let over_limit = format!("{at_limit}p");
         for audience in [
             "people".to_owned(),
             String::new(),
             "urn:test:people#fragment".to_owned(),
             "https://user@people.example.test".to_owned(),
+            "https://:secret@people.example.test".to_owned(),
+            "https://:secret@host/".to_owned(),
             "urn:test:with space".to_owned(),
-            format!("urn:test:{}", "p".repeat(250)),
+            "urn:test:p\u{e9}ople".to_owned(),
+            "https:\\people.example.test".to_owned(),
+            "urn:test:%zz".to_owned(),
+            "urn:test:a|b".to_owned(),
+            "urn:test:<people>".to_owned(),
+            "urn:test:\"people\"".to_owned(),
+            over_limit,
         ] {
             let mut refused = value.clone();
             refused["personAudience"] = json!(audience);
             let message = refusal_of(&root, refused);
             assert!(message.contains("/personAudience"), "{audience}: {message}");
+            assert!(
+                message.contains("The person audience must be an absolute ASCII URI"),
+                "{audience}: {message}"
+            );
+        }
+        {
+            let mut accepted = value.clone();
+            accepted["personAudience"] = json!(at_limit);
+            let plan: Plan = serde_json::from_value(accepted).unwrap();
+            plan.validate(&canonical(&root)).unwrap();
         }
         for audience in ["urn:test:people", "https://people.example.test/audience"] {
             let mut accepted = value.clone();
@@ -2161,15 +2188,24 @@ mod tests {
 
     #[test]
     fn breg_may_be_a_person_audience_member() {
-        let (root, plan) = plan(json!({
-            "id": "read", "product": "breg", "as": "operator",
-            "method": "GET", "path": "/v1/records", "expect": {"status": 200}
-        }));
-        let mut value = serde_json::to_value(plan).unwrap();
+        let (root, mut value) = person_audience_plan(
+            "casework",
+            "casework.yaml",
+            json!({"profile": "requester", "scopes": []}),
+        );
         value["personAudience"] = json!("urn:test:people");
         value["products"][0]["audience"] = json!("urn:test:people");
-        let plan: Plan = serde_json::from_value(value).unwrap();
+        let plan: Plan = serde_json::from_value(value.clone()).unwrap();
         validate_all(&canonical(&root), &plan).unwrap();
+        // The member shares the audience with nobody else: a second product on
+        // it is refused as a member of its own kind.
+        value["products"][1]["audience"] = json!("urn:test:people");
+        let message = refusal_of(&root, value);
+        assert!(message.contains("/products/1/audience"), "{message}");
+        assert!(
+            message.contains("Casework keeps its own audience"),
+            "{message}"
+        );
     }
 
     #[test]
