@@ -89,6 +89,12 @@
   `[127.0.0.1]` are never loopback. Sites that use it accept more literal
   spellings than before, for example `127.0.0.2` and `[::ffff:127.0.0.1]`.
 
+- `registry-thunderid-tooling` reads development identity files and task
+  connections with the same loopback rule. A development issuer, exchange
+  issuer or local app origin may be any `127.0.0.0/8` address, `[::1]`, the
+  IPv4-mapped form or `localhost`. The identity facts issuer and the local app
+  origin accepted only `127.0.0.1` before.
+
 - Every client built by `OutboundClientBuilder` resolves the name
   `localhost` to `127.0.0.1` and `::1` itself, so no resolver is asked for
   it. A host whose resolver or hosts file maps `localhost` elsewhere is no

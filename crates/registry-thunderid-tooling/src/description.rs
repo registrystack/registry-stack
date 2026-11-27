@@ -324,10 +324,18 @@ fn private_file_name(path: &std::path::Path) -> bool {
             .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
+/// A host a development profile may reach over plain HTTP: loopback, or the
+/// name Docker gives the host machine.
+fn development_host(host: &str) -> bool {
+    registry_platform_loopback::loopback_host(host).is_some() || host == "host.docker.internal"
+}
+
 fn local_url(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| {
         url.scheme() == "http"
-            && url.host_str() == Some("127.0.0.1")
+            && url
+                .host_str()
+                .is_some_and(|host| registry_platform_loopback::loopback_host(host).is_some())
             && url.port().is_some_and(|port| port != 0)
             && url.username().is_empty()
             && url.password().is_none()
@@ -619,10 +627,7 @@ impl IssuerDescription {
                         && (url.scheme() == "https"
                             || (development
                                 && url.scheme() == "http"
-                                && matches!(
-                                    url.host_str(),
-                                    Some("127.0.0.1" | "localhost" | "host.docker.internal")
-                                )))
+                                && url.host_str().is_some_and(development_host)))
                 });
                 if !valid {
                     return refuse("exchange issuer and JWKS URLs require HTTPS or an explicit development host");
@@ -964,6 +969,49 @@ pub(crate) fn all_distinct(ids: impl IntoIterator<Item = impl Ord>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_urls_follow_the_shared_loopback_rule() {
+        for (host, loopback) in [
+            ("127.0.0.1", true),
+            ("127.0.0.2", true),
+            ("[::1]", true),
+            ("[::ffff:127.0.0.1]", true),
+            ("localhost", true),
+            ("LOCALHOST", true),
+            ("a.localhost", false),
+            ("localhost.", false),
+            ("10.0.0.1", false),
+            ("example.com", false),
+        ] {
+            assert_eq!(
+                local_url(&format!("http://{host}:3000")),
+                loopback,
+                "{host}"
+            );
+        }
+        assert!(!local_url("http://127.0.0.1"), "a port is required");
+    }
+
+    #[test]
+    fn development_hosts_are_loopback_or_the_docker_host_name() {
+        for (host, loopback) in [
+            ("127.0.0.1", true),
+            ("127.0.0.2", true),
+            ("[::1]", true),
+            ("[::ffff:127.0.0.1]", true),
+            ("localhost", true),
+            ("LOCALHOST", true),
+            ("a.localhost", false),
+            ("localhost.", false),
+            ("10.0.0.1", false),
+            ("example.com", false),
+        ] {
+            assert_eq!(development_host(host), loopback, "{host}");
+        }
+        assert!(development_host("host.docker.internal"));
+        assert!(!development_host("host.docker.internal."));
+    }
 
     pub(super) fn exchange_description() -> IssuerDescription {
         let mut description = crate::testing::synthetic_description();

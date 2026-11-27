@@ -41,7 +41,9 @@ fn endpoint(address: &str) -> Result<Url, ToolingError> {
         || url.fragment().is_some()
         || !(url.scheme() == "https"
             || (url.scheme() == "http"
-                && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))))
+                && url
+                    .host_str()
+                    .is_some_and(|host| registry_platform_loopback::loopback_host(host).is_some())))
         || url.host_str().is_none()
     {
         return Err(refused(
@@ -216,6 +218,28 @@ mod tests {
             scopes: vec!["records:get".into()],
         }
     }
+    #[test]
+    fn plain_http_endpoints_follow_the_shared_loopback_rule() {
+        for (host, loopback) in [
+            ("127.0.0.1", true),
+            ("127.0.0.2", true),
+            ("[::1]", true),
+            ("[::ffff:127.0.0.1]", true),
+            ("localhost", true),
+            ("LOCALHOST", true),
+            ("a.localhost", false),
+            ("localhost.", false),
+            ("10.0.0.1", false),
+            ("example.com", false),
+        ] {
+            assert_eq!(
+                endpoint(&format!("http://{host}:8100")).is_ok(),
+                loopback,
+                "{host}"
+            );
+        }
+    }
+
     #[test]
     fn connection_refuses_ambiguous_or_unprotected_endpoints_and_scopes() {
         assert!(connection().validate().is_ok());
