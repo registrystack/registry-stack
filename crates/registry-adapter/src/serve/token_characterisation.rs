@@ -34,12 +34,6 @@ fn client_of(fixture: &TokenFixture) -> Option<String> {
     literal(fixture, "azp").or_else(|| literal(fixture, "client_id"))
 }
 
-fn stage_of(error: &OidcError) -> Outcome {
-    format!("refused/{}", error.authentication_stage().label())
-        .parse()
-        .expect("every authentication stage label is a result value")
-}
-
 fn runtime_for(case: &FixtureCase) -> AdapterRuntimeConfig {
     let client = client_of(&case.fixture).unwrap_or_else(|| PLACEHOLDER_CLIENT.into());
     serde_json::from_value(json!({
@@ -74,7 +68,7 @@ async fn observe(authenticator: &Authenticator, token: &str) -> Outcome {
                 error.failed_check(),
                 "the refusal carries the check the verifier named"
             );
-            stage_of(&error)
+            Outcome::refused_by(&error)
         }
         (Err(CallerRefusal::Unauthenticated(_)), Ok(_)) => {
             "refused/claims".parse().expect("result value")

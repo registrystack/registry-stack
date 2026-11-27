@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: `registry-platform-oidc` no longer has the stage-labelled
+  authentication log helpers: `AuthenticationStage`,
+  `AuthenticationDiagnostics`, `OidcError::authentication_stage`,
+  `TokenVerifier::authentication_diagnostic` and the
+  `log_authentication_refusal!` macro. Every runtime logs and counts
+  refusals by failed check. Migration: use `OidcError::failed_check`.
+
 - `registry-platform-posture`, a `std`-only crate, holds `Posture`,
   `PostureSource`, `DeclaredPosture`, `PostureError` and
   `declared_from`/`declared`, which read the `--posture` flag and the

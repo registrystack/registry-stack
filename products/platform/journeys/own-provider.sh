@@ -80,8 +80,8 @@ REALM=registry-journey
 POSTGRES_IMAGE=postgres:18.7@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
 PROJECTS_DIR=$JOURNEY_LIB_DIR/projects
 SECRETS=$JOURNEY_OUT/secrets
-# The stages the shared verifier logs (AuthenticationStage in
-# registry-platform-oidc), the same list as authenticationStages in the table.
+# The stages a token characterisation result value may name (`Stage` in
+# registry-platform-testing), the same list as authenticationStages in the table.
 STAGES=' header algorithm token-type key signature issuer audience time client scope profile unavailable '
 # Every product a token reaches. The realm names a caller client for each, so
 # every one of their client secrets is generated even when fewer are selected.
