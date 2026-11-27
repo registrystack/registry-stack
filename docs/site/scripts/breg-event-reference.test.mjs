@@ -80,8 +80,8 @@ test('Proposal payload fields match the closed native schema and omit retired re
 
 test('header lookup covers the exact platform event request header inventory', () => {
   const source = read('../../../crates/registry-platform-httputil/src/destination.rs');
-  const start = source.indexOf('pub fn event_delivery(');
-  const end = source.indexOf('pub fn render_event(', start);
+  const start = source.indexOf('const SIGNED_EVENT_HEADERS');
+  const end = source.indexOf('fn closed_signed_event_headers(', start);
   assert.ok(start >= 0 && end > start);
   const names = [...source.slice(start, end).matchAll(/name: "([^"]+)"/g)]
     .map((match) => match[1]).sort();
