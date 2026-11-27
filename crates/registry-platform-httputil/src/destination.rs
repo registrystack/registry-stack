@@ -441,6 +441,8 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
     /// allocation. An origin id is canonical lowercase ASCII using alphanumeric
     /// characters with internal `.`, `_`, `:`, or `-` separators. Each CIDR
     /// must be wholly contained by RFC 1918, RFC 6598 CGNAT, or IPv6 ULA space.
+    /// A [`DestinationProfile::PrivateServiceHttp`] destination needs at least
+    /// one CIDR, since it sends only to addresses inside the listed ranges.
     pub fn new(
         origin_id: &str,
         origin: &str,
@@ -558,6 +560,12 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             }
             #[cfg(any(test, feature = "test-support"))]
             DestinationProfile::PinnedLoopbackHttpsTest => {}
+        }
+        // A private service hop admits only addresses inside the listed
+        // ranges, so with none it could never send. Refuse it here, at
+        // activation, rather than at the first send.
+        if profile == DestinationProfile::PrivateServiceHttp && allowed_private_cidrs.is_empty() {
+            return Err(DestinationPolicyError::PrivateServiceRequiresPrivateCidr);
         }
 
         if dns_family == DestinationDnsFamily::Ipv4Only
@@ -1236,6 +1244,10 @@ pub enum DestinationPolicyError {
     ProductionRequiresHttps,
     #[error("private service destination requires HTTP")]
     PrivateServiceRequiresHttp,
+    #[error(
+        "private service destination requires at least one private CIDR; name the range that holds the service's addresses"
+    )]
+    PrivateServiceRequiresPrivateCidr,
     #[error("destination profile denies the localhost namespace")]
     LocalhostNamespaceDenied,
     #[error("loopback development destination requires HTTP")]
@@ -5664,25 +5676,28 @@ mod tests {
 
     #[test]
     fn private_service_http_is_dns_pinned_to_private_address_space() {
-        let policy = DataDestinationPolicy::new(
+        let error = DataDestinationPolicy::new(
             "private-service",
             "http://registry-service:8080/",
             DestinationProfile::PrivateServiceHttp,
             &[],
         )
-        .expect("private service destination validates");
-        for address in ["10.89.0.4", "fd42::4"] {
-            assert_eq!(
-                classify(&policy, &[address]),
-                Err(DestinationSendError::PrivateAddressNotAllowed),
-                "an empty private range list admits no private address: {address}"
-            );
-        }
-        for address in ["127.0.0.1", "169.254.169.254", "8.8.8.8", "::1"] {
-            assert!(
-                classify(&policy, &[address]).is_err(),
-                "private service accepted {address}"
-            );
+        .expect_err("an empty private range list is refused at activation, not at the first send");
+        assert_eq!(
+            error,
+            DestinationPolicyError::PrivateServiceRequiresPrivateCidr
+        );
+        assert!(error.to_string().contains("private CIDR"), "{error}");
+        for profile in [
+            DestinationProfile::ProductionHttps,
+            DestinationProfile::LoopbackDevelopmentHttp,
+        ] {
+            let origin = match profile {
+                DestinationProfile::ProductionHttps => "https://registry.example/",
+                _ => "http://127.0.0.1:8080/",
+            };
+            DataDestinationPolicy::new("destination", origin, profile, &[])
+                .expect("a public or loopback destination needs no private range");
         }
 
         let listed = DataDestinationPolicy::new(
@@ -5693,6 +5708,17 @@ mod tests {
         )
         .expect("listed private service destination validates");
         assert_eq!(classify(&listed, &["10.0.0.5"]), Ok(()));
+        assert_eq!(
+            classify(&listed, &["fd42::4"]),
+            Err(DestinationSendError::PrivateAddressNotAllowed),
+            "a private address outside the listed ranges stays refused at send"
+        );
+        for address in ["127.0.0.1", "8.8.8.8", "::1"] {
+            assert!(
+                classify(&listed, &[address]).is_err(),
+                "private service accepted {address}"
+            );
+        }
         assert_eq!(
             classify(&listed, &["169.254.169.254"]),
             Err(DestinationSendError::CloudMetadataDenied),

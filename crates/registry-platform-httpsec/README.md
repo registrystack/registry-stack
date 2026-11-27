@@ -22,7 +22,18 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
   422 framework bodies in the service's own problem vocabulary through a
   caller-supplied mapping from `FrameworkRejection`.
 - `TraceId` and `TraceContext`, the shared strict W3C `traceparent` transport
-  primitives for Registry service responses.
+  primitives for Registry service responses. With the `server` feature,
+  `TraceId` implements `registry_platform_authcommon::RefusalTraceId`, so a
+  service passes its request trace id to `record_refusal!`.
+- `loopback`, the one definition of loopback for outbound destinations and
+  loopback origins: `loopback_address`, `loopback_host` and
+  `loopback_literal`. A literal in `127.0.0.0/8`, `::1` or the IPv4-mapped
+  form of `127.0.0.0/8` is loopback, and so is the exact name `localhost`
+  once the connection is pinned to loopback addresses
+  (`LoopbackHost::pinned_by`). A site that accepts the name must pin the
+  connection; a site that cannot pin uses `loopback_literal`. Bind sites keep
+  their own, stricter rule. The module is available with
+  `default-features = false`.
 - `ProblemBody`, the fixed value-free Registry Stack problem envelope with
   `type`, `title`, `status`, `detail`, `code`, and `traceId` members.
 - `response_trace_id` for exact-one canonical W3C v0 response correlation.

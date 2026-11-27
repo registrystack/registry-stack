@@ -14,6 +14,8 @@ workspace = true
 # The refusal recorder: the counter, the bounded log line and `record_refusal!`.
 # Off by default so client crates that reach this crate through
 # `registry-platform-httputil` do not gain the metrics crate.
+# This crate never depends on `registry-platform-httpsec`: httpsec implements
+# `RefusalTraceId` for its `TraceId`, so the dependency runs the other way.
 refusal-recorder = ["dep:registry-platform-metrics", "dep:tracing"]
 
 [dependencies]

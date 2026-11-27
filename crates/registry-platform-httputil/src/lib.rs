@@ -177,7 +177,17 @@ impl OutboundClientBuilder {
     /// Fallibly build one hardened client with rustls, redirects and retries disabled,
     /// proxy environment variables ignored, and optional exact CA pinning.
     pub fn try_build(self) -> Result<reqwest::Client, OutboundClientBuildError> {
-        let mut builder = reqwest::Client::builder()
+        self.try_build_from(reqwest::Client::builder())
+    }
+
+    /// Apply every setting of [`Self::try_build`] to `builder`. Tests pass a
+    /// builder that carries their own resolver; every other caller goes
+    /// through [`Self::try_build`].
+    fn try_build_from(
+        self,
+        builder: reqwest::ClientBuilder,
+    ) -> Result<reqwest::Client, OutboundClientBuildError> {
+        let mut builder = builder
             .timeout(self.timeout)
             .connect_timeout(self.connect_timeout)
             .redirect(reqwest::redirect::Policy::none())
@@ -1105,6 +1115,45 @@ mod tests {
         let client = OutboundClientBuilder::new().try_build().expect("client");
         assert!(reaches(&client, &v4_only).await, "IPv4-only listener");
         assert!(reaches(&client, &v6_only).await, "IPv6-only listener");
+    }
+
+    /// Answers every name, `localhost` included, with an address off this
+    /// machine, as a hosts-file override or a hostile resolver could.
+    struct OffHostResolver {
+        asked_for_localhost: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl reqwest::dns::Resolve for OffHostResolver {
+        fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            if name.as_str().eq_ignore_ascii_case(LOCALHOST_NAME) {
+                self.asked_for_localhost
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            let off_host: reqwest::dns::Addrs =
+                Box::new(std::iter::once(SocketAddr::from(([192, 0, 2, 1], 0))));
+            Box::pin(std::future::ready(Ok(off_host)))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_localhost_pin_holds_against_a_resolver_that_answers_off_host() {
+        let url = serve_on("127.0.0.1:0").await;
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let resolver = OffHostResolver {
+            asked_for_localhost: std::sync::Arc::clone(&asked),
+        };
+        let client = OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(500))
+            .try_build_from(reqwest::Client::builder().dns_resolver(std::sync::Arc::new(resolver)))
+            .expect("client");
+        assert!(
+            reaches(&client, &url).await,
+            "localhost reaches the loopback listener"
+        );
+        assert!(
+            !asked.load(std::sync::atomic::Ordering::SeqCst),
+            "the resolver is never asked for localhost"
+        );
     }
 
     #[test]
