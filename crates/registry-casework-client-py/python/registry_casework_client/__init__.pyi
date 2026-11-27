@@ -512,7 +512,7 @@ class ReviewPageQuery(TypedDict, total=False):
     limit: SafeInteger
 ReviewTaskOwnership: TypeAlias = Literal["assigned-to-me", "unclaimed"]
 ReviewTaskSort: TypeAlias = Literal["due", "subject", "reference"]
-ReviewTaskMarker: TypeAlias = Literal["waiting", "answered"]
+ReviewTaskMarker: TypeAlias = Literal["waiting", "answered", "expired"]
 class ReviewStaffingQuery(ReviewPageQuery, total=False):
     subjectSource: str
     subjectType: str
@@ -691,7 +691,7 @@ class ReviewClockOccurrence(_ReviewClockOccurrenceOptional):
     clockId: str
     requestId: Uuid
     correlation: ReviewClockCorrelation
-    state: Literal["running", "completed", "cancelled", "source-facts-missing"]
+    state: Literal["running", "paused", "completed", "cancelled", "source-facts-missing"]
     policyDigest: ContentDigest
     anchorAt: str
 class ReviewTaskDraftInput(TypedDict):
@@ -777,6 +777,10 @@ class ReviewContextProviderPolicy(TypedDict):
     sourceNamespace: str
     deploymentRef: str
     serviceProfiles: NotRequired[dict[ReviewContextCapability, str]]
+class ReviewStageAsksPolicy(TypedDict, total=False):
+    answerWithin: ElapsedDuration
+    onDue: Literal["return-to-reviewer"]
+    pauseClocks: bool
 class ReviewStagePolicy(TypedDict):
     id: str
     label: NotRequired[str]
@@ -786,6 +790,7 @@ class ReviewStagePolicy(TypedDict):
     requiredApprovals: SafeInteger
     outcomes: NotRequired[list[str]]
     negativeDecisions: NotRequired[Literal["settle", "advise"]]
+    asks: NotRequired[ReviewStageAsksPolicy]
     excludeInitiator: NotRequired[bool]
     excludePreviousStageReviewers: NotRequired[bool]
 class ReviewRetentionPolicy(TypedDict):
@@ -799,6 +804,7 @@ class ReviewOutcomePolicy(TypedDict):
     publicReason: Literal["required", "optional", "none"]
     resultRequired: NotRequired[bool]
 class _ReviewPolicyOptional(TypedDict, total=False):
+    resubmission: Literal["first-stage", "resume-at-returning-stage"]
     label: str
     routing: list[RoutingRule]
     clocks: list[str]

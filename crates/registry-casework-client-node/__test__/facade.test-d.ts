@@ -1,3 +1,4 @@
+import './ask-timing.test-d'
 import { CaseworkClient, CaseworkClientError, submissionDigest, type ContentDigest, type SubjectBinding,
   type PolicyBinding, type ReviewCreateRequest, type ReviewRequestAccepted,
   type ReviewTask, type SupervisoryReviewTask, type StaffingDiagnostic, type ReviewTaskDecisionRequest, type ReviewStaffingQuery, type ReviewTaskMarker,

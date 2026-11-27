@@ -12,6 +12,21 @@ STUB = (
 
 
 class TypingContractTests(unittest.TestCase):
+    def test_ask_timing_and_resubmission_types_match_the_wire(self) -> None:
+        module = ast.parse(STUB.read_text(encoding="utf-8"))
+        classes = {node.name: node for node in module.body if isinstance(node, ast.ClassDef)}
+        aliases = {node.target.id: ast.unparse(node.value) for node in module.body if isinstance(node, ast.AnnAssign) and node.value is not None}
+        self.assertEqual(aliases["ReviewTaskMarker"], "Literal['waiting', 'answered', 'expired']")
+        fields = lambda name: {node.target.id: ast.unparse(node.annotation) for node in classes[name].body if isinstance(node, ast.AnnAssign)}
+        self.assertEqual(fields("ReviewClockOccurrence")["state"], "Literal['running', 'paused', 'completed', 'cancelled', 'source-facts-missing']")
+        self.assertEqual(fields("ReviewStagePolicy")["asks"], "NotRequired[ReviewStageAsksPolicy]")
+        self.assertEqual(fields("ReviewStageAsksPolicy"), {
+            "answerWithin": "ElapsedDuration",
+            "onDue": "Literal['return-to-reviewer']",
+            "pauseClocks": "bool",
+        })
+        self.assertEqual(fields("_ReviewPolicyOptional")["resubmission"], "Literal['first-stage', 'resume-at-returning-stage']")
+
     def test_client_configuration_uses_the_canonical_authored_names(self) -> None:
         module = ast.parse(STUB.read_text(encoding="utf-8"))
         client = next(

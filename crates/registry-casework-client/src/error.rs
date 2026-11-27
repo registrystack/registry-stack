@@ -382,7 +382,7 @@ impl CaseworkProblemCode {
             ),
             Self::ReviewAskNotOpen => (
                 "Review ask not open",
-                "This ask was already answered or closed and cannot be answered again.",
+                "This ask was already answered or closed, or the applicant answered after its due date.",
             ),
             Self::ReviewAskProducerUnsupported => (
                 "Review ask producer unsupported",
@@ -932,7 +932,7 @@ mod tests {
                 CaseworkProblemCode::ReviewAskNotOpen,
                 409,
                 "Review ask not open",
-                "This ask was already answered or closed and cannot be answered again.",
+                "This ask was already answered or closed, or the applicant answered after its due date.",
             ),
             (
                 "review.ask-producer-unsupported",

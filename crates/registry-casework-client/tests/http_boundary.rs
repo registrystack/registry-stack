@@ -242,6 +242,7 @@ fn json_fixture_response(value: Value) -> impl IntoResponse {
 #[tokio::test]
 async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "returned-kind".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -309,6 +310,7 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
 #[tokio::test]
 async fn review_policy_refuses_unverified_governed_response_members() {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "requested-kind".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -379,6 +381,7 @@ async fn review_policy_refuses_unverified_governed_response_members() {
 #[tokio::test]
 async fn review_policy_refuses_duplicate_additive_response_members() {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "requested-kind".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -2324,6 +2327,7 @@ async fn review_task_context_preserves_the_frozen_source_neutral_shape() {
 
 fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: Value) -> Value {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "standalone-answer".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -3506,6 +3510,7 @@ async fn empty_not_found_response() -> axum::http::Response<axum::body::Body> {
 
 async fn task_context_response() -> impl IntoResponse {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "standalone-answer".to_owned(),
         label: None,
         version: "1".to_owned(),
