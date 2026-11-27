@@ -51,8 +51,12 @@ decisions:
       documents.project.profile-role-mismatch. It also refuses a requester
       client listed in two profiles, two profiles of one actor kind that name
       different principal claims (documents.project.mixed-principal-claim),
-      and a default grant expiry above the policy's maximum, and reports
-      every such finding in one run.
+      a profile whose every required scope other profiles also require
+      (documents.project.profile-without-own-scope), a required scope spelled
+      like a standard scope name (documents.project.standard-scope-name) or
+      not an exact scope token (documents.project.invalid-scope), and a
+      default grant expiry above the policy's maximum, and reports every such
+      finding in one run.
     evidence:
       - {path: crates/registry-documents-core/src/project.rs, name: an_unknown_member_is_refused}
       - {path: crates/registry-documents-core/src/project.rs, name: a_repeated_hook_id_is_refused}
@@ -60,6 +64,9 @@ decisions:
       - {path: crates/registry-documents-core/src/project.rs, name: a_profile_listed_against_its_role_is_refused}
       - {path: crates/registry-documents-core/src/project.rs, name: a_requester_client_shared_by_two_profiles_is_refused}
       - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_one_actor_kind_reading_different_principal_claims_are_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: scopes_held_across_several_other_profiles_still_cover_a_profile}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_standard_scope_name_is_never_a_profiles_own_scope}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_scope_that_is_not_an_exact_scope_token_is_refused}
       - {path: crates/registry-documents-core/src/project.rs, name: every_reference_finding_is_reported_in_one_run}
       - {path: crates/registry-documentsctl/src/lib.rs, name: the_starter_project_and_runtime_check_clean}
   - id: DOCUMENTS-DEC-05

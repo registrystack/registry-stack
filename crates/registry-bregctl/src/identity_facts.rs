@@ -185,8 +185,9 @@ impl<'a> Grant<'a> {
                 .then(|| self.requester_clients.clone()),
             exchange: None,
             selected_by: BTreeMap::new(),
-            // BReg resolves the profile by client id and then requires this
-            // kind, so it is a requirement, not a selector.
+            // The register lets the caller pick the profile and uses the
+            // client list as a gate; the Document Store selects by client.
+            // This kind is a requirement of the profile, not a selector.
             actor_kind: self.actor_kind.map(facts_actor_kind),
             required_claims: required_claims(principal, &self.claims)
                 .into_iter()
@@ -276,6 +277,11 @@ pub(crate) fn facts(
     if verifier.scope_claim != DEFAULT_SCOPE_CLAIM {
         return Err(unstatable(
             "authentication.oidc.scopeClaim is not the default `scope`, which hosted generation does not support yet; set it to `scope`",
+        ));
+    }
+    if !verifier.assertion_issuers.is_empty() {
+        return Err(unstatable(
+            "authentication.oidc names assertion issuers, so another product exchanges tokens into the register, which hosted generation cannot configure yet; generate facts only from the runtime configuration the server runs",
         ));
     }
     let authentication = config.authentication();

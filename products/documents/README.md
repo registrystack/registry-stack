@@ -254,6 +254,14 @@ documentsctl apply --runtime-config ABSOLUTE_FILE \
 documents --runtime-config ABSOLUTE_FILE serve
 ```
 
+`documentsctl generate identity-facts --runtime-config ABSOLUTE_FILE --output
+FILE` writes the identity facts the hosted identity generator reads: the
+issuer, audience, admitted clients and each access profile's scopes, requester
+clients and actor kind, from the runtime configuration and the package it
+names. It never overwrites a file, and it refuses a named `scopeClaim` and
+assertion issuers, which hosted generation cannot configure into the Document
+Store yet. Generate the facts from the runtime file the server runs.
+
 `package` checks the project and writes the deployable package `package.root`
 names; `--dry-run` reports its digest without writing it, for
 `package.expectedDigest`. `plan` reports what `apply` would change and writes

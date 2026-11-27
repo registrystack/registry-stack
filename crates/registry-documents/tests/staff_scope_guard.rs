@@ -16,13 +16,20 @@ use registry_platform_authcommon::FailedCheck;
 use serde_json::Value;
 use support::{
     Api, Deployment, FakeVerifier, Principal, APPROVE, CITIZEN, DATABASE_STORAGE,
-    DISABLED_VERIFIER, STAFF,
+    DISABLED_VERIFIER, READER, STAFF, STARTER_PROJECT,
 };
 use tracing::instrument::WithSubscriber as _;
 
 /// The staff client carrying the scope of the citizen profile.
 const STAFF_CLIENT_WITH_CITIZEN_SCOPE: Principal = Principal {
     scope: CITIZEN.scope,
+    ..STAFF
+};
+
+/// The staff client carrying the scope of the reader profile, which the staff
+/// profile shared before every profile had a scope of its own.
+const STAFF_CLIENT_WITH_READER_SCOPE: Principal = Principal {
+    scope: READER.scope,
     ..STAFF
 };
 
@@ -83,5 +90,51 @@ async fn each_client_is_admitted_with_the_scope_of_its_own_profile() {
         let answer = api.get(principal, "/v1/documents").await;
         assert_eq!(answer.status, 200, "{}", principal.client);
     }
+    drop(deployment);
+}
+
+#[tokio::test]
+async fn a_staff_client_token_with_only_the_reader_scope_is_refused_at_the_scope_check() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let api = api(&deployment).await;
+    assert_ne!(
+        STAFF.scope, READER.scope,
+        "the staff profile has a scope the reader profile does not"
+    );
+
+    let answer = api
+        .get(STAFF_CLIENT_WITH_READER_SCOPE, "/v1/documents")
+        .await;
+    assert_eq!(answer.status, 403);
+    let body: Value = serde_json::from_slice(&answer.body).expect("a problem body");
+    assert_eq!(body["code"], "profile.not-authorized");
+    drop(deployment);
+}
+
+#[tokio::test]
+async fn a_package_whose_staff_profile_shares_the_reader_scope_is_refused_by_the_runtime() {
+    let shared = STARTER_PROJECT.replacen(
+        "requiredScopes: [documents:staff]",
+        &format!("requiredScopes: [{}]", READER.scope),
+        1,
+    );
+    assert_ne!(shared, STARTER_PROJECT);
+    // The package is written without the project reader, as a package built
+    // before the rule existed would be.
+    let deployment = Deployment::with_project(DATABASE_STORAGE, DISABLED_VERIFIER, &shared).await;
+    let refusal = match prepare_with_verifier(
+        &deployment.runtime,
+        FakeVerifier::new("staff-scope-guard", APPROVE),
+    )
+    .await
+    {
+        Ok(_) => panic!("the runtime prepared a package whose staff profile shares a scope"),
+        Err(refusal) => refusal.to_string(),
+    };
+    assert!(
+        refusal.contains("documents.project.profile-without-own-scope"),
+        "{refusal}"
+    );
     drop(deployment);
 }

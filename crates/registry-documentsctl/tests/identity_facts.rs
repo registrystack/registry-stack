@@ -170,6 +170,30 @@ fn a_profile_client_the_runtime_does_not_admit_is_refused() {
         .success());
     let (run, output) = starter.generate();
     assert!(!run.status.success());
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("allowedClients"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(!output.exists());
+}
+
+#[test]
+fn assertion_issuers_are_refused_and_write_nothing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let starter = Starter::new(temporary.path());
+    assert!(starter
+        .build(|text| text.replace(
+            "    scopeClaim: scope\n",
+            "    scopeClaim: scope\n    assertionIssuers:\n      partner-portal: [https://assertions.example.test]\n",
+        ))
+        .status
+        .success());
+    let (run, output) = starter.generate();
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("assertion issuers"), "{stderr}");
+    assert!(stderr.contains("the server runs"), "{stderr}");
     assert!(!output.exists());
 }
 
@@ -225,4 +249,27 @@ fn a_project_with_a_profile_sharing_every_scope_is_never_packaged_so_never_state
     let (run, output) = starter.generate();
     assert!(!run.status.success());
     assert!(!output.exists());
+}
+
+#[test]
+fn a_standard_scope_name_is_refused_when_the_project_is_checked() {
+    let temporary = tempfile::tempdir().unwrap();
+    let starter = Starter::new(temporary.path());
+    starter.edit_project(
+        "requiredScopes: [documents:staff]",
+        "requiredScopes: [openid]",
+    );
+    let checked = documentsctl(&["check", "--project", path(&starter.project)]);
+    assert!(!checked.status.success());
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&checked.stdout),
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(
+        all.contains("documents.project.standard-scope-name"),
+        "{all}"
+    );
+    let built = starter.build(|text| text);
+    assert!(!built.status.success());
 }

@@ -35,6 +35,12 @@ pub const DOCUMENTS_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
     }],
 };
 
+/// Scope names an issuer may put into a token without checking a role, so a
+/// token carries them whatever the person holds. No access profile may
+/// require one as its own scope.
+pub const STANDARD_SCOPE_NAMES: [&str; 6] =
+    ["openid", "profile", "email", "phone", "address", "roles"];
+
 /// The largest document a deployment or a policy may admit: one gibibyte.
 pub const MAXIMUM_DOCUMENT_BYTES: u64 = 1_073_741_824;
 
@@ -125,12 +131,34 @@ impl DocumentsProject {
                 }
             }
         }
+        for (id, profile) in &self.access_profiles {
+            for (index, scope) in profile.required_scopes.as_slice().iter().enumerate() {
+                let pointer = format!("/accessProfiles/{id}/requiredScopes/{index}");
+                if !valid_scope(scope.as_str()) {
+                    findings.push(document.diagnostic_at_value(
+                        Severity::Error,
+                        "documents.project.invalid-scope",
+                        &pointer,
+                        "this is not an exact scope token",
+                        "Write each scope as an exact token of printable ASCII without spaces, quotes, backslashes or `*`, at most 128 bytes.",
+                    ));
+                } else if STANDARD_SCOPE_NAMES.contains(&scope.as_str()) {
+                    findings.push(document.diagnostic_at_value(
+                        Severity::Error,
+                        "documents.project.standard-scope-name",
+                        &pointer,
+                        "this is spelled like a standard scope name, which an issuer puts into a token without checking a role",
+                        "Rename the scope, for example with the product's prefix: documents:staff.",
+                    ));
+                }
+            }
+        }
         for id in self.profiles_without_own_scope() {
             findings.push(document.diagnostic_at_value(
                 Severity::Error,
                 "documents.project.profile-without-own-scope",
                 &format!("/accessProfiles/{id}/requiredScopes"),
-                "every scope this access profile requires is also required by another access profile",
+                "every scope this access profile requires is also required by other access profiles",
                 "Give the profile a requiredScopes entry that no other access profile requires, so a token carrying only another profile's scope is never admitted here.",
             ));
         }
@@ -207,8 +235,8 @@ impl DocumentsProject {
         findings
     }
 
-    /// The profiles, in id order, that share every required scope with
-    /// another profile. A person signs in through any client of the
+    /// The profiles, in id order, whose every required scope another profile
+    /// also requires. A person signs in through any client of the
     /// deployment, so a profile is selected safely by its client only when
     /// its scope gate cannot be met by a token meant for another profile.
     /// A sole profile has no other to share with.
@@ -320,6 +348,18 @@ pub struct AccessProfile {
     /// this profile reserves; a profile that names none records none.
     #[serde(default)]
     pub institution: Option<ExternalId>,
+}
+
+/// One RFC 6749 scope token, without the wildcard and within the length the
+/// identity facts allow, so the project reader and the facts reader accept
+/// the same spellings.
+fn valid_scope(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope.len() <= 128
+        && !scope.contains('*')
+        && scope.bytes().all(|byte| {
+            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
+        })
 }
 
 /// A list of at least one distinct identifier, external unless named
@@ -995,40 +1035,91 @@ mod tests {
         );
     }
 
+    fn own_scope_refusals(text: &str) -> Vec<String> {
+        let report = DocumentsProject::decode("documents.yaml", text.as_bytes())
+            .expect_err("the document is refused");
+        report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "documents.project.profile-without-own-scope")
+            .map(|diagnostic| diagnostic.path.clone())
+            .collect()
+    }
+
     #[test]
-    fn a_profile_whose_every_scope_another_profile_also_requires_is_refused() {
+    fn both_profiles_sharing_one_scope_are_refused() {
         let text = STARTER.replacen(
             "requiredScopes: [documents:staff]\n    requesterClients: [case-portal]",
             "requiredScopes: [documents:own]\n    requesterClients: [case-portal]",
             1,
         );
         assert_ne!(text, STARTER);
-        let refused = refusals(&text);
-        assert!(
-            refused.contains(&(
-                "documents.project.profile-without-own-scope".to_owned(),
-                "/accessProfiles/staff/requiredScopes".to_owned()
-            )),
-            "{refused:?}"
+        assert_eq!(
+            own_scope_refusals(&text),
+            [
+                "/accessProfiles/citizen/requiredScopes",
+                "/accessProfiles/staff/requiredScopes"
+            ]
         );
     }
 
     #[test]
     fn a_profile_with_one_scope_of_its_own_among_shared_ones_is_admitted() {
+        let shared = |staff: &str, reader: &str| {
+            STARTER
+                .replacen(
+                    "requiredScopes: [documents:staff]",
+                    &format!("requiredScopes: {staff}"),
+                    1,
+                )
+                .replacen(
+                    "requiredScopes: [documents:read]",
+                    &format!("requiredScopes: {reader}"),
+                    1,
+                )
+        };
+        // Each shares documents:read and keeps a scope no one else requires.
+        let admitted = shared(
+            "[documents:read, documents:staff]",
+            "[documents:read, documents:partner]",
+        );
+        assert_ne!(admitted, STARTER);
+        DocumentsProject::decode("documents.yaml", admitted.as_bytes())
+            .expect("one scope of its own is enough");
+        // Drop the reader's own scope and the reader is refused, the staff
+        // profile keeps its own.
+        let refused = shared("[documents:read, documents:staff]", "[documents:read]");
+        assert_eq!(
+            own_scope_refusals(&refused),
+            ["/accessProfiles/reader/requiredScopes"]
+        );
+    }
+
+    #[test]
+    fn scopes_held_across_several_other_profiles_still_cover_a_profile() {
+        // P [a, b], Q [a, x], R [b, y]: a person who holds Q and R holds a
+        // and b, so P has no scope of its own although no single other
+        // profile covers it.
         let text = STARTER
             .replacen(
                 "requiredScopes: [documents:staff]",
-                "requiredScopes: [documents:read, documents:staff]",
+                "requiredScopes: [documents:a, documents:b]",
                 1,
             )
             .replacen(
                 "requiredScopes: [documents:read]",
-                "requiredScopes: [documents:read, documents:partner]",
+                "requiredScopes: [documents:a, documents:x]",
+                1,
+            )
+            .replacen(
+                "requiredScopes: [documents:own]",
+                "requiredScopes: [documents:b, documents:y]",
                 1,
             );
-        assert_ne!(text, STARTER);
-        DocumentsProject::decode("documents.yaml", text.as_bytes())
-            .expect("one scope of its own is enough");
+        assert_eq!(
+            own_scope_refusals(&text),
+            ["/accessProfiles/staff/requiredScopes"]
+        );
     }
 
     #[test]
@@ -1038,9 +1129,79 @@ mod tests {
             .value;
         assert!(project.profiles_without_own_scope().is_empty());
         let id = LocalId::new("custodian-app").unwrap();
-        let mut alone = project;
+        let mut alone = project.clone();
         alone.access_profiles.retain(|key, _| *key == id);
         assert!(alone.profiles_without_own_scope().is_empty());
+        // The same profile, given a second holder of its scope, is flagged.
+        let mut shared = project;
+        let custody = shared.access_profiles[&id].clone();
+        shared
+            .access_profiles
+            .get_mut(&LocalId::new("staff").unwrap())
+            .unwrap()
+            .required_scopes = custody.required_scopes;
+        assert_eq!(shared.profiles_without_own_scope().len(), 2);
+    }
+
+    #[test]
+    fn a_standard_scope_name_is_never_a_profiles_own_scope() {
+        for name in STANDARD_SCOPE_NAMES {
+            let text = STARTER.replacen(
+                "requiredScopes: [documents:staff]",
+                &format!("requiredScopes: [{name}]"),
+                1,
+            );
+            assert_ne!(text, STARTER);
+            assert_eq!(
+                refusals(&text),
+                [(
+                    "documents.project.standard-scope-name".to_owned(),
+                    "/accessProfiles/staff/requiredScopes/0".to_owned()
+                )],
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_standard_scope_name_among_other_scopes_is_refused_at_its_entry() {
+        let text = STARTER.replacen(
+            "requiredScopes: [documents:staff]",
+            "requiredScopes: [documents:staff, openid]",
+            1,
+        );
+        assert_eq!(
+            refusals(&text),
+            [(
+                "documents.project.standard-scope-name".to_owned(),
+                "/accessProfiles/staff/requiredScopes/1".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_scope_that_is_not_an_exact_scope_token_is_refused() {
+        for scope in [
+            "\"documents:staff \"",
+            "\"documents staff\"",
+            "\"documents:*\"",
+            "\"documents:stäff\"",
+        ] {
+            let text = STARTER.replacen(
+                "requiredScopes: [documents:staff]",
+                &format!("requiredScopes: [{scope}]"),
+                1,
+            );
+            assert_ne!(text, STARTER);
+            assert_eq!(
+                refusals(&text),
+                [(
+                    "documents.project.invalid-scope".to_owned(),
+                    "/accessProfiles/staff/requiredScopes/0".to_owned()
+                )],
+                "{scope}"
+            );
+        }
     }
 
     #[test]

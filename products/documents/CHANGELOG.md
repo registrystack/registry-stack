@@ -9,10 +9,19 @@
   only when its scope gate cannot be met by a token meant for another profile.
   Give each profile a scope no other profile requires. The starter's `staff`
   profile now requires `documents:staff`.
+- BREAKING: the project reader refuses a `requiredScopes` entry spelled like a
+  standard scope name, `openid`, `profile`, `email`, `phone`, `address` or
+  `roles` (`documents.project.standard-scope-name`), because the issuer puts
+  those into a token without checking a role. It also refuses an entry that is
+  not an exact scope token (`documents.project.invalid-scope`), so `check`,
+  `package` and `generate identity-facts` accept the same spellings. A profile
+  whose scopes other profiles cover together is refused by the own-scope rule,
+  not only one whose scopes another single profile covers.
 - `documentsctl generate identity-facts` writes the identity facts the hosted
   identity generator reads from the runtime configuration and the package it
   names. It never overwrites a file and refuses a named `scopeClaim` and
-  assertion issuers, which hosted generation does not state yet.
+  assertion issuers, which hosted generation cannot configure into the
+  Document Store yet.
 - BREAKING: Document Store hook deliveries use Standard Webhooks. Each POST
   carries `accept`, `content-type`, `webhook-id`, `webhook-timestamp` and
   `webhook-signature`. The signature covers `webhook-id`, the attempt

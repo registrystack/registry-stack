@@ -998,3 +998,27 @@ invariants:
     negativeTest:
       path: crates/registry-documents/src/config.rs
       name: the_metrics_listener_must_be_private_and_apart_from_the_listener
+  - id: DOCUMENTS-SEC-56
+    state: enforced
+    threat: >-
+      A person signs in through any client of the deployment, so a token for
+      one client can carry the scope another profile's holders get from their
+      role. A profile selected by its client is bypassed when every scope it
+      requires is also required by other profiles, or when a required scope
+      is a standard scope name such as openid, which the issuer puts into
+      every token without checking a role.
+    enforcementPoint: >-
+      Project check. The project reader refuses an access profile whose every
+      required scope other profiles also require, counted across all other
+      profiles together, and refuses a required scope spelled like a standard
+      scope name or not an exact scope token. The runtime reads the same
+      project, so a package built before the rule is refused at startup. The
+      rule applies to service profiles too: the actor kind that would separate
+      them comes from a claim the person can write.
+    refusal: >-
+      Refuse the project with documents.project.profile-without-own-scope,
+      documents.project.standard-scope-name or documents.project.invalid-scope
+      at the profile's requiredScopes.
+    negativeTest:
+      path: crates/registry-documents-core/src/project.rs
+      name: scopes_held_across_several_other_profiles_still_cover_a_profile

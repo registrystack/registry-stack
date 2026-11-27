@@ -53,6 +53,15 @@ product's files. It merges the facts, reads your deployment file, and renders th
   issuers under one id. Casework admits a profile only for a person when the profile does not act as
   a requester, or when it initiates reviews; its facts require a human for those profiles, so a
   machine client granted one is refused.
+  The Document Store and BReg refuse a runtime configuration that names `assertionIssuers`, because
+  hosted generation cannot configure token exchange into either of them yet: generate their facts
+  only from the runtime file the server runs. The Document Store also refuses a `scopeClaim` other
+  than `scope`. Its project reader refuses an access profile whose every required scope other
+  profiles also require (`documents.project.profile-without-own-scope`), a required scope spelled
+  like a standard scope name (`documents.project.standard-scope-name`) and a required scope that is
+  not an exact scope token (`documents.project.invalid-scope`), so `documentsctl check` and
+  `package` refuse what generation would. The own-scope rule holds for service profiles too, because
+  the actor kind that would separate them comes from a claim the person can write.
 - **Actor kinds a product pins** are stated in its facts with `actorKind`. Casework's task status
   profile requires a service and its assertion profile an agent. On a profile reached by token
   exchange, `actorKind` applies to the client's own token, the one it requests the assertion with.

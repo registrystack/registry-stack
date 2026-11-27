@@ -907,7 +907,8 @@ const CASEWORK: &str = "casework";
 /// The one member that may check task grants.
 const REGISTER: &str = "breg";
 /// Scope names ThunderID passes into a token with no role check.
-const STANDARD_SCOPE_NAMES: [&str; 6] = ["openid", "profile", "email", "phone", "address", "roles"];
+pub const STANDARD_SCOPE_NAMES: [&str; 6] =
+    ["openid", "profile", "email", "phone", "address", "roles"];
 /// The only products that may share the person audience: the ones a person
 /// calls from a page.
 const PERSON_AUDIENCE_PRODUCTS: [&str; 2] = ["breg", "documents"];

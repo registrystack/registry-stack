@@ -38,6 +38,19 @@ policy that uses it. The check also refuses:
 - a profile whose `principalClaim` differs from another profile's with the same `actorKind`
   (`documents.project.mixed-principal-claim`): every profile of one actor kind reads the subject
   from one claim;
+- a profile whose every `requiredScopes` entry other profiles also require, counted across all
+  other profiles together (`documents.project.profile-without-own-scope`, at the profile's
+  `requiredScopes`): a person signs in through any client of the deployment, so a profile
+  selected by its client needs a scope no other profile's holders get from their role. The rule
+  covers service profiles too, because the actor kind that would separate them comes from a
+  claim the person can write;
+- a `requiredScopes` entry spelled like a standard scope name: `openid`, `profile`, `email`,
+  `phone`, `address` or `roles` (`documents.project.standard-scope-name`, at the entry), because
+  the issuer puts those into a token without checking a role;
+- a `requiredScopes` entry that is not an exact scope token, one with a space, a quote, a
+  backslash, a non-ASCII byte or `*`, or longer than 128 bytes
+  (`documents.project.invalid-scope`, at the entry), so `check`, `package` and
+  `generate identity-facts` accept the same spellings;
 - a hook whose `handler.destinationId` the runtime configuration does not bind under
   `destinations.hooks` (`documents.runtime.unbound-hook-destination`, at `/destinations/hooks`),
   when the check is given both `--project` and `--runtime-config`. The runtime refuses to start

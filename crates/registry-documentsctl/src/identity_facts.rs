@@ -6,10 +6,10 @@
 //! identity-facts` writes them from the deployment's own runtime
 //! configuration and the package it names.
 //!
-//! The identity generator checks that profiles sharing the person audience
-//! each carry a scope of their own. The project reader refuses a profile
-//! without one before a package exists, so a package that loads states
-//! profiles the generator accepts on that rule.
+//! The identity generator checks that every access profile carries a scope of
+//! its own, and refuses a standard scope name. The project reader refuses
+//! both before a package exists, so a package that loads states profiles the
+//! generator accepts on those rules.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -76,7 +76,7 @@ pub(crate) fn facts(
     }
     if config.binds_assertion_issuers() {
         return Err(FactsError::Unstatable(
-            "authentication.oidc names assertion issuers, which hosted generation does not state yet; remove them to write facts".to_owned(),
+            "authentication.oidc names assertion issuers, so another product exchanges tokens into the Document Store, which hosted generation cannot configure yet; generate facts only from the runtime configuration the server runs".to_owned(),
         ));
     }
     let admitted = config
@@ -209,4 +209,63 @@ fn output_exists() -> Outcome {
         "--output",
         "the output file already exists; generate never overwrites".to_owned(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use registry_documents_core::{DocumentsProject, STANDARD_SCOPE_NAMES};
+
+    use super::*;
+
+    const STARTER: &str =
+        include_str!("../../../products/documents/examples/starter/documents.yaml");
+
+    #[test]
+    fn the_project_reader_and_the_facts_reader_refuse_the_same_standard_scope_names() {
+        assert_eq!(
+            STANDARD_SCOPE_NAMES,
+            identity_facts::STANDARD_SCOPE_NAMES,
+            "the two lists must not drift apart"
+        );
+    }
+
+    fn project_accepts(scope: &str) -> bool {
+        let text = STARTER.replacen(
+            "requiredScopes: [documents:staff]",
+            &format!("requiredScopes: [{scope}]"),
+            1,
+        );
+        DocumentsProject::decode("documents.yaml", text.as_bytes()).is_ok()
+    }
+
+    fn facts_accept(scope: &str) -> bool {
+        let text = format!(
+            "apiVersion: id.registrystack.org/formats/platform/identity-facts/v1\nkind: PlatformIdentityFacts\nproduct: documents\nissuer: https://identity.example.test\naudience: urn:example:documents\nallowedClients:\n  - case-portal\nclaims:\n  registry_actor_kind: string\naccessProfiles:\n  - id: staff\n    scopes: [{scope}]\n    requesterClients: [case-portal]\n    actorKind: human\n"
+        );
+        identity_facts::read("identity-facts", text.as_bytes()).is_ok()
+    }
+
+    #[test]
+    fn the_project_reader_accepts_the_scope_spellings_the_facts_reader_accepts() {
+        let long = format!("documents:{}", "a".repeat(120));
+        let spellings: [&str; 10] = [
+            "documents:staff",
+            "\"documents:staff \"",
+            "\"documents staff\"",
+            "\"Documents:Staff\"",
+            "\"documents:st\u{e4}ff\"",
+            "\"documents:*\"",
+            "\"documents:\\\"staff\"",
+            &long,
+            "openid",
+            "roles",
+        ];
+        for spelling in spellings {
+            assert_eq!(
+                project_accepts(spelling),
+                facts_accept(spelling),
+                "{spelling}"
+            );
+        }
+    }
 }

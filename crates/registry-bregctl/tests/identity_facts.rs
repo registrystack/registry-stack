@@ -174,6 +174,24 @@ fn a_customized_scope_claim_is_refused_and_writes_nothing() {
     assert!(text.contains("support yet"), "{text}");
 }
 
+#[test]
+fn assertion_issuers_are_refused_and_write_nothing() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    edit_runtime(
+        &runtime,
+        "    allowedClients: [generic-registry-client]\n",
+        "    allowedClients: [generic-registry-client]\n    assertionIssuers:\n      generic-registry-client: [https://assertions.example.test]\n",
+    );
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate(&runtime, &output);
+    assert!(!ok);
+    assert!(!output.exists());
+    let text = format!("{stdout}{stderr}");
+    assert!(text.contains("assertion issuers"), "{text}");
+    assert!(text.contains("the server runs"), "{text}");
+}
+
 /// A copy of the fixture project whose `evidence-source` profile requires
 /// `kind` of whoever holds it. BReg requires the requester client beside it.
 fn project_requiring(root: &Path, kind: &str) -> PathBuf {
