@@ -2411,3 +2411,68 @@ fn the_own_scope_rule_holds_for_a_typed_user_in_the_file() {
         .refusal()
         .contains(&"identity.deployment.profile-without-own-scope".to_owned()));
 }
+
+/// A deployment with every kind of person-facing resource: a browser
+/// application, a session application, an extension user type with
+/// attributes and users with claims.
+fn person_facing_case() -> Case {
+    let mut case = case();
+    case.deployment = format!(
+        "personAudience: urn:person:example\n{}",
+        case.deployment.replace(
+            "users:\n",
+            "sessionApps:\n  - id: citizen-pages\n    clientSecretRef: secret:env/CITIZEN_PAGES_CLIENT_SECRET\n    origin: https://pages.registry.example\n    redirectUris: [https://pages.registry.example/auth/callback]\n    postLogoutRedirectUris: [https://pages.registry.example/signed-out]\n    products: [documents]\n    tokenAttributes: [registry_actor_kind]\n    grants:\n      - product: documents\n        accessProfiles: [read]\nusers:\n",
+        )
+    );
+    case.facts
+        .push(("documents".into(), person_facts("documents", "documents:get")));
+    case
+}
+
+/// Every token attribute comes from the deployment file, a declared issuer
+/// or the generator: no generated user type or application lets a person
+/// register, and self-edits of the user record go to administrators.
+#[test]
+fn no_generated_resource_lets_a_person_register_or_edit_their_own_record() {
+    let generated = person_facing_case().run().expect("generates");
+    let documents = resources(&generated);
+    let user_types = of_type(&documents, "user_type");
+    let names: Vec<_> = user_types
+        .iter()
+        .map(|document| document["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["RegistryPerson", "Farmer"]);
+    let farmer = user_types[1];
+    assert!(farmer["schema"].get("national_id").is_some());
+    for user_type in &user_types {
+        assert_eq!(
+            user_type["allowSelfRegistration"],
+            serde_json::Value::Bool(false),
+            "{}",
+            user_type["name"]
+        );
+    }
+    let users = of_type(&documents, "user");
+    assert!(users
+        .iter()
+        .all(|user| user["attributes"]["registry_role"].is_string()));
+    let applications = of_type(&documents, "application");
+    let descriptions: Vec<_> = applications
+        .iter()
+        .map(|document| document["description"].as_str().unwrap())
+        .collect();
+    assert_eq!(descriptions.len(), 2);
+    assert!(descriptions.contains(&"Browser application"));
+    assert!(descriptions.contains(&"Session application"));
+    for application in &applications {
+        assert_eq!(
+            application["isRegistrationFlowEnabled"],
+            serde_json::Value::Bool(false),
+            "{}",
+            application["name"]
+        );
+    }
+    for output in [generated, case().run().unwrap(), session_case().run().unwrap()] {
+        assert!(output.files.contains_key(crate::front_gateway::FILE));
+    }
+}

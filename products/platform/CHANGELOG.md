@@ -54,6 +54,12 @@
   post-logout return URIs. Generated applications use authorization-code and
   refresh-token grants with PKCE. The receipt records each application's
   distinct audiences, with the person audience first and the rest sorted.
+- Every token attribute in generated identity output comes from the
+  deployment file, a declared federated issuer or the generator. Every
+  generated user type carries `allowSelfRegistration: false`, every browser
+  and session application `isRegistrationFlowEnabled: false`, and every
+  output holds `front-gateway/envoy.yaml`. The deployment file has no member
+  that turns registration on.
 - The hosted identity generator accepts `personAudience` for `breg` and
   `documents`. Member products must admit explicit client lists and use
   disjoint scope names. Non-BReg members cannot state exchange profiles or

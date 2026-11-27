@@ -371,3 +371,17 @@ internal name.
 
 The problem types are exported by `examples/problem-catalog.rs` and registered
 in `products/identifiers`.
+
+### Where token attributes come from
+
+A token attribute that decides access comes from a source the deployment
+controls: users and their claims stated in the deployment file by
+administrators, a declared federated issuer, or the generator itself (the
+actor kind and the purpose). A person has no way to set one. Generated
+deployments have no self-registration: every user type carries
+`allowSelfRegistration: false` and every browser and session application
+`isRegistrationFlowEnabled: false`, and the deployment file has no member that
+turns either on. With the front gateway above, changes to a user record stay
+with administrators. Adding self-registration later needs a per-attribute
+source in the deployment file, and a refusal to list a person-set attribute
+among `tokenAttributes`.

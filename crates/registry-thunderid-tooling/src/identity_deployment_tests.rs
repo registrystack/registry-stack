@@ -327,3 +327,32 @@ fn a_client_declares_its_side_of_the_trust_line() {
     let unknown = marked.replace("side: registry", "side: elsewhere");
     assert!(read_text(&unknown).is_err());
 }
+
+/// The deployment file has no member that turns registration on: a user
+/// type, a browser application and a session application each refuse one.
+#[test]
+fn the_deployment_file_cannot_turn_registration_on() {
+    let base = format!(
+        "{}userTypes:\n  - id: farmer\n    name: Farmer\n    attributes: [national_id]\n",
+        with_session_app()
+    );
+    assert_eq!(codes(&base), Vec::<String>::new());
+    let unknown = vec!["config.unknown-key".to_owned()];
+    for member in ["allowSelfRegistration", "isRegistrationFlowEnabled"] {
+        let user_type = base.replace(
+            "    name: Farmer\n",
+            &format!("    name: Farmer\n    {member}: true\n"),
+        );
+        assert_eq!(codes(&user_type), unknown, "user type {member}");
+        let browser = base.replace(
+            "    product: breg\n",
+            &format!("    product: breg\n    {member}: true\n"),
+        );
+        assert_eq!(codes(&browser), unknown, "browser application {member}");
+        let session = base.replace(
+            "    products: [breg, evidence]\n",
+            &format!("    products: [breg, evidence]\n    {member}: true\n"),
+        );
+        assert_eq!(codes(&session), unknown, "session application {member}");
+    }
+}
