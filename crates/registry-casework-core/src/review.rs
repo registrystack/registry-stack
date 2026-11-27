@@ -273,11 +273,47 @@ pub struct ReviewStagePolicy {
     pub exclude_previous_stage_reviewers: bool,
 }
 
-/// The options of a stage's asks. None exist yet: `asks: {}` turns asks on.
+/// `asks: {}` offers an ask without a deadline or clock pause.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReviewStageAsksPolicy {}
+pub struct ReviewStageAsksPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_within: Option<crate::ElapsedDuration>,
+    #[serde(default, skip_serializing_if = "ReviewAskOnDue::is_default")]
+    pub on_due: ReviewAskOnDue,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pause_clocks: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewAskOnDue {
+    #[default]
+    ReturnToReviewer,
+}
+
+impl ReviewAskOnDue {
+    const fn is_default(&self) -> bool {
+        matches!(self, Self::ReturnToReviewer)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewResubmissionPolicy {
+    #[default]
+    FirstStage,
+    ResumeAtReturningStage,
+}
+
+impl ReviewResubmissionPolicy {
+    const fn is_default(&self) -> bool {
+        matches!(self, Self::FirstStage)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -456,6 +492,8 @@ impl ReviewStagePolicy {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewPolicy {
+    #[serde(default, skip_serializing_if = "ReviewResubmissionPolicy::is_default")]
+    pub resubmission: ReviewResubmissionPolicy,
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
@@ -943,6 +981,7 @@ impl ReviewPolicy {
         dependencies: crate::ReviewPolicyDependencies,
     ) -> Result<ReviewPolicyClosure, ReviewPolicyError> {
         let snapshot = ReviewPolicyClosure {
+            resubmission: self.resubmission,
             identity: ReviewPolicyIdentity {
                 id: self.id.clone(),
                 version: self.version.clone(),
@@ -980,6 +1019,8 @@ pub struct ReviewPolicyIdentity {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewPolicyClosure {
+    #[serde(default, skip_serializing_if = "ReviewResubmissionPolicy::is_default")]
+    pub resubmission: ReviewResubmissionPolicy,
     pub dependencies: crate::ReviewPolicyDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -1139,6 +1180,7 @@ impl ReviewPolicyClosure {
 
     fn as_policy(&self) -> ReviewPolicy {
         ReviewPolicy {
+            resubmission: self.resubmission,
             id: self.identity.id.clone(),
             label: self.label.clone(),
             version: self.identity.version.clone(),
@@ -1256,8 +1298,7 @@ pub struct ReviewTask {
     /// context remains subject to the source's current disclosure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_receipt: Option<ReviewDecisionReceipt>,
-    /// Set while the task has an ask the applicant has not answered
-    /// (`waiting`) or has answered (`answered`). It stays with the task
+    /// An ask is waiting for the applicant, answered, or expired. The marker stays with the task
     /// through release and reassignment and clears when the task is decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker: Option<ReviewTaskMarker>,
@@ -1270,6 +1311,7 @@ pub struct ReviewTask {
 pub enum ReviewTaskMarker {
     Waiting,
     Answered,
+    Expired,
 }
 
 impl ReviewTaskMarker {
@@ -1278,6 +1320,7 @@ impl ReviewTaskMarker {
         match self {
             Self::Waiting => "waiting",
             Self::Answered => "answered",
+            Self::Expired => "expired",
         }
     }
 }
@@ -1549,6 +1592,7 @@ pub struct ReviewAccountabilityRecord {
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewClockState {
     Running,
+    Paused,
     Completed,
     Cancelled,
     SourceFactsMissing,
@@ -3117,6 +3161,7 @@ mod tests {
 
     fn approval_policy(stages: Vec<ReviewStagePolicy>) -> ReviewPolicy {
         ReviewPolicy {
+            resubmission: ReviewResubmissionPolicy::default(),
             id: "registry-correction".to_owned(),
             label: None,
             version: "1".to_owned(),
@@ -3167,6 +3212,7 @@ mod tests {
 
     fn answer_policy() -> ReviewPolicy {
         ReviewPolicy {
+            resubmission: ReviewResubmissionPolicy::default(),
             id: "standalone-question".to_owned(),
             label: None,
             version: "1".to_owned(),
@@ -4577,11 +4623,11 @@ mod tests {
         assert!(encoded.get("asks").is_none());
 
         let mut asking = plain.clone();
-        asking.stages[0].asks = Some(ReviewStageAsksPolicy {});
+        asking.stages[0].asks = Some(ReviewStageAsksPolicy::default());
         let encoded = serde_json::to_value(&asking.stages[0]).unwrap();
         assert_eq!(encoded["asks"], json!({}));
         let decoded: ReviewStagePolicy = serde_json::from_value(encoded).unwrap();
-        assert_eq!(decoded.asks, Some(ReviewStageAsksPolicy {}));
+        assert_eq!(decoded.asks, Some(ReviewStageAsksPolicy::default()));
 
         let defaults = crate::ReviewPolicyDependencies::default();
         let plain_digest = plain.digest_with(&defaults).unwrap();
@@ -4593,7 +4639,7 @@ mod tests {
     }
 
     #[test]
-    fn asks_take_no_options_yet() {
+    fn asks_reject_unknown_options() {
         let refused = serde_json::from_value::<ReviewStagePolicy>(json!({
             "id": "review", "queue": "review", "decidingProfiles": ["reviewer"],
             "requiredApprovals": 1, "asks": {"dueDays": 3}
@@ -4602,13 +4648,50 @@ mod tests {
     }
 
     #[test]
+    fn ask_timing_options_and_resubmission_round_trip_without_changing_defaults() {
+        let original = approval_policy(vec![stage("review", 1)]);
+        let original_bytes = serde_json::to_value(&original).unwrap();
+        let dependencies = crate::ReviewPolicyDependencies::default();
+        let original_digest = original.digest_with(&dependencies).unwrap();
+        let mut configured = original_bytes.clone();
+        configured["stages"][0]["asks"] = json!({
+            "answerWithin": {"hours": 48},
+            "onDue": "return-to-reviewer",
+            "pauseClocks": true
+        });
+        configured["resubmission"] = json!("resume-at-returning-stage");
+        let policy: ReviewPolicy = serde_json::from_value(configured).expect("timing options");
+        let encoded = serde_json::to_value(&policy).unwrap();
+        assert_eq!(
+            encoded["stages"][0]["asks"]["answerWithin"],
+            json!({"hours": 48})
+        );
+        assert_eq!(encoded["stages"][0]["asks"]["pauseClocks"], true);
+        assert_eq!(encoded["resubmission"], "resume-at-returning-stage");
+        assert_ne!(policy.digest_with(&dependencies).unwrap(), original_digest);
+        let mut defaults = original_bytes.clone();
+        defaults["resubmission"] = json!("first-stage");
+        let defaults: ReviewPolicy = serde_json::from_value(defaults).unwrap();
+        assert_eq!(serde_json::to_value(&defaults).unwrap(), original_bytes);
+        assert_eq!(
+            defaults.digest_with(&dependencies).unwrap(),
+            original_digest
+        );
+        let asks: ReviewStageAsksPolicy = serde_json::from_value(json!({
+            "pauseClocks": false, "onDue": "return-to-reviewer"
+        }))
+        .unwrap();
+        assert_eq!(serde_json::to_value(asks).unwrap(), json!({}));
+    }
+
+    #[test]
     fn only_an_approval_policy_may_declare_asks() {
         let mut approval = approval_policy(vec![stage("review", 1)]);
-        approval.stages[0].asks = Some(ReviewStageAsksPolicy {});
+        approval.stages[0].asks = Some(ReviewStageAsksPolicy::default());
         assert_eq!(approval.check(), Ok(()));
 
         let mut answer = answer_policy();
-        answer.stages[0].asks = Some(ReviewStageAsksPolicy {});
+        answer.stages[0].asks = Some(ReviewStageAsksPolicy::default());
         assert_eq!(answer.check(), Err(ReviewPolicyError::StageAsks));
         let finding = answer
             .findings()

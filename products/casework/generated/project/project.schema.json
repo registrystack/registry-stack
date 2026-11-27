@@ -247,6 +247,12 @@
       ],
       "type": "object"
     },
+    "ReviewAskOnDue": {
+      "enum": [
+        "return-to-reviewer"
+      ],
+      "type": "string"
+    },
     "ReviewCompletionDestinationPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -379,6 +385,13 @@
       ],
       "type": "string"
     },
+    "ReviewResubmissionPolicy": {
+      "enum": [
+        "first-stage",
+        "resume-at-returning-stage"
+      ],
+      "type": "string"
+    },
     "ReviewRetentionPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -403,7 +416,18 @@
     },
     "ReviewStageAsksPolicy": {
       "additionalProperties": false,
-      "description": "The options of a stage's asks. None exist yet: `asks: {}` turns asks on.",
+      "description": "`asks: {}` offers an ask without a deadline or clock pause.",
+      "properties": {
+        "answerWithin": {
+          "$ref": "#/$defs/ElapsedDuration"
+        },
+        "onDue": {
+          "$ref": "#/$defs/ReviewAskOnDue"
+        },
+        "pauseClocks": {
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "ReviewStagePolicy": {
@@ -1078,6 +1102,9 @@
           },
           "purpose": {
             "$ref": "#/$defs/ReviewPurpose"
+          },
+          "resubmission": {
+            "$ref": "#/$defs/ReviewResubmissionPolicy"
           },
           "resultSchema": {
             "x-registry-foreign": "json-schema-2020-12"

@@ -25,7 +25,7 @@ pub struct ReviewStaffingQuery {
     pub subject_version: Option<String>,
     pub subject_digest: Option<ContentDigest>,
     pub reference: Option<String>,
-    /// Lists only the tasks that wait for an applicant or that an applicant answered.
+    /// Lists tasks by their ask marker: waiting, answered, or expired.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker: Option<crate::ReviewTaskMarker>,
     #[serde(default)]
