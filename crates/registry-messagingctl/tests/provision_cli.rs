@@ -36,7 +36,7 @@ fn write_runtime_for(directory: &Path, database: &str) -> String {
             "runtime-database-url",
             format!("postgresql://messaging_runtime:{RUNTIME_PASSWORD}@db.invalid:5432/{database}"),
         ),
-        ("audit-key", "0123456789abcdef0123456789abcdef".to_owned()),
+        ("audit-key", "5a".repeat(16)),
         (
             "jwks.json",
             r#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#.to_owned(),
