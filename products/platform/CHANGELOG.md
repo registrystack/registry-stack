@@ -20,7 +20,8 @@
   `StaticJwksError::OctetKeyPair`, which names the key position and says to
   use an RSA or EC key.
 
-- One definition of loopback, `registry_platform_httpsec::loopback` (also
+- One definition of loopback, the std-only `registry-platform-loopback` crate
+  (re-exported as `registry_platform_httpsec::loopback` and
   `registry_platform_httputil::loopback`), for outbound destinations and
   loopback origins. A host is loopback when it is an address literal in
   `127.0.0.0/8`, `::1` or an IPv4-mapped form of `127.0.0.0/8`, or the exact

@@ -36,6 +36,7 @@ SHARDS = {
         "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
+        "registry-platform-loopback",
         "registry-platform-metrics",
         "registry-platform-objectstore",
         "registry-platform-oidc",

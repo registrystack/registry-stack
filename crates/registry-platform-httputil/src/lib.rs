@@ -9,7 +9,7 @@ use thiserror::Error;
 pub mod client;
 pub mod destination;
 pub mod probe;
-pub use registry_platform_httpsec::loopback;
+pub use registry_platform_loopback as loopback;
 
 pub use client::{
     exchange_authorization_from_json, valid_resource_uri, valid_scope_token,

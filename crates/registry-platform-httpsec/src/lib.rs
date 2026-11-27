@@ -1,7 +1,7 @@
 //! HTTP security primitives shared by Registry Stack servers and clients.
 
 mod client;
-pub mod loopback;
+pub use registry_platform_loopback as loopback;
 
 pub use client::{
     response_trace_id, ProblemDocument, ProblemDocumentError, ResponseTraceError, TraceId,

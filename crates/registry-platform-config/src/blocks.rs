@@ -428,7 +428,7 @@ fn valid_jwks_uri(value: &Url, allow_loopback_http: bool, allow_insecure_http: b
                 || (allow_loopback_http
                     && parsed
                         .host_str()
-                        .and_then(registry_platform_httpsec::loopback::loopback_host)
+                        .and_then(registry_platform_loopback::loopback_host)
                         .is_some())
         }
         _ => false,
