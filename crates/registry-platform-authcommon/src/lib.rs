@@ -2,6 +2,15 @@
 //! provider.
 
 pub mod client_assertion;
+pub mod refusal;
+
+pub use refusal::FailedCheck;
+#[cfg(feature = "refusal-recorder")]
+pub use refusal::{
+    RefusalLine, RefusalNote, RefusalRecorder, REFUSAL_LOG_LINES_PER_WINDOW, REFUSAL_LOG_WINDOW,
+};
+#[cfg(feature = "refusal-recorder")]
+pub use tracing as __tracing;
 
 use std::env;
 use std::fs;

@@ -17,6 +17,7 @@ schema = ["dep:schemars"]
 [dependencies]
 base64.workspace = true
 jsonwebtoken.workspace = true
+registry-platform-authcommon.workspace = true
 registry-platform-crypto = { workspace = true }
 registry-platform-httputil = { workspace = true }
 registry-platform-config.workspace = true
