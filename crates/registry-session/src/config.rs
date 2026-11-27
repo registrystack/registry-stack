@@ -170,6 +170,11 @@ pub struct RuntimeConfig {
     pub audit: AuditConfig,
     #[serde(default)]
     pub rate_limits: RateLimitsConfig,
+    /// How the gateway reaches the service and the host's clusters, read only
+    /// by `gateway envoy`. When present, every module and page names its
+    /// `upstream`.
+    #[serde(default)]
+    pub gateway: Option<GatewayConfig>,
 }
 
 /// The OpenID Provider the service signs people in with. Every endpoint is
@@ -243,6 +248,10 @@ pub struct ModuleConfig {
     /// The kinds that may call the module. Omitted, every kind may.
     #[serde(default)]
     pub sign_ins: Option<UniqueList<LocalId>>,
+    /// The host's cluster the gateway forwards the module's calls to. Required
+    /// when the file has a `gateway` block.
+    #[serde(default)]
+    pub upstream: Option<UpstreamConfig>,
 }
 
 impl ModuleConfig {
@@ -263,6 +272,75 @@ pub struct PageConfig {
     pub prefix: String,
     /// The kind of session the pages need.
     pub sign_in: LocalId,
+    /// The host's cluster the gateway forwards the pages to. Required when the
+    /// file has a `gateway` block.
+    #[serde(default)]
+    pub upstream: Option<UpstreamConfig>,
+}
+
+/// The gateway's view of the service and of the host it sits in front of.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayConfig {
+    /// The `:authority` the browser uses, as `host` or `host:port`. Default:
+    /// the host and port of `publicOrigin`. Signed-in routes match only this
+    /// authority, so a caller that reaches the host by an internal name never
+    /// meets the session routes.
+    #[serde(default)]
+    pub authority: Option<Authority>,
+    /// How the gateway reaches the service's two listeners.
+    pub service: GatewayServiceConfig,
+    /// How long the gateway waits for the check. Default: 3000.
+    #[serde(default = "default_check_timeout")]
+    pub check_timeout_milliseconds:
+        BoundedU64<MINIMUM_CHECK_TIMEOUT_MILLISECONDS, MAXIMUM_CHECK_TIMEOUT_MILLISECONDS>,
+    /// The host's own HTTP filters, by the name the host's chain gives them.
+    /// Every signed-in route switches them off, except where its upstream
+    /// keeps one.
+    #[serde(default)]
+    pub host_filters: UniqueList<FilterName>,
+}
+
+/// The service's address as the gateway reaches it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayServiceConfig {
+    /// The service's host name or address.
+    pub host: HostName,
+    /// The port of the service's public listener.
+    pub public_port: BoundedU32<1, 65535>,
+    /// The port of the service's check listener.
+    pub check_port: BoundedU32<1, 65535>,
+}
+
+/// Where the gateway forwards the calls of one module or page route.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpstreamConfig {
+    /// The host's cluster name.
+    pub cluster: ClusterName,
+    /// The prefix the gateway puts in place of the route's own.
+    #[serde(default)]
+    pub prefix_rewrite: Option<RewritePrefix>,
+    /// How long the gateway waits for the upstream's answer. Default: 30.
+    #[serde(default = "default_upstream_timeout")]
+    pub timeout_seconds: BoundedU32<1, MAXIMUM_UPSTREAM_TIMEOUT_SECONDS>,
+    /// Names from `gateway.hostFilters` that stay on for this route.
+    #[serde(default)]
+    pub keep_host_filters: UniqueList<FilterName>,
+}
+
+const MINIMUM_CHECK_TIMEOUT_MILLISECONDS: u64 = 500;
+const MAXIMUM_CHECK_TIMEOUT_MILLISECONDS: u64 = 10_000;
+const MAXIMUM_UPSTREAM_TIMEOUT_SECONDS: u32 = 3600;
+
+fn default_check_timeout(
+) -> BoundedU64<MINIMUM_CHECK_TIMEOUT_MILLISECONDS, MAXIMUM_CHECK_TIMEOUT_MILLISECONDS> {
+    BoundedU64::new(3000).expect("the default check timeout is within its bounds")
+}
+
+fn default_upstream_timeout() -> BoundedU32<1, MAXIMUM_UPSTREAM_TIMEOUT_SECONDS> {
+    BoundedU32::new(30).expect("the default upstream timeout is within its bounds")
 }
 
 /// One kind of sign-in and the confidential client it uses at the provider.
@@ -552,6 +630,82 @@ checked_text!(
     )
 );
 
+checked_text!(
+    /// A host name or address: 1 to 253 ASCII letters, digits, `.`, `-` or
+    /// `_`.
+    HostName,
+    |text| {
+        (1..=253).contains(&text.len())
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    },
+    Invalid::expected(
+        "a host name or address of 1 to 253 ASCII letters, digits, dots, hyphens, or \
+         underscores",
+        "Write the host name or address the gateway reaches the service at."
+    )
+);
+
+checked_text!(
+    /// An `:authority` value: a host with an optional port, 1 to 260 ASCII
+    /// letters, digits, `.`, `-`, `_`, `:`, `[` or `]`.
+    Authority,
+    |text| {
+        (1..=260).contains(&text.len())
+            && text.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':' | b'[' | b']')
+            })
+    },
+    Invalid::expected(
+        "a host with an optional port, such as app.example or 127.0.0.1:8120",
+        "Write the authority the browser sends, without the scheme."
+    )
+);
+
+checked_text!(
+    /// An Envoy cluster name: 1 to 128 ASCII letters, digits, `.`, `-`, `_`
+    /// or `:`.
+    ClusterName,
+    |text| (1..=128).contains(&text.len()) && text.bytes().all(name_byte),
+    Invalid::expected(
+        "a cluster name of 1 to 128 ASCII letters, digits, dots, hyphens, underscores, or colons",
+        "Write the cluster name exactly as the host's gateway configuration spells it."
+    )
+);
+
+checked_text!(
+    /// An Envoy HTTP filter name: 1 to 128 ASCII letters, digits, `.`, `-`,
+    /// `_` or `:`.
+    FilterName,
+    |text| (1..=128).contains(&text.len()) && text.bytes().all(name_byte),
+    Invalid::expected(
+        "a filter name of 1 to 128 ASCII letters, digits, dots, hyphens, underscores, or colons",
+        "Write the filter name exactly as the host's HTTP filter chain spells it."
+    )
+);
+
+checked_text!(
+    /// The path an upstream route rewrites its prefix to: it starts with `/`
+    /// and holds only visible ASCII without a percent sign, backslash, query,
+    /// or fragment.
+    RewritePrefix,
+    |text| {
+        text.len() <= MAXIMUM_PREFIX_BYTES
+            && text.starts_with('/')
+            && text.bytes().all(|byte| byte.is_ascii_graphic())
+            && !text.contains(['%', '\\', '?', '#'])
+    },
+    Invalid::expected(
+        "a path that starts with / and holds no percent sign, backslash, query, or fragment",
+        "Write the prefix the upstream expects, such as / or /v1/."
+    )
+);
+
+fn name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':')
+}
+
 /// A set of 0 to 16 scopes.
 fn scope_list<'de, D>(deserializer: D) -> Result<UniqueList<ScopeToken>, D::Error>
 where
@@ -675,6 +829,23 @@ impl RuntimeConfig {
         } else {
             FLOW_COOKIE
         }
+    }
+
+    /// The `:authority` the gateway matches signed-in routes on: the
+    /// configured one, else the host and port of `publicOrigin`. `None` when
+    /// the file has no `gateway` block.
+    #[must_use]
+    pub fn gateway_authority(&self) -> Option<String> {
+        let gateway = self.gateway.as_ref()?;
+        if let Some(authority) = &gateway.authority {
+            return Some(authority.as_str().to_owned());
+        }
+        let url = self.public_origin.to_url();
+        let host = url.host_str()?;
+        Some(
+            url.port()
+                .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}")),
+        )
     }
 
     /// The browser-facing origin, without a trailing slash.
@@ -863,6 +1034,7 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
     }
     route_findings(config, &mut findings);
     kind_findings(config, &mut findings);
+    gateway_findings(config, &mut findings);
     for (index, claim) in config
         .who_am_i
         .claims
@@ -1129,6 +1301,79 @@ fn kind_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
                  audience is one more token request at sign-in",
                 "Move modules into the person audience, or limit which kinds may call them.",
             ));
+        }
+    }
+}
+
+/// The gateway block: the two ports differ, every module and page names its
+/// upstream, and every filter an upstream keeps is a host filter the block
+/// declares. Without the block no upstream is accepted.
+fn gateway_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
+    let Some(gateway) = &config.gateway else {
+        let upstreams = config
+            .modules
+            .iter()
+            .enumerate()
+            .map(|(index, module)| (format!("/modules/{index}/upstream"), &module.upstream))
+            .chain(
+                config
+                    .pages
+                    .iter()
+                    .enumerate()
+                    .map(|(index, page)| (format!("/pages/{index}/upstream"), &page.upstream)),
+            );
+        for (pointer, upstream) in upstreams {
+            if upstream.is_some() {
+                findings.push(Finding::new(
+                    "platform.session-runtime.upstream-without-gateway",
+                    &pointer,
+                    "the route names an upstream, but the file has no gateway block",
+                    "Add the gateway block, or remove the upstream.",
+                ));
+            }
+        }
+        return;
+    };
+    if gateway.service.public_port.get() == gateway.service.check_port.get() {
+        findings.push(Finding::new(
+            "platform.session-runtime.gateway-ports-equal",
+            "/gateway/service/checkPort",
+            "gateway.service.checkPort is the same port as publicPort, which would serve the \
+             check on the public listener",
+            "Give the check its own port, the one checkListener binds.",
+        ));
+    }
+    let routes = config
+        .modules
+        .iter()
+        .enumerate()
+        .map(|(index, module)| (format!("/modules/{index}"), &module.upstream))
+        .chain(
+            config
+                .pages
+                .iter()
+                .enumerate()
+                .map(|(index, page)| (format!("/pages/{index}"), &page.upstream)),
+        );
+    for (pointer, upstream) in routes {
+        let Some(upstream) = upstream else {
+            findings.push(Finding::new(
+                "platform.session-runtime.upstream-missing",
+                &pointer,
+                "the route has no upstream, which the gateway block needs to forward it",
+                "Name the host's cluster under upstream.cluster.",
+            ));
+            continue;
+        };
+        for (position, kept) in upstream.keep_host_filters.iter().enumerate() {
+            if !gateway.host_filters.iter().any(|filter| filter == kept) {
+                findings.push(Finding::new(
+                    "platform.session-runtime.unknown-host-filter",
+                    &format!("{pointer}/upstream/keepHostFilters/{position}"),
+                    "the upstream keeps a host filter that gateway.hostFilters does not list",
+                    "List the filter under gateway.hostFilters, or remove it here.",
+                ));
+            }
         }
     }
 }

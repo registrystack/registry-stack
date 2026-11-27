@@ -1,0 +1,89 @@
+apiVersion: id.registrystack.org/formats/platform/session-runtime/v1alpha1
+kind: PlatformSessionRuntimeConfig
+listener:
+  bind: 10.0.0.5:8120
+  tlsTermination: operator-controlled-upstream
+checkListener: 10.0.0.5:8121
+publicOrigin: https://app.example
+secretProviders:
+  file:
+    root: /run/secrets
+  environment: {}
+issuer:
+  id: https://id.example
+  authorization: https://id.example/oauth2/authorize
+  endSession: https://id.example/oauth2/logout
+  token: https://id.example/oauth2/token
+  revocation: https://id.example/oauth2/revoke
+  jwks: https://id.example/oauth2/jwks
+personAudience: https://api.example/person
+gateway:
+  service:
+    host: registry-session
+    publicPort: 8120
+    checkPort: 8121
+  hostFilters:
+    - envoy.filters.http.cors
+    - envoy.filters.http.basic_auth
+    - envoy.filters.http.rbac
+modules:
+  - id: registry
+    prefix: /api/registry/
+    audience: person
+    upstream:
+      cluster: registry
+      prefixRewrite: /
+      timeoutSeconds: 30
+  - id: documents
+    prefix: /api/documents/
+    audience: person
+    upstream:
+      cluster: documents
+      prefixRewrite: /
+      timeoutSeconds: 120
+  - id: functions
+    prefix: /api/functions/
+    audience: person
+    upstream:
+      cluster: functions
+      prefixRewrite: /functions/v1/
+      timeoutSeconds: 60
+  - id: casework
+    prefix: /api/casework/
+    audience: https://casework.example/api
+    signIns: [staff]
+    upstream:
+      cluster: casework
+      prefixRewrite: /
+  - id: data
+    prefix: /api/data/
+    audience: person
+    upstream:
+      cluster: data-api
+      prefixRewrite: /rest/v1/
+      timeoutSeconds: 30
+      keepHostFilters:
+        - envoy.filters.http.rbac
+pages:
+  - prefix: /apply/
+    signIn: citizen
+    upstream:
+      cluster: pages
+      timeoutSeconds: 15
+  - prefix: /staff/
+    signIn: staff
+    upstream:
+      cluster: pages
+      timeoutSeconds: 15
+signIns:
+  citizen:
+    clientId: citizen-app
+    clientSecretRef: secret:file/citizen-secret
+    scopes: [registry:read]
+  staff:
+    clientId: staff-app
+    clientSecretRef: secret:file/staff-secret
+    scopes: [registry:read, casework:work]
+audit:
+  hashKeyRef: secret:env/SESSION_AUDIT_KEY
+  path: /var/lib/session/audit.jsonl
