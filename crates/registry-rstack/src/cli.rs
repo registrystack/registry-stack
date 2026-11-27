@@ -286,6 +286,9 @@ struct ThunderidArguments {
     /// Casework runtime configuration file.
     #[arg(long, value_name = "FILE", requires = "casework_project")]
     casework_runtime_config: Option<PathBuf>,
+    /// Document Store runtime configuration file.
+    #[arg(long, value_name = "FILE")]
+    documents_runtime_config: Option<PathBuf>,
     /// Evidence project directory.
     #[arg(long, value_name = "DIR", requires = "evidence_target")]
     evidence_project: Option<PathBuf>,
@@ -329,6 +332,7 @@ impl ThunderidArguments {
             &self.casework_runtime_config,
             false,
         );
+        push("documents", &None, &self.documents_runtime_config, false);
         push(
             "evidence",
             &self.evidence_project,

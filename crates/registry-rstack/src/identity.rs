@@ -66,8 +66,12 @@ pub(crate) struct ProductSpec {
     substitutes_environment: bool,
 }
 
-/// The products that admit OIDC tokens, in the order their facts are merged.
-pub(crate) const PRODUCTS: [ProductSpec; 4] = [
+/// The products that admit OIDC tokens, in the order their facts are merged:
+/// alphabetical by product name, so a merge never depends on the order the
+/// operator typed flags in. The Document Store sits between casework and
+/// evidence for that reason. Its tool takes a runtime configuration and no
+/// project directory.
+pub(crate) const PRODUCTS: [ProductSpec; 5] = [
     ProductSpec {
         name: "breg",
         binary: "bregctl",
@@ -83,6 +87,15 @@ pub(crate) const PRODUCTS: [ProductSpec; 4] = [
         variable: "RSTACK_CASEWORKCTL_BIN",
         config_flag: "--runtime-config",
         takes_project: true,
+        takes_production: false,
+        substitutes_environment: true,
+    },
+    ProductSpec {
+        name: "documents",
+        binary: "documentsctl",
+        variable: "RSTACK_DOCUMENTSCTL_BIN",
+        config_flag: "--runtime-config",
+        takes_project: false,
         takes_production: false,
         substitutes_environment: true,
     },

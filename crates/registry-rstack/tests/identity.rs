@@ -55,6 +55,11 @@ impl Workspace {
     /// issuer variable it received, refuses to run when the secret-looking
     /// variable reaches it, and writes the example facts to `--output`.
     fn stub(&self, name: &str, version: &str) -> PathBuf {
+        self.stub_writing(name, version, &examples().join("identity-facts.yaml"))
+    }
+
+    /// [`Self::stub`], writing the facts in `facts` to `--output`.
+    fn stub_writing(&self, name: &str, version: &str, facts: &Path) -> PathBuf {
         let script = format!(
             "#!/usr/bin/env bash\n\
              set -euo pipefail\n\
@@ -67,7 +72,7 @@ impl Workspace {
              cp '{facts}' \"$out\"\n",
             log = self.path(&format!("{name}.log")).display(),
             env = self.path(&format!("{name}.env")).display(),
-            facts = examples().join("identity-facts.yaml").display(),
+            facts = facts.display(),
         );
         let path = self.path(name);
         fs::write(&path, script).unwrap();
@@ -704,4 +709,154 @@ fn check_reads_no_secret() {
     let run = workspace.rstack(&["identity", "check", deployment.to_str().unwrap()], None);
     assert!(!text(&run.stdout).contains(SECRET));
     assert!(!text(&run.stderr).contains(SECRET));
+}
+
+const PERSON_AUDIENCE: &str = "urn:registry:person";
+
+const PERSON_DEPLOYMENT: &str = "\
+apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1
+kind: PlatformIdentityDeployment
+personAudience: urn:registry:person
+organizationUnit:
+  handle: registry
+  name: Registry
+browserApps:
+- id: staff-portal
+  clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET
+  origin: https://staff.registry.example
+  redirectUris: [https://staff.registry.example/auth/callback]
+  product: breg
+  tokenAttributes: [registry_actor_kind]
+  grants:
+  - product: breg
+    accessProfiles: [case-read]
+  - product: documents
+    accessProfiles: [staff]
+";
+
+const PERSON_BREG_FACTS: &str = "\
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: breg
+issuer: https://id.registry.example
+audience: urn:registry:person
+allowedClients:
+- staff-portal
+claims:
+  registry_actor_kind: string
+accessProfiles:
+- id: case-read
+  scopes:
+  - records:get
+  requesterClients:
+  - staff-portal
+  actorKind: human
+";
+
+const PERSON_DOCUMENTS_FACTS: &str = "\
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: documents
+issuer: https://id.registry.example
+audience: urn:registry:person
+allowedClients:
+- staff-portal
+claims:
+  registry_actor_kind: string
+accessProfiles:
+- id: staff
+  scopes:
+  - documents:staff
+  requesterClients:
+  - staff-portal
+  actorKind: human
+";
+
+#[test]
+fn a_person_audience_deployment_generates_through_the_documents_tool() {
+    let workspace = Workspace::new();
+    let breg_facts = workspace.path("breg-facts.yaml");
+    let documents_facts = workspace.path("documents-facts.yaml");
+    fs::write(&breg_facts, PERSON_BREG_FACTS).unwrap();
+    fs::write(&documents_facts, PERSON_DOCUMENTS_FACTS).unwrap();
+    let bregctl = workspace.stub_writing("bregctl", VERSION, &breg_facts);
+    let documentsctl = workspace.stub_writing("documentsctl", VERSION, &documents_facts);
+
+    let deployment = workspace.deployment();
+    fs::write(&deployment, PERSON_DEPLOYMENT).unwrap();
+
+    let output = workspace.path("out");
+    let runtime = workspace.path("breg-runtime.yaml");
+    let documents_runtime = workspace.path("documents-runtime.yaml");
+    let run = workspace.rstack_with(
+        &[
+            "identity",
+            "generate",
+            "thunderid",
+            "--deployment",
+            deployment.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--breg-project",
+            "project-dir",
+            "--breg-runtime-config",
+            runtime.to_str().unwrap(),
+            "--documents-runtime-config",
+            documents_runtime.to_str().unwrap(),
+        ],
+        Some(&bregctl),
+        &[("RSTACK_DOCUMENTSCTL_BIN", documentsctl.to_str().unwrap())],
+    );
+    assert_eq!(run.status.code(), Some(0), "{}", text(&run.stderr));
+
+    // The documents tool is driven through its public command with the
+    // runtime configuration and an output file, and takes no project.
+    let log = workspace.log("documentsctl").unwrap();
+    assert!(
+        log.starts_with("generate identity-facts --runtime-config /")
+            && log.contains("/documents-runtime.yaml --output /")
+            && !log.contains("project")
+            && !log.contains("--production"),
+        "{log}"
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("identity-receipt.json")).unwrap()).unwrap();
+    assert_eq!(receipt["personAudience"]["audience"], PERSON_AUDIENCE);
+    assert_eq!(
+        receipt["personAudience"]["products"],
+        serde_json::json!(["breg", "documents"])
+    );
+}
+
+#[test]
+fn a_documents_runtime_config_selects_the_documents_tool_alone() {
+    let workspace = Workspace::new();
+    let facts = workspace.path("documents-facts.yaml");
+    fs::write(&facts, PERSON_DOCUMENTS_FACTS).unwrap();
+    let documentsctl = workspace.stub_writing("documentsctl", VERSION, &facts);
+    let deployment = workspace.deployment();
+    let output = workspace.path("out");
+    let run = workspace.rstack_with(
+        &[
+            "identity",
+            "generate",
+            "thunderid",
+            "--deployment",
+            deployment.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--documents-runtime-config",
+            "documents-runtime.yaml",
+        ],
+        None,
+        &[("RSTACK_DOCUMENTSCTL_BIN", documentsctl.to_str().unwrap())],
+    );
+    // The documents tool ran; the example deployment grants only breg, so
+    // the run is refused by the generator, not by the launcher's arguments.
+    assert!(
+        workspace.log("documentsctl").is_some(),
+        "{}",
+        text(&run.stderr)
+    );
+    assert_ne!(run.status.code(), Some(2), "{}", text(&run.stderr));
 }
