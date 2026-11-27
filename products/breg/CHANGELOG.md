@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- `bregctl provision` creates the PostgreSQL objects a Registry needs, from the
+  two database URLs in its runtime file and an administrator URL read from
+  `--admin-url-file` or `--admin-url-env`. It creates or adopts the migration
+  and runtime login roles, each with no privilege beyond `LOGIN`, and the
+  database, closed to `PUBLIC`. Both roles get `CONNECT` on the database. It
+  installs `btree_gist` and creates the five managed schemas, each owned by
+  the migration role and closed to `PUBLIC`. The runtime role gets nothing
+  else, and no `USAGE` on `public`: `apply` grants the rest. With `--package`
+  and a package that needs PostGIS, it also installs PostGIS in
+  `registry_spatial_ext` (the step that needs a superuser), creates the
+  `<runtime role>__spatial_bbox` role, makes the migration role a member of
+  it, and grants `USAGE` on that schema to the migration, runtime and bbox
+  roles. `--print-sql` connects to nothing and prints the script, which holds
+  `\password` prompts and no password. Running the command again creates only
+  what is missing, and it refuses a role that exists with other attributes.
+
 - BReg counts the requests it refuses by the check that refused it, in
   `breg_request_refusals_total{check}`, published at zero for every check from
   the first scrape. Each refusal writes one `request refused` line at `INFO`

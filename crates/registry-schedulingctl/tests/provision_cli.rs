@@ -126,9 +126,13 @@ fn print_sql_writes_the_script_and_no_password() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
     assert!(stderr.is_empty(), "{stderr}");
-    for name in ["scheduling_migration", "scheduling_runtime", "scheduling"] {
+    for name in ["scheduling_migration", "scheduling_runtime"] {
         assert!(stdout.contains(name), "the script names {name}: {stdout}");
     }
+    assert!(
+        stdout.contains("CREATE DATABASE \"scheduling\""),
+        "{stdout}"
+    );
     assert!(stdout.contains("CREATE ROLE"), "{stdout}");
     assert!(stdout.contains("\\password"), "{stdout}");
     for secret in [MIGRATION_PASSWORD, RUNTIME_PASSWORD] {
@@ -180,33 +184,115 @@ fn print_sql_as_json_reports_nothing_executed() {
 fn both_administrator_flags_are_refused() {
     let directory = scratch();
     let runtime = write_runtime(directory.path());
-    for arguments in [
-        vec![
-            "provision",
-            "--runtime-config",
-            &runtime,
-            "--admin-url-file",
-            "/nonexistent/admin-url",
-            "--admin-url-env",
-            "SCHEDULING_ADMIN_URL",
-        ],
-        vec![
-            "provision",
-            "--runtime-config",
-            &runtime,
-            "--print-sql",
-            "--admin-url-env",
-            "SCHEDULING_ADMIN_URL",
-        ],
-        vec!["provision", "--runtime-config", &runtime],
+    for (arguments, message) in [
+        (
+            vec![
+                "provision",
+                "--runtime-config",
+                &runtime,
+                "--admin-url-file",
+                "/nonexistent/admin-url",
+                "--admin-url-env",
+                "SCHEDULING_ADMIN_URL",
+            ],
+            "conflicting use of --admin-url-file",
+        ),
+        (
+            vec![
+                "provision",
+                "--runtime-config",
+                &runtime,
+                "--print-sql",
+                "--admin-url-env",
+                "SCHEDULING_ADMIN_URL",
+            ],
+            "conflicting use of --print-sql",
+        ),
+        (
+            vec!["provision", "--runtime-config", &runtime],
+            "missing required argument --admin-url-file, --admin-url-env",
+        ),
     ] {
         let output = ctl(&arguments);
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{arguments:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
         assert!(output.stdout.is_empty(), "{arguments:?}");
+        assert!(stderr.contains(message), "{arguments:?}: {stderr}");
     }
+}
+
+/// Runs `provision --print-sql --format json` over the runtime file and
+/// returns the exit code, the first diagnostic and the whole output.
+fn refusal(runtime: &str) -> (Option<i32>, serde_json::Value, String) {
+    let output = ctl(&[
+        "provision",
+        "--runtime-config",
+        runtime,
+        "--print-sql",
+        "--format",
+        "json",
+    ]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|error| panic!("{error}: {stdout}{stderr}"));
+    let diagnostic = report["diagnostics"][0].clone();
+    (
+        output.status.code(),
+        diagnostic,
+        format!("{stdout}{stderr}"),
+    )
+}
+
+fn assert_refused_at(
+    (code, diagnostic, output): (Option<i32>, serde_json::Value, String),
+    path: &str,
+) {
+    assert_eq!(code, Some(1), "{output}");
+    assert_eq!(diagnostic["code"], "config.refused", "{output}");
+    assert_eq!(diagnostic["path"], path, "{output}");
+    for secret in [MIGRATION_PASSWORD, RUNTIME_PASSWORD] {
+        assert!(!output.contains(secret), "the refusal holds no password");
+    }
+}
+
+#[test]
+fn a_missing_runtime_url_secret_is_refused_without_a_password() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    std::fs::remove_file(directory.path().join("secrets/runtime-database-url")).unwrap();
+    assert_refused_at(refusal(&runtime), "/database/runtimeUrlRef");
+}
+
+#[test]
+fn a_missing_migration_url_secret_is_refused_without_a_password() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    std::fs::remove_file(directory.path().join("secrets/migration-database-url")).unwrap();
+    assert_refused_at(refusal(&runtime), "/database/migrationUrlRef");
+}
+
+#[test]
+fn a_runtime_url_secret_that_is_not_text_is_refused_without_a_password() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let path = directory.path().join("secrets/runtime-database-url");
+    let mut bytes = RUNTIME_PASSWORD.as_bytes().to_vec();
+    bytes.extend([0xff, 0xfe]);
+    std::fs::write(&path, bytes).unwrap();
+    assert_refused_at(refusal(&runtime), "/database/runtimeUrlRef");
+}
+
+#[test]
+fn a_missing_ca_bundle_secret_is_refused_without_a_password() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let document = std::fs::read_to_string(&runtime).unwrap();
+    let with_ca = document.replace(
+        "  migrationUrlRef: secret:file/migration-database-url\n",
+        "  migrationUrlRef: secret:file/migration-database-url\n  caBundleRef: secret:file/postgres-ca.pem\n",
+    );
+    assert_ne!(document, with_ca, "the runtime file names the CA bundle");
+    std::fs::write(&runtime, with_ca).unwrap();
+    assert_refused_at(refusal(&runtime), "/database/caBundleRef");
 }

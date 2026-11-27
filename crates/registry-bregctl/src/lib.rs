@@ -257,9 +257,10 @@ enum Command {
     ///
     /// The runtime file's two database URLs name both roles, the database and both passwords.
     /// The administrator URL comes from a file or an environment variable, never from the command
-    /// line. The command grants the runtime role CONNECT and nothing else: apply grants the rest.
+    /// line. The command grants the runtime role CONNECT on the database: apply grants the rest.
     /// With --package, a package that needs PostGIS also gets its schema, extension and
-    /// bounding-box role, which CREATE EXTENSION postgis needs a superuser for.
+    /// bounding-box role, which CREATE EXTENSION postgis needs a superuser for, and both roles
+    /// get USAGE on the PostGIS schema.
     Provision(ProvisionCommand),
     /// Inspect and operate native Record timers through bounded audited commands.
     Timer(timer_operator_lifecycle::TimerArgs),

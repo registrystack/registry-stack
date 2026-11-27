@@ -145,8 +145,10 @@ schedulingctl provision --runtime-config /etc/registry-scheduling/runtime.yaml -
 
 The `admin-url` file holds one PostgreSQL URL for that administrator, for example
 `postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
-`CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable instead,
-use `--admin-url-env NAME`. The connection requires TLS and verifies the server certificate. Set
+`CREATEDB` and does not need to be a superuser. The URL must name the same host and port as the two
+product URLs, or `provision` refuses it as `platform.provision.target-mismatch`. To pass the URL in
+an environment variable instead, use `--admin-url-env NAME`. The connection requires TLS and
+verifies the server certificate. Set
 `database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
 administrator URL or a password.
 
@@ -155,8 +157,8 @@ The command:
 - Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
 - Creates the database and closes it to `PUBLIC`.
 - Grants both roles `CONNECT` on the database.
-- Gives the migration role `USAGE` and `CREATE` on the `public` schema, and takes `CREATE` on it
-  from `PUBLIC`.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema, takes `CREATE` on it
+  from `PUBLIC`, and gives the runtime role `USAGE` on it.
 
 Run it again at any time. It creates only what is missing. It refuses a role that exists with a
 different password than its URL holds, and tells you which role.
@@ -166,6 +168,10 @@ flags. The command connects to nothing and prints the script. Each `CREATE ROLE`
 `\password` line that prompts for the password in `psql`, so the script holds no password:
 
 ```sql
+-- provision script, product scheduling. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
 SET createrole_self_grant = 'set,inherit';
 CREATE ROLE "scheduling_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
 \password "scheduling_migration"
@@ -176,7 +182,7 @@ REVOKE ALL ON DATABASE "scheduling" FROM PUBLIC;
 GRANT CONNECT ON DATABASE "scheduling" TO "scheduling_migration", "scheduling_runtime";
 ALTER DATABASE "scheduling" ALLOW_CONNECTIONS true;
 \connect "scheduling"
-REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "scheduling_migration";
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "scheduling_migration"; GRANT USAGE ON SCHEMA public TO "scheduling_runtime";
 ```
 
 The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
