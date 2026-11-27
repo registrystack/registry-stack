@@ -181,11 +181,13 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   Each refusal also writes one `request refused` log line with `failed_check` and the request's
   trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
   a window held back.
-  Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
-  recording a refusal changes nothing the caller receives: the answer is the same
+  A refusal on the `scope` check also names the claim that carries scopes, the scope the operation
+  needs and the access profile, each as the configuration or package declares it.
+  Neither the counter nor the line holds a token, claim, client, subject, scope or identifier from
+  the request, and recording a refusal changes nothing the caller receives: the answer is the same
   `operation.not-authorized`, `request.not-found`, `review.distinct-approver-required` or
   `review.initiator-excluded` body as before.
-  {/* Evidence: crates/registry-casework/src/http.rs, impl From<ReviewRuntimeError> for HttpError;
+  {/* Evidence: crates/registry-casework/src/http.rs, the ReviewRuntimeError conversion into HttpError;
       crates/registry-casework/src/review.rs,
       a_reviewer_who_already_acted_is_refused_for_separation_of_duties,
       only_staff_and_supervisors_pass_the_human_reviewer_check;

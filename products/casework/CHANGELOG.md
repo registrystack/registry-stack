@@ -12,6 +12,11 @@
   nothing, such as the task grant key set route when task grants are not
   configured, is not counted. Refusal statuses, headers and bodies are
   unchanged.
+- A refusal on the `scope` check also names, in its `request refused` line,
+  the claim that carries scopes, the scope the operation needs and the access
+  profile, each as the configuration or package declares it. The line never
+  names a scope the token held. Refusal statuses, headers and bodies are
+  unchanged.
 - A static key set with a private key member is refused at startup under
   `casework.runtime.unreadable-jwks-secret`, with the rule it broke and the
   key's position. Earlier releases loaded such a set, so remove private

@@ -467,7 +467,16 @@ async fn every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wir
         (
             "missing-scope",
             "scope",
-            read_request(&record, Some(&token(without(service_claims(), "scope")))),
+            // The token carries another scope, so the line can be seen to name
+            // the declared one and not the presented one.
+            read_request(
+                &record,
+                Some(&token(with(
+                    service_claims(),
+                    "scope",
+                    json!("token-held-canary-scope"),
+                ))),
+            ),
         ),
         (
             "purpose-not-declared",
@@ -608,15 +617,23 @@ async fn every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wir
         assert_eq!(fields["failed_check"], case.expected_check, "{}", case.name);
         assert_eq!(fields["suppressed"], 0, "{}", case.name);
         let keys: BTreeSet<&str> = fields.keys().map(String::as_str).collect();
+        let mut expected = BTreeSet::from([
+            "decision",
+            "failed_check",
+            "message",
+            "suppressed",
+            "trace_id",
+        ]);
+        if case.expected_check == "scope" {
+            // A scope refusal also names what the operator declared: the scope
+            // claim, the scope the profile needs and the profile.
+            expected.extend(["scope_claim", "required_scope", "access_profile"]);
+            assert_eq!(fields["scope_claim"], "scope", "{}", case.name);
+            assert_eq!(fields["required_scope"], "registry.read", "{}", case.name);
+            assert_eq!(fields["access_profile"], "reader", "{}", case.name);
+        }
         assert_eq!(
-            keys,
-            BTreeSet::from([
-                "decision",
-                "failed_check",
-                "message",
-                "suppressed",
-                "trace_id"
-            ]),
+            keys, expected,
             "{}: the line carries only the fixed fields",
             case.name
         );
@@ -624,6 +641,7 @@ async fn every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wir
             PRINCIPAL,
             "agent-client",
             "other-client",
+            "token-held-canary-scope",
             "nobody",
             "not-a-uuid",
             "https://other.example",

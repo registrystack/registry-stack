@@ -30,8 +30,13 @@
   task grant counts under `task-grant-expired`, a grant bound to another client
   or resource under `task-grant-binding`, and a grant token with no `iat`, an
   `iat` ahead of the clock or an `exp` not after `iat` under
-  `task-grant-claims`. A generic `412` precondition answer and an unknown route
-  are not counted. Refusal statuses, headers and bodies are unchanged.
+  `task-grant-claims`. A `412` for a stale version and an unknown route are not
+  counted. A failed field guard counts under `action-guard`, also when it
+  answers the generic `412`. A refusal on the `scope` check also names the
+  claim that carries scopes, the scope the operation needs and the access
+  profile, each as the configuration or package declares it. The line never
+  names a scope the token held. Refusal statuses, headers and bodies are
+  unchanged.
 
 - The BReg MCP gateway and the review page read loopback the way every
   other service does. Under `development-loopback`, plain HTTP to the

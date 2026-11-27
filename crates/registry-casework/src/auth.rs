@@ -4,7 +4,7 @@ use std::sync::Arc;
 use registry_casework_core::{
     AccessProfile, ActorContext, CaseworkActsAs, CaseworkProject, IssuerPrincipal,
 };
-use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
+use registry_platform_authcommon::{validate_compact_access_token, DeclaredScope, FailedCheck};
 use registry_platform_oidc::{JwksFetcher, TokenVerifier, TokenVerifierConfig};
 use serde_json::Value;
 use thiserror::Error;
@@ -25,9 +25,34 @@ pub struct CaseworkAuthenticator {
     initiator_profiles: BTreeSet<String>,
     human_identity: HumanIdentityConfig,
     delegated_staff_readers: BTreeMap<String, crate::DelegatedStaffReaderConfig>,
+    /// The claim the deployment configured to carry scopes. A scope refusal
+    /// names it to the operator.
+    scope_claim: String,
+}
+
+tokio::task_local! {
+    /// The operator-declared values of the scope check the current request
+    /// failed. The HTTP edge scopes it around each request and attaches it to
+    /// the refusal answer's extensions, which are never written to the wire.
+    pub(crate) static DECLARED_SCOPE: std::cell::RefCell<Option<DeclaredScope>>;
 }
 
 impl CaseworkAuthenticator {
+    /// Record, for the operator's refusal line, the scope the operation needs
+    /// and the access profile that was applied. Both are declared by the
+    /// configuration or the package, never read from the token.
+    fn declare_scope_refusal(&self, required_scope: Option<&str>, access_profile: Option<&str>) {
+        let mut declared = DeclaredScope::new(&self.scope_claim);
+        if let Some(scope) = required_scope {
+            declared = declared.with_required_scope(scope);
+        }
+        if let Some(profile) = access_profile {
+            declared = declared.with_access_profile(profile);
+        }
+        // Outside an HTTP request there is no line to carry it.
+        let _ = DECLARED_SCOPE.try_with(|slot| *slot.borrow_mut() = Some(declared));
+    }
+
     /// Constructs an authenticator from a project already validated by
     /// [`CaseworkProject::load`] or [`CaseworkProject::check`].
     #[must_use]
@@ -39,6 +64,7 @@ impl CaseworkAuthenticator {
     ) -> Self {
         let audience = verifier.audiences.first().cloned().unwrap_or_default();
         Self {
+            scope_claim: verifier.scope_claim.clone(),
             source_verifier_config: verifier.clone(),
             source_keys: Arc::clone(&keys),
             source_verifiers: BTreeMap::new(),
@@ -187,6 +213,7 @@ impl CaseworkAuthenticator {
             return Err(AuthenticationError::Refused(FailedCheck::Delegation));
         }
         if !verified.scopes.iter().any(|value| value == scope) {
+            self.declare_scope_refusal(Some(scope), None);
             return Err(AuthenticationError::Refused(FailedCheck::Scope));
         }
         if verified.matched_client_id().ok().flatten().is_none() {
@@ -239,6 +266,9 @@ impl CaseworkAuthenticator {
                 .iter()
                 .any(|scope| scope == &reader.required_scope)
             {
+                // The delegated read scope is refused here because it belongs to the
+                // delegated path, so the line names no scope as required.
+                self.declare_scope_refusal(None, None);
                 return Err(AuthenticationError::Refused(FailedCheck::Scope));
             }
         }
@@ -267,6 +297,14 @@ impl CaseworkAuthenticator {
             .iter()
             .all(|scope| actual_scopes.contains(scope.as_str()))
         {
+            self.declare_scope_refusal(
+                profile
+                    .required_scopes
+                    .iter()
+                    .map(String::as_str)
+                    .find(|scope| !actual_scopes.contains(scope)),
+                Some(&profile.id),
+            );
             return Err(AuthenticationError::Profile(FailedCheck::Scope));
         }
         if requires_person {

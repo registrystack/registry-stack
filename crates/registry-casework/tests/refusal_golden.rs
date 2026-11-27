@@ -72,6 +72,10 @@ fn case(
     }
 }
 
+/// The scope a token holds in the cases that refuse on scope. It is the
+/// caller's value, so no log line may carry it.
+const HELD_CANARY_SCOPE: &str = "casework:unrelated";
+
 fn bearer(token: &str) -> String {
     format!("Bearer {token}")
 }
@@ -582,6 +586,21 @@ fn assert_one_value_free_line(case: &Case, logs: &CapturedDiagnosticLogs, tokens
         "{}",
         case.name
     );
+    if case.check == "scope" {
+        // A scope refusal names what the operator declared, never the scopes
+        // the token held.
+        assert_eq!(fields["scope_claim"], "scope", "{}", case.name);
+        assert!(
+            fields["required_scope"].is_string(),
+            "{}: the line names the scope the operation needs",
+            case.name
+        );
+        assert!(!text.contains(HELD_CANARY_SCOPE), "{}: {text}", case.name);
+        if case.name == "scope-missing" {
+            assert_eq!(fields["required_scope"], "casework:staff", "{}", case.name);
+            assert_eq!(fields["access_profile"], "staff", "{}", case.name);
+        }
+    }
     for name in fields.keys() {
         assert!(
             [
@@ -590,14 +609,23 @@ fn assert_one_value_free_line(case: &Case, logs: &CapturedDiagnosticLogs, tokens
                 "failed_check",
                 "suppressed",
                 "trace_id",
-                "remedy"
+                "remedy",
+                "scope_claim",
+                "required_scope",
+                "access_profile"
             ]
             .contains(&name.as_str()),
             "{}: unexpected field {name}",
             case.name
         );
     }
+    // The profile id the operator declared is also a header value the caller
+    // sent, so the line may name it. Nothing else the caller sent may appear.
+    let declared_profile = fields.get("access_profile").and_then(Value::as_str);
     for secret in tokens.iter().chain([&PRINCIPAL.to_owned()]) {
+        if Some(secret.as_str()) == declared_profile {
+            continue;
+        }
         assert!(!text.contains(secret.as_str()), "{}: {secret}", case.name);
     }
 }

@@ -374,14 +374,7 @@ impl RegistryAuthenticator {
         if let Some(grant) = &grant {
             grant
                 .verify_context(&verified, &self.audience)
-                .map_err(|error| {
-                    invalid_claims(match error {
-                        GrantContextError::ClientMismatch | GrantContextError::ResourceMismatch => {
-                            FailedCheck::TaskGrantBinding
-                        }
-                        _ => FailedCheck::TaskGrantClaims,
-                    })
-                })?;
+                .map_err(|error| invalid_claims(grant_context_check(error)))?;
             task_grant_token_lifetime(verified.claims.iat, verified.claims.exp, now, self.leeway)
                 .map_err(invalid_claims)?;
         }
@@ -530,6 +523,16 @@ pub(crate) async fn authenticate_request(
             }
             return authentication_refused(refusal.check);
         }
+    };
+    let claims = match request
+        .extensions()
+        .get::<crate::correlation::RequestCorrelation>()
+    {
+        Some(correlation) => claims.with_scope_declaration(
+            &authenticator.scope_claim,
+            correlation.declared_scope_slot(),
+        ),
+        None => claims,
     };
     request.extensions_mut().insert(claims);
     next.run(request).await
@@ -1001,6 +1004,21 @@ fn mapped_scalar_claim(
     Ok(value)
 }
 
+/// The check a task grant refused by its token context failed. A token with
+/// no usable verified client fails the client check, and a grant bound to
+/// another client or resource fails its binding.
+fn grant_context_check(error: GrantContextError) -> FailedCheck {
+    match error {
+        GrantContextError::MissingVerifiedClient | GrantContextError::InvalidVerifiedClient => {
+            FailedCheck::TokenClient
+        }
+        GrantContextError::ClientMismatch | GrantContextError::ResourceMismatch => {
+            FailedCheck::TaskGrantBinding
+        }
+        _ => FailedCheck::TaskGrantClaims,
+    }
+}
+
 /// The 401 for a missing or refused credential. The answer is the same for
 /// every check, so a caller learns nothing about which one failed.
 pub(crate) fn authentication_refused(check: FailedCheck) -> Response {
@@ -1018,6 +1036,30 @@ pub(crate) fn authentication_refused(check: FailedCheck) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_grant_context_refusal_names_the_check_it_failed() {
+        for (error, check) in [
+            (
+                GrantContextError::MissingVerifiedClient,
+                FailedCheck::TokenClient,
+            ),
+            (
+                GrantContextError::InvalidVerifiedClient,
+                FailedCheck::TokenClient,
+            ),
+            (
+                GrantContextError::ClientMismatch,
+                FailedCheck::TaskGrantBinding,
+            ),
+            (
+                GrantContextError::ResourceMismatch,
+                FailedCheck::TaskGrantBinding,
+            ),
+        ] {
+            assert_eq!(grant_context_check(error), check, "{error:?}");
+        }
+    }
 
     #[test]
     fn a_bearer_names_the_check_its_header_failed() {
@@ -1107,18 +1149,24 @@ mod tests {
     /// answer 401 without a check unless it is added to this list on purpose.
     #[test]
     fn only_the_noting_constructors_build_a_401() {
-        fn visit(dir: &std::path::Path, found: &mut Vec<String>) {
+        fn visit(root: &std::path::Path, dir: &std::path::Path, found: &mut Vec<String>) {
             for entry in std::fs::read_dir(dir).expect("source directory is readable") {
                 let path = entry.expect("directory entry is readable").path();
                 if path.is_dir() {
-                    visit(&path, found);
+                    visit(root, &path, found);
                     continue;
                 }
-                let name = path.to_string_lossy().into_owned();
+                // Judge the path below `src`, so where the checkout lives
+                // cannot exclude the files.
+                let name = path
+                    .strip_prefix(root)
+                    .expect("the file is below the source directory")
+                    .to_string_lossy()
+                    .into_owned();
                 if !name.ends_with(".rs")
                     || name.contains("tests")
-                    || name.ends_with("/problem.rs")
-                    || name.ends_with("/compiler.rs")
+                    || name == "problem.rs"
+                    || name == "compiler.rs"
                 {
                     continue;
                 }
@@ -1141,10 +1189,8 @@ mod tests {
             }
         }
         let mut found = Vec::new();
-        visit(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-            &mut found,
-        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        visit(&root, &root, &mut found);
         found.sort();
         assert_eq!(
             found,
