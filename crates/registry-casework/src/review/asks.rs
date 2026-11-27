@@ -18,6 +18,7 @@ const ASK_COLUMNS: &str =
 
 impl CaseworkService {
     /// Opens an ask from the task the caller holds.
+    #[allow(clippy::too_many_arguments)]
     pub async fn ask_applicant(
         &self,
         actor: &ActorContext,
