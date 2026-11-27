@@ -22,8 +22,9 @@ pub(super) struct BregFacts {
     pub access_profiles: BTreeSet<String>,
     pub actions: BTreeSet<String>,
     pub review_authorities: BTreeSet<String>,
-    /// Whether any access profile declares a task grant, so the product checks
-    /// task grants bound to its own audience.
+    /// Whether any access profile, action permission or proposal permission
+    /// declares a task grant, so the product checks task grants bound to its
+    /// own audience.
     pub checks_task_grants: bool,
 }
 
@@ -155,13 +156,22 @@ fn facts_from_reports(access: &Value, model: &Value) -> Result<BregFacts> {
         access_profiles: ids(model, "accessProfiles")?,
         actions: ids(model, "actions")?,
         review_authorities: ids(model, "reviewAuthorities")?,
-        checks_task_grants: access["recordTypes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .flat_map(|record| record["profiles"].as_array().into_iter().flatten())
-            .any(|profile| profile["taskGrant"].is_object()),
+        checks_task_grants: declares_task_grant(access),
     })
+}
+
+/// Whether the access explanation carries a task grant anywhere: on a record
+/// type's access profile, on an action's permission, or on a proposal's
+/// permission. The report nests them in different members, so the whole
+/// explanation is searched for a `taskGrant` object.
+fn declares_task_grant(value: &Value) -> bool {
+    match value {
+        Value::Object(members) => members.iter().any(|(key, member)| {
+            (key == "taskGrant" && member.is_object()) || declares_task_grant(member)
+        }),
+        Value::Array(items) => items.iter().any(declares_task_grant),
+        _ => false,
+    }
 }
 
 fn strings(value: &Value) -> Option<BTreeSet<String>> {
@@ -247,22 +257,81 @@ mod tests {
         );
     }
 
+    /// The access report with `grant` set as `taskGrant` at `place`, a JSON
+    /// pointer into the explanation, over members that declare none.
+    fn access_with_task_grant_at(place: &str) -> Value {
+        let (mut access, _) = reports();
+        access["explanation"]["recordTypes"] = json!([
+            {"recordType": "plain", "profiles": [{"id": "operator", "taskGrant": null}]}
+        ]);
+        access["explanation"]["actions"] = json!({"actions": [{
+            "id": "act",
+            "permissions": [{"profileId": "operator", "taskGrant": null}],
+            "execution": {"mode": "proposal", "proposal": {
+                "permissions": [{"profileId": "operator", "taskGrant": null}]
+            }}
+        }]});
+        *access["explanation"]
+            .pointer_mut(place)
+            .expect("the fixture has the place") =
+            json!({"sourceIssuer": "https://casework.example"});
+        access
+    }
+
+    /// The shape `bregctl explain access` prints for a project whose only task
+    /// grant is on a profile that grants an action: the record types list no
+    /// profiles and the grant sits on the action's permission.
     #[test]
-    fn a_task_grant_on_any_access_profile_is_reported() {
+    fn an_action_only_task_grant_is_reported() {
         let (mut access, model) = reports();
         access["explanation"]["recordTypes"] = json!([
-            {"recordType": "plain", "profiles": [{"id": "operator"}]},
-            {"recordType": "tasked", "profiles": [
-                {"id": "reviewer"},
-                {"id": "worker", "taskGrant": {"sourceIssuer": "https://casework.example"}}
-            ]}
+            {"recordType": "household", "profiles": []},
+            {"recordType": "person", "profiles": []}
         ]);
+        access["explanation"]["actions"] = json!({"actions": [{
+            "id": "register-household-contact",
+            "permissions": [
+                {"profileId": "contact-auditor", "taskGrant": null},
+                {"profileId": "contact-registrar",
+                 "taskGrant": {"sourceIssuer": "https://casework.example"}}
+            ]
+        }]});
         assert!(
             facts_from_reports(&access, &model)
                 .unwrap()
                 .checks_task_grants
         );
-        access["explanation"]["recordTypes"][1]["profiles"][1]["taskGrant"] = Value::Null;
+    }
+
+    #[test]
+    fn a_task_grant_is_reported_wherever_the_access_report_carries_one() {
+        let (_, model) = reports();
+        let none = {
+            let (mut access, _) = reports();
+            access["explanation"]["recordTypes"] = json!([{"profiles": [{"id": "operator"}]}]);
+            access
+        };
+        assert!(
+            !facts_from_reports(&none, &model)
+                .unwrap()
+                .checks_task_grants
+        );
+        for place in [
+            "/recordTypes/0/profiles/0/taskGrant",
+            "/actions/actions/0/permissions/0/taskGrant",
+            "/actions/actions/0/execution/proposal/permissions/0/taskGrant",
+        ] {
+            let access = access_with_task_grant_at(place);
+            assert!(
+                facts_from_reports(&access, &model)
+                    .unwrap()
+                    .checks_task_grants,
+                "{place}"
+            );
+        }
+        // A null member declares none.
+        let mut access = access_with_task_grant_at("/recordTypes/0/profiles/0/taskGrant");
+        access["explanation"]["recordTypes"][0]["profiles"][0]["taskGrant"] = Value::Null;
         assert!(
             !facts_from_reports(&access, &model)
                 .unwrap()
