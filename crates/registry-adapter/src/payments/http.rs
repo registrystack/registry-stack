@@ -224,157 +224,194 @@ fn load_provider_packs(paths: &[PathBuf]) -> Result<LoadedPaymentPacks, ServeErr
     })
 }
 
-pub async fn load_router(
-    runtime: &AdapterRuntimeConfig,
-    path: &Path,
-    provider_pack_paths: &[PathBuf],
-    pool: deadpool_postgres::Pool,
-) -> Result<Router, ServeError> {
-    let config = load_config(path)?;
-    let packs = load_provider_packs(provider_pack_paths)?;
-    for connection in &config.connections {
-        let Some(pin) = connection.binding.provider_pack.as_ref() else {
-            if connection.binding.simulation {
-                continue;
+/// A payment configuration whose packs, mapping and credentials are settled,
+/// before any database work: the caller migrates and grants, then builds the
+/// router over the runtime pool.
+pub(crate) struct PreparedPayments {
+    config: PaymentsConfig,
+    packs: LoadedPaymentPacks,
+    resolver: Arc<SecretResolver>,
+    authenticator: Authenticator,
+    g2p_provider: HttpG2pProvider,
+    deployment: String,
+}
+
+impl PreparedPayments {
+    pub(crate) async fn prepare(
+        runtime: &AdapterRuntimeConfig,
+        path: &Path,
+        provider_pack_paths: &[PathBuf],
+    ) -> Result<Self, ServeError> {
+        let config = load_config(path)?;
+        let packs = load_provider_packs(provider_pack_paths)?;
+        for connection in &config.connections {
+            let Some(pin) = connection.binding.provider_pack.as_ref() else {
+                if connection.binding.simulation {
+                    continue;
+                }
+                return Err(refused("payment connection must pin the provider pack"));
+            };
+            let pack = packs.for_pin(pin)?;
+            if pack.connector != connection.binding.connector_kind()
+                || !pack.capabilities.contains(&PaymentCapability::Collection)
+            {
+                return Err(refused(
+                    "payment provider pack lacks collection capability or connector",
+                ));
             }
-            return Err(refused("payment connection must pin the provider pack"));
-        };
-        let pack = packs.for_pin(pin)?;
-        if pack.connector != connection.binding.connector_kind()
-            || !pack.capabilities.contains(&PaymentCapability::Collection)
-        {
-            return Err(refused(
-                "payment provider pack lacks collection capability or connector",
-            ));
+            if matches!(
+                &connection.binding.provider,
+                super::config::CollectionProvider::Http { .. }
+            ) && !mapping_auth_matches(
+                pack.mapping
+                    .as_ref()
+                    .and_then(|mapping| mapping.collection.as_ref()),
+                PaymentProviderAuth::Bearer,
+            ) {
+                return Err(refused(
+                    "payment provider collection mapping requires unsupported authentication",
+                ));
+            }
         }
-        if matches!(
-            &connection.binding.provider,
-            super::config::CollectionProvider::Http { .. }
-        ) && !mapping_auth_matches(
-            pack.mapping
-                .as_ref()
-                .and_then(|mapping| mapping.collection.as_ref()),
-            PaymentProviderAuth::Bearer,
-        ) {
-            return Err(refused(
-                "payment provider collection mapping requires unsupported authentication",
-            ));
-        }
-    }
-    for connection in &config.disbursements {
-        let pack = packs.for_pin(&connection.binding.provider_pack)?;
-        if pack.connector != ConnectorKind::AdapterPaymentHttpV1
-            || !pack.capabilities.contains(&PaymentCapability::Disbursement)
-        {
-            return Err(refused(
-                "payment provider pack lacks generic HTTP disbursement capability",
-            ));
-        }
-        if !mapping_auth_matches(
-            pack.mapping
-                .as_ref()
-                .and_then(|mapping| mapping.disbursement.as_ref()),
-            connection.binding.provider.auth_profile(),
-        ) {
-            return Err(refused(
+        for connection in &config.disbursements {
+            let pack = packs.for_pin(&connection.binding.provider_pack)?;
+            if pack.connector != ConnectorKind::AdapterPaymentHttpV1
+                || !pack.capabilities.contains(&PaymentCapability::Disbursement)
+            {
+                return Err(refused(
+                    "payment provider pack lacks generic HTTP disbursement capability",
+                ));
+            }
+            if !mapping_auth_matches(
+                pack.mapping
+                    .as_ref()
+                    .and_then(|mapping| mapping.disbursement.as_ref()),
+                connection.binding.provider.auth_profile(),
+            ) {
+                return Err(refused(
                 "payment provider disbursement mapping authentication differs from the connection",
             ));
-        }
-        if !live_disbursement_auth_supported(connection.binding.provider.auth_profile()) {
-            return Err(refused(
+            }
+            if !live_disbursement_auth_supported(connection.binding.provider.auth_profile()) {
+                return Err(refused(
                 "payment provider disbursement authentication is not implemented by the live host",
             ));
+            }
         }
-    }
-    let resolver = Arc::new(resolver(runtime)?);
-    for connection in &config.connections {
-        for reference in [
-            &connection.binding.provider_credential_ref,
-            &connection.binding.registry.credential_ref,
-        ] {
-            let value = resolver
-                .resolve(reference.as_str())
-                .map_err(|_| refused("a payment credential could not be resolved"))?;
-            let value = std::str::from_utf8(value.expose_secret())
-                .map_err(|_| refused("a payment credential was refused"))?;
-            registry_platform_httputil::client::BearerToken::new(value.to_owned())
-                .map_err(|_| refused("a payment credential was refused"))?;
+        let resolver = Arc::new(resolver(runtime)?);
+        for connection in &config.connections {
+            for reference in [
+                &connection.binding.provider_credential_ref,
+                &connection.binding.registry.credential_ref,
+            ] {
+                let value = resolver
+                    .resolve(reference.as_str())
+                    .map_err(|_| refused("a payment credential could not be resolved"))?;
+                let value = std::str::from_utf8(value.expose_secret())
+                    .map_err(|_| refused("a payment credential was refused"))?;
+                registry_platform_httputil::client::BearerToken::new(value.to_owned())
+                    .map_err(|_| refused("a payment credential was refused"))?;
+            }
         }
-    }
-    for connection in &config.disbursements {
-        let references = [
-            connection.binding.provider.credential_ref(),
-            &connection.binding.registry.credential_ref,
-        ];
-        for reference in references {
-            let value = resolver
-                .resolve(reference.as_str())
-                .map_err(|_| refused("a payment credential could not be resolved"))?;
-            let value = std::str::from_utf8(value.expose_secret())
-                .map_err(|_| refused("a payment credential was refused"))?;
-            registry_platform_httputil::client::BearerToken::new(value.to_owned())
-                .map_err(|_| refused("a payment credential was refused"))?;
+        for connection in &config.disbursements {
+            let references = [
+                connection.binding.provider.credential_ref(),
+                &connection.binding.registry.credential_ref,
+            ];
+            for reference in references {
+                let value = resolver
+                    .resolve(reference.as_str())
+                    .map_err(|_| refused("a payment credential could not be resolved"))?;
+                let value = std::str::from_utf8(value.expose_secret())
+                    .map_err(|_| refused("a payment credential was refused"))?;
+                registry_platform_httputil::client::BearerToken::new(value.to_owned())
+                    .map_err(|_| refused("a payment credential was refused"))?;
+            }
         }
-    }
-    let authenticator = crate::serve::authenticator(runtime, &resolver).await?;
-    let migration = crate::serve::pool(&runtime.database, &resolver, true)?;
-    {
-        let mut client = migration
-            .get()
+        let authenticator = crate::serve::authenticator(runtime, &resolver).await?;
+        // Transit signer and verifier setup reads no database, so a wrong
+        // socket, mount or key refuses here, before any grant.
+        let g2p_provider_bindings = config
+            .disbursements
+            .iter()
+            .map(|connection| connection.binding.provider.clone())
+            .collect::<Vec<_>>();
+        let g2p_provider = HttpG2pProvider::initialize(resolver.clone(), &g2p_provider_bindings)
             .await
-            .map_err(|_| refused("payment migration database unavailable"))?;
-        migrate(&mut client)
+            .map_err(|_| refused("payment disbursement authentication initialization failed"))?;
+        Ok(Self {
+            config,
+            packs,
+            resolver,
+            authenticator,
+            g2p_provider,
+            deployment: runtime.id.as_str().to_owned(),
+        })
+    }
+
+    /// Create the collection and G2P tables as the migration role.
+    pub(crate) async fn migrate(client: &mut deadpool_postgres::Client) -> Result<(), ServeError> {
+        migrate(client)
             .await
             .map_err(|_| refused("payment database migration failed"))?;
-        migrate_g2p(&mut client)
+        migrate_g2p(client)
             .await
-            .map_err(|_| refused("G2P database migration failed"))?;
+            .map_err(|_| refused("G2P database migration failed"))
     }
-    let store = PaymentStore::new(pool.clone(), runtime.id.as_str().to_owned());
-    store
-        .check_privileges()
-        .await
-        .map_err(|_| refused("payment runtime role lacks required table or sequence privileges"))?;
-    let g2p_store = G2pStore::new(pool.clone(), runtime.id.as_str().to_owned());
-    if !config.disbursements.is_empty() {
-        g2p_store
-            .check_privileges()
-            .await
-            .map_err(|_| refused("G2P runtime role lacks required table or sequence privileges"))?;
+
+    /// What the runtime role must hold: the collection tables, and the G2P
+    /// tables when a disbursement connection is declared.
+    pub(crate) fn requirements(&self) -> crate::serve::Requirements {
+        crate::serve::Requirements::payments(!self.config.disbursements.is_empty())
     }
-    let g2p_provider_bindings = config
-        .disbursements
-        .iter()
-        .map(|connection| connection.binding.provider.clone())
-        .collect::<Vec<_>>();
-    let g2p_provider = HttpG2pProvider::initialize(resolver.clone(), &g2p_provider_bindings)
-        .await
-        .map_err(|_| refused("payment disbursement authentication initialization failed"))?;
-    let g2p = G2pService::new(
-        g2p_store,
-        Arc::new(BregG2pBridge::new(resolver.clone())),
-        Arc::new(g2p_provider),
-    );
-    let g2p = if let Some(mapping) = packs.mapping.clone() {
-        g2p.with_mapping(mapping)
-    } else {
-        g2p
-    };
-    let disbursements = config.disbursements.clone();
-    let service = PaymentService::new(
-        config,
-        store,
-        Arc::new(BregBridge::new(resolver.clone())),
-        Arc::new(SyntheticProvider::new(resolver, packs.mapping)),
-    )
-    .map_err(|_| refused("payment service was refused"))?;
-    let state = Arc::new(HttpState {
-        authenticator,
-        service,
-        g2p,
-        disbursements,
-    });
-    Ok(Router::new()
+
+    pub(crate) async fn into_router(
+        self,
+        pool: deadpool_postgres::Pool,
+    ) -> Result<Router, ServeError> {
+        let Self {
+            config,
+            packs,
+            resolver,
+            authenticator,
+            g2p_provider,
+            deployment,
+        } = self;
+        let store = PaymentStore::new(pool.clone(), deployment.clone());
+        store.check_privileges().await.map_err(|_| {
+            refused("payment runtime role lacks required table or sequence privileges")
+        })?;
+        let g2p_store = G2pStore::new(pool.clone(), deployment.clone());
+        if !config.disbursements.is_empty() {
+            g2p_store.check_privileges().await.map_err(|_| {
+                refused("G2P runtime role lacks required table or sequence privileges")
+            })?;
+        }
+        let g2p = G2pService::new(
+            g2p_store,
+            Arc::new(BregG2pBridge::new(resolver.clone())),
+            Arc::new(g2p_provider),
+        );
+        let g2p = if let Some(mapping) = packs.mapping.clone() {
+            g2p.with_mapping(mapping)
+        } else {
+            g2p
+        };
+        let disbursements = config.disbursements.clone();
+        let service = PaymentService::new(
+            config,
+            store,
+            Arc::new(BregBridge::new(resolver.clone())),
+            Arc::new(SyntheticProvider::new(resolver, packs.mapping)),
+        )
+        .map_err(|_| refused("payment service was refused"))?;
+        let state = Arc::new(HttpState {
+            authenticator,
+            service,
+            g2p,
+            disbursements,
+        });
+        Ok(Router::new()
         .route("/v1/payments/{connection}/collections", post(request))
         .route(
             "/v1/payments/{connection}/collections/receipt",
@@ -406,6 +443,7 @@ pub async fn load_router(
         )
         .layer(DefaultBodyLimit::max(MAX_PAYMENT_BODY_BYTES))
         .with_state(state))
+    }
 }
 
 pub async fn run_only(
@@ -424,8 +462,20 @@ pub async fn run_only(
     .map_err(|_| refused("runtime configuration was refused"))?
     .config;
     let resolver = resolver(&runtime)?;
+    let prepared = PreparedPayments::prepare(&runtime, payments_path, provider_pack_paths).await?;
     let pool = crate::serve::pool(&runtime.database, &resolver, false)?;
-    let router = load_router(&runtime, payments_path, provider_pack_paths, pool).await?;
+    {
+        let migration = crate::serve::pool(&runtime.database, &resolver, true)?;
+        let mut client = migration
+            .get()
+            .await
+            .map_err(|_| refused("payment migration database unavailable"))?;
+        PreparedPayments::migrate(&mut client).await?;
+        // When the grant step makes no grant, the privilege check in
+        // `into_router` refuses a role that lacks one.
+        crate::serve::grant_when_split(&mut client, &pool, &prepared.requirements()).await?;
+    }
+    let router = prepared.into_router(pool).await?;
     let shutdown = crate::serve::shutdown_signal()?;
     let listener = tokio::net::TcpListener::bind(runtime.listener.bind.0)
         .await

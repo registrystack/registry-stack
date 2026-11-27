@@ -58,6 +58,18 @@ pub struct PaymentStore {
     pub(crate) deployment: String,
 }
 
+/// The table privileges a runtime role needs for the collection tables.
+/// Startup checks them, and `adapter serve` grants those a split runtime role
+/// lacks.
+pub const RUNTIME_GRANTS: [(&str, &[&str]); 3] = [
+    ("adapter_payment_attempts", &["SELECT", "INSERT", "UPDATE"]),
+    ("adapter_payment_commands", &["SELECT", "INSERT"]),
+    ("adapter_payment_events", &["SELECT", "INSERT"]),
+];
+/// The sequence the events table draws its identifiers from. A runtime role
+/// needs USAGE on it.
+pub const RUNTIME_SEQUENCE: &str = "adapter_payment_events_sequence_seq";
+
 impl PaymentStore {
     pub fn new(pool: Pool, deployment: String) -> Self {
         Self { pool, deployment }
@@ -77,14 +89,7 @@ impl PaymentStore {
 
     pub async fn check_privileges(&self) -> Result<(), Error> {
         let client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        for (table, privileges) in [
-            (
-                "adapter_payment_attempts",
-                &["SELECT", "INSERT", "UPDATE"][..],
-            ),
-            ("adapter_payment_commands", &["SELECT", "INSERT"][..]),
-            ("adapter_payment_events", &["SELECT", "INSERT"][..]),
-        ] {
+        for (table, privileges) in RUNTIME_GRANTS {
             if !crate::journal::missing_table_privileges(&client, table, privileges)
                 .await
                 .map_err(|_| Error::Unavailable)?
@@ -96,7 +101,7 @@ impl PaymentStore {
         let row = client
             .query_one(
                 "SELECT has_sequence_privilege(current_user, $1, 'USAGE')",
-                &[&"adapter_payment_events_sequence_seq"],
+                &[&RUNTIME_SEQUENCE],
             )
             .await
             .map_err(|_| Error::Unavailable)?;

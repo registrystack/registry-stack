@@ -103,18 +103,6 @@ async function issue(bill, receipt, key, expected = [200]) {
   return exchange('POST', bregOrigin + path + query, { token: serviceToken, body: { input, preconditions: conditions.body.preconditions }, key: `${key}-${suffix}`, expected });
 }
 
-async function preflightAndGrant(db, runtime, payments, label) {
-  const log = join(root, `${label}-preflight.log`);
-  const initial = start(join(binaries, 'adapter'), ['serve', '--runtime-config', runtime, '--payments-config', payments], log);
-  handles.push(initial);
-  const result = await Promise.race([initial.exited, sleep(15000).then(() => null)]);
-  assert(result && result.code !== 0, 'split runtime must refuse before payment table grants');
-  assert.match(await readFile(log, 'utf8'), /\badapter\.payment\.configuration\b/, 'preflight must fail at the payment privilege diagnostic');
-  sql(`GRANT SELECT, INSERT, UPDATE ON adapter_payment_attempts TO ${db.runtime};
-GRANT SELECT, INSERT ON adapter_payment_commands, adapter_payment_events TO ${db.runtime};
-GRANT USAGE, SELECT ON SEQUENCE adapter_payment_events_sequence_seq TO ${db.runtime};`, db.owner);
-}
-
 async function independentStores(originalConfiguration) {
   const prior = ledger(); const collections = [];
   simControl(['collection-scenario', '--outcome', 'paid']);
@@ -129,7 +117,6 @@ async function independentStores(originalConfiguration) {
     runtime.database.runtimeUrlRef = `secret:file/${kind}-runtime`;
     runtime.database.migrationUrlRef = `secret:file/${kind}-migration`;
     const path = join(root, `${kind}-runtime.yaml`); await privateFile(path, runtime);
-    await preflightAndGrant(db, path, configPath, kind);
     const process = start(join(binaries, 'adapter'), ['serve', '--runtime-config', path, '--payments-config', configPath], join(root, `${kind}.log`));
     handles.push(process);
     const route = `${origin}/v1/payments/licence-fees/collections`;
@@ -215,8 +202,7 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
     database: { runtimeUrlRef: 'secret:file/adapter-runtime', migrationUrlRef: 'secret:file/adapter-migration', caBundleRef: 'secret:file/postgres-ca' },
     oidc: { issuer: issuer.issuer, audience: 'urn:registry:payment-adapter', jwksSource: { type: 'static', documentRef: 'secret:file/jwks' } },
     allowedClients: ['coordinator-payments'], allowedPrivateCidrs: ['127.0.0.0/8'], audit: { retentionDays: 90 } });
-  await preflightAndGrant(adapterDb, runtimePath, paymentsPath, 'adapter');
-  await startAdapter(); check('PostgreSQL TLS startup and exact split-role payment privilege diagnostic');
+  await startAdapter(); check('PostgreSQL TLS startup grants the split runtime role its payment privileges');
 
   const bill = await createBill('recovery');
   await issue(bill, 'absent-receipt', 'unpaid-issue', [412]);

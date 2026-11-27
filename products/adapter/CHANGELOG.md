@@ -23,8 +23,12 @@
   role and has no members of its own does not count. A grant the migration
   role has no right to make (it does not own the object) stops startup with
   the missing privilege named and rolls everything back. With one role in both
-  sessions, no grant is issued. Payment and G2P tables under
-  `--payments-config` still need your own grants. The runtime role must exist,
+  sessions, no grant is issued. The payment tables under
+  `--payments-config` follow the same rules: the collection tables always, the
+  G2P tables when `payments.yaml` declares disbursement connections, with
+  `USAGE` on their events sequences, in the facade's grant transaction or, when
+  serving payments without a project, in a grant step of their own that also
+  grants `USAGE` on the schema. The runtime role must exist,
   and the migration role must own the tables.
 - `adapter serve --payments-config` hosts typed synthetic payment collection
   operations on the shared listener and PostgreSQL store, including without

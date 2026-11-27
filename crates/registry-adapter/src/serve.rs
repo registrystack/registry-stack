@@ -698,6 +698,39 @@ fn runtime_requirements(
     required
 }
 
+/// Everything a runtime role must hold for a deployment: table privileges, by
+/// table, and USAGE on sequences. Startup grants what the role lacks, then
+/// checks it.
+pub(crate) struct Requirements {
+    pub(crate) tables: Vec<(&'static str, &'static [&'static str])>,
+    pub(crate) sequences: Vec<&'static str>,
+}
+
+impl Requirements {
+    /// What the payment host requires: the collection tables always, and the
+    /// G2P tables when a disbursement connection is declared.
+    pub(crate) fn payments(disbursements: bool) -> Self {
+        let mut required = Self {
+            tables: crate::payments::store::RUNTIME_GRANTS.to_vec(),
+            sequences: vec![crate::payments::store::RUNTIME_SEQUENCE],
+        };
+        if disbursements {
+            required
+                .tables
+                .extend(crate::payments::g2p_store::RUNTIME_GRANTS);
+            required
+                .sequences
+                .push(crate::payments::g2p_store::RUNTIME_SEQUENCE);
+        }
+        required
+    }
+
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.tables.extend(other.tables);
+        self.sequences.extend(other.sequences);
+    }
+}
+
 /// The advisory-lock key the grant step holds for its transaction, so
 /// replicas starting together do not rewrite the same catalog rows at once.
 /// Its ASCII bytes spell `adap_gnt`.
@@ -746,16 +779,33 @@ async fn missing_for(
         .collect())
 }
 
+/// Whether `grantee` lacks USAGE on `relation`, a sequence given as an
+/// already-quoted, schema-qualified name; true when it does not exist.
+async fn lacks_sequence_usage(
+    transaction: &tokio_postgres::Transaction<'_>,
+    grantee: &str,
+    relation: &str,
+) -> Result<bool, tokio_postgres::Error> {
+    let held: bool = transaction
+        .query_one(
+            "SELECT coalesce(has_sequence_privilege($1, to_regclass($2), 'USAGE'), false)",
+            &[&grantee, &relation],
+        )
+        .await?
+        .get(0);
+    Ok(!held)
+}
+
 /// Everything `grantee` still lacks of `required` and of `USAGE` on `schema`,
 /// as "PRIVILEGES on object" phrases.
 async fn lacking(
     transaction: &tokio_postgres::Transaction<'_>,
     grantee: &str,
     schema: &str,
-    required: &[(&'static str, &'static [&'static str])],
+    required: &Requirements,
 ) -> Result<Vec<String>, tokio_postgres::Error> {
     let mut lacking = Vec::new();
-    for (table, privileges) in required {
+    for (table, privileges) in &required.tables {
         let missing = missing_for(
             transaction,
             grantee,
@@ -765,6 +815,11 @@ async fn lacking(
         .await?;
         if !missing.is_empty() {
             lacking.push(format!("{} on {table}", missing.join(", ")));
+        }
+    }
+    for sequence in &required.sequences {
+        if lacks_sequence_usage(transaction, grantee, &format!("{schema}.{sequence}")).await? {
+            lacking.push(format!("USAGE on sequence {sequence}"));
         }
     }
     let usage: bool = transaction
@@ -801,7 +856,7 @@ async fn lacking(
 async fn grant_runtime_privileges(
     client: &mut deadpool_postgres::Client,
     grantee: &str,
-    required: &[(&'static str, &'static [&'static str])],
+    required: &Requirements,
 ) -> Result<bool, ServeError> {
     let transaction = client.transaction().await.map_err(|e| grant_error(&e))?;
     transaction
@@ -850,7 +905,7 @@ async fn grant_runtime_privileges(
     }
     let mut granted = 0_usize;
     let quoted_grantee = quote_identifier(grantee);
-    for (table, privileges) in required {
+    for (table, privileges) in &required.tables {
         let missing = missing_for(
             &transaction,
             grantee,
@@ -872,6 +927,26 @@ async fn grant_runtime_privileges(
             .map_err(|error| {
                 ServeError::Configuration(format!(
                     "database: could not grant {missing} on {table} to the runtime role: {}",
+                    database_message(&error)
+                ))
+            })?;
+    }
+    for sequence in &required.sequences {
+        if !lacks_sequence_usage(&transaction, grantee, &format!("{schema}.{sequence}"))
+            .await
+            .map_err(|e| grant_error(&e))?
+        {
+            continue;
+        }
+        granted += 1;
+        transaction
+            .batch_execute(&format!(
+                "GRANT USAGE ON SEQUENCE {schema}.{sequence} TO {quoted_grantee}"
+            ))
+            .await
+            .map_err(|error| {
+                ServeError::Configuration(format!(
+                    "database: could not grant USAGE on sequence {sequence} to the runtime role: {}",
                     database_message(&error)
                 ))
             })?;
@@ -915,6 +990,37 @@ async fn grant_runtime_privileges(
         "granted the runtime role the privileges it lacked"
     );
     Ok(true)
+}
+
+/// Grant the runtime session's role what `required` names, from `migration`,
+/// when the two sessions are different roles. The grantee is the role the
+/// runtime session proves it holds, read before any grant: a runtime URL
+/// naming `public`, a role that cannot log in or a wrong password fails here,
+/// and the URL's text never chooses who receives privileges. One role on both
+/// sessions issues no grant and returns false, as `grant_runtime_privileges`
+/// does when its members rule made none.
+pub(crate) async fn grant_when_split(
+    migration: &mut deadpool_postgres::Client,
+    runtime: &Pool,
+    required: &Requirements,
+) -> Result<bool, ServeError> {
+    let runtime_role: String = runtime
+        .get()
+        .await
+        .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?
+        .get(0);
+    let migration_role: String = migration
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .map_err(|error| ServeError::Configuration(format!("database: {error}")))?
+        .get(0);
+    if runtime_role == migration_role {
+        return Ok(false);
+    }
+    grant_runtime_privileges(migration, &runtime_role, required).await
 }
 
 async fn run_facade(
@@ -1013,12 +1119,25 @@ async fn run_facade(
     } else {
         None
     };
+    // The payment configuration, packs and credentials settle before any
+    // database work, so a refusal grants nothing.
+    let payments = match payments_path {
+        Some(path) => Some(
+            crate::payments::http::PreparedPayments::prepare(
+                &loaded.runtime,
+                path,
+                payment_provider_pack,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let shutdown = shutdown_signal()?;
     let migration = pool(&loaded.runtime.database, &loaded.resolver, true)?;
     let journal = pool(&loaded.runtime.database, &loaded.resolver, false)?;
     // Whether the grant step found the runtime role holding everything the
     // deployment requires in the schema the migrations ran in.
-    let mut grants_verified = false;
+    let grants_verified;
     {
         let mut client = migration
             .get()
@@ -1030,31 +1149,17 @@ async fn run_facade(
         idempotent::migrate(&mut client).await.map_err(|error| {
             ServeError::Configuration(format!("idempotency migration: {error}"))
         })?;
-        // The grantee is the role the runtime session proves it holds, read
-        // before any grant: a runtime URL naming `public`, a role that cannot
-        // log in or a wrong password fails here, and the URL's text never
-        // chooses who receives privileges.
-        let runtime_role: String = journal
-            .get()
-            .await
-            .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?
-            .query_one("SELECT current_user::text", &[])
-            .await
-            .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?
-            .get(0);
-        let migration_role: String = client
-            .query_one("SELECT current_user::text", &[])
-            .await
-            .map_err(|error| ServeError::Configuration(format!("database: {error}")))?
-            .get(0);
-        if runtime_role != migration_role {
-            grants_verified = grant_runtime_privileges(
-                &mut client,
-                &runtime_role,
-                &runtime_requirements(serves_write, declares_recovery, declares_resume),
-            )
-            .await?;
+        if payments.is_some() {
+            crate::payments::http::PreparedPayments::migrate(&mut client).await?;
         }
+        let mut required = Requirements {
+            tables: runtime_requirements(serves_write, declares_recovery, declares_resume),
+            sequences: Vec::new(),
+        };
+        if let Some(payments) = &payments {
+            required.extend(payments.requirements());
+        }
+        grants_verified = grant_when_split(&mut client, &journal, &required).await?;
     }
     {
         // A runtime role that lacks a grant this deployment uses is refused
@@ -1119,16 +1224,8 @@ async fn run_facade(
     let async_recovery = async_recovery_admission(&loaded)?;
     let async_retention = idempotency.as_ref().map(|(_, retention)| *retention);
     let facade_idempotency = idempotency.as_ref().map(|(store, _)| store.clone());
-    let payments_router = match payments_path {
-        Some(path) => Some(
-            crate::payments::http::load_router(
-                &loaded.runtime,
-                path,
-                payment_provider_pack,
-                journal.clone(),
-            )
-            .await?,
-        ),
+    let payments_router = match payments {
+        Some(payments) => Some(payments.into_router(journal.clone()).await?),
         None => None,
     };
     let address: SocketAddr = loaded.runtime.listener.bind.0;
@@ -1308,6 +1405,33 @@ mod tests {
         assert!(runtime_requirements(true, true, true)
             .iter()
             .all(|(table, _)| *table != "adapter_idempotency_schema_migrations"));
+    }
+
+    #[test]
+    fn payment_requirements_follow_what_the_payment_host_checks() {
+        let collections = Requirements::payments(false);
+        assert_eq!(
+            collections.tables,
+            crate::payments::store::RUNTIME_GRANTS.to_vec()
+        );
+        assert_eq!(
+            collections.sequences,
+            ["adapter_payment_events_sequence_seq"]
+        );
+        let both = Requirements::payments(true);
+        assert_eq!(both.tables.len(), 6);
+        assert!(both
+            .tables
+            .iter()
+            .any(|(table, privileges)| *table == "adapter_g2p_attempts"
+                && *privileges == ["SELECT", "INSERT", "UPDATE"]));
+        assert_eq!(
+            both.sequences,
+            [
+                "adapter_payment_events_sequence_seq",
+                "adapter_g2p_events_sequence_seq"
+            ]
+        );
     }
 
     #[test]
