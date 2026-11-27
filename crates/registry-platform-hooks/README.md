@@ -114,18 +114,26 @@ A URL delivery posts the canonical envelope with `accept: application/json`,
 `content-type: application/json`, `webhook-id`, `webhook-timestamp`, and
 `webhook-signature`. The envelope id stays the same across retries and operator
 replays and is the receiver's idempotency key. The timestamp is the attempt's
-start time in Unix seconds. The signature covers the id, timestamp, and exact
-body bytes, joined by periods. It carries one `v1,<base64>` HMAC-SHA256 entry
+lease time in Unix seconds from the database clock. Database clock skew
+counts against the receiver's freshness window. The signature covers the id,
+timestamp, and exact body bytes, joined by periods. It carries one `v1,<base64>` HMAC-SHA256 entry
 per active signing key, current first, separated by a single space. Each key
 contains 32 to 64 exact secret bytes. Activation of a shared URL destination
 inventory refuses key reuse across current and previous keys. Adding or
-removing the previous key leaves the binding digest intact.
+removing the previous key leaves the binding digest intact. To rotate,
+keep the current reference `hmacSha256KeyRef` unchanged and write the new
+bytes behind it. Store the old bytes separately and set
+`previousHmacSha256KeyRef` to that secret. Changing the current reference
+changes the binding digest and prevents delivery of work retained under
+the earlier binding.
 
 With the `receiver` feature, `verify_hook_delivery` checks that each required
-header occurs once, requires the JSON content type, verifies the signature and
-freshness, and decodes the canonical envelope. It requires the envelope id to
-match `webhook-id`. The default freshness window is 300 seconds in either
-direction. Receivers own deduplication, source trust, and handler effects.
+header occurs once, requires the JSON content type, verifies the signature,
+and decodes the canonical envelope. It requires the envelope id to
+match `webhook-id`. Freshness is checked under `DeliveryFreshness::Within`,
+with a default window of 300 seconds in either direction. Callers using
+`CallerEnforced` check the timestamp themselves. Receivers deduplicate on
+`webhook-id` per endpoint and own source trust and handler effects.
 
 The simple URL hook destination block, `UrlHookDestinationConfig`, defines
 `url`, `hmacSha256KeyRef`, optional `previousHmacSha256KeyRef`, and a delivery

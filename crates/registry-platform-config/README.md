@@ -149,8 +149,9 @@ accepted reference through the explicitly enabled environment or file provider.
   through `url_hook_destinations`. `registry-platform-hooks` activates the
   block under a fixed outbound policy: https, or http on a loopback host.
   Keep `hmacSha256KeyRef` stable during rotation because the binding digest
-  includes it. The digest excludes `previousHmacSha256KeyRef`. The shared
-  block parses the previous reference for consumers to adopt.
+  includes it. The digest excludes `previousHmacSha256KeyRef`. Omit that
+  member when there is no previous key. Activation resolves both references
+  as exact binary keys when both are configured and refuses reused key bytes.
 
 ## Project check acceptances
 

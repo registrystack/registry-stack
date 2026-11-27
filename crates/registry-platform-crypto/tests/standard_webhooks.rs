@@ -374,7 +374,62 @@ fn debug_redacts_delivery_keys() {
     );
 }
 
+#[test]
+fn verifies_freshness_at_extreme_timestamps_without_panicking() {
+    let keys = DeliveryKeys::new(key(1), None).unwrap();
+    for (timestamp, now) in [
+        (u64::MAX, SystemTime::UNIX_EPOCH),
+        (TIMESTAMP, SystemTime::UNIX_EPOCH - Duration::from_secs(1)),
+    ] {
+        let signature = sign(&keys, ID, timestamp, BODY).unwrap();
+        let result = verify(
+            &keys,
+            SignedContent {
+                id: ID,
+                timestamp: &timestamp.to_string(),
+                signature: &signature,
+                body: BODY,
+            },
+            now,
+            DELIVERY_TOLERANCE,
+        );
+        assert_eq!(result, Err(DeliverySignatureError::StaleDelivery));
+    }
+}
+
+fn signature_entries() -> impl Strategy<Value = Vec<(String, String)>> {
+    let version =
+        prop_oneof![Just("v1"), Just("v1a"), Just("v2"), Just("")].prop_map(str::to_owned);
+    let value = prop_oneof![
+        4 => "[A-Za-z0-9+/=_,-]{44}",
+        1 => "[A-Za-z0-9+/=_,-]{0,46}",
+    ];
+    proptest::collection::vec((version, value), 1..=6)
+}
+
 proptest! {
+    #[test]
+    fn a_structured_signature_header_only_authenticates_with_a_real_tag(
+        entries in signature_entries(),
+        real_entry in proptest::option::of(0usize..6),
+        double_space in any::<bool>(),
+    ) {
+        let keys = DeliveryKeys::new(key(1), None).unwrap();
+        let signature = sign(&keys, ID, TIMESTAMP, BODY).unwrap();
+        let mut entries: Vec<_> = entries.into_iter().map(|(version, value)| {
+            format!("{version},{value}")
+        }).collect();
+        if let Some(index) = real_entry {
+            let slot = index % entries.len();
+            entries[slot].clone_from(&signature);
+        }
+        let header = entries.join(if double_space { "  " } else { " " });
+        let result = verify_authenticity(&keys, SignedContent {
+            id: ID, timestamp: &TIMESTAMP.to_string(), signature: &header, body: BODY,
+        });
+        prop_assert!(result.is_err() || entries.contains(&signature));
+    }
+
     #[test]
     fn the_signature_header_parser_never_panics_and_round_trips(
         arbitrary_header in any::<String>(),

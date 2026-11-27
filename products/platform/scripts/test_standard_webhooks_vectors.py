@@ -65,7 +65,18 @@ class StandardWebhooksVectors(unittest.TestCase):
         }
         return current, previous, vector["body"], headers
 
-    def test_library_accepts_our_two_signature_header_now(self):
+    def test_library_signs_vectors_outside_the_registry_wire_profile(self):
+        for name in ("id-with-period", "timestamp-leading-zero"):
+            with self.subTest(vector=name):
+                vector = self.by_name[name]
+                instant = datetime.fromtimestamp(int(vector["timestamp"]), UTC)
+                (webhook,) = webhooks(vector)
+                self.assertEqual(
+                    webhook.sign(vector["id"], instant, vector["body"]),
+                    vector["signature"],
+                )
+
+    def test_library_accepts_a_two_key_header_with_either_key_now(self):
         current, previous, body, headers = self.fresh_rotation()
         for webhook in (current, previous):
             self.assertEqual(webhook.verify(body, headers), json.loads(body))

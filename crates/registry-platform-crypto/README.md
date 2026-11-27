@@ -287,15 +287,18 @@ The timestamp is unsigned Unix seconds in canonical decimal.
 `DeliveryKey::new` takes 32 to 64 raw bytes, refuses `whsec_` text, and
 zeroizes the stored key on drop. A 64-character hex key file supplies 64
 ASCII bytes. A trailing newline would make that file 65 bytes and fail
-validation. `DeliveryKeys::new` accepts a current key and an optional
+validation. Within the allowed range, a trailing newline is key material.
+The official libraries interpret a text secret as `whsec_` followed by
+base64. Give those receivers the raw key file bytes or `whsec_` followed by
+the base64 encoding of those exact bytes. `DeliveryKeys::new` accepts a current key and an optional
 distinct previous key. Signatures are `v1,<padded standard base64>`, joined
 by one space, with the current key first when rotating.
 
 Receivers pass the three header values and raw body as `SignedContent`.
 Pass `DELIVERY_TOLERANCE` to `verify` to authenticate the delivery with a
 300-second window in either direction. Up to four signature
-entries are accepted. A malformed `v1` entry invalidates the header, and
-a valid tag under either configured key is sufficient. Callers using
+entries are accepted. An empty value invalidates the header, even for an
+unknown version. A malformed `v1` entry also invalidates the header. A valid tag under either configured key is sufficient. Callers using
 `verify_authenticity` enforce freshness themselves. Callers also own
 destination binding and replay handling, including deduplication by webhook ID.
 

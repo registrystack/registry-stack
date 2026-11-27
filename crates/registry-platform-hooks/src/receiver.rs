@@ -1,17 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Receiver-side verification of one signed Version 1 hook delivery.
+//! Receiver-side authentication of Standard Webhooks and Version 1 deliveries.
 //!
-//! Every product that receives a signed hook delivery reads the same twelve
-//! transport headers, rebuilds the same signed fields, and calls the same
-//! `registry-platform-crypto` verifier. This module is that one reading, so a
-//! receiver never re-derives the field order, the header set, or the
-//! signature shape on its own.
-//!
-//! It verifies authenticity only. Which source a receiver trusts, which event
-//! types and schemas it accepts, the content type it requires, its
-//! deduplication on the idempotency key, and what the body means stay with
-//! the receiving product, which checks them on the returned
-//! [`VerifiedDelivery`].
+//! [`verify_hook_delivery`] authenticates the exact HTTP body and decodes its
+//! canonical hook envelope. [`verify_delivery`] authenticates the Version 1
+//! transport fields and body. Both apply the freshness policy the caller
+//! selects. Receivers own source trust, deduplication, and handler effects.
 
 use std::time::{Duration, SystemTime};
 

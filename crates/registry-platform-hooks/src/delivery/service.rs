@@ -2184,7 +2184,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hook_delivery_carries_the_event_id_as_webhook_id_on_every_attempt_and_replay() {
+    fn webhook_header_values_project_the_claim_event_id_and_attempt_start() {
         let mut claim = proposal_claim();
         claim.attempt_started_at = SystemTime::UNIX_EPOCH + Duration::from_millis(1_123);
         for (generation, attempt, timestamp) in [(1, 1, 1), (1, 2, 2), (2, 1, 3)] {

@@ -1188,6 +1188,12 @@ const URL_HOOK_DESTINATION: &str = "url: https://events.example.test/hooks\n\
 hmacSha256KeyRef: secret:file/hook-key\n";
 
 #[test]
+fn a_present_previous_hook_key_reference_cannot_be_null() {
+    let input = format!("{URL_HOOK_DESTINATION}previousHmacSha256KeyRef: null\n");
+    assert!(read_block::<UrlHookDestinationConfig>(&input).is_err());
+}
+
+#[test]
 fn a_url_hook_destination_accepts_a_previous_key_reference() {
     let yaml =
         format!("{URL_HOOK_DESTINATION}previousHmacSha256KeyRef: secret:file/old-hook-key\n");

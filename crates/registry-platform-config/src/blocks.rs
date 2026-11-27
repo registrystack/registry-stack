@@ -1791,7 +1791,11 @@ pub struct UrlHookDestinationConfig {
     pub hmac_sha256_key_ref: SecretReference,
     /// Optional previous signing key for rotation, excluded from the
     /// destination binding digest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_hook_key_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub previous_hmac_sha256_key_ref: Option<SecretReference>,
     /// How long one delivery attempt may take, from 100 through 10000
@@ -1815,6 +1819,13 @@ pub struct UrlHookDestinationConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_HOOK_ATTEMPTS)))]
     pub maximum_attempts: u8,
+}
+
+fn present_hook_key_reference<'de, D>(deserializer: D) -> Result<Option<SecretReference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    SecretReference::deserialize(deserializer).map(Some)
 }
 
 impl UrlHookDestinationConfig {

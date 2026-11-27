@@ -87,5 +87,7 @@ pub use receiver::{
     verify_hook_delivery, HookDelivery, HookDeliveryError, VerifiedHookDelivery,
     HOOK_DELIVERY_HEADERS,
 };
+#[cfg(feature = "receiver")]
+pub use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
 pub use retry::exponential_retry_delays_ms;
 pub use validate::{validate_hooks, HookValidationError};

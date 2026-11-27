@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::{SecretReference, SecretResolver, UrlHookDestinationConfig};
+use registry_platform_config::{
+    SecretError, SecretReference, SecretResolver, UrlHookDestinationConfig,
+};
 use registry_platform_crypto::delivery_signature::{
     distinct_delivery_keys, DeliveryKey, DeliveryKeyError, DeliveryKeys,
 };
@@ -31,7 +33,7 @@ const CURRENT_KEY_MEMBER: &str = "hmacSha256KeyRef";
 const PREVIOUS_KEY_MEMBER: &str = "previousHmacSha256KeyRef";
 
 /// Refusal while activating a URL hook destination.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum UrlHookActivationError {
     /// The logical id is not a local identifier, or the attempt timeout or
     /// attempt count is outside the block's delivery budget.
@@ -41,19 +43,20 @@ pub enum UrlHookActivationError {
     #[error("the URL hook destination is invalid")]
     InvalidDestination,
     /// The key reference could not be resolved.
-    #[error("destination {destination} could not resolve {member}. Check the configured secret reference")]
+    #[error("Destination {destination} could not resolve {member}: {reason}. {}", reason.suggested_action())]
     SigningKeyUnavailable {
         destination: String,
         member: &'static str,
+        reason: SecretError,
     },
     /// The resolved key bytes violate the signing key policy.
-    #[error("destination {destination} member {member} has {length} bytes (trailing newline: {trailing_newline}). {source}")]
+    #[error("Destination {destination} member {member} has {length} bytes (trailing newline: {trailing_newline}). {}", signing_key_action(.reason))]
     InvalidSigningKey {
         destination: String,
         member: &'static str,
         length: usize,
         trailing_newline: bool,
-        source: DeliveryKeyError,
+        reason: DeliveryKeyError,
     },
     /// Two destination members resolve to the same key bytes.
     #[error("destination keys {first} and {second} share the same bytes. Configure distinct keys")]
@@ -121,10 +124,7 @@ pub fn activate_url_hook_destinations(
         first: error.first().to_owned(),
         second: error.second().to_owned(),
     })?;
-    let binding_digest = canonical_digest(&json!({
-        "schemaVersion": binding_schema,
-        "destinations": digest_values,
-    }))?;
+    let binding_digest = inventory_digest(binding_schema, digest_values)?;
     Ok(ActivatedUrlHookDestinations {
         bindings,
         binding_digest,
@@ -156,13 +156,13 @@ pub fn activate_url_hook_destination(
     let keys = if let Some(reference) = &config.previous_hmac_sha256_key_ref {
         let (previous, length, trailing_newline) =
             resolve_delivery_key(secrets, logical_id, PREVIOUS_KEY_MEMBER, reference)?;
-        DeliveryKeys::new(current, Some(previous)).map_err(|source| {
+        DeliveryKeys::new(current, Some(previous)).map_err(|reason| {
             UrlHookActivationError::InvalidSigningKey {
                 destination: logical_id.to_owned(),
                 member: PREVIOUS_KEY_MEMBER,
                 length,
                 trailing_newline,
-                source,
+                reason,
             }
         })?
     } else {
@@ -198,24 +198,47 @@ fn resolve_delivery_key(
     member: &'static str,
     reference: &SecretReference,
 ) -> Result<(DeliveryKey, usize, bool), UrlHookActivationError> {
-    let secret = secrets.resolve_binary_reference(reference).map_err(|_| {
-        UrlHookActivationError::SigningKeyUnavailable {
+    let secret = secrets
+        .resolve_binary_reference(reference)
+        .map_err(|reason| UrlHookActivationError::SigningKeyUnavailable {
             destination: logical_id.to_owned(),
             member,
-        }
-    })?;
+            reason,
+        })?;
     let bytes = secret.expose_secret();
     let length = bytes.len();
     let trailing_newline = bytes.ends_with(b"\n");
     let key =
-        DeliveryKey::new(bytes).map_err(|source| UrlHookActivationError::InvalidSigningKey {
+        DeliveryKey::new(bytes).map_err(|reason| UrlHookActivationError::InvalidSigningKey {
             destination: logical_id.to_owned(),
             member,
             length,
             trailing_newline,
-            source,
+            reason,
         })?;
     Ok((key, length, trailing_newline))
+}
+
+fn signing_key_action(reason: &DeliveryKeyError) -> &'static str {
+    match reason {
+        DeliveryKeyError::TooShort { .. } | DeliveryKeyError::TooLong { .. } => {
+            "Supply 32 to 64 exact key bytes."
+        }
+        DeliveryKeyError::SecretText => "Supply the exact key bytes without the whsec_ encoding.",
+        DeliveryKeyError::PreviousEqualsCurrent => {
+            "Configure a previous key distinct from the current key."
+        }
+    }
+}
+
+fn inventory_digest(
+    binding_schema: &str,
+    destinations: Vec<Value>,
+) -> Result<String, UrlHookActivationError> {
+    canonical_digest(&json!({
+        "schemaVersion": binding_schema,
+        "destinations": destinations,
+    }))
 }
 
 fn canonical_digest(value: &Value) -> Result<String, UrlHookActivationError> {
