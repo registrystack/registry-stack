@@ -23,6 +23,8 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use uuid::Uuid;
 
+const CURSOR_KEY: &str = "synthetic-cursor-key-0123456789!";
+
 fn repository(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -81,7 +83,7 @@ async fn provision_then_serve_with_split_roles() {
         std::fs::write(&path, value).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     };
-    secret("cursor-key", "0123456789abcdef0123456789abcdef");
+    secret("cursor-key", CURSOR_KEY);
     secret("upstream-user", "upstream-user");
     secret("upstream-password", "upstream-password");
     // The runtime verifies tokens against a static key set, so it starts

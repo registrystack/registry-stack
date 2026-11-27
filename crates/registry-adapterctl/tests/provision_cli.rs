@@ -11,6 +11,7 @@ use std::process::{Command, Output};
 
 const MIGRATION_PASSWORD: &str = "migration-password-for-print-mode";
 const RUNTIME_PASSWORD: &str = "runtime-password-for-print-mode";
+const CURSOR_KEY: &str = "synthetic-cursor-key-0123456789!";
 
 /// A runtime file whose secret files name a migration and a runtime login on
 /// one server that does not exist, so a connection attempt could only fail.
@@ -31,7 +32,7 @@ fn write_runtime(directory: &Path) -> String {
             "jwks.json",
             r#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#.to_owned(),
         ),
-        ("cursor-key", "0123456789abcdef0123456789abcdef".to_owned()),
+        ("cursor-key", CURSOR_KEY.to_owned()),
     ] {
         let path = secrets.join(name);
         std::fs::write(&path, value).unwrap();

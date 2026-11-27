@@ -610,6 +610,7 @@ BREG_POSTGRES_SHARDS = 3
 # The packages whose provisioning journey runs against the contracts-journeys
 # lane's TLS-only PostgreSQL service, and the inputs that select that lane.
 PROVISION_JOURNEY_PACKAGES = (
+    "registry-adapterctl",
     "registry-bregctl",
     "registry-caseworkctl",
     "registry-coordinator",
@@ -631,6 +632,8 @@ PROVISION_JOURNEY_INPUTS = (
     "crates/registry-messaging/migrations/**",
     "crates/registry-scheduling/migrations/**",
     # What `apply` grants and what the start check reads, per product.
+    # The Adapter migrates and grants when it serves, not in a separate apply.
+    "crates/registry-adapter/src/serve.rs",
     "crates/registry-casework/src/activation.rs",
     "crates/registry-documents/src/activation.rs",
     "crates/registry-messaging/src/activation.rs",

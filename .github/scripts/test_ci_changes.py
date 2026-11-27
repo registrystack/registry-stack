@@ -4544,7 +4544,7 @@ on:
             command,
         )
         self.assertIn(
-            "grep -Eq '^test ([a-z_]+::)?provision_then_apply_then_serve_with_[a-z_]+ "
+            "grep -Eq '^test ([a-z_]+::)?provision_then_(apply_then_)?serve_with_[a-z_]+ "
             "\\.\\.\\. ok$' \"${log}\"",
             command,
         )
