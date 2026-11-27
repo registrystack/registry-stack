@@ -34,6 +34,117 @@ fn keyed_secrets() -> (tempfile::TempDir, SecretResolver) {
     (directory, secrets)
 }
 
+fn write_test_key(directory: &tempfile::TempDir, name: &str, bytes: &[u8]) {
+    let path = directory.path().join(name);
+    std::fs::write(&path, bytes).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[test]
+fn a_destination_key_over_64_bytes_names_its_length() {
+    let (directory, secrets) = keyed_secrets();
+    let mut key = [0; 65];
+    key[64] = b'\n';
+    write_test_key(&directory, "hook-key", &key);
+    let error = activate_url_hook_destination(
+        SCHEDULING_BINDING_SCHEMA,
+        "events",
+        &destination("https://events.example.test/hooks", 5000, 3),
+        &secrets,
+        MAXIMUM_PAYLOAD_BYTES,
+    )
+    .unwrap_err()
+    .to_string();
+    for expected in ["events", "hmacSha256KeyRef", "65 bytes", "newline"] {
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn a_bad_rotation_key_names_its_member_without_printing_key_bytes() {
+    let (directory, secrets) = keyed_secrets();
+    let mut config = destination("https://events.example.test/hooks", 5000, 3);
+    config.previous_hmac_sha256_key_ref =
+        Some(registry_platform_config::SecretReference::parse("secret:file/previous").unwrap());
+    for (bytes, expected) in [
+        (b"x".as_slice(), DeliveryKeyError::TooShort { length: 1 }),
+        (b"whsec_test_value".as_slice(), DeliveryKeyError::SecretText),
+        (
+            [0x5a; 32].as_slice(),
+            DeliveryKeyError::PreviousEqualsCurrent,
+        ),
+    ] {
+        write_test_key(&directory, "previous", bytes);
+        let error = activate_url_hook_destination(
+            SCHEDULING_BINDING_SCHEMA,
+            "events",
+            &config,
+            &secrets,
+            MAXIMUM_PAYLOAD_BYTES,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            UrlHookActivationError::InvalidSigningKey {
+                destination: "events".to_owned(),
+                member: PREVIOUS_KEY_MEMBER,
+                length: bytes.len(),
+                trailing_newline: false,
+                source: expected,
+            }
+        );
+        assert!(!error.to_string().contains("whsec_test_value"));
+    }
+}
+
+#[test]
+fn two_destinations_sharing_a_key_are_refused_naming_both() {
+    let (directory, secrets) = keyed_secrets();
+    write_test_key(&directory, "other-key", &[0; 32]);
+    let first = destination("https://events.example.test/hooks", 5000, 3);
+    let mut second = first.clone();
+    second.previous_hmac_sha256_key_ref = Some(second.hmac_sha256_key_ref.clone());
+    second.hmac_sha256_key_ref =
+        registry_platform_config::SecretReference::parse("secret:file/other-key").unwrap();
+    let configured = BTreeMap::from([("events".into(), first), ("mirror".into(), second)]);
+    let error = activate_url_hook_destinations(
+        SCHEDULING_BINDING_SCHEMA,
+        &configured,
+        &secrets,
+        MAXIMUM_PAYLOAD_BYTES,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("events.hmacSha256KeyRef"), "{error}");
+    assert!(error.contains("mirror.previousHmacSha256KeyRef"), "{error}");
+    assert!(!error.contains("hook-key"), "{error}");
+}
+
+#[test]
+fn adding_a_previous_key_leaves_the_binding_digest_unchanged() {
+    let (directory, secrets) = keyed_secrets();
+    write_test_key(&directory, "old-key", &[0; 32]);
+    let mut config = destination("https://events.example.test/hooks", 5000, 3);
+    let activate = |config| {
+        activate_url_hook_destinations(
+            SCHEDULING_BINDING_SCHEMA,
+            &BTreeMap::from([("events".into(), config)]),
+            &secrets,
+            MAXIMUM_PAYLOAD_BYTES,
+        )
+        .unwrap()
+    };
+    let before = activate(config.clone());
+    config.previous_hmac_sha256_key_ref =
+        Some(registry_platform_config::SecretReference::parse("secret:file/old-key").unwrap());
+    let after = activate(config);
+    assert_eq!(before.binding_digest, after.binding_digest);
+    assert_eq!(
+        before.bindings["events"].binding_digest(),
+        after.bindings["events"].binding_digest()
+    );
+}
+
 /// The digests Scheduling recorded before the block moved here. A retained
 /// delivery row is refused once its recorded digest stops matching, so the
 /// digest shape may not change.
@@ -51,14 +162,29 @@ fn binding_digests_keep_the_shape_scheduling_records() {
         ),
     ]);
 
-    let activated = activate_url_hook_destinations(
-        SCHEDULING_BINDING_SCHEMA,
-        &configured,
-        &secrets,
-        MAXIMUM_PAYLOAD_BYTES,
-    )
-    .expect("the pinned destinations activate");
-
+    // Resolve the shared fixture reference in isolation for each destination.
+    let (bindings, digest_values): (BTreeMap<_, _>, Vec<_>) = configured
+        .iter()
+        .map(|(id, config)| {
+            let (destination, value) = activate_url_hook_destination(
+                SCHEDULING_BINDING_SCHEMA,
+                id,
+                config,
+                &secrets,
+                MAXIMUM_PAYLOAD_BYTES,
+            )
+            .unwrap();
+            ((id.clone(), Arc::new(destination)), value)
+        })
+        .unzip();
+    let activated = ActivatedUrlHookDestinations {
+        bindings,
+        binding_digest: canonical_digest(&json!({
+            "schemaVersion": SCHEDULING_BINDING_SCHEMA,
+            "destinations": digest_values,
+        }))
+        .unwrap(),
+    };
     assert_eq!(
         activated.binding_digest,
         "sha256:6021194b5df3b34eeb31b21c8b3ef448f2d639d3e8393d13b98a8276b5411df0"
@@ -156,7 +282,10 @@ fn activation_refuses_ids_and_budgets_outside_the_block() {
         .map(drop)
         .expect_err("no test key resolves");
         let expected = if accepted {
-            UrlHookActivationError::InvalidSigningMaterial
+            UrlHookActivationError::SigningKeyUnavailable {
+                destination: id.clone(),
+                member: CURRENT_KEY_MEMBER,
+            }
         } else {
             UrlHookActivationError::DeliveryBudgetWidening
         };
@@ -183,4 +312,150 @@ fn activation_refuses_a_url_outside_the_fixed_policy() {
         .expect_err("the URL is refused");
         assert_eq!(refused, UrlHookActivationError::InvalidDestination, "{url}");
     }
+}
+
+#[tokio::test]
+async fn a_key_rotation_keeps_every_retained_delivery_acceptable() {
+    use registry_platform_crypto::delivery_signature::{verify, SignedContent, DELIVERY_TOLERANCE};
+    use registry_platform_httputil::destination::SignedEventHeaders;
+    use std::time::SystemTime;
+    use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
+    use tokio::net::TcpListener;
+
+    use crate::delivery::{
+        DeliverySignatureFields, DestinationAnswer, HookDestination, SharedUrlDestination,
+    };
+
+    const ID: &str = "retained-event";
+    const BODY: &[u8] = br#"{"event":"retained"}"#;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut config = destination(
+        &format!("http://{}/hook", listener.local_addr().unwrap()),
+        5000,
+        3,
+    );
+    let (directory, secrets) = keyed_secrets();
+    let k1 = || DeliveryKey::new(&[0x5a; 32]).unwrap();
+    let k2 = || DeliveryKey::new(&[0; 32]).unwrap();
+    let original_receiver = DeliveryKeys::new(k1(), None).unwrap();
+    let rotated_receiver = DeliveryKeys::new(k2(), Some(k1())).unwrap();
+
+    let activate = |config: &UrlHookDestinationConfig| {
+        let (destination, _) = activate_url_hook_destination(
+            SCHEDULING_BINDING_SCHEMA,
+            "events",
+            config,
+            &secrets,
+            MAXIMUM_PAYLOAD_BYTES,
+        )
+        .unwrap();
+        SharedUrlDestination(Arc::new(destination))
+    };
+
+    let server = tokio::spawn(async move {
+        for (timestamp, response, signature_count) in [
+            (1000, "503 Service Unavailable", 1),
+            (1001, "200 OK", 2),
+            (1002, "200 OK", 1),
+        ] {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut line = String::new();
+            stream.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "POST /hook HTTP/1.1\r\n");
+            let mut headers = BTreeMap::new();
+            loop {
+                line.clear();
+                stream.read_line(&mut line).await.unwrap();
+                assert!(!line.is_empty(), "incomplete request");
+                if line == "\r\n" {
+                    break;
+                }
+                let (name, value) = line.trim_end().split_once(": ").unwrap();
+                assert!(headers.insert(name.to_owned(), value.to_owned()).is_none());
+            }
+            let mut body = vec![0; BODY.len()];
+            stream.read_exact(&mut body).await.unwrap();
+            assert_eq!(body, BODY);
+            let content = SignedContent {
+                id: &headers["webhook-id"],
+                timestamp: &headers["webhook-timestamp"],
+                signature: &headers["webhook-signature"],
+                body: &body,
+            };
+            assert_eq!(content.id, ID);
+            assert_eq!(content.signature.split(' ').count(), signature_count);
+            let now = SystemTime::UNIX_EPOCH + Duration::from_secs(timestamp);
+            if timestamp <= 1001 {
+                assert_eq!(
+                    verify(&original_receiver, content, now, DELIVERY_TOLERANCE),
+                    Ok(timestamp)
+                );
+            }
+            if timestamp >= 1001 {
+                assert_eq!(
+                    verify(&rotated_receiver, content, now, DELIVERY_TOLERANCE),
+                    Ok(timestamp)
+                );
+            }
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {response}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    });
+
+    let send = |destination: SharedUrlDestination, timestamp: u64| async move {
+        let signature = destination
+            .sign_delivery(DeliverySignatureFields {
+                id: ID,
+                timestamp,
+                body: BODY,
+            })
+            .unwrap();
+        let request = destination
+            .render_delivery(
+                SignedEventHeaders {
+                    id: ID.as_bytes(),
+                    timestamp: timestamp.to_string().as_bytes(),
+                    signature: signature.as_bytes(),
+                },
+                BODY.to_vec(),
+            )
+            .unwrap();
+        destination
+            .send_delivery(request, Duration::from_secs(5))
+            .await
+            .unwrap()
+    };
+
+    let original = activate(&config);
+    let digest = original.binding_digest().to_owned();
+    assert!(matches!(
+        send(original, 1000).await,
+        DestinationAnswer::NonSuccess { status: 503 }
+    ));
+    write_test_key(&directory, "previous", &[0x5a; 32]);
+    write_test_key(&directory, "hook-key", &[0; 32]);
+    config.previous_hmac_sha256_key_ref =
+        Some(registry_platform_config::SecretReference::parse("secret:file/previous").unwrap());
+    let rotated = activate(&config);
+    assert_eq!(rotated.binding_digest(), digest);
+    assert!(matches!(
+        send(rotated, 1001).await,
+        DestinationAnswer::Delivered { .. }
+    ));
+    config.previous_hmac_sha256_key_ref = None;
+    let retired = activate(&config);
+    assert_eq!(retired.binding_digest(), digest);
+    assert!(matches!(
+        send(retired, 1002).await,
+        DestinationAnswer::Delivered { .. }
+    ));
+    server.await.unwrap();
 }

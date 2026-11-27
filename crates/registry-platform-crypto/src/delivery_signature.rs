@@ -516,6 +516,16 @@ impl DeliveryKeys {
         Ok(Self { current, previous })
     }
 
+    /// Key used for new deliveries.
+    pub const fn current(&self) -> &DeliveryKey {
+        &self.current
+    }
+
+    /// Rotation key used alongside the current key when configured.
+    pub const fn previous(&self) -> Option<&DeliveryKey> {
+        self.previous.as_ref()
+    }
+
     fn iter(&self) -> impl Iterator<Item = &DeliveryKey> {
         std::iter::once(&self.current).chain(self.previous.iter())
     }
@@ -560,6 +570,16 @@ pub struct DuplicateDeliveryKey {
 }
 
 impl DuplicateDeliveryKey {
+    /// Label of the first key with these bytes.
+    pub fn first(&self) -> &str {
+        &self.first
+    }
+
+    /// Label of the repeated key.
+    pub fn second(&self) -> &str {
+        &self.second
+    }
+
     pub const fn code(&self) -> &'static str {
         "key-repeated"
     }

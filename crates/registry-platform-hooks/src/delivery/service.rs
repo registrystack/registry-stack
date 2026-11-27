@@ -3,15 +3,10 @@
 //! The at-least-once delivery worker: claim, send, finalize, and the
 //! operator status and replay surface.
 //!
-//! This is the moved delivery core. Claim, lease/CAS, lease reaping, retry
-//! scheduling, dead-lettering, payload expiry, and operator replay run in
-//! [`registry_platform_dispatch::postgres::Dispatcher`] over the delivery
-//! state table, through the hook store in `store.rs`; attempt-budget
-//! accounting, idempotency-key construction, and transport-vs-deadline
-//! classification keep the behavior they had while the worker lived in the
-//! owning product's runtime. Every product-owned input arrives through the
-//! seams, and the worker sends the captured envelope bytes unchanged, with the
-//! delivery attributes the transport carries beside them.
+//! The shared dispatcher owns leases, retries, dead-lettering, expiry, and
+//! replay through the hook store. The worker signs the captured envelope
+//! bytes for each attempt and sends them unchanged through the destination
+//! seam under the remaining attempt budget.
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
@@ -22,9 +17,9 @@ use registry_platform_dispatch::postgres::{
     LeasedJob, LeasedReadError, SelectSql,
 };
 use registry_platform_dispatch::{
-    idempotency_key, remaining_attempt_budget, DispatchError, FailureCode, SendOutcome, Sent,
+    remaining_attempt_budget, DispatchError, FailureCode, SendOutcome, Sent,
 };
-use registry_platform_httputil::destination::{DestinationSendError, EventDeliveryHeaders};
+use registry_platform_httputil::destination::{DestinationSendError, SignedEventHeaders};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -134,21 +129,12 @@ impl From<tokio_postgres::Error> for RetainedBindingError {
 }
 
 /// The product-supplied constants the worker cannot derive.
-///
-/// The adopting product passes its own values; the values it used before the
-/// move keep the bytes on the wire identical.
 pub struct DeliveryConfig {
     /// The product schema that holds the delivery tables. The name is
     /// interpolated into SQL, so only a plain lowercase SQL identifier is
     /// accepted.
     pub schema: String,
-    /// The product's idempotency-key domain, bound into every delivery
-    /// idempotency key. It must stay stable for the life of retained work,
-    /// because a changed domain changes every future key.
-    pub idempotency_domain: Vec<u8>,
-    /// The delivery source identity sent with every delivery (`ce-source`
-    /// and the signed source component): the producing product and
-    /// deployment identity.
+    /// The producing product and deployment identity expected in the envelope.
     pub delivery_source: String,
 }
 
@@ -156,7 +142,6 @@ pub struct DeliveryConfig {
 pub struct DeliveryService<S: DeliverySeams> {
     dispatcher: Dispatcher<HookStore<S>>,
     schema: String,
-    idempotency_domain: Vec<u8>,
     delivery_source: String,
     execution_deadline: Option<Instant>,
 }
@@ -166,7 +151,6 @@ impl<S: DeliverySeams> Clone for DeliveryService<S> {
         Self {
             dispatcher: self.dispatcher.clone(),
             schema: self.schema.clone(),
-            idempotency_domain: self.idempotency_domain.clone(),
             delivery_source: self.delivery_source.clone(),
             execution_deadline: self.execution_deadline,
         }
@@ -227,7 +211,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
         Self {
             dispatcher,
             schema,
-            idempotency_domain: config.idempotency_domain,
             delivery_source: config.delivery_source,
             execution_deadline: None,
         }
@@ -252,7 +235,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
             self.seams().clone(),
             DeliveryConfig {
                 schema: self.schema.clone(),
-                idempotency_domain: self.idempotency_domain.clone(),
                 delivery_source: self.delivery_source.clone(),
             },
             Some(revision.to_owned()),
@@ -866,53 +848,23 @@ impl<S: DeliverySeams> DeliveryService<S> {
         {
             return Ok(DeliveryAuditOutcome::DestinationBindingRefused.into());
         }
-        let delivery_time = OffsetDateTime::from(claim.attempt_started_at)
-            .format(&Rfc3339)
-            .map_err(|_| DeliveryError::Unavailable)?;
-        let event_time = OffsetDateTime::from(material.event_time)
-            .format(&Rfc3339)
-            .map_err(|_| DeliveryError::Unavailable)?;
-        let event_id = claim.event_id.to_string();
-        let source = &self.delivery_source;
-        let generation = claim.generation.to_string();
-        let attempt = claim.attempt.to_string();
-        let idempotency_key = delivery_idempotency_key(
-            &self.idempotency_domain,
-            claim.event_id,
-            &claim.compiled_delivery_id,
-            claim.generation,
-            &material.payload_digest,
-            &material.destination_binding_digest,
-        );
+        let (event_id, timestamp) = delivery_header_values(claim)?;
         let signature = destination.sign_delivery(DeliverySignatureFields {
             id: &event_id,
-            source,
-            event_type: &material.event_type,
-            time: &event_time,
-            data_schema: &material.data_schema,
-            generation: &generation,
-            attempt: &attempt,
-            delivery_time: &delivery_time,
-            idempotency_key: &idempotency_key,
+            timestamp,
             body: &material.body,
         });
         let Ok(signature) = signature else {
             return Ok(DeliveryAuditOutcome::DestinationPolicyRefused.into());
         };
+        let timestamp = timestamp.to_string();
         // The envelope bytes outlive the request: a proposal answer hands
         // them to the product's apply seam after the send returns.
         let envelope = material.body.clone();
         let request = match destination.render_delivery(
-            EventDeliveryHeaders {
+            SignedEventHeaders {
                 id: event_id.as_bytes(),
-                source: source.as_bytes(),
-                event_type: material.event_type.as_bytes(),
-                time: event_time.as_bytes(),
-                dataschema: material.data_schema.as_bytes(),
-                generation: generation.as_bytes(),
-                attempt: attempt.as_bytes(),
-                delivery_time: delivery_time.as_bytes(),
-                idempotency_key: idempotency_key.as_bytes(),
+                timestamp: timestamp.as_bytes(),
                 signature: signature.as_bytes(),
             },
             material.body,
@@ -1925,27 +1877,13 @@ pub(super) fn validate_captured_policy(
     Ok(())
 }
 
-/// The delivery idempotency key for one attempt: the product's domain, then
-/// the length-prefixed attempt identity, digested. Stable across retries of
-/// one attempt and changed by a new generation.
-fn delivery_idempotency_key(
-    idempotency_domain: &[u8],
-    event_id: Uuid,
-    compiled_delivery_id: &str,
-    generation: i64,
-    payload_digest: &[u8],
-    destination_binding_digest: &str,
-) -> String {
-    idempotency_key(
-        idempotency_domain,
-        &[
-            event_id.to_string().as_bytes(),
-            compiled_delivery_id.as_bytes(),
-            generation.to_string().as_bytes(),
-            payload_digest,
-            destination_binding_digest.as_bytes(),
-        ],
-    )
+fn delivery_header_values(claim: &DeliveryClaim) -> Result<(String, u64), DeliveryError> {
+    let timestamp = claim
+        .attempt_started_at
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|_| DeliveryError::Unavailable)?
+        .as_secs();
+    Ok((claim.event_id.to_string(), timestamp))
 }
 
 #[cfg(test)]
@@ -1992,7 +1930,7 @@ mod tests {
 
         fn render_delivery(
             &self,
-            _headers: EventDeliveryHeaders<'_>,
+            _headers: SignedEventHeaders<'_>,
             _body: Vec<u8>,
         ) -> Result<EventDestinationRequest, DestinationRequestError> {
             unreachable!("no test below reaches a destination")
@@ -2206,7 +2144,7 @@ mod tests {
         let digest = Sha256::digest(b"other bytes").to_vec();
         assert!(
             accept_stored_envelope(&body, &stored_binding(&body, &digest)).is_err(),
-            "the captured payload digest still pins the bytes the idempotency key is built from"
+            "the captured payload digest still pins the delivered envelope"
         );
     }
 
@@ -2246,67 +2184,17 @@ mod tests {
     }
 
     #[test]
-    fn idempotency_key_is_stable_across_retries_and_changes_on_replay_generation() {
-        let domain = b"hooks-delivery-idempotency-v1";
-        let event_id =
-            Uuid::parse_str("00000000-0000-4000-8000-000000000001").expect("fixture UUID parses");
-        let digest = Sha256::digest(br#"{"label":"value"}"#);
-        let first_key = delivery_idempotency_key(
-            domain,
-            event_id,
-            "events.case.created.webhook",
-            1,
-            digest.as_slice(),
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        );
-        let repeated_key = delivery_idempotency_key(
-            domain,
-            event_id,
-            "events.case.created.webhook",
-            1,
-            digest.as_slice(),
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        );
-        let replay_key = delivery_idempotency_key(
-            domain,
-            event_id,
-            "events.case.created.webhook",
-            2,
-            digest.as_slice(),
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        );
-        assert_eq!(first_key, repeated_key);
-        assert_ne!(first_key, replay_key);
-        assert!(first_key.starts_with("sha256:"));
-        assert_eq!(first_key.len(), 71);
-    }
-
-    #[test]
-    fn the_idempotency_key_is_bound_to_its_configured_domain() {
-        let event_id =
-            Uuid::parse_str("00000000-0000-4000-8000-000000000001").expect("fixture UUID parses");
-        let digest = Sha256::digest(br#"{"label":"value"}"#);
-        let binding = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let one = delivery_idempotency_key(
-            b"hooks-delivery-idempotency-v1",
-            event_id,
-            "events.case.created.webhook",
-            1,
-            digest.as_slice(),
-            binding,
-        );
-        let other = delivery_idempotency_key(
-            b"another-product-idempotency-v1",
-            event_id,
-            "events.case.created.webhook",
-            1,
-            digest.as_slice(),
-            binding,
-        );
-        assert_ne!(
-            one, other,
-            "two products never share a delivery idempotency key"
-        );
+    fn a_hook_delivery_carries_the_event_id_as_webhook_id_on_every_attempt_and_replay() {
+        let mut claim = proposal_claim();
+        claim.attempt_started_at = SystemTime::UNIX_EPOCH + Duration::from_millis(1_123);
+        for (generation, attempt, timestamp) in [(1, 1, 1), (1, 2, 2), (2, 1, 3)] {
+            claim.generation = generation;
+            claim.attempt = attempt;
+            let (id, actual_timestamp) = delivery_header_values(&claim).unwrap();
+            assert_eq!(id, STORED_EVENT_ID);
+            assert_eq!(actual_timestamp, timestamp);
+            claim.attempt_started_at += Duration::from_secs(1);
+        }
     }
 
     #[test]
@@ -2446,7 +2334,6 @@ mod tests {
             seams,
             DeliveryConfig {
                 schema: "registry; drop table users".to_owned(),
-                idempotency_domain: b"hooks-delivery-refusal-test-v1".to_vec(),
                 delivery_source: "urn:registrystack:test:instance:hooks-delivery".to_owned(),
             },
         );
@@ -2461,7 +2348,6 @@ mod tests {
             },
             DeliveryConfig {
                 schema: "hooks_delivery_loop_test".to_owned(),
-                idempotency_domain: b"hooks-delivery-loop-test-v1".to_vec(),
                 delivery_source: "urn:registrystack:test:instance:hooks-delivery".to_owned(),
             },
         );
@@ -2698,7 +2584,6 @@ mod tests {
             },
             DeliveryConfig {
                 schema: "hooks_delivery_proposal_test".to_owned(),
-                idempotency_domain: b"hooks-delivery-proposal-test-v1".to_vec(),
                 delivery_source: STORED_SOURCE.to_owned(),
             },
         )
@@ -3054,7 +2939,6 @@ mod tests {
             },
             DeliveryConfig {
                 schema: "test".to_owned(),
-                idempotency_domain: vec![],
                 delivery_source: STORED_SOURCE.to_owned(),
             },
         );
@@ -3133,7 +3017,6 @@ mod tests {
             },
             DeliveryConfig {
                 schema: schema.to_owned(),
-                idempotency_domain: b"hooks-delivery-success-test-v1".to_vec(),
                 delivery_source: STORED_SOURCE.to_owned(),
             },
         );
@@ -3240,7 +3123,6 @@ mod tests {
             },
             DeliveryConfig {
                 schema: schema.to_owned(),
-                idempotency_domain: b"hooks-dispatch-adapter-test-v1".to_vec(),
                 delivery_source: STORED_SOURCE.to_owned(),
             },
         );

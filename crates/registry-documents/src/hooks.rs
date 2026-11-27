@@ -58,7 +58,6 @@ use crate::store::PostgresStore;
 
 const DESTINATION_BINDING_SCHEMA: &str = "registry.documents-hook-destinations/v1";
 const COMPILED_HOOK_SCHEMA: &str = "registry.documents-hooks/v1";
-const IDEMPOTENCY_DOMAIN: &[u8] = b"documents-hook-idempotency-v1";
 /// The refusal code retained with a delivery whose destination answered with
 /// a proposal. Each dotted segment is lowercase kebab-case.
 const PROPOSAL_UNSUPPORTED_CODE: &str = "documents.hook.proposal-unsupported";
@@ -691,7 +690,6 @@ impl ActivatedHooks {
                 seams,
                 DeliveryConfig {
                     schema: self.schema.clone(),
-                    idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
                     delivery_source: self.delivery_source.clone(),
                 },
             ),
@@ -725,7 +723,9 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
             HookActivationError::DeliveryBudgetWidening
         }
         UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
-        UrlHookActivationError::InvalidSigningMaterial => {
+        UrlHookActivationError::SigningKeyUnavailable { .. }
+        | UrlHookActivationError::InvalidSigningKey { .. }
+        | UrlHookActivationError::RepeatedSigningKey { .. } => {
             HookActivationError::InvalidSigningMaterial
         }
     }

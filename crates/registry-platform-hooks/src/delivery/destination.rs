@@ -1,26 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `url` handler kind's destination: one activated logical destination,
-//! its signing key, and the bounded send that reads the answer back.
+//! its signing keys, and the bounded send that reads the answer back.
 //!
 //! The product builds the outbound policy (its network profile, DNS family,
 //! private ranges, and TLS material are deployment configuration it owns) and
 //! hands it here with the rest of the binding. From then on every product
-//! signs, renders, sends, and reads an answer the same way: the Version 1
-//! delivery signature over `POST` and `application/json`, the closed event
-//! request template, and a 2xx body read under the handler output ceiling.
+//! signs and renders the canonical event with Standard Webhooks, then reads
+//! a 2xx response body under the handler output ceiling.
 
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use registry_platform_config::{ProtectedSecret, MAX_SECRET_BYTES};
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::{sign, DeliveryKeys};
 use registry_platform_httputil::destination::{
     DestinationProfile, DestinationRequestError, DestinationResponseError, DestinationSendError,
-    EventDeliveryHeaders, EventDestinationPolicy, EventDestinationRequest,
-    EventDestinationRequestTemplate, MAX_DESTINATION_REQUEST_HEADER_BYTES,
-    MAX_DESTINATION_TARGET_BYTES,
+    EventDestinationPolicy, EventDestinationRequest, EventDestinationRequestTemplate,
+    SignedEventHeaders, MAX_DESTINATION_REQUEST_HEADER_BYTES, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_httputil::loopback::loopback_host;
 use url::Url;
@@ -32,7 +29,7 @@ use super::seams::{
 use crate::{ErrorCategory, MAX_OUTPUT_BYTES};
 
 /// The shortest HMAC-SHA256 delivery key a destination accepts.
-pub const MIN_HMAC_SHA256_KEY_BYTES: usize = 32;
+pub use registry_platform_crypto::delivery_signature::MIN_HMAC_SHA256_KEY_BYTES;
 
 /// Value-free refusal while building a [`UrlDestination`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -41,25 +38,20 @@ pub enum UrlDestinationError {
     /// request template.
     #[error("the hook destination binding is invalid")]
     InvalidBinding,
-    /// The resolved HMAC-SHA256 key is shorter than
-    /// [`MIN_HMAC_SHA256_KEY_BYTES`] or longer than the secret ceiling.
-    #[error("the hook destination signing material is invalid")]
-    InvalidSigningMaterial,
 }
 
 /// Everything one activated `url` destination is built from.
 pub struct UrlDestinationParts {
     /// The product's digest of this destination's non-secret binding.
     pub binding_digest: String,
-    /// The exact request target the template sends to and the signature
-    /// covers.
+    /// The exact request target the template sends to.
     pub request_target: String,
     /// The only outbound authority for this logical destination.
     pub policy: EventDestinationPolicy,
     /// The largest envelope this destination is sent.
     pub maximum_payload_bytes: usize,
-    /// The resolved HMAC-SHA256 delivery key.
-    pub hmac_sha256_key: ProtectedSecret,
+    /// The validated delivery keys, in signing order.
+    pub keys: DeliveryKeys,
     /// The deployed per-attempt timeout.
     pub attempt_timeout: Duration,
     /// The deployed attempt ceiling.
@@ -72,20 +64,19 @@ pub struct UrlDestination {
     request_target: String,
     policy: Arc<EventDestinationPolicy>,
     request_template: EventDestinationRequestTemplate,
-    hmac_sha256_key: ProtectedSecret,
+    keys: DeliveryKeys,
     attempt_timeout: Duration,
     maximum_attempts: u8,
 }
 
 impl UrlDestination {
-    /// Build the destination, refusing a request target or payload ceiling
-    /// the closed template refuses, then a key outside its length bounds.
+    /// Build the destination with a closed signed event template.
     ///
     /// # Errors
     ///
     /// [`UrlDestinationError`] names which part was refused, never a value.
     pub fn new(parts: UrlDestinationParts) -> Result<Self, UrlDestinationError> {
-        let request_template = EventDestinationRequestTemplate::event_delivery(
+        let request_template = EventDestinationRequestTemplate::signed_event_delivery(
             &parts.request_target,
             parts.maximum_payload_bytes,
             MAX_DESTINATION_TARGET_BYTES
@@ -93,15 +84,12 @@ impl UrlDestination {
                 + parts.maximum_payload_bytes,
         )
         .map_err(|_| UrlDestinationError::InvalidBinding)?;
-        if !(MIN_HMAC_SHA256_KEY_BYTES..=MAX_SECRET_BYTES).contains(&parts.hmac_sha256_key.len()) {
-            return Err(UrlDestinationError::InvalidSigningMaterial);
-        }
         Ok(Self {
             binding_digest: parts.binding_digest,
             request_target: parts.request_target,
             policy: Arc::new(parts.policy),
             request_template,
-            hmac_sha256_key: parts.hmac_sha256_key,
+            keys: parts.keys,
             attempt_timeout: parts.attempt_timeout,
             maximum_attempts: parts.maximum_attempts,
         })
@@ -125,16 +113,14 @@ impl UrlDestination {
         &self.request_template
     }
 
-    /// Borrow the exact request target the template and the signature share,
-    /// so signing and transport cannot disagree about the path.
+    /// Borrow the exact request target the template sends to.
     #[must_use]
     pub fn request_target(&self) -> &str {
         &self.request_target
     }
 
-    /// Borrow signing bytes only for the duration of the supplied operation.
-    pub fn with_hmac_sha256_key<T>(&self, use_key: impl FnOnce(&[u8]) -> T) -> T {
-        use_key(self.hmac_sha256_key.expose_secret())
+    pub(super) fn keys(&self) -> &DeliveryKeys {
+        &self.keys
     }
 
     /// Deployed per-attempt timeout.
@@ -158,7 +144,7 @@ impl fmt::Debug for UrlDestination {
             .field("request_target", &"[REDACTED]")
             .field("policy", &self.policy)
             .field("request_template", &self.request_template)
-            .field("hmac_sha256_key", &"[REDACTED]")
+            .field("keys", &"[REDACTED]")
             .field("attempt_timeout", &self.attempt_timeout)
             .field("maximum_attempts", &self.maximum_attempts)
             .finish()
@@ -188,48 +174,16 @@ impl HookDestination for SharedUrlDestination {
         &self,
         fields: DeliverySignatureFields<'_>,
     ) -> Result<String, DeliverySignatureRefused> {
-        let DeliverySignatureFields {
-            id,
-            source,
-            event_type,
-            time,
-            data_schema,
-            generation,
-            attempt,
-            delivery_time,
-            idempotency_key,
-            body,
-        } = fields;
-        self.0
-            .with_hmac_sha256_key(|key| {
-                sign_v1(
-                    key,
-                    SignatureFields {
-                        id,
-                        source,
-                        event_type,
-                        time,
-                        data_schema,
-                        generation,
-                        attempt,
-                        delivery_time,
-                        method: "POST",
-                        request_target: self.0.request_target(),
-                        content_type: "application/json",
-                        idempotency_key,
-                        body,
-                    },
-                )
-            })
+        sign(self.0.keys(), fields.id, fields.timestamp, fields.body)
             .map_err(|_| DeliverySignatureRefused)
     }
 
     fn render_delivery(
         &self,
-        headers: EventDeliveryHeaders<'_>,
+        headers: SignedEventHeaders<'_>,
         body: Vec<u8>,
     ) -> Result<EventDestinationRequest, DestinationRequestError> {
-        self.0.request_template().render_event(headers, body)
+        self.0.request_template().render_signed_event(headers, body)
     }
 
     async fn send_delivery(
@@ -341,90 +295,71 @@ mod tests {
         .expect("policy")
     }
 
-    /// Resolve `length` key bytes through the real secret path, under an
-    /// environment name unique to the length so parallel tests never race.
-    fn key(length: usize) -> ProtectedSecret {
-        let name = format!("REGISTRY_PLATFORM_HOOKS_DESTINATION_TEST_KEY_{length}");
-        std::env::set_var(&name, "k".repeat(length));
-        registry_platform_config::SecretResolver::new(
-            [registry_platform_config::SecretProvider::Environment],
-            "/",
-        )
-        .expect("resolver")
-        .resolve(&format!("secret:env/{name}"))
-        .expect("key")
+    fn keys(length: usize) -> DeliveryKeys {
+        use registry_platform_crypto::delivery_signature::DeliveryKey;
+        DeliveryKeys::new(DeliveryKey::new(&vec![b'k'; length]).unwrap(), None).unwrap()
     }
 
-    fn parts(key: ProtectedSecret) -> UrlDestinationParts {
+    fn parts(keys: DeliveryKeys) -> UrlDestinationParts {
         UrlDestinationParts {
             binding_digest: "sha256:binding".to_owned(),
             request_target: "/hooks".to_owned(),
             policy: policy(),
             maximum_payload_bytes: 16 * 1024,
-            hmac_sha256_key: key,
+            keys,
             attempt_timeout: Duration::from_secs(5),
             maximum_attempts: 3,
         }
     }
 
     #[test]
-    fn destination_refuses_signing_keys_outside_their_bounds() {
-        assert_eq!(
-            UrlDestination::new(parts(key(MIN_HMAC_SHA256_KEY_BYTES - 1))).unwrap_err(),
-            UrlDestinationError::InvalidSigningMaterial
-        );
-        let destination =
-            UrlDestination::new(parts(key(MIN_HMAC_SHA256_KEY_BYTES))).expect("destination");
-        assert_eq!(destination.request_target(), "/hooks");
-        assert_eq!(destination.maximum_attempts(), 3);
-    }
-
-    #[test]
     fn destination_debug_redacts_the_key_and_target() {
-        let destination = UrlDestination::new(parts(key(33))).expect("destination");
+        let destination = UrlDestination::new(parts(keys(33))).expect("destination");
         let rendered = format!("{destination:?}");
         assert!(rendered.contains("[REDACTED]"));
         assert!(!rendered.contains("/hooks"));
     }
 
     #[test]
-    fn destination_signature_covers_post_and_json_over_the_request_target() {
-        let destination = SharedUrlDestination(Arc::new(
-            UrlDestination::new(parts(key(33))).expect("destination"),
-        ));
-        let fields = || DeliverySignatureFields {
-            id: "event",
-            source: "urn:source",
-            event_type: "record.created",
-            time: "2026-01-01T00:00:00Z",
-            data_schema: "urn:schema",
-            generation: "1",
-            attempt: "1",
-            delivery_time: "2026-01-01T00:00:01Z",
-            idempotency_key: "key",
-            body: b"{}",
+    fn a_hook_delivery_signs_id_timestamp_and_the_exact_body() {
+        use registry_platform_crypto::delivery_signature::{
+            verify, DeliveryKey, SignedContent, DELIVERY_TOLERANCE,
         };
-        let signed = destination.sign_delivery(fields()).expect("signed");
-        let expected = sign_v1(
-            "k".repeat(33).as_bytes(),
-            SignatureFields {
+        let destination = SharedUrlDestination(Arc::new(
+            UrlDestination::new(parts(keys(33))).expect("destination"),
+        ));
+        let signed = destination
+            .sign_delivery(DeliverySignatureFields {
                 id: "event",
-                source: "urn:source",
-                event_type: "record.created",
-                time: "2026-01-01T00:00:00Z",
-                data_schema: "urn:schema",
-                generation: "1",
-                attempt: "1",
-                delivery_time: "2026-01-01T00:00:01Z",
-                method: "POST",
-                request_target: "/hooks",
-                content_type: "application/json",
-                idempotency_key: "key",
-                body: b"{}",
+                timestamp: 1000,
+                body: br#"{"ok":true}"#,
+            })
+            .unwrap();
+        let keys = DeliveryKeys::new(DeliveryKey::new(&[b'k'; 33]).unwrap(), None).unwrap();
+        let now = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
+        let content = SignedContent {
+            id: "event",
+            timestamp: "1000",
+            signature: &signed,
+            body: br#"{"ok":true}"#,
+        };
+        assert_eq!(verify(&keys, content, now, DELIVERY_TOLERANCE), Ok(1000));
+        for changed in [
+            SignedContent {
+                id: "other",
+                ..content
             },
-        )
-        .expect("expected");
-        assert_eq!(signed, expected);
+            SignedContent {
+                timestamp: "1001",
+                ..content
+            },
+            SignedContent {
+                body: br#"{ "ok":true }"#,
+                ..content
+            },
+        ] {
+            assert!(verify(&keys, changed, now, DELIVERY_TOLERANCE).is_err());
+        }
     }
 
     #[test]

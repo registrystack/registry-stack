@@ -454,6 +454,7 @@ async fn fixture_publishing_with_hook_and_status(
                     "secret:env/{hook_secret_name}"
                 ))
                 .expect("the test hook key reference"),
+                previous_hmac_sha256_key_ref: None,
                 attempt_timeout_milliseconds: 5_000,
                 maximum_attempts: 1,
             },
@@ -2516,6 +2517,7 @@ async fn changed_retained_hook_destination_binding_is_refused() {
                 .expect("the changed hook URL"),
             hmac_sha256_key_ref: SecretReference::parse(fx.hook_secret_ref.clone())
                 .expect("the test hook key reference"),
+            previous_hmac_sha256_key_ref: None,
             attempt_timeout_milliseconds: 5_000,
             maximum_attempts: 1,
         },

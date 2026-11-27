@@ -17,8 +17,11 @@ use std::time::{Duration, SystemTime};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_crypto::delivery_signature::{
-    verify_v1, verify_v1_authenticity, SignatureFields, VerificationError, MAX_BODY_BYTES,
+    self, verify_v1, verify_v1_authenticity, DeliveryKeys, DeliverySignatureError, SignatureFields,
+    SignedContent, VerificationError, MAX_BODY_BYTES,
 };
+
+use crate::{EnvelopeLimits, HookEnvelope};
 
 const SIGNATURE_PREFIX: &str = "v1=";
 const SIGNATURE_BYTES: usize = 32;
@@ -43,7 +46,7 @@ const HEADERS: [&str; 12] = [
 
 /// How far a signed delivery time may be from the receiver clock, in either
 /// direction, when the receiver names no window of its own.
-pub const DEFAULT_DELIVERY_SKEW: Duration = Duration::from_secs(300);
+pub const DEFAULT_DELIVERY_SKEW: Duration = delivery_signature::DELIVERY_TOLERANCE;
 
 /// How the receiver bounds the signed delivery time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,9 +54,8 @@ pub enum DeliveryFreshness {
     /// Refuse a delivery time further than `skew` from `now`, in either
     /// direction.
     Within { now: SystemTime, skew: Duration },
-    /// Check only that the delivery time is a valid RFC 3339 instant. The
-    /// caller enforces its own clock window on
-    /// [`VerifiedDelivery::delivery_time`] before acting on the body.
+    /// The caller enforces its clock window on the verified timestamp
+    /// before acting on the delivery.
     CallerEnforced,
 }
 
@@ -66,6 +68,123 @@ impl DeliveryFreshness {
             skew: DEFAULT_DELIVERY_SKEW,
         }
     }
+}
+
+/// Required Standard Webhooks delivery headers, matched case-insensitively.
+pub const HOOK_DELIVERY_HEADERS: [&str; 4] = [
+    "content-type",
+    "webhook-id",
+    "webhook-timestamp",
+    "webhook-signature",
+];
+
+/// Exact request material. The iterator must include every header occurrence.
+pub struct HookDelivery<'a, H> {
+    pub headers: H,
+    pub body: &'a [u8],
+    pub keys: &'a DeliveryKeys,
+}
+
+/// Authenticated and decoded Standard Webhooks delivery.
+pub struct VerifiedHookDelivery<'a> {
+    pub id: &'a str,
+    pub timestamp: u64,
+    pub envelope: HookEnvelope,
+    pub body: &'a [u8],
+}
+
+impl std::fmt::Debug for VerifiedHookDelivery<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("VerifiedHookDelivery([REDACTED])")
+    }
+}
+
+/// Value-free reasons to refuse a Standard Webhooks delivery.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum HookDeliveryError {
+    #[error("a required hook delivery header is missing")]
+    MissingHeader,
+    #[error("a required hook delivery header is repeated")]
+    DuplicateHeader,
+    #[error("the hook delivery content type must be application/json")]
+    InvalidContentType,
+    #[error(transparent)]
+    Signature(#[from] DeliverySignatureError),
+    #[error("the hook delivery body is not a canonical hook envelope")]
+    InvalidEnvelope,
+    #[error("webhook-id does not match the hook envelope id")]
+    IdMismatch,
+}
+
+impl HookDeliveryError {
+    /// Stable refusal code for the failed validation.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::MissingHeader => "missing-header",
+            Self::DuplicateHeader => "duplicate-header",
+            Self::InvalidContentType => "invalid-content-type",
+            Self::Signature(error) => error.code(),
+            Self::InvalidEnvelope => "invalid-envelope",
+            Self::IdMismatch => "id-mismatch",
+        }
+    }
+}
+
+/// Verify the exact received bytes before decoding the canonical hook envelope.
+pub fn verify_hook_delivery<'a, H>(
+    delivery: HookDelivery<'a, H>,
+    freshness: DeliveryFreshness,
+) -> Result<VerifiedHookDelivery<'a>, HookDeliveryError>
+where
+    H: IntoIterator<Item = (&'a str, &'a [u8])>,
+{
+    let mut headers = [None; HOOK_DELIVERY_HEADERS.len()];
+    for (name, value) in delivery.headers {
+        if let Some(index) = HOOK_DELIVERY_HEADERS
+            .iter()
+            .position(|header| name.eq_ignore_ascii_case(header))
+        {
+            if headers[index].replace(value).is_some() {
+                return Err(HookDeliveryError::DuplicateHeader);
+            }
+        }
+    }
+    let [Some(content_type), Some(id), Some(timestamp), Some(signature)] = headers else {
+        return Err(HookDeliveryError::MissingHeader);
+    };
+    if content_type != b"application/json" {
+        return Err(HookDeliveryError::InvalidContentType);
+    }
+
+    let id = std::str::from_utf8(id).map_err(|_| DeliverySignatureError::InvalidId)?;
+    let content = SignedContent {
+        id,
+        timestamp: std::str::from_utf8(timestamp)
+            .map_err(|_| DeliverySignatureError::InvalidTimestamp)?,
+        signature: std::str::from_utf8(signature)
+            .map_err(|_| DeliverySignatureError::MalformedSignature)?,
+        body: delivery.body,
+    };
+    let timestamp = match freshness {
+        DeliveryFreshness::Within { now, skew } => {
+            delivery_signature::verify(delivery.keys, content, now, skew)
+        }
+        DeliveryFreshness::CallerEnforced => {
+            delivery_signature::verify_authenticity(delivery.keys, content)
+        }
+    }?;
+    let envelope = HookEnvelope::from_canonical_bytes(delivery.body, &EnvelopeLimits::default())
+        .map_err(|_| HookDeliveryError::InvalidEnvelope)?;
+    if envelope.id != id {
+        return Err(HookDeliveryError::IdMismatch);
+    }
+    Ok(VerifiedHookDelivery {
+        id,
+        timestamp,
+        envelope,
+        body: delivery.body,
+    })
 }
 
 /// Exact request material of one received delivery.
@@ -280,6 +399,178 @@ mod tests {
     use registry_platform_crypto::delivery_signature::sign_v1;
 
     const KEY: &[u8] = b"webhook-delivery-signing-key-0123456789abcdef";
+    const HOOK_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const HOOK_BODY: &[u8] = br#"{"causation":{"hop":0,"root":"00000000-0000-4000-8000-000000000001"},"data":{},"dataschema":"urn:example:schema","id":"00000000-0000-4000-8000-000000000001","source":"urn:example:source","subject":{"recordReference":"example/case/42","recordRevision":3},"time":"2026-08-30T00:00:00Z","type":"case-created"}"#;
+
+    fn hook_keys() -> DeliveryKeys {
+        use registry_platform_crypto::delivery_signature::DeliveryKey;
+        DeliveryKeys::new(DeliveryKey::new(&[42; 32]).unwrap(), None).unwrap()
+    }
+
+    fn with_hook_headers<T>(
+        id: &str,
+        run: impl FnOnce([(&str, &[u8]); 4], &DeliveryKeys) -> T,
+    ) -> T {
+        use registry_platform_crypto::delivery_signature::sign;
+        let keys = hook_keys();
+        let signature = sign(&keys, id, 1000, HOOK_BODY).unwrap();
+        run(
+            [
+                ("content-type", b"application/json"),
+                ("webhook-id", id.as_bytes()),
+                ("webhook-timestamp", b"1000"),
+                ("webhook-signature", signature.as_bytes()),
+            ],
+            &keys,
+        )
+    }
+
+    #[test]
+    fn verify_hook_delivery_accepts_a_signed_envelope() {
+        with_hook_headers(HOOK_ID, |headers, keys| {
+            let delivery = verify_hook_delivery(
+                HookDelivery {
+                    headers,
+                    body: HOOK_BODY,
+                    keys,
+                },
+                DeliveryFreshness::CallerEnforced,
+            )
+            .unwrap();
+            assert_eq!(delivery.id, HOOK_ID);
+            assert_eq!(delivery.envelope.id, HOOK_ID);
+            assert_eq!(delivery.timestamp, 1000);
+            assert_eq!(delivery.body, HOOK_BODY);
+        });
+    }
+
+    #[test]
+    fn verify_hook_delivery_refuses_missing_or_duplicate_headers() {
+        with_hook_headers(HOOK_ID, |headers, keys| {
+            for (index, (name, value)) in headers.iter().enumerate() {
+                let mut missing = headers.to_vec();
+                missing.remove(index);
+                let repeated = [(name.to_ascii_uppercase(), *value)];
+                for (headers, expected) in [
+                    (missing, "missing-header"),
+                    (
+                        headers
+                            .into_iter()
+                            .chain([(repeated[0].0.as_str(), repeated[0].1)])
+                            .collect(),
+                        "duplicate-header",
+                    ),
+                ] {
+                    let error = verify_hook_delivery(
+                        HookDelivery {
+                            headers,
+                            body: HOOK_BODY,
+                            keys,
+                        },
+                        DeliveryFreshness::CallerEnforced,
+                    )
+                    .unwrap_err();
+                    assert_eq!(error.code(), expected);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn verify_hook_delivery_refuses_an_envelope_whose_id_differs() {
+        with_hook_headers("other-event", |headers, keys| {
+            let error = verify_hook_delivery(
+                HookDelivery {
+                    headers,
+                    body: HOOK_BODY,
+                    keys,
+                },
+                DeliveryFreshness::CallerEnforced,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), "id-mismatch");
+        });
+    }
+
+    #[test]
+    fn verify_hook_delivery_checks_content_type_and_authenticity_before_decoding() {
+        use registry_platform_crypto::delivery_signature::sign;
+        with_hook_headers(HOOK_ID, |mut headers, keys| {
+            headers[0].1 = b"application/json; charset=utf-8";
+            let error = verify_hook_delivery(
+                HookDelivery {
+                    headers,
+                    body: b"!",
+                    keys,
+                },
+                DeliveryFreshness::CallerEnforced,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), "invalid-content-type");
+            headers[0].1 = b"application/json";
+            let error = verify_hook_delivery(
+                HookDelivery {
+                    headers,
+                    body: b"!",
+                    keys,
+                },
+                DeliveryFreshness::CallerEnforced,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), "signature-mismatch");
+            let signature = sign(keys, HOOK_ID, 1000, b"!").unwrap();
+            let headers = [
+                headers[0],
+                headers[1],
+                headers[2],
+                ("webhook-signature", signature.as_bytes()),
+            ];
+            let error = verify_hook_delivery(
+                HookDelivery {
+                    headers,
+                    body: b"!",
+                    keys,
+                },
+                DeliveryFreshness::CallerEnforced,
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), "invalid-envelope");
+        });
+    }
+
+    #[test]
+    fn verify_hook_delivery_applies_300_seconds_by_default() {
+        with_hook_headers(HOOK_ID, |headers, keys| {
+            for now in [700, 1300] {
+                assert!(verify_hook_delivery(
+                    HookDelivery {
+                        headers,
+                        body: HOOK_BODY,
+                        keys
+                    },
+                    DeliveryFreshness::default_at(
+                        SystemTime::UNIX_EPOCH + Duration::from_secs(now)
+                    )
+                )
+                .is_ok());
+            }
+            for now in [699, 1301] {
+                let error = verify_hook_delivery(
+                    HookDelivery {
+                        headers,
+                        body: HOOK_BODY,
+                        keys,
+                    },
+                    DeliveryFreshness::default_at(
+                        SystemTime::UNIX_EPOCH + Duration::from_secs(now),
+                    ),
+                )
+                .unwrap_err();
+                assert_eq!(error.code(), "stale-delivery");
+            }
+        });
+    }
+
     const BODY: &[u8] = br#"{"entity":"case","values":{"label":"value"}}"#;
     const TARGET: &str = "/hooks/registry";
     // The crypto crate's fixed Version 1 vector for these exact fields.

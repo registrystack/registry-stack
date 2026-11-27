@@ -16,18 +16,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::{SecretResolver, UrlHookDestinationConfig};
+use registry_platform_config::{SecretReference, SecretResolver, UrlHookDestinationConfig};
+use registry_platform_crypto::delivery_signature::{
+    distinct_delivery_keys, DeliveryKey, DeliveryKeyError, DeliveryKeys,
+};
 use registry_platform_httputil::destination::EventDestinationPolicy;
 use registry_platform_yaml::LocalId;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::destination::{
-    url_destination_address, UrlDestination, UrlDestinationError, UrlDestinationParts,
-};
+use super::destination::{url_destination_address, UrlDestination, UrlDestinationParts};
 
-/// Value-free refusal while activating a URL hook destination.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+const CURRENT_KEY_MEMBER: &str = "hmacSha256KeyRef";
+const PREVIOUS_KEY_MEMBER: &str = "previousHmacSha256KeyRef";
+
+/// Refusal while activating a URL hook destination.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum UrlHookActivationError {
     /// The logical id is not a local identifier, or the attempt timeout or
     /// attempt count is outside the block's delivery budget.
@@ -36,9 +40,24 @@ pub enum UrlHookActivationError {
     /// The URL or the policy built from it is refused.
     #[error("the URL hook destination is invalid")]
     InvalidDestination,
-    /// The signing key reference does not resolve to usable key material.
-    #[error("the URL hook destination signing material is invalid")]
-    InvalidSigningMaterial,
+    /// The key reference could not be resolved.
+    #[error("destination {destination} could not resolve {member}. Check the configured secret reference")]
+    SigningKeyUnavailable {
+        destination: String,
+        member: &'static str,
+    },
+    /// The resolved key bytes violate the signing key policy.
+    #[error("destination {destination} member {member} has {length} bytes (trailing newline: {trailing_newline}). {source}")]
+    InvalidSigningKey {
+        destination: String,
+        member: &'static str,
+        length: usize,
+        trailing_newline: bool,
+        source: DeliveryKeyError,
+    },
+    /// Two destination members resolve to the same key bytes.
+    #[error("destination keys {first} and {second} share the same bytes. Configure distinct keys")]
+    RepeatedSigningKey { first: String, second: String },
 }
 
 /// Every configured URL hook destination, activated, with the digest of the
@@ -83,6 +102,25 @@ pub fn activate_url_hook_destinations(
         digest_values.push(digest_value);
         bindings.insert(logical_id.clone(), Arc::new(destination));
     }
+    let labeled_keys = bindings
+        .iter()
+        .flat_map(|(logical_id, destination)| {
+            let keys = destination.keys();
+            std::iter::once((format!("{logical_id}.{CURRENT_KEY_MEMBER}"), keys.current())).chain(
+                keys.previous()
+                    .map(|key| (format!("{logical_id}.{PREVIOUS_KEY_MEMBER}"), key)),
+            )
+        })
+        .collect::<Vec<_>>();
+    distinct_delivery_keys(
+        labeled_keys
+            .iter()
+            .map(|(label, key)| (label.as_str(), *key)),
+    )
+    .map_err(|error| UrlHookActivationError::RepeatedSigningKey {
+        first: error.first().to_owned(),
+        second: error.second().to_owned(),
+    })?;
     let binding_digest = canonical_digest(&json!({
         "schemaVersion": binding_schema,
         "destinations": digest_values,
@@ -109,9 +147,27 @@ pub fn activate_url_hook_destination(
         .map_err(|_| UrlHookActivationError::InvalidDestination)?;
     let policy = EventDestinationPolicy::new(logical_id, &address.origin, address.profile, &[])
         .map_err(|_| UrlHookActivationError::InvalidDestination)?;
-    let hmac_sha256_key = secrets
-        .resolve(config.hmac_sha256_key_ref.as_str())
-        .map_err(|_| UrlHookActivationError::InvalidSigningMaterial)?;
+    let (current, _, _) = resolve_delivery_key(
+        secrets,
+        logical_id,
+        CURRENT_KEY_MEMBER,
+        &config.hmac_sha256_key_ref,
+    )?;
+    let keys = if let Some(reference) = &config.previous_hmac_sha256_key_ref {
+        let (previous, length, trailing_newline) =
+            resolve_delivery_key(secrets, logical_id, PREVIOUS_KEY_MEMBER, reference)?;
+        DeliveryKeys::new(current, Some(previous)).map_err(|source| {
+            UrlHookActivationError::InvalidSigningKey {
+                destination: logical_id.to_owned(),
+                member: PREVIOUS_KEY_MEMBER,
+                length,
+                trailing_newline,
+                source,
+            }
+        })?
+    } else {
+        DeliveryKeys::new(current, None).expect("one validated key")
+    };
     let digest_value = json!({
         "logicalId": logical_id,
         "url": config.url.as_str(),
@@ -128,17 +184,38 @@ pub fn activate_url_hook_destination(
         request_target: address.request_target,
         policy,
         maximum_payload_bytes,
-        hmac_sha256_key,
+        keys,
         attempt_timeout: Duration::from_millis(u64::from(config.attempt_timeout_milliseconds)),
         maximum_attempts: config.maximum_attempts,
     })
-    .map_err(|error| match error {
-        UrlDestinationError::InvalidBinding => UrlHookActivationError::InvalidDestination,
-        UrlDestinationError::InvalidSigningMaterial => {
-            UrlHookActivationError::InvalidSigningMaterial
+    .map_err(|_| UrlHookActivationError::InvalidDestination)?;
+    Ok((destination, digest_value))
+}
+
+fn resolve_delivery_key(
+    secrets: &SecretResolver,
+    logical_id: &str,
+    member: &'static str,
+    reference: &SecretReference,
+) -> Result<(DeliveryKey, usize, bool), UrlHookActivationError> {
+    let secret = secrets.resolve_binary_reference(reference).map_err(|_| {
+        UrlHookActivationError::SigningKeyUnavailable {
+            destination: logical_id.to_owned(),
+            member,
         }
     })?;
-    Ok((destination, digest_value))
+    let bytes = secret.expose_secret();
+    let length = bytes.len();
+    let trailing_newline = bytes.ends_with(b"\n");
+    let key =
+        DeliveryKey::new(bytes).map_err(|source| UrlHookActivationError::InvalidSigningKey {
+            destination: logical_id.to_owned(),
+            member,
+            length,
+            trailing_newline,
+            source,
+        })?;
+    Ok((key, length, trailing_newline))
 }
 
 fn canonical_digest(value: &Value) -> Result<String, UrlHookActivationError> {
