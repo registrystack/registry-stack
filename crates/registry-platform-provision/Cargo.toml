@@ -1,0 +1,39 @@
+[package]
+name = "registry-platform-provision"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Product-free PostgreSQL provisioning plans: roles, database, schemas and extensions for Registry Stack runtimes."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Runs tests/postgres.rs against the disposable PostgreSQL superuser named by
+# PROVISION_TEST_DATABASE_URL, over TLS verified with PROVISION_TEST_DATABASE_CA.
+# It also needs PROVISION_TEST_OLD_DATABASE_URL, a server older than the floor.
+# With the feature on, a missing variable fails the suite.
+postgres-test = []
+
+[[test]]
+name = "postgres"
+required-features = ["postgres-test"]
+
+[dependencies]
+postgres-protocol.workspace = true
+registry-platform-activation.workspace = true
+rustls.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+getrandom.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

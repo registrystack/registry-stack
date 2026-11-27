@@ -8028,6 +8028,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-provision"
+version = "0.49.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "postgres-protocol",
+ "registry-platform-activation",
+ "rustls",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-platform-ratelimit"
 version = "0.49.0"
 dependencies = [
