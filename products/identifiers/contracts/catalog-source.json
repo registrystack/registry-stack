@@ -3,6 +3,16 @@
   "baseUrl": "https://id.registrystack.org",
   "problemSources": [
     {
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-platform/",
+      "sourcePath": "crates/registry-session/src/wire.rs",
+      "exporterPath": "crates/registry-session/examples/problem-catalog.rs",
+      "cargoPackage": "registry-session",
+      "cargoExample": "problem-catalog"
+    },
+    {
       "owner": "discovery",
       "status": "active",
       "compatibilityLine": "v1alpha1",
@@ -94,6 +104,18 @@
     }
   ],
   "referenceExclusions": [
+    {
+      "path": "crates/registry-session/src/wire.rs",
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/",
+      "classification": "identifier-prefix",
+      "reason": "This constant constructs the exact session problem types exported by ProblemKind::ALL; the prefix itself is not an emitted type URI. problemSources names the platform parent because each public code already carries the session namespace."
+    },
+    {
+      "path": "crates/registry-session/src/check.rs",
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/",
+      "classification": "fixture",
+      "reason": "The check tests append the expected problem suffix to this template prefix. Each complete session problem type is exported by ProblemKind::ALL and registered in the catalog."
+    },
     {
       "glob": "products/breg/generated/minimal/generated/action-contracts.schema.json",
       "classification": "generated-copy",
@@ -233,6 +255,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Report of the shared `provision` command that creates a product's PostgreSQL roles, database, schemas and extensions."
+    },
+    {
+      "glob": "products/platform/generated/session-runtime/*.schema.json",
+      "sourcePath": "crates/registry-session/src/schema.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack session service runtime configuration JSON Schema."
     },
     {
       "glob": "products/platform/generated/mcp-runtime/*.schema.json",

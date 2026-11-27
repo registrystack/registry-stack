@@ -15,6 +15,15 @@ workspace = true
 name = "registry-session"
 path = "src/main.rs"
 
+[features]
+default = []
+schema = [
+    "dep:schemars",
+    "registry-platform-audit/schema",
+    "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
+]
+
 [dependencies]
 axum.workspace = true
 base64.workspace = true
@@ -29,6 +38,7 @@ registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
 registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -40,7 +50,13 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 registry-platform-testing.workspace = true
 reqwest.workspace = true
 tempfile.workspace = true
 tower = { workspace = true, features = ["util"] }
+
+[[example]]
+name = "session-runtime-schema"
+path = "examples/session-runtime-schema.rs"
+required-features = ["schema"]

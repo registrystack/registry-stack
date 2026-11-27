@@ -3966,6 +3966,177 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/busy",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Busy",
+      "description": "The session service has no capacity for another sign-in.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.busy",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/expired",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Session expired",
+      "description": "The session is absent, expired, or no longer valid. Sign in again.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.expired",
+        "httpStatuses": [
+          401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/internal",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Something went wrong",
+      "description": "The session service cannot complete the request.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.internal",
+        "httpStatuses": [
+          500
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/method-not-allowed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Method not allowed",
+      "description": "The session route does not accept this HTTP method.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.method-not-allowed",
+        "httpStatuses": [
+          405
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Not found",
+      "description": "The requested session route does not exist.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/rate-limited",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Too many requests",
+      "description": "The session service's request limit has been reached.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.rate-limited",
+        "httpStatuses": [
+          429
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Forbidden",
+      "description": "The request is not permitted by the session's route or origin rules.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.refused",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/return-refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Return path not accepted",
+      "description": "The return path is not an allowed local page route.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.return-refused",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Session service unavailable",
+      "description": "The session check cannot complete. Retry later.",
+      "source": {
+        "path": "crates/registry-session/src/wire.rs",
+        "sha256": "86b338860fd4964b78b7b6cd4b8ea7b8157dc3ae9fb596440b7bc94f95914f12"
+      },
+      "problem": {
+        "code": "session.unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/problems/registry-scheduling/authentication/refused",
       "kind": "problem",
       "status": "active",
@@ -5381,7 +5552,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "daeeee1db5a85267dd6529b1eaec5f8f6d465ee339fa2be1ce2067803e8a5a6d",
+        "sha256": "ab8ef99cbf19a2fa6cf0748940a9f4c019cbb8edc52cf83a9f1aed3748db43b6",
         "mediaType": "application/schema+json"
       }
     },
@@ -5417,7 +5588,7 @@
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "7dc772cfffa6d9fd8f9ac3607dec74fcbcf72c052c1e01fb66585a33b21b8fd7",
+        "sha256": "9c293b6338985016326c9c3fed0ad04ce753486b44a039f863c6e0081db3ddd5",
         "mediaType": "application/schema+json"
       }
     },
@@ -6097,11 +6268,11 @@
       "description": "Registry Stack identity deployment JSON Schema.",
       "source": {
         "path": "crates/registry-thunderid-tooling/src/schema.rs",
-        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
+        "sha256": "20b561a8cbc383e477a4dbd4e68030aaedb7a107cd938ce44069bce1463182d6"
       },
       "artifact": {
         "path": "products/platform/schemas/identity-deployment.schema.json",
-        "sha256": "20b5224ee58a88324552ba4eef77132273ac2b6609e178db001dc57dd1d63077",
+        "sha256": "9062f1e8cbf65f7b74d872f6a2a3d46140996707ea5b611198f0b38690c4a44f",
         "mediaType": "application/schema+json"
       }
     },
@@ -6115,7 +6286,7 @@
       "description": "Registry Stack product identity facts JSON Schema.",
       "source": {
         "path": "crates/registry-thunderid-tooling/src/schema.rs",
-        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
+        "sha256": "20b561a8cbc383e477a4dbd4e68030aaedb7a107cd938ce44069bce1463182d6"
       },
       "artifact": {
         "path": "products/platform/schemas/identity-facts.schema.json",
@@ -6151,11 +6322,29 @@
       "description": "rstack error report JSON Schema.",
       "source": {
         "path": "crates/registry-rstack/src/cli.rs",
-        "sha256": "182b516039961207301c3e135ff1de2ae8ab4d6f0a0b6f098953d302b97ec125"
+        "sha256": "9b64a88d58574ceb1f3b670549506d06cf00b26575e5a9fa9815cc0c8955f37b"
       },
       "artifact": {
         "path": "products/platform/schemas/rstack-dev-error.v1.schema.json",
         "sha256": "a0d0429e5fbd348f029607c9f6ef6c945a04001ff1d6dc2e86eea237d74674b7",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/platform/session-runtime/session-runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Registry Stack session service runtime configuration",
+      "description": "Registry Stack session service runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-session/src/schema.rs",
+        "sha256": "f9ec89dbabaa96e49a1abbd076590d5935e007cbc35e4d5d042882ef00d39ee9"
+      },
+      "artifact": {
+        "path": "products/platform/generated/session-runtime/session-runtime.schema.json",
+        "sha256": "792105625285031b9a9253edb821451914145e07fd1d809302f7f1d768e2ba18",
         "mediaType": "application/schema+json"
       }
     },
@@ -6169,7 +6358,7 @@
       "description": "Registry Stack task connection JSON Schema.",
       "source": {
         "path": "crates/registry-thunderid-tooling/src/schema.rs",
-        "sha256": "3c54de0035540767520565700458e3bb8cf74eb4394ca6c67b908f045a76211b"
+        "sha256": "20b561a8cbc383e477a4dbd4e68030aaedb7a107cd938ce44069bce1463182d6"
       },
       "artifact": {
         "path": "products/platform/schemas/task-connection.schema.json",
@@ -6263,7 +6452,7 @@
       },
       "artifact": {
         "path": "products/platform/generated/dev/dev.v1alpha1.schema.json",
-        "sha256": "fa65292e60d11cf31a5da38d2ad554acd4d19e31c514aa8f775f7f3b782418fe",
+        "sha256": "2ffcce06019ea1d01ecdc90e7cb4038077751ecf8ca7b7a3dc181e1b52ff8482",
         "mediaType": "application/schema+json"
       }
     },

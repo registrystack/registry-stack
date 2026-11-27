@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/session-runtime/session-runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/platform/session-runtime/v1alpha1
+kind: PlatformSessionRuntimeConfig
+listener:
+  bind: 10.0.0.5:8120
+  tlsTermination: operator-controlled-upstream
+checkListener: 10.0.0.5:8121
+publicOrigin: https://app.example
+secretProviders:
+  file:
+    root: /run/secrets
+  environment: {}
+issuer:
+  id: https://id.example
+  authorization: https://id.example/oauth2/authorize
+  endSession: https://id.example/oauth2/logout
+  token: https://id.example/oauth2/token
+  revocation: https://id.example/oauth2/revoke
+  jwks: https://id.example/oauth2/jwks
+personAudience: https://api.example/person
+modules:
+  - id: breg
+    prefix: /api/registry/
+    audience: person
+pages:
+  - prefix: /apply/
+    signIn: citizen
+signIns:
+  citizen:
+    clientId: citizen-app
+    clientSecretRef: secret:file/citizen-secret
+    scopes: [registry:read]
+session:
+  absoluteLifetimeSeconds: 28800
+audit:
+  hashKeyRef: secret:env/SESSION_AUDIT_KEY
+  path: /var/lib/session/audit.jsonl

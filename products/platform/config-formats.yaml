@@ -185,6 +185,95 @@ formats:
         whenOmitted: refused
     restrictingMembers: [/resourceServer/resource, /resourceServer/issuer, /resourceServer/jwksSource, /resourceServer/algorithms, /resourceServer/allowedClients, /resourceServer/requiredScopes, /bindings/*/tools, /bindings/*/provider/registry/scopes, /bindings/*/provider/authorization/scopes, /bindings/*/provider/baseUrl, /bindings/*/provider/contractDigest, /bindings/*/provider/audience, /bindings/*/provider/operations, /bindings/*/provider/dataClass]
 
+  - id: platform/session-runtime
+    product: platform
+    title: Session service runtime configuration
+    files: [runtime.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/platform/session-runtime/v1alpha1
+      kind: PlatformSessionRuntimeConfig
+      checkedBy:
+        file: crates/registry-session/src/config.rs
+        symbol: RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/session-runtime/v1alpha1
+      kind: PlatformSessionRuntimeConfig
+    schema:
+      path: products/platform/generated/session-runtime/session-runtime.schema.json
+      id: https://id.registrystack.org/schemas/platform/session-runtime/session-runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-session --features schema --example session-runtime-schema -- --output products/platform/generated/session-runtime
+      driftCheck: crates/registry-session/src/schema.rs
+    reader:
+      crate: registry-session
+      file: crates/registry-session/src/config.rs
+      function: load
+      type: RuntimeConfig
+    check: registry-session --runtime-config {file} check
+    example: products/platform/examples/session/runtime.yaml
+    conformance:
+      requiredText: /issuer/id
+      optionalText: /audit/path
+      integer: /session/absoluteLifetimeSeconds
+      boolean: none
+      idList: /modules
+      set: /signIns/citizen/scopes
+      reference: /pages/0/signIn
+      operand: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /listener/tlsTermination
+        whenOmitted: refused
+      - pointer: /listener/networkExposure
+        whenOmitted: closed
+      - pointer: /checkListener
+        whenOmitted: refused
+      - pointer: /publicOrigin
+        whenOmitted: refused
+      - pointer: /secretProviders
+        whenOmitted: refused
+      - pointer: /issuer/id
+        whenOmitted: refused
+      - pointer: /issuer/authorization
+        whenOmitted: refused
+      - pointer: /issuer/endSession
+        whenOmitted: refused
+      - pointer: /issuer/token
+        whenOmitted: refused
+      - pointer: /issuer/revocation
+        whenOmitted: refused
+      - pointer: /issuer/jwks
+        whenOmitted: refused
+      - pointer: /personAudience
+        whenOmitted: closed
+      - pointer: /modules/*/audience
+        whenOmitted: refused
+      - pointer: /modules/*/signIns
+        whenOmitted: open
+      - pointer: /pages/*/signIn
+        whenOmitted: refused
+      - pointer: /signIns/*/clientId
+        whenOmitted: refused
+      - pointer: /signIns/*/clientSecretRef
+        whenOmitted: refused
+      - pointer: /signIns/*/scopes
+        whenOmitted: refused
+      - pointer: /audit/hashKeyRef
+        whenOmitted: refused
+      - pointer: /session/absoluteLifetimeSeconds
+        whenOmitted: closed
+      - pointer: /session/idleLifetimeSeconds
+        whenOmitted: closed
+      - pointer: /session/signInLifetimeSeconds
+        whenOmitted: closed
+      - pointer: /session/renewBeforeSeconds
+        whenOmitted: closed
+    restrictingMembers: []
+
   # breg
   - id: breg/project
     product: breg

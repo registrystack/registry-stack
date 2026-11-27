@@ -19,6 +19,8 @@ pub mod pages;
 mod public;
 pub mod revoker;
 pub mod runtime;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod signin;
 pub mod store;
 pub mod wire;

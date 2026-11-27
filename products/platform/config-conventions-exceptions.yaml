@@ -41,6 +41,12 @@
 apiVersion: id.registrystack.org/formats/platform/config-conventions-exceptions/v1alpha1
 kind: PlatformConfigConventionsExceptions
 exceptions:
+- rule: CFG-ID-1
+  format: platform/session-runtime
+  location: products/platform/generated/session-runtime/session-runtime.schema.json#/$defs/IssuerConfig/properties/id
+  class: protocol-constant
+  reason: "This is OpenID Connect's issuer identifier, compared byte-exactly with iss, so it must not be typed LocalId or parsed as a URL (parsing would normalise a trailing slash)."
+  resolution: Permanent for the OpenID Connect issuer identifier.
 - rule: CFG-NAME-2
   format: breg/mcp-runtime
   location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256

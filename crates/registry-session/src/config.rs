@@ -108,6 +108,7 @@ const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 /// The operational log level. The vocabulary is closed so configuration cannot
 /// turn on debug output or dependency logging.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Error,
@@ -133,6 +134,7 @@ const fn default_log_level() -> LogLevel {
 
 /// The operator runtime configuration document.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub api_version: String,
@@ -140,6 +142,7 @@ pub struct RuntimeConfig {
     /// Operational log level. Defaults to `info`; accepted values are
     /// `error`, `warn`, and `info`.
     #[serde(default = "default_log_level")]
+    #[cfg_attr(feature = "schema", schemars(default))]
     pub log_level: LogLevel,
     /// The listener for the service's public routes.
     pub listener: PrivateListenerConfig,
@@ -157,6 +160,10 @@ pub struct RuntimeConfig {
     /// The audience several modules share, written once. A module takes it by
     /// writing `audience: person`.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "ResourceUri", skip_serializing_if = "Option::is_none")
+    )]
     pub person_audience: Option<ResourceUri>,
     /// The products a page calls, each under one path prefix.
     pub modules: Vec<ModuleConfig>,
@@ -164,10 +171,14 @@ pub struct RuntimeConfig {
     pub pages: Vec<PageConfig>,
     /// One confidential client per kind of sign-in, keyed by kind.
     #[serde(deserialize_with = "registry_platform_yaml::id_keyed_by_local_id")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_yaml::id_keyed_schema::<SignInConfig>")
+    )]
     pub sign_ins: Vec<SignInConfig>,
     #[serde(default)]
     pub session: SessionConfig,
-    #[serde(default)]
+    #[serde(default, rename = "me")]
     pub who_am_i: WhoAmIConfig,
     pub audit: AuditConfig,
     #[serde(default)]
@@ -176,12 +187,17 @@ pub struct RuntimeConfig {
     /// by `gateway envoy`. When present, every module and page names its
     /// `upstream`.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "GatewayConfig", skip_serializing_if = "Option::is_none")
+    )]
     pub gateway: Option<GatewayConfig>,
 }
 
 /// The OpenID Provider the service signs people in with. Every endpoint is
 /// written out: there is no discovery.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssuerConfig {
     /// The expected `iss` of every ID token, compared exactly.
@@ -200,7 +216,10 @@ pub struct IssuerConfig {
     /// endpoints. It must be below `gateway.checkTimeoutMilliseconds`, so a
     /// check whose token is still valid is answered before the gateway gives
     /// up on it. Default: 2000.
-    #[serde(default = "default_issuer_timeout")]
+    #[serde(
+        default = "default_issuer_timeout",
+        rename = "attemptTimeoutMilliseconds"
+    )]
     pub timeout_milliseconds:
         BoundedU64<MINIMUM_ISSUER_TIMEOUT_MILLISECONDS, MAXIMUM_ISSUER_TIMEOUT_MILLISECONDS>,
 }
@@ -246,20 +265,33 @@ impl<'de> Deserialize<'de> for ModuleAudience {
 
 /// One product a page calls, reached under one path prefix.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModuleConfig {
     /// The module's name in this file, unique among its modules.
     pub id: LocalId,
     /// The path prefix the module owns: it starts and ends with `/`.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::schema::route_prefix_schema")
+    )]
     pub prefix: String,
     /// The audience of the token the service attaches to calls to the module.
     pub audience: ModuleAudience,
     /// The kinds that may call the module. Omitted, every kind may.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "UniqueList<LocalId>", skip_serializing_if = "Option::is_none")
+    )]
     pub sign_ins: Option<UniqueList<LocalId>>,
     /// The host's cluster the gateway forwards the module's calls to. Required
     /// when the file has a `gateway` block.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "UpstreamConfig", skip_serializing_if = "Option::is_none")
+    )]
     pub upstream: Option<UpstreamConfig>,
 }
 
@@ -275,20 +307,30 @@ impl ModuleConfig {
 
 /// A page route: pages under the prefix need a session of one kind.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PageConfig {
     /// The path prefix the pages sit under: it starts and ends with `/`.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::schema::route_prefix_schema")
+    )]
     pub prefix: String,
     /// The kind of session the pages need.
     pub sign_in: LocalId,
     /// The host's cluster the gateway forwards the pages to. Required when the
     /// file has a `gateway` block.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "UpstreamConfig", skip_serializing_if = "Option::is_none")
+    )]
     pub upstream: Option<UpstreamConfig>,
 }
 
 /// The gateway's view of the service and of the host it sits in front of.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayConfig {
     /// The `:authority` the browser uses, as `host` or `host:port`. Default:
@@ -296,6 +338,10 @@ pub struct GatewayConfig {
     /// authority, so a caller that reaches the host by an internal name never
     /// meets the session routes.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Authority", skip_serializing_if = "Option::is_none")
+    )]
     pub authority: Option<Authority>,
     /// How the gateway reaches the service's two listeners.
     pub service: GatewayServiceConfig,
@@ -312,6 +358,7 @@ pub struct GatewayConfig {
 
 /// The service's address as the gateway reaches it.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayServiceConfig {
     /// The service's host name or address.
@@ -324,12 +371,17 @@ pub struct GatewayServiceConfig {
 
 /// Where the gateway forwards the calls of one module or page route.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpstreamConfig {
     /// The host's cluster name.
     pub cluster: ClusterName,
     /// The prefix the gateway puts in place of the route's own.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "RewritePrefix", skip_serializing_if = "Option::is_none")
+    )]
     pub prefix_rewrite: Option<RewritePrefix>,
     /// How long the gateway waits for the upstream's answer. Default: 30.
     #[serde(default = "default_upstream_timeout")]
@@ -363,6 +415,7 @@ fn default_upstream_timeout() -> BoundedU32<1, MAXIMUM_UPSTREAM_TIMEOUT_SECONDS>
 
 /// One kind of sign-in and the confidential client it uses at the provider.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SignInConfig {
     /// The kind's name, the key it is written under.
@@ -373,6 +426,10 @@ pub struct SignInConfig {
     pub client_secret_ref: SecretReference,
     /// Scopes requested beside `openid`, which the service always requests.
     #[serde(deserialize_with = "scope_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::schema::scopes_schema")
+    )]
     pub scopes: UniqueList<ScopeToken>,
 }
 
@@ -386,9 +443,11 @@ impl Identified for SignInConfig {
 /// `file` (the default) or `stdout` destination, with rotation and retention
 /// for a file.
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
     #[serde(rename(deserialize = "registry-platform-yaml/shared-block/audit-key"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     pub key: AuditKeyConfig,
     /// Where audit lines go: `file` or `stdout`.
     #[serde(default)]
@@ -396,13 +455,31 @@ pub struct AuditConfig {
     /// The absolute path of the active audit file. Required for a `file`
     /// destination, and refused with `stdout`.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "PathBuf", skip_serializing_if = "Option::is_none")
+    )]
     pub path: Option<PathBuf>,
     /// Size at which the active file rotates, in bytes, for a `file`
     /// destination. Default: 100 MiB.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>",
+            skip_serializing_if = "Option::is_none"
+        )
+    )]
     pub rotate_bytes: Option<BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>>,
     /// Days a rotated file is kept, for a `file` destination. Default: 90.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>",
+            skip_serializing_if = "Option::is_none"
+        )
+    )]
     pub retention_days: Option<BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>>,
 }
 
@@ -419,6 +496,7 @@ impl AuditConfig {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RateLimitConfig {
     /// Requests admitted per minute, on average.
@@ -431,6 +509,7 @@ pub struct RateLimitConfig {
 /// forwarded headers, so it cannot tell one browser from another before
 /// sign-in: a per-address limit on the sign-in routes belongs at the gateway.
 #[derive(Clone, Copy, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RateLimitsConfig {
     /// One limit for each signed-in person, shared by all their sessions. It
@@ -475,6 +554,7 @@ fn default_global_sign_in() -> RateLimitConfig {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionConfig {
     /// The most signed-in sessions the service holds at once. Default: 10000.
@@ -501,6 +581,13 @@ pub struct SessionConfig {
     /// full, sessions past this are the first to make room. Default: 1800, or
     /// `absoluteLifetimeSeconds` when that is shorter.
     #[serde(default, rename = "idleLifetimeSeconds")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<MINIMUM_SESSION_SECONDS, MAXIMUM_SESSION_SECONDS>",
+            skip_serializing_if = "Option::is_none"
+        )
+    )]
     pub idle_lifetime: Option<BoundedU64<MINIMUM_SESSION_SECONDS, MAXIMUM_SESSION_SECONDS>>,
 }
 
@@ -560,11 +647,20 @@ fn default_sign_in_lifetime() -> BoundedU64<MINIMUM_SIGN_IN_SECONDS, MAXIMUM_SIG
 
 /// What who-am-I returns.
 #[derive(Clone, Debug, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WhoAmIConfig {
     /// The ID-token claims who-am-I returns, a closed list. Default: `sub`,
     /// `name`, `email`, `email_verified`.
     #[serde(default, deserialize_with = "optional_claim_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "UniqueList<ClaimName>",
+            skip_serializing_if = "Option::is_none",
+            length(max = 32)
+        )
+    )]
     pub claims: Option<UniqueList<ClaimName>>,
 }
 
@@ -1141,10 +1237,10 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
     if config.issuer.timeout_milliseconds.get() >= check_timeout {
         findings.push(Finding::new(
             "platform.session-runtime.issuer-timeout-not-below-check-timeout",
-            "/issuer/timeoutMilliseconds",
-            "issuer.timeoutMilliseconds is not below the gateway's check timeout, so a check \
+            "/issuer/attemptTimeoutMilliseconds",
+            "issuer.attemptTimeoutMilliseconds is not below the gateway's check timeout, so a check \
              could be cut off by the gateway while it waits for the issuer",
-            "Lower issuer.timeoutMilliseconds, or raise gateway.checkTimeoutMilliseconds (3000 \
+            "Lower issuer.attemptTimeoutMilliseconds, or raise gateway.checkTimeoutMilliseconds (3000 \
              when the file has no gateway block).",
         ));
     }
@@ -1171,8 +1267,8 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
         if TOKEN_CLAIMS.contains(&claim.as_str()) {
             findings.push(Finding::new(
                 "platform.session-runtime.token-claim",
-                &format!("/whoAmI/claims/{index}"),
-                "whoAmI.claims names a claim that describes the token or its exchange rather \
+                &format!("/me/claims/{index}"),
+                "me.claims names a claim that describes the token or its exchange rather \
                  than the person",
                 "Remove the claim, and name only claims that describe the person.",
             ));
@@ -2247,7 +2343,7 @@ audit:
         text.replace(
             "  jwks: https://id.example/oauth2/jwks\n",
             &format!(
-                "  jwks: https://id.example/oauth2/jwks\n  timeoutMilliseconds: {milliseconds}\n"
+                "  jwks: https://id.example/oauth2/jwks\n  attemptTimeoutMilliseconds: {milliseconds}\n"
             ),
         )
     }
@@ -2260,14 +2356,14 @@ audit:
         refused(
             &with_issuer_timeout(&document(), 3000),
             &code("issuer-timeout-not-below-check-timeout"),
-            "/issuer/timeoutMilliseconds",
+            "/issuer/attemptTimeoutMilliseconds",
         );
         load(&with_issuer_timeout(&document(), 2999)).expect("below the default check timeout");
         for bad in [99, 10_001] {
             refused(
                 &with_issuer_timeout(&document(), bad),
                 "config.out-of-range",
-                "/issuer/timeoutMilliseconds",
+                "/issuer/attemptTimeoutMilliseconds",
             );
         }
         let fixture = include_str!("../tests/gateway/runtime.yaml");
@@ -2283,12 +2379,12 @@ audit:
         found(
             &gateway(1500, 2000),
             &code("issuer-timeout-not-below-check-timeout"),
-            "/issuer/timeoutMilliseconds",
+            "/issuer/attemptTimeoutMilliseconds",
         );
         found(
             &gateway(1500, 1500),
             &code("issuer-timeout-not-below-check-timeout"),
-            "/issuer/timeoutMilliseconds",
+            "/issuer/attemptTimeoutMilliseconds",
         );
         assert_eq!(findings_of(&gateway(1500, 1499)), []);
     }
@@ -2583,7 +2679,7 @@ audit:
 
     #[test]
     fn who_am_i_claims_are_a_closed_list_without_token_claims() {
-        let with = |claims: &str| format!("{}whoAmI:\n  claims: {claims}\n", document());
+        let with = |claims: &str| format!("{}me:\n  claims: {claims}\n", document());
         assert_eq!(
             load(&with("[sub, preferred_username]"))
                 .expect("claims")
@@ -2600,15 +2696,11 @@ audit:
             refused(
                 &with(&format!("[sub, {token_claim}]")),
                 &code("token-claim"),
-                "/whoAmI/claims/1",
+                "/me/claims/1",
             );
         }
-        refused(
-            &with("[sub, sub]"),
-            "config.duplicate-item",
-            "/whoAmI/claims/1",
-        );
-        refused(&with("['a b']"), "config.invalid-value", "/whoAmI/claims/0");
+        refused(&with("[sub, sub]"), "config.duplicate-item", "/me/claims/1");
+        refused(&with("['a b']"), "config.invalid-value", "/me/claims/0");
     }
 
     #[test]

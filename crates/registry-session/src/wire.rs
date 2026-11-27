@@ -66,6 +66,37 @@ impl ProblemKind {
         Self::Internal,
     ];
 
+    /// The HTTP status used by the service for this problem, for the catalog.
+    #[must_use]
+    pub const fn http_status(self) -> u16 {
+        match self {
+            Self::Refused => 403,
+            Self::Expired => 401,
+            Self::Unavailable | Self::Busy => 503,
+            Self::ReturnRefused => 400,
+            Self::RateLimited => 429,
+            Self::NotFound => 404,
+            Self::MethodNotAllowed => 405,
+            Self::Internal => 500,
+        }
+    }
+
+    /// Value-free documentation of the refusal, for the identifier catalog.
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Refused => "The request is not permitted by the session's route or origin rules.",
+            Self::Expired => "The session is absent, expired, or no longer valid. Sign in again.",
+            Self::Unavailable => "The session check cannot complete. Retry later.",
+            Self::ReturnRefused => "The return path is not an allowed local page route.",
+            Self::RateLimited => "The session service's request limit has been reached.",
+            Self::Busy => "The session service has no capacity for another sign-in.",
+            Self::NotFound => "The requested session route does not exist.",
+            Self::MethodNotAllowed => "The session route does not accept this HTTP method.",
+            Self::Internal => "The session service cannot complete the request.",
+        }
+    }
+
     /// The suffix of the code and of the `type` URI.
     #[must_use]
     pub const fn suffix(self) -> &'static str {
@@ -134,6 +165,46 @@ mod tests {
     use axum::http::StatusCode;
 
     use super::*;
+
+    #[test]
+    fn the_catalog_inventory_covers_every_kind_and_pins_its_wire_metadata() {
+        let source = include_str!("wire.rs");
+        let variants: Vec<_> = source
+            .split_once("pub enum ProblemKind {")
+            .expect("problem enum")
+            .1
+            .split_once('}')
+            .expect("enum body")
+            .0
+            .lines()
+            .map(str::trim)
+            .filter_map(|line| line.strip_suffix(','))
+            .collect();
+        let inventory: Vec<_> = ProblemKind::ALL
+            .map(|kind| format!("{kind:?}"))
+            .into_iter()
+            .collect();
+        assert_eq!(
+            inventory, variants,
+            "every enum variant appears once, in order"
+        );
+        for (kind, suffix, status) in [
+            (ProblemKind::Refused, "refused", 403),
+            (ProblemKind::Expired, "expired", 401),
+            (ProblemKind::Unavailable, "unavailable", 503),
+            (ProblemKind::ReturnRefused, "return-refused", 400),
+            (ProblemKind::RateLimited, "rate-limited", 429),
+            (ProblemKind::Busy, "busy", 503),
+            (ProblemKind::NotFound, "not-found", 404),
+            (ProblemKind::MethodNotAllowed, "method-not-allowed", 405),
+            (ProblemKind::Internal, "internal", 500),
+        ] {
+            assert_eq!(kind.code(), format!("session.{suffix}"));
+            assert_eq!(kind.type_uri(), format!("{PROBLEM_TYPE_PREFIX}{suffix}"));
+            assert_eq!(kind.http_status(), status);
+            assert!(!kind.description().is_empty());
+        }
+    }
 
     #[tokio::test]
     async fn every_problem_carries_its_own_type_uri_its_code_and_the_marker() {

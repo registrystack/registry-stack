@@ -1,0 +1,762 @@
+{
+  "$defs": {
+    "AuditConfig": {
+      "additionalProperties": false,
+      "description": "The audit block every Registry Stack product shares: the hash key, then a\n`file` (the default) or `stdout` destination, with rotation and retention\nfor a file.",
+      "else": {
+        "required": [
+          "path"
+        ]
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file",
+          "description": "Where audit lines go: `file` or `stdout`."
+        },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
+        "hashKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the audit hash key."
+        },
+        "path": {
+          "description": "The absolute path of the active audit file. Required for a `file`\ndestination, and refused with `stdout`.",
+          "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
+          "type": "string"
+        },
+        "retentionDays": {
+          "description": "Days a rotated file is kept, for a `file` destination. Default: 90.",
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rotateBytes": {
+          "description": "Size at which the active file rotates, in bytes, for a `file`\ndestination. Default: 100 MiB.",
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hashKeyRef"
+      ],
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "required": [
+                "retentionDays"
+              ]
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
+          "type": "string"
+        }
+      ]
+    },
+    "Authority": {
+      "maxLength": 260,
+      "minLength": 1,
+      "pattern": "^[a-z0-9._:\\[\\]-]+$",
+      "type": "string"
+    },
+    "ClaimName": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^(?!(?:iss|aud|exp|nbf|iat|jti|nonce|at_hash|c_hash|s_hash|azp|cnf|sid)$)[A-Za-z0-9_.:-]+$",
+      "type": "string"
+    },
+    "ClusterName": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]+$",
+      "type": "string"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. A name may be a\nrelative link that stays below this directory, through at most 8 links.\nThe file it reaches must be a regular file with one hard link, owned by\nthe runtime user with mode 0400 or 0600, or owned by root with no\naccess beyond group read (0440 or 0640) when the runtime is not root.\nA process that declared development loads a file with looser read or\nmode bits and logs a warning.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "FilterName": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]+$",
+      "type": "string"
+    },
+    "GatewayConfig": {
+      "additionalProperties": false,
+      "description": "The gateway's view of the service and of the host it sits in front of.",
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/Authority",
+          "description": "The `:authority` the browser uses, as `host` or `host:port`. Default:\nthe host and port of `publicOrigin`. Signed-in routes match only this\nauthority, so a caller that reaches the host by an internal name never\nmeets the session routes."
+        },
+        "checkTimeoutMilliseconds": {
+          "default": 3000,
+          "description": "How long the gateway waits for the check. Default: 3000.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 500,
+          "type": "integer"
+        },
+        "hostFilters": {
+          "description": "The host's own HTTP filters, by the name the host's chain gives them.\nEvery signed-in route switches them off, except where its upstream\nkeeps one.",
+          "items": {
+            "$ref": "#/$defs/FilterName"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "service": {
+          "$ref": "#/$defs/GatewayServiceConfig",
+          "description": "How the gateway reaches the service's two listeners."
+        }
+      },
+      "required": [
+        "service"
+      ],
+      "type": "object"
+    },
+    "GatewayServiceConfig": {
+      "additionalProperties": false,
+      "description": "The service's address as the gateway reaches it.",
+      "properties": {
+        "checkPort": {
+          "description": "The port of the service's check listener.",
+          "format": "uint32",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "host": {
+          "$ref": "#/$defs/HostName",
+          "description": "The service's host name or address."
+        },
+        "publicPort": {
+          "description": "The port of the service's public listener.",
+          "format": "uint32",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "publicPort",
+        "checkPort"
+      ],
+      "type": "object"
+    },
+    "HostName": {
+      "maxLength": 253,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "type": "string"
+    },
+    "IssuerConfig": {
+      "additionalProperties": false,
+      "description": "The OpenID Provider the service signs people in with. Every endpoint is\nwritten out: there is no discovery.",
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 2000,
+          "description": "How long the service waits for the issuer's token and revocation\nendpoints. It must be below `gateway.checkTimeoutMilliseconds`, so a\ncheck whose token is still valid is answered before the gateway gives\nup on it. Default: 2000.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 100,
+          "type": "integer"
+        },
+        "authorization": {
+          "$ref": "#/$defs/Url",
+          "description": "The authorization endpoint the browser visits."
+        },
+        "endSession": {
+          "$ref": "#/$defs/Url",
+          "description": "The end-session endpoint the browser visits."
+        },
+        "id": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The expected `iss` of every ID token, compared exactly."
+        },
+        "jwks": {
+          "$ref": "#/$defs/Url",
+          "description": "The signing key set the service calls."
+        },
+        "revocation": {
+          "$ref": "#/$defs/Url",
+          "description": "The revocation endpoint the service calls."
+        },
+        "token": {
+          "$ref": "#/$defs/Url",
+          "description": "The token endpoint the service calls."
+        }
+      },
+      "required": [
+        "id",
+        "authorization",
+        "endSession",
+        "token",
+        "revocation",
+        "jwks"
+      ],
+      "type": "object"
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of an HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "LogLevel": {
+      "description": "The operational log level. The vocabulary is closed so configuration cannot\nturn on debug output or dependency logging.",
+      "enum": [
+        "error",
+        "warn",
+        "info"
+      ],
+      "type": "string"
+    },
+    "ModuleAudience": {
+      "anyOf": [
+        {
+          "const": "person",
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ResourceUri"
+        }
+      ]
+    },
+    "ModuleConfig": {
+      "additionalProperties": false,
+      "description": "One product a page calls, reached under one path prefix.",
+      "properties": {
+        "audience": {
+          "$ref": "#/$defs/ModuleAudience",
+          "description": "The audience of the token the service attaches to calls to the module."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The module's name in this file, unique among its modules."
+        },
+        "prefix": {
+          "description": "The path prefix the module owns: it starts and ends with `/`.",
+          "maxLength": 256,
+          "minLength": 3,
+          "pattern": "^/(?!session/)(?!.*[%\\\\?#])(?:(?!\\.\\.?/)[!-\\.0-~]+/)+$",
+          "type": "string"
+        },
+        "signIns": {
+          "description": "The kinds that may call the module. Omitted, every kind may.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "upstream": {
+          "$ref": "#/$defs/UpstreamConfig",
+          "description": "The host's cluster the gateway forwards the module's calls to. Required\nwhen the file has a `gateway` block."
+        }
+      },
+      "required": [
+        "id",
+        "prefix",
+        "audience"
+      ],
+      "type": "object"
+    },
+    "PageConfig": {
+      "additionalProperties": false,
+      "description": "A page route: pages under the prefix need a session of one kind.",
+      "properties": {
+        "prefix": {
+          "description": "The path prefix the pages sit under: it starts and ends with `/`.",
+          "maxLength": 256,
+          "minLength": 3,
+          "pattern": "^/(?!session/)(?!.*[%\\\\?#])(?:(?!\\.\\.?/)[!-\\.0-~]+/)+$",
+          "type": "string"
+        },
+        "signIn": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The kind of session the pages need."
+        },
+        "upstream": {
+          "$ref": "#/$defs/UpstreamConfig",
+          "description": "The host's cluster the gateway forwards the pages to. Required when the\nfile has a `gateway` block."
+        }
+      },
+      "required": [
+        "prefix",
+        "signIn"
+      ],
+      "type": "object"
+    },
+    "PrivateListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares its TLS termination and network\nexposure.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        },
+        "tlsTermination": {
+          "$ref": "#/$defs/TlsTermination"
+        }
+      },
+      "required": [
+        "bind",
+        "tlsTermination"
+      ],
+      "type": "object"
+    },
+    "RateLimitConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "burst": {
+          "description": "Requests admitted at once before the average applies.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requestsPerMinute": {
+          "description": "Requests admitted per minute, on average.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestsPerMinute",
+        "burst"
+      ],
+      "type": "object"
+    },
+    "RateLimitsConfig": {
+      "additionalProperties": false,
+      "description": "The service's own request limits. It reads neither peer addresses nor\nforwarded headers, so it cannot tell one browser from another before\nsign-in: a per-address limit on the sign-in routes belongs at the gateway.",
+      "properties": {
+        "globalSignIn": {
+          "$ref": "#/$defs/RateLimitConfig",
+          "description": "One limit shared by everyone starting a sign-in. A start is charged\nonly once its return path is accepted. A callback is never charged,\nbecause it needs the pending sign-in a charged start created. Default:\n900 a minute, burst 300."
+        },
+        "perPerson": {
+          "$ref": "#/$defs/RateLimitConfig",
+          "description": "One limit for each signed-in person, shared by all their sessions. It\ncovers the sign-in that names the person (once, when the first hop\nreturns) and `GET /session/me`. It does not cover sign-out, which\nalways ends the session, or the gateway check, which leaves limits on\nmodule calls to the modules and the gateway. Default: 120 a minute,\nburst 30."
+        }
+      },
+      "type": "object"
+    },
+    "ResourceUri": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?!//[^/?#]*@)(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$",
+      "type": "string"
+    },
+    "RewritePrefix": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^/(?!.*[%\\\\?#])[!-~]*$",
+      "type": "string"
+    },
+    "ScopeToken": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[!#-\\[\\]-~]+$",
+      "type": "string"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "SessionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "absoluteLifetimeSeconds": {
+          "default": 28800,
+          "description": "The longest a session lasts, whatever renewals it makes. Default:\n28800.",
+          "format": "uint64",
+          "maximum": 86400,
+          "minimum": 300,
+          "type": "integer"
+        },
+        "idleLifetimeSeconds": {
+          "description": "How long a session may go without a request that presents it before it\nends, between 300 and `absoluteLifetimeSeconds`. When the store is\nfull, sessions past this are the first to make room. Default: 1800, or\n`absoluteLifetimeSeconds` when that is shorter.",
+          "format": "uint64",
+          "maximum": 86400,
+          "minimum": 300,
+          "type": "integer"
+        },
+        "maximumPendingSignIns": {
+          "default": 10000,
+          "description": "The most sign-ins in progress the service holds at once. It must hold\nevery sign-in `rateLimits.globalSignIn` admits within\n`signInLifetimeSeconds`. Default: 10000.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumSessions": {
+          "default": 10000,
+          "description": "The most signed-in sessions the service holds at once. Default: 10000.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "renewBeforeSeconds": {
+          "default": 60,
+          "description": "How long before an access token expires a call renews it. Default: 60.",
+          "format": "uint64",
+          "maximum": 240,
+          "minimum": 10,
+          "type": "integer"
+        },
+        "signInLifetimeSeconds": {
+          "default": 600,
+          "description": "How long a started sign-in may take to return from the provider.\nDefault: 600.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 60,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TlsTermination": {
+      "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
+      "oneOf": [
+        {
+          "enum": [
+            "operator-controlled-upstream",
+            "development-loopback"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "loopback-plaintext",
+          "description": "Plaintext on a loopback bind, behind a proxy on the same host. Valid\nin every posture. It is placement only: it relaxes nothing a product\nrelaxes under `development-loopback`.",
+          "type": "string"
+        }
+      ]
+    },
+    "UpstreamConfig": {
+      "additionalProperties": false,
+      "description": "Where the gateway forwards the calls of one module or page route.",
+      "properties": {
+        "cluster": {
+          "$ref": "#/$defs/ClusterName",
+          "description": "The host's cluster name."
+        },
+        "keepHostFilters": {
+          "description": "Names from `gateway.hostFilters` that stay on for this route.",
+          "items": {
+            "$ref": "#/$defs/FilterName"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "prefixRewrite": {
+          "$ref": "#/$defs/RewritePrefix",
+          "description": "The prefix the gateway puts in place of the route's own."
+        },
+        "timeoutSeconds": {
+          "default": 30,
+          "description": "How long the gateway waits for the upstream's answer. Default: 30.",
+          "format": "uint32",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    },
+    "WhoAmIConfig": {
+      "additionalProperties": false,
+      "description": "What who-am-I returns.",
+      "properties": {
+        "claims": {
+          "description": "The ID-token claims who-am-I returns, a closed list. Default: `sub`,\n`name`, `email`, `email_verified`.",
+          "items": {
+            "$ref": "#/$defs/ClaimName"
+          },
+          "maxItems": 32,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/session-runtime/session-runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The operator runtime configuration document.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/session-runtime/v1alpha1",
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditConfig"
+    },
+    "checkListener": {
+      "$ref": "#/$defs/ListenerBind",
+      "description": "The address the gateway's authorization check calls. It takes the\npublic listener's `tlsTermination` and `networkExposure` and must\ndiffer from `listener.bind`."
+    },
+    "gateway": {
+      "$ref": "#/$defs/GatewayConfig",
+      "description": "How the gateway reaches the service and the host's clusters, read only\nby `gateway envoy`. When present, every module and page names its\n`upstream`."
+    },
+    "issuer": {
+      "$ref": "#/$defs/IssuerConfig"
+    },
+    "kind": {
+      "const": "PlatformSessionRuntimeConfig",
+      "type": "string"
+    },
+    "listener": {
+      "$ref": "#/$defs/PrivateListenerConfig",
+      "description": "The listener for the service's public routes."
+    },
+    "logLevel": {
+      "$ref": "#/$defs/LogLevel",
+      "default": "info",
+      "description": "Operational log level. Defaults to `info`; accepted values are\n`error`, `warn`, and `info`."
+    },
+    "me": {
+      "$ref": "#/$defs/WhoAmIConfig"
+    },
+    "modules": {
+      "description": "The products a page calls, each under one path prefix.",
+      "items": {
+        "$ref": "#/$defs/ModuleConfig"
+      },
+      "type": "array"
+    },
+    "pages": {
+      "description": "The page routes that need a session of one kind.",
+      "items": {
+        "$ref": "#/$defs/PageConfig"
+      },
+      "type": "array"
+    },
+    "personAudience": {
+      "$ref": "#/$defs/ResourceUri",
+      "description": "The audience several modules share, written once. A module takes it by\nwriting `audience: person`."
+    },
+    "publicOrigin": {
+      "$ref": "#/$defs/Url",
+      "description": "The browser-facing origin of the gateway, such as\n`https://app.example`: an https URL with no path, query, or fragment;\nplain http is accepted only on a loopback host under\n`development-loopback`."
+    },
+    "rateLimits": {
+      "$ref": "#/$defs/RateLimitsConfig"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "session": {
+      "$ref": "#/$defs/SessionConfig"
+    },
+    "signIns": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "One kind of sign-in and the confidential client it uses at the provider.",
+        "properties": {
+          "clientId": {
+            "$ref": "#/$defs/ExternalId",
+            "description": "The client identifier at the provider."
+          },
+          "clientSecretRef": {
+            "$ref": "#/$defs/SecretReference",
+            "description": "Secret reference to the client secret, under a declared provider."
+          },
+          "scopes": {
+            "description": "Scopes requested beside `openid`, which the service always requests.",
+            "items": {
+              "$ref": "#/$defs/ScopeToken"
+            },
+            "maxItems": 16,
+            "not": {
+              "contains": {
+                "const": "openid"
+              }
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "clientId",
+          "clientSecretRef",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "description": "One confidential client per kind of sign-in, keyed by kind.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId",
+        "description": "The kind's name, the key it is written under."
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "listener",
+    "checkListener",
+    "publicOrigin",
+    "secretProviders",
+    "issuer",
+    "modules",
+    "pages",
+    "signIns",
+    "audit"
+  ],
+  "title": "Registry Stack session service runtime configuration",
+  "type": "object"
+}
