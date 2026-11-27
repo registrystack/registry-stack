@@ -194,8 +194,8 @@ fn audience_check(token: &BearerToken, resource: &str) -> AudienceCheck {
     }
 }
 
-/// Whether the access token an issuer returned may be kept for `resource`. An
-/// unreadable token is kept, and the gap is logged.
+/// Whether the access token an issuer returned may be kept for `resource`.
+/// A token whose audience cannot be read is refused like a mismatch.
 fn audience_accepted(token: &BearerToken, resource: &str) -> bool {
     match audience_check(token, resource) {
         AudienceCheck::Matches => true,
@@ -204,8 +204,8 @@ fn audience_accepted(token: &BearerToken, resource: &str) -> bool {
             false
         }
         AudienceCheck::Unreadable => {
-            tracing::warn!("an access token's audience could not be read, so it is not checked");
-            true
+            tracing::warn!("an access token's audience could not be read, so it is refused");
+            false
         }
     }
 }
@@ -387,14 +387,14 @@ mod tests {
     }
 
     #[test]
-    fn a_token_that_is_not_a_jwt_cannot_be_checked_and_is_logged_as_such() {
+    fn a_token_that_is_not_a_jwt_cannot_be_checked_and_is_refused() {
         let opaque = BearerToken::new("opaque-token-value").expect("token");
         assert_eq!(audience_check(&opaque, "r"), AudienceCheck::Unreadable);
         let not_json = BearerToken::new("a.bm90IGpzb24.c").expect("token");
         assert_eq!(audience_check(&not_json, "r"), AudienceCheck::Unreadable);
         let four_parts = BearerToken::new("a.e30.c.d").expect("token");
         assert_eq!(audience_check(&four_parts, "r"), AudienceCheck::Unreadable);
-        assert!(audience_accepted(&opaque, "r"));
+        assert!(!audience_accepted(&opaque, "r"));
     }
 
     #[test]

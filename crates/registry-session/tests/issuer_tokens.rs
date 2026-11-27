@@ -59,6 +59,7 @@ async fn every_bad_id_token_and_incomplete_response_is_refused_and_revoked() {
         Fault::NoIdToken,
         Fault::NoExpiresIn,
         Fault::WrongAccessAudience,
+        Fault::OpaqueAccessToken,
     ] {
         harness.issuer.set_fault(Some(fault));
         let refused = harness.sign_in_attempt("/apply/", "citizen-a").await;
@@ -129,4 +130,41 @@ async fn a_renewal_that_returns_another_audience_ends_the_session_and_revokes_it
         .check("GET", "/api/registry/records", Some(&citizen.cookie))
         .await;
     assert_eq!(after.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn an_access_token_with_no_readable_audience_is_refused_at_a_later_hop() {
+    let harness = Harness::start().await;
+    let start = harness.start_sign_in("/staff/").await;
+    let flow = start.cookie_pair(support::FLOW_COOKIE).expect("flow");
+    let callback = harness.authorize_as(start.location(), "staff-a").await;
+    let second = harness.callback(&callback, Some(&flow)).await;
+    assert_eq!(second.status, StatusCode::FOUND);
+    harness.issuer.set_fault(Some(Fault::OpaqueAccessToken));
+    let flow = second.cookie_pair(support::FLOW_COOKIE).expect("next flow");
+    let callback = harness.authorize_as(second.location(), "staff-a").await;
+    let refused = harness.callback(&callback, Some(&flow)).await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert!(refused.set_cookie(SESSION_COOKIE).is_none());
+    harness.issuer.wait_live_families(0).await;
+}
+
+#[tokio::test]
+async fn a_renewal_with_no_readable_audience_ends_the_session_and_revokes_its_tokens() {
+    let harness = Harness::start().await;
+    harness.issuer.set_access_lifetime(2);
+    let citizen = harness.sign_in("/apply/", "citizen-a").await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    harness.issuer.set_fault(Some(Fault::OpaqueAccessToken));
+    harness
+        .check("GET", "/api/registry/records", Some(&citizen.cookie))
+        .await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while harness.store.session_count() != 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the session ended");
+    harness.issuer.wait_live_families(0).await;
 }

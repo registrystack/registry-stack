@@ -112,9 +112,8 @@ issuer returned, from the token's payload, and refuses the sign-in (or ends the
 session) when it does not contain the resource the request asked for, revoking what the
 issuer issued. The payload comes from the issuer's own token endpoint, so its signature
 is not checked here: this guards against an issuer that ignores the requested resource.
-A token that is not a JWT with a readable `aud` cannot be checked, is kept, and the gap
-is logged in fixed text. An issuer that returns opaque access tokens therefore gets no
-audience check from this service.
+A token that is not a JWT with a readable `aud` is refused the same way, with a fixed-text
+log line, so an issuer that returns opaque access tokens cannot be used with this service.
 
 ### Sign-out is a top-level form post
 

@@ -107,6 +107,8 @@ pub enum Fault {
     NoExpiresIn,
     /// The access token names another audience than the `resource` asked for.
     WrongAccessAudience,
+    /// The access token is opaque: it has no readable audience.
+    OpaqueAccessToken,
 }
 
 /// A point the fake can hold a request at until a test opens it.
@@ -402,6 +404,9 @@ async fn authorize(State(shared): State<Arc<Shared>>, RawQuery(query): RawQuery)
 }
 
 fn access_token(shared: &Shared, client: &str, subject: &str, resource: &str) -> String {
+    if *shared.fault.lock().expect("lock") == Some(Fault::OpaqueAccessToken) {
+        return random(24);
+    }
     let now = unix_now();
     let resource = if *shared.fault.lock().expect("lock") == Some(Fault::WrongAccessAudience) {
         "https://other.example/api"
