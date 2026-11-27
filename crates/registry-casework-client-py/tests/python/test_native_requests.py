@@ -533,6 +533,10 @@ class NativeRequestTests(unittest.TestCase):
                 "", "staff", ITEM_ID, 1, "decision-key",
                 {"decision": {"type": "approve", "outcome": "approved"}},
             ),
+            lambda: self.client.ask_applicant(
+                "", "staff", ITEM_ID, 1, "ask-key",
+                {"text": "Send the form.", "wants": [{"kind": "answer"}]},
+            ),
             lambda: self.client.review_history("", "staff", ITEM_ID),
             lambda: self.client.add_review_note(
                 "", "staff", ITEM_ID, "note-key", {"audience": "requester", "note": "Note"}

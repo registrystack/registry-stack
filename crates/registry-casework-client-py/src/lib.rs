@@ -16,8 +16,8 @@ use casework_client_sdk::{
     HolidaySetRevisionInput, OwnReviewDecisionQuery, ReviewCancelRequest,
     ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest, ReviewClockRecomputeApplyRequest,
     ReviewClockRecomputeRequest, ReviewCreateRequest, ReviewNoteRequest, ReviewPageQuery,
-    ReviewRequestAccepted, ReviewResultResponse, ReviewStaffingQuery, ReviewTaskDecisionRequest,
-    ReviewTaskDraftInput, SubmissionDigest, SupervisoryReviewTaskQuery,
+    ReviewRequestAccepted, ReviewResultResponse, ReviewStaffingQuery, ReviewTaskAskRequest,
+    ReviewTaskDecisionRequest, ReviewTaskDraftInput, SubmissionDigest, SupervisoryReviewTaskQuery,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -1186,6 +1186,38 @@ impl CaseworkClient {
                     task_id,
                     expected_revision,
                     idempotency_key,
+                ))
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, ask, source_profile=None, source_credential=None))]
+    fn ask_applicant<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        task_id: &str,
+        expected_revision: i64,
+        idempotency_key: &str,
+        ask: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
+        source_credential: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let source_credential = parse_human_source_credential(py, source_credential)?;
+        let task_id = uuid(py, task_id)?;
+        let ask: ReviewTaskAskRequest = input(py, ask)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.ask_applicant(
+                    auth(&token, profile, source_profile, source_credential.as_ref()),
+                    task_id,
+                    expected_revision,
+                    idempotency_key,
+                    &ask,
                 ))
             }),
         )

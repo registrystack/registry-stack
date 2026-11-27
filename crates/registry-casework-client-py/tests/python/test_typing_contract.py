@@ -163,7 +163,7 @@ class TypingContractTests(unittest.TestCase):
         }
         self.assertEqual(
             optional_task_fields,
-            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt", "deadlineAt": "str | None", "displayReference": "str", "staffingDiagnostic": "StaffingDiagnostic"},
+            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt", "deadlineAt": "str | None", "displayReference": "str", "marker": "ReviewTaskMarker", "staffingDiagnostic": "StaffingDiagnostic"},
         )
         self.assertEqual(
             ast.unparse(aliases["ReviewTaskOwnership"].value),
@@ -248,6 +248,7 @@ class TypingContractTests(unittest.TestCase):
             "save_review_task_draft",
             "delete_review_task_draft",
             "decide_review_task",
+            "ask_applicant",
         ):
             method_arguments = {
                 argument.arg: ast.unparse(argument.annotation)

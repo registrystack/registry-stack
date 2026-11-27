@@ -17,7 +17,7 @@ class CapabilityTests(unittest.TestCase):
             "preview_review_task_templates", "list_review_task_grants",
             "approve_review_task_grant", "revoke_review_task_grant",
             "assign_review_task", "delegate_review_task", "review_task_draft",
-            "save_review_task_draft", "delete_review_task_draft", "decide_review_task",
+            "save_review_task_draft", "delete_review_task_draft", "decide_review_task", "ask_applicant",
             "review_history", "add_review_note", "review_clocks", "review_accountability",
 
 

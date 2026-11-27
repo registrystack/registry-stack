@@ -512,6 +512,7 @@ class ReviewPageQuery(TypedDict, total=False):
     limit: SafeInteger
 ReviewTaskOwnership: TypeAlias = Literal["assigned-to-me", "unclaimed"]
 ReviewTaskSort: TypeAlias = Literal["due", "subject", "reference"]
+ReviewTaskMarker: TypeAlias = Literal["waiting", "answered"]
 class ReviewStaffingQuery(ReviewPageQuery, total=False):
     subjectSource: str
     subjectType: str
@@ -522,6 +523,7 @@ class ReviewStaffingQuery(ReviewPageQuery, total=False):
     sort: ReviewTaskSort
     queue: str
     ownership: ReviewTaskOwnership
+    marker: ReviewTaskMarker
 class SupervisoryReviewTaskQuery(ReviewPageQuery, total=False):
     queue: str
     requestId: Uuid
@@ -577,6 +579,7 @@ class _ReviewTaskOptional(TypedDict, total=False):
     displayReference: str
     decidedByCaller: bool
     decisionReceipt: ReviewDecisionReceipt
+    marker: ReviewTaskMarker
 class ReviewTask(_ReviewTaskOptional):
     subject: SubjectBinding
     requesterReference: str
@@ -625,8 +628,42 @@ class ReviewSourceContext(_ReviewSourceContextOptional):
     reference: str
     bindingStatus: ReviewSourceBindingStatus
 ReviewTaskContextData: TypeAlias = ReviewSubmittedContext | ReviewSourceContext
+class ReviewAnswerWant(TypedDict):
+    kind: Literal["answer"]
+class ReviewDocumentWant(TypedDict):
+    kind: Literal["document"]
+ReviewAskWant: TypeAlias = ReviewAnswerWant | ReviewDocumentWant
+ReviewAskState: TypeAlias = Literal["open", "answered", "expired", "closed"]
+class ReviewTaskAskRequest(TypedDict):
+    text: str
+    wants: list[ReviewAskWant]
+class _ReviewAskOptional(TypedDict, total=False):
+    dueAt: str
+    answeredAt: str
+    closedAt: str
+class ReviewAsk(_ReviewAskOptional):
+    askId: Uuid
+    requestId: Uuid
+    subject: SubjectBinding
+    text: str
+    wants: list[ReviewAskWant]
+    askedAt: str
+    state: ReviewAskState
+class ReviewTaskAsked(TypedDict):
+    task: ReviewTask
+    ask: ReviewAsk
+class _ReviewContextAskOptional(TypedDict, total=False):
+    answeredAt: str
+class ReviewContextAsk(_ReviewContextAskOptional):
+    askId: Uuid
+    taskId: Uuid
+    text: str
+    wants: list[ReviewAskWant]
+    askedAt: str
+    state: ReviewAskState
 class _ReviewTaskContextOptional(TypedDict, total=False):
     resultConstraints: JsonObject
+    asks: list[ReviewContextAsk]
 class ReviewTaskContext(_ReviewTaskContextOptional):
     taskId: Uuid
     requestId: Uuid
@@ -847,6 +884,7 @@ class CaseworkClient:
     def review_task_draft(self, token: str, profile: str, task_id: Uuid, source_profile: str | None = None, source_credential: HumanSourceCredential | None = None) -> Complete[ReviewTaskDraft | None]: ...
     def save_review_task_draft(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, draft: ReviewTaskDraftInput, source_profile: str | None = None, source_credential: HumanSourceCredential | None = None) -> Complete[ReviewTaskDraft]: ...
     def delete_review_task_draft(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, source_profile: str | None = None, source_credential: HumanSourceCredential | None = None) -> Complete[None]: ...
+    def ask_applicant(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, ask: ReviewTaskAskRequest, source_profile: str | None = None, source_credential: HumanSourceCredential | None = None) -> Complete[ReviewTaskAsked]: ...
     def decide_review_task(self, token: str, profile: str, task_id: Uuid, expected_revision: SafeInteger, idempotency_key: str, decision: ReviewTaskDecisionRequest, source_profile: str | None = None, source_credential: HumanSourceCredential | None = None) -> Complete[None]: ...
     def review_history(self, token: str, profile: str, request_id: Uuid, query: ReviewPageQuery | None = None, source_profile: str | None = None, source_credential: HumanSourceCredential | None = None) -> Complete[ReviewHistoryPage]: ...
     def add_review_note(self, token: str, profile: str, request_id: Uuid, idempotency_key: str, note: ReviewNoteRequest, source_profile: str | None = None, source_credential: HumanSourceCredential | None = None) -> Complete[ReviewHistoryEntry]: ...
