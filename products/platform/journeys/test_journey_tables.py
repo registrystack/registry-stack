@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -274,6 +276,47 @@ class JourneyFiles(unittest.TestCase):
         realm = TABLES / "keycloak" / "realm.json"
         if realm.is_file():
             self.assertNotIn("protocolMappers", realm.read_text(encoding="utf-8"))
+
+
+class LoggedStage(unittest.TestCase):
+    """`logged_stage` reads a refused call's stage from `stage` or from `failed_check`."""
+
+    CASES = (
+        ('{"stage":"token-type","msg":"refused"}', "token-type"),
+        ("WARN refused stage=audience", "audience"),
+        ('INFO request refused decision="refused" failed_check="token-type" suppressed=0', "token-type"),
+        ('{"fields":{"decision":"refused","failed_check":"credential-malformed"}}', "header"),
+        ('failed_check="token-client"', "client"),
+        ('failed_check="token-assertion-issuer"', "client"),
+        ('failed_check="key-source-unavailable"', "unavailable"),
+        ('failed_check="token-key"\nfailed_check="token-time"', "time"),
+        ('failed_check="credential-missing"', ""),
+        ('failed_check="token-time"\nfailed_check="operation"', "time"),
+        ("no refusal here", ""),
+    )
+
+    @staticmethod
+    def function(script: str) -> str:
+        text = (TABLES / script).read_text(encoding="utf-8")
+        match = re.search(r"^logged_stage\(\) \{\n.*?^\}\n", text, re.S | re.M)
+        assert match, f"{script} has no logged_stage"
+        return match.group(0)
+
+    def test_the_stage_reads_both_log_fields(self):
+        for script in ("own-provider.sh", "promote.sh"):
+            function = self.function(script)
+            for log, expected in self.CASES:
+                with self.subTest(script=script, log=log):
+                    with tempfile.TemporaryDirectory() as directory:
+                        path = Path(directory) / "server.log"
+                        path.write_text(log + "\n", encoding="utf-8")
+                        result = subprocess.run(
+                            ["bash", "-c", function + '\nlogged_stage "$1"', "bash", str(path)],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                        )
+                    self.assertEqual(result.stdout, expected)
 
 
 if __name__ == "__main__":

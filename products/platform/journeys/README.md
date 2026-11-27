@@ -49,7 +49,11 @@ forms.
   step named in the form found nothing to work with, lost the written record or
   refused the reader's own setup.
 - `http.<status>.<stage>`: a refused call. The stage is one of the
-  authentication stages the shared OIDC crate reports.
+  authentication stages the shared OIDC crate reports. The journeys read it
+  from the product's `stage` log field or from the `failed_check` label of its
+  refusal line, mapped onto the stage words (for example `token-key` is `key`
+  and `credential-malformed` is `header`). A label with no stage word leaves the
+  stage empty, and the cell records the problem code instead.
 - `product.<dotted code>`: the diagnostic code a product prints.
 
 Each row has a `basis`. A `predicted` row was inferred from reading the code. A

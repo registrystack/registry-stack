@@ -961,18 +961,41 @@ missing_claims() {
 		journey_harness_failure "cannot read the claims of the token of $CELL"
 }
 
-# logged_stage FILE...: the last authentication stage the product logged.
+# logged_stage FILE...: the last authentication stage the product logged,
+# from its `stage` field or the `failed_check` label of its refusal line.
 logged_stage() {
 	perl -e '
 		my $stage = "";
+		my %check_stage = (
+			"credential-malformed" => "header",
+			"token-algorithm" => "algorithm",
+			"token-type" => "token-type",
+			"token-key" => "key",
+			"token-signature" => "signature",
+			"token-issuer" => "issuer",
+			"token-audience" => "audience",
+			"token-time" => "time",
+			"token-client" => "client",
+			"token-assertion-issuer" => "client",
+			"scope" => "scope",
+			"key-source-unavailable" => "unavailable",
+		);
 		local $/;
 		for my $path (@ARGV) {
 			open my $fh, "<", $path or next;
 			my $text = <$fh>;
 			next unless defined $text;
 			$text =~ s/\e\[[0-9;]*m//g;
-			while ($text =~ /"stage"\s*:\s*"([a-z]+(?:-[a-z]+)*)"|\bstage=("?)([a-z]+(?:-[a-z]+)*)\2/g) {
-				$stage = defined $1 ? $1 : $3;
+			# A product logs `stage`, or the refusal recorder `failed_check`
+			# label, which the map turns into the stage word the table lists.
+			# A label with no stage word is skipped, so the problem code names
+			# the refusal instead.
+			while ($text =~ /"stage"\s*:\s*"([a-z]+(?:-[a-z]+)*)"|\bstage=("?)([a-z]+(?:-[a-z]+)*)\2|\bfailed_check"?[:=]\s*"([a-z]+(?:-[a-z]+)*)"/g) {
+				if (defined $4) {
+					$stage = $check_stage{$4} if exists $check_stage{$4};
+				} else {
+					$stage = defined $1 ? $1 : $3;
+				}
 			}
 		}
 		print $stage;' "$@"
