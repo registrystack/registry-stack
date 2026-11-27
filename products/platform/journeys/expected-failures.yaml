@@ -221,71 +221,81 @@ expectedFailures:
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: casework
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: messaging
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: evidence
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: scheduling
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: documents
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: coordinator
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: adapter
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: render
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: discovery
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The own-provider cell of discovery is unreached (it verifies no token and keeps no database), so there are no files to promote."
 
 unreached:
   - journey: own-provider
@@ -369,32 +379,51 @@ unreached:
   - journey: promote
     product: breg-mcp
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: breg-review
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: registry-mcp
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: evidence-oid4vci
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: evidence-oid4vp
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: adapter-job
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
 
+# The scheduling row above is the unassisted outcome, which the ratchet checks
+# against an unassisted input. The assisted baseline input (run
+# 20261127024425-265d, kept) gives this observed outcome instead, in promote
+# run 20261127025000-816f (acceptance mode, exit 1):
+#
+#   - journey: promote
+#     product: scheduling
+#     step: refusals
+#     code: journey.promote.nothing-refused
+#     removedBy: M6
+#     basis: observed
+#     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), promote run 20261127025000-816f on own-provider run 20261127024425-265d (assisted: sql, certificate, token-type, mapper)"
+#     reason: "The assisted Scheduling cell reached T1. Started with no development declaration, schedulingctl check (which has no --production flag) lists no refusal and the server starts and answers /readyz, so zero refusals are listed. No shared posture exists on main, so nothing can refuse. The count becomes meaningful at M1 with M6."
 passes: []

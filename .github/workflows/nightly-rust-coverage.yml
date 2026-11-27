@@ -55,9 +55,11 @@ jobs:
       COVERAGE_PACKAGES: ${{ matrix.packages }}
     # The platform shard's --all-features build enables the dispatch and
     # activation PostgreSQL tests, which fail rather than skip without their
-    # disposable database. The other shards start the service and leave it
-    # unused, so this definition stays identical to platform-coverage in
-    # ci.yml, which .github/scripts/test_ci_changes.py holds.
+    # disposable database, and the provisioning suite, which fails rather
+    # than skips without its two TLS servers. The other shards start the
+    # services and leave them unused, so this definition stays identical to
+    # platform-coverage in ci.yml, which .github/scripts/test_ci_changes.py
+    # holds. The provisioning server steps run in the platform shard only.
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
@@ -72,6 +74,20 @@ jobs:
           --health-retries 5
         ports:
           - 5432/tcp
+      postgis:
+        # The PostgreSQL 17 / PostGIS 3.5.2 image breg-contracts pins.
+        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+        env:
+          POSTGRES_DB: provision
+          POSTGRES_USER: provision
+          POSTGRES_PASSWORD: provision_test
+        options: >-
+          --health-cmd "pg_isready -U provision -d provision"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -79,6 +95,105 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           submodules: false
+
+      # The same provisioning server steps as platform-coverage in ci.yml.
+      - name: Serve the provisioning PostGIS service over TLS
+        if: matrix.name == 'platform'
+        shell: bash
+        env:
+          SERVICE_CONTAINER_ID: ${{ job.services.postgis.id }}
+          SERVICE_PORT: ${{ job.services.postgis.ports['5432'] }}
+          SERVICE_CA_PEM_PATH: ${{ runner.temp }}/provision-postgres-ca.pem
+        run: |
+          set -euo pipefail
+          BREG_TEST_TLS_SETUP_ONLY=1 \
+            BREG_TEST_TLS_POSTGRES_CONTAINER_ID="${SERVICE_CONTAINER_ID}" \
+            BREG_TEST_TLS_DATABASE_HOST=localhost \
+            BREG_TEST_TLS_DATABASE_URL="postgresql://provision:provision_test@localhost:${SERVICE_PORT}/postgres" \
+            BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL="postgresql://provision:provision_test@127.0.0.1:${SERVICE_PORT}/postgres" \
+            BREG_TEST_TLS_CA_DER_PATH='' \
+            BREG_TEST_TLS_CA_PEM_PATH="${SERVICE_CA_PEM_PATH}" \
+            products/breg/scripts/test-postgres-tls.sh
+
+      - name: Start PostgreSQL 16 for the provisioning floor test
+        id: provision-postgres-16
+        if: matrix.name == 'platform'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # PostgreSQL 16.15, verified 2026-11-27.
+          image='docker.io/library/postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657'
+          container_name="provision-postgres-16-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container_id="$(
+            docker run --detach \
+              --name "${container_name}" \
+              --label org.registrystack.ci.postgres-service=true \
+              --env POSTGRES_USER=provision \
+              --env POSTGRES_PASSWORD=provision_test \
+              --health-cmd 'pg_isready -U provision -d provision' \
+              --health-interval 10s \
+              --health-timeout 5s \
+              --health-retries 5 \
+              --publish 127.0.0.1::5432 \
+              "${image}"
+          )"
+          printf 'container_id=%s\n' "${container_id}" >> "${GITHUB_OUTPUT}"
+
+          for _ in $(seq 1 30); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")"
+            if [[ "${health}" == healthy ]]; then
+              break
+            fi
+            if [[ "${health}" == unhealthy ]]; then
+              docker logs "${container_id}"
+              exit 1
+            fi
+            sleep 2
+          done
+          if [[ "$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")" != healthy ]]; then
+            docker logs "${container_id}"
+            exit 1
+          fi
+
+          endpoint="$(docker port "${container_id}" 5432/tcp)"
+          port="${endpoint##*:}"
+          [[ "${port}" =~ ^[0-9]+$ ]]
+          printf 'port=%s\n' "${port}" >> "${GITHUB_OUTPUT}"
+
+      - name: Serve PostgreSQL 16 over TLS for the provisioning floor test
+        if: matrix.name == 'platform'
+        shell: bash
+        env:
+          OLD_CONTAINER_ID: ${{ steps.provision-postgres-16.outputs.container_id }}
+          OLD_PORT: ${{ steps.provision-postgres-16.outputs.port }}
+          OLD_CA_PEM_PATH: ${{ runner.temp }}/provision-old-postgres-ca.pem
+        run: |
+          set -euo pipefail
+          BREG_TEST_TLS_SETUP_ONLY=1 \
+            BREG_TEST_TLS_POSTGRES_CONTAINER_ID="${OLD_CONTAINER_ID}" \
+            BREG_TEST_TLS_DATABASE_HOST=localhost \
+            BREG_TEST_TLS_DATABASE_URL="postgresql://provision:provision_test@localhost:${OLD_PORT}/postgres" \
+            BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL="postgresql://provision:provision_test@127.0.0.1:${OLD_PORT}/postgres" \
+            BREG_TEST_TLS_CA_DER_PATH='' \
+            BREG_TEST_TLS_CA_PEM_PATH="${OLD_CA_PEM_PATH}" \
+            products/breg/scripts/test-postgres-tls.sh
+
+      - name: Bundle the provisioning servers' CAs
+        if: matrix.name == 'platform'
+        shell: bash
+        env:
+          SERVICE_CA_PEM_PATH: ${{ runner.temp }}/provision-postgres-ca.pem
+          OLD_CA_PEM_PATH: ${{ runner.temp }}/provision-old-postgres-ca.pem
+          BUNDLE_PATH: ${{ runner.temp }}/provision-postgres-ca-bundle.pem
+        run: |
+          set -euo pipefail
+          for ca in "${SERVICE_CA_PEM_PATH}" "${OLD_CA_PEM_PATH}"; do
+            if [[ ! -s "${ca}" ]]; then
+              echo "::error::the provisioning suite needs the CA file ${ca}"
+              exit 1
+            fi
+          done
+          cat "${SERVICE_CA_PEM_PATH}" "${OLD_CA_PEM_PATH}" > "${BUNDLE_PATH}"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
@@ -97,6 +212,9 @@ jobs:
         env:
           DISPATCH_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
           ACTIVATION_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
+          PROVISION_TEST_DATABASE_URL: postgresql://provision:provision_test@localhost:${{ job.services.postgis.ports['5432'] }}/postgres?sslmode=verify-full
+          PROVISION_TEST_DATABASE_CA: ${{ runner.temp }}/provision-postgres-ca-bundle.pem
+          PROVISION_TEST_OLD_DATABASE_URL: postgresql://provision:provision_test@localhost:${{ steps.provision-postgres-16.outputs.port }}/postgres?sslmode=verify-full
         run: |
           set -euo pipefail
 
@@ -157,6 +275,21 @@ jobs:
           plugins: noop
           use_oidc: true
           version: v11.3.1
+
+      - name: Stop PostgreSQL 16 for the provisioning floor test
+        if: always() && matrix.name == 'platform' && steps.provision-postgres-16.outputs.container_id != ''
+        env:
+          CONTAINER_ID: ${{ steps.provision-postgres-16.outputs.container_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          label="$(
+            docker inspect \
+              --format '{{ index .Config.Labels "org.registrystack.ci.postgres-service" }}' \
+              "${CONTAINER_ID}"
+          )"
+          [[ "${label}" == true ]]
+          docker rm --force "${CONTAINER_ID}"
 
       - name: Report disk usage
         if: always()

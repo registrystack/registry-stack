@@ -32,6 +32,8 @@ issuer the run starts and does not start an identity provider.
 | `test_lib.sh` | The library's self-test. It runs against fake `docker`, `curl` and `cargo` commands, so it starts no container and builds nothing: `bash products/platform/journeys/test_lib.sh`. |
 | `rstack-dev.sh` | The `rstack dev` journey, with a recipe per product for the steps from `start` on. |
 | `own-provider.sh` | The own-provider journey: a stock Keycloak and a stock PostgreSQL started on loopback, then each product from its starter to a first authenticated call. |
+| `lib-assists.sh` | The assists, sourced only when `--assist` names one: `sql` (provisioning statements through psql), `certificate` (a private CA and a TLS server certificate for the pg container), `token-type` (Keycloak's at+jwt header setting) and `mapper` (a hardcoded actor-kind claim mapper). The only journey file allowed to call psql, openssl or docker exec. Each use counts as a pass-rule violation. |
+| `promote.sh` | The promote journey: `promote.sh --from RUN_DIR --bin-dir DIR`, where RUN_DIR is a run directory of a development journey (an `own-provider.sh` run ended with `--keep` when any cell finished). It starts the files in place with no development declaration, lists the refusals and applies each fix. A product whose development cell did not finish stops at `input`. |
 | `keycloak/realm.json` | The realm the own-provider journey imports: per product, one caller client with a service account and one API client for the product's audience. It holds no protocol mappers. |
 | `projects/` | The runtime files the own-provider journey gives the products whose starter has none (Render, Coordinator). |
 

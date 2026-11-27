@@ -970,6 +970,7 @@ logged_stage() {
 			open my $fh, "<", $path or next;
 			my $text = <$fh>;
 			next unless defined $text;
+			$text =~ s/\e\[[0-9;]*m//g;
 			while ($text =~ /"stage"\s*:\s*"([a-z]+(?:-[a-z]+)*)"|\bstage=("?)([a-z]+(?:-[a-z]+)*)\2/g) {
 				$stage = defined $1 ? $1 : $3;
 			}
@@ -1032,13 +1033,27 @@ step_call() {
 		[[ -z "$stage" ]] || break
 		[[ $attempt -eq 3 ]] || sleep 1
 	done
-	# shellcheck disable=SC2086 # CLAIMS is a list of words
-	missing=$(missing_claims ACCESS_TOKEN $CLAIMS)
-	if [[ -n "$missing" && (-z "$stage" || "$stage" == profile) ]]; then
-		# shellcheck disable=SC2086 # missing is a list of words
-		if ! journey_blocker call journey.needs.claim-mapper mapper "$CELL" "$CLIENT" ACCESS_TOKEN $missing; then
-			CELL_OVER=1
-			return 0
+	# Each blocker the assists can clear is met once. After an assist the call
+	# is made again. The shared verifier logs a stage at most once a minute, so
+	# the log of a second refusal repeats the stage of the first: a token-type
+	# refusal already assisted is followed by the claim check, not by a second
+	# token-type assist.
+	for attempt in 1 2; do
+		# shellcheck disable=SC2086 # CLAIMS is a list of words
+		missing=$(missing_claims ACCESS_TOKEN $CLAIMS)
+		if [[ "$stage" == token-type && $attempt -eq 1 ]]; then
+			if ! journey_blocker call "http.$JOURNEY_HTTP_STATUS.token-type" token-type "$CELL" "$CLIENT" ACCESS_TOKEN; then
+				CELL_OVER=1
+				return 0
+			fi
+		elif [[ -n "$missing" && (-z "$stage" || "$stage" == profile || $attempt -eq 2) ]]; then
+			# shellcheck disable=SC2086 # missing is a list of words
+			if ! journey_blocker call journey.needs.claim-mapper mapper "$CELL" "$CLIENT" ACCESS_TOKEN $missing; then
+				CELL_OVER=1
+				return 0
+			fi
+		else
+			break
 		fi
 		status=0
 		call_request || status=$?
@@ -1046,9 +1061,12 @@ step_call() {
 			journey_reached t1
 			return 0
 		fi
+		# The refusal of this call is logged after the response is written, and
+		# the log already holds the one before it.
+		sleep 1
 		refresh_server_log
 		stage=$(logged_stage "$SERVER_LOG_OUT" "$SERVER_LOG_ERR")
-	fi
+	done
 	if [[ -z "$stage" ]]; then
 		# A product whose log names no stage still names its refusal in the
 		# problem body. That code is recorded rather than a stage the journey
