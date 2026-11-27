@@ -1776,22 +1776,33 @@ fn a_session_application_renders_what_distinguishes_it_from_a_browser_applicatio
     let documents = resources(&session);
     let app = of_type(&documents, "application")[0];
     let config = &app["inboundAuthConfig"][0]["config"];
+    let browser = case().run().unwrap();
+    let browser_documents = resources(&browser);
+    let browser_config =
+        &of_type(&browser_documents, "application")[0]["inboundAuthConfig"][0]["config"];
     assert_eq!(
         config["grantTypes"],
         serde_json::json!(["authorization_code", "refresh_token"])
     );
-    assert_eq!(config["tokenEndpointAuthMethod"], "client_secret_post");
-    assert_eq!(config["pkceRequired"], true);
-    assert_eq!(config["publicClient"], false);
+    assert_eq!(browser_config["grantTypes"], serde_json::json!(["authorization_code"]));
     assert_eq!(
         config["postLogoutRedirectUris"],
         serde_json::json!(["https://pages.registry.example/signed-out"])
     );
-    assert_eq!(config["clientSecret"], "{{.CITIZEN_PAGES_CLIENT_SECRET}}");
+    assert_eq!(
+        browser_config["postLogoutRedirectUris"],
+        serde_json::json!(["https://staff.registry.example"])
+    );
     assert_eq!(config["token"]["accessToken"]["defaultAudience"], "urn:person:example");
-    assert_eq!(config["token"]["accessToken"]["userConfig"]["validityPeriod"], 300);
-    let browser = case().run().unwrap();
-    let browser_documents = resources(&browser);
+    assert_eq!(config["clientSecret"], "{{.CITIZEN_PAGES_CLIENT_SECRET}}");
+    // What both kinds share: the authentication method, PKCE and the flow.
+    for member in ["tokenEndpointAuthMethod", "pkceRequired", "publicClient"] {
+        assert_eq!(config[member], browser_config[member], "{member}");
+    }
+    assert_eq!(
+        config["token"]["accessToken"]["userConfig"]["validityPeriod"],
+        browser_config["token"]["accessToken"]["userConfig"]["validityPeriod"]
+    );
     assert_eq!(
         app["authFlowId"],
         of_type(&browser_documents, "application")[0]["authFlowId"],
@@ -1908,4 +1919,273 @@ fn the_person_audience_refusals_reach_the_generator() {
     let mut without = session_case();
     without.deployment = without.deployment.replace("personAudience: urn:person:example\n", "");
     assert_eq!(without.refusal(), ["identity.facts.duplicate-audience"]);
+}
+
+fn session_deployment_with(extra: &str) -> String {
+    format!("{SESSION_DEPLOYMENT}{extra}")
+}
+
+const SESSION_USER: &str = "users:
+  - id: citizen-one
+    username: citizen-one
+    email: citizen.one@agency.example
+    passwordRef: secret:env/CITIZEN_ONE_PASSWORD
+    claims:
+      registry_actor_kind: human
+    grants:
+      - product: breg
+        accessProfiles: [read]
+";
+
+#[test]
+fn a_user_reaches_a_product_through_a_session_application_that_lists_it() {
+    let mut case = session_case();
+    case.deployment = session_deployment_with(SESSION_USER);
+    let generated = case.run().expect("generates");
+    assert_eq!(generated.summary.users, 1);
+    // Another product the session application does not list is not reached.
+    let mut unlisted = session_case();
+    unlisted.deployment = session_deployment_with(SESSION_USER)
+        .replace("products: [breg, documents]", "products: [documents]")
+        .replace(
+            "      - product: breg\n        accessProfiles: [read]\n      - product: documents",
+            "      - product: documents",
+        );
+    assert!(unlisted
+        .refusal()
+        .contains(&"identity.deployment.client-not-admitted".to_owned()));
+}
+
+#[test]
+fn a_session_application_signs_in_only_the_user_types_it_lists() {
+    let mut case = session_case();
+    case.deployment = session_deployment_with(SESSION_USER).replace(
+        "    claims:\n      registry_actor_kind: human\n    grants:\n      - product: breg\n        accessProfiles: [read]\n",
+        "    userType: farmer\n    claims:\n      registry_actor_kind: human\n    grants:\n      - product: breg\n        accessProfiles: [read]\n",
+    ) + "userTypes:\n  - id: farmer\n    name: Farmer\n";
+    assert!(case
+        .refusal()
+        .contains(&"identity.deployment.client-not-admitted".to_owned()));
+    case.deployment = case
+        .deployment
+        .replace("    tokenAttributes: [registry_actor_kind]\n", "    tokenAttributes: [registry_actor_kind]\n    userTypes: [farmer]\n");
+    assert!(case.run().is_ok());
+}
+
+#[test]
+fn a_session_application_must_project_the_claims_its_granted_profiles_require() {
+    let mut case = session_case();
+    case.facts[0].1 = case.facts[0]
+        .1
+        .replace("  registry_actor_kind: string\n", "  registry_actor_kind: string\n  registry_role: string\n")
+        .replace(
+            "  - id: read\n",
+            "  - id: read\n    requiredClaims: [registry_role]\n",
+        );
+    assert!(case
+        .refusal()
+        .contains(&"identity.deployment.required-claim-not-projected".to_owned()));
+    case.deployment = case.deployment.replace(
+        "tokenAttributes: [registry_actor_kind]",
+        "tokenAttributes: [registry_actor_kind, registry_role]",
+    );
+    assert!(case.run().is_ok());
+}
+
+#[test]
+fn an_exchange_profile_cannot_be_granted_to_a_session_application() {
+    let mut case = session_case();
+    case.facts.push((
+        "evidence".into(),
+        "apiVersion: id.registrystack.org/formats/platform/identity-facts/v1\nkind: PlatformIdentityFacts\nproduct: evidence\nissuer: https://id.registry.example\naudience: urn:evidence:example\nallowedClients:\n  - citizen-pages\nclaims:\n  registry_actor_kind: string\naccessProfiles:\n  - id: task\n    scopes: [evidence:task]\n    exchange:\n      assertionIssuerId: authority\n      bootstrapAudience: urn:casework:example\n      bootstrapScope: casework:grants:assert\nassertionIssuers:\n  - id: authority\n    issuer: https://authority.example\n    jwksUrl: https://authority.example/jwks\n    mapping: institutional-grant\n".into(),
+    ));
+    case.deployment = case
+        .deployment
+        .replace("products: [breg, documents]", "products: [breg, documents, evidence]")
+        + "";
+    case.deployment = case.deployment.replace(
+        "      - product: documents\n        accessProfiles: [read]\n",
+        "      - product: documents\n        accessProfiles: [read]\n      - product: evidence\n        accessProfiles: [task]\n",
+    );
+    assert!(case
+        .refusal()
+        .contains(&"identity.deployment.exchange-not-interactive".to_owned()));
+}
+
+/// Facts of a product on the person audience with its own profiles per client.
+fn documents_by_client() -> String {
+    "apiVersion: id.registrystack.org/formats/platform/identity-facts/v1\nkind: PlatformIdentityFacts\nproduct: documents\nissuer: https://id.registry.example\naudience: urn:person:example\nallowedClients:\n  - citizen-pages\n  - staff-pages\nclaims:\n  registry_actor_kind: string\naccessProfiles:\n  - id: citizen-read\n    scopes: [documents:get]\n    requesterClients: [citizen-pages]\n  - id: staff-read\n    scopes: [documents:get]\n    requesterClients: [staff-pages]\n".into()
+}
+
+fn two_clients_case(user_profiles: &str) -> Case {
+    let app = |id: &str, secret: &str, profile: &str| {
+        format!("  - id: {id}\n    clientSecretRef: secret:env/{secret}\n    origin: https://{id}.registry.example\n    redirectUris: [https://{id}.registry.example/cb]\n    postLogoutRedirectUris: [https://{id}.registry.example/out]\n    products: [documents]\n    tokenAttributes: [registry_actor_kind]\n    grants:\n      - product: documents\n        accessProfiles: [{profile}]\n")
+    };
+    Case {
+        deployment: format!(
+            "apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1\nkind: PlatformIdentityDeployment\norganizationUnit:\n  handle: registry\n  name: Registry\npersonAudience: urn:person:example\nsessionApps:\n{}{}users:\n  - id: citizen-one\n    username: citizen-one\n    email: citizen.one@agency.example\n    passwordRef: secret:env/CITIZEN_ONE_PASSWORD\n    claims:\n      registry_actor_kind: human\n    grants:\n      - product: documents\n        accessProfiles: [{user_profiles}]\n",
+            app("citizen-pages", "CITIZEN_SECRET", "citizen-read"),
+            app("staff-pages", "STAFF_SECRET", "staff-read"),
+        ),
+        facts: vec![("documents".into(), documents_by_client())],
+        jwks: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn a_user_cannot_use_another_client_to_reach_a_profile_they_were_not_granted() {
+    // `staff-read` shares `documents:get` with the granted `citizen-read`, so
+    // signing in through `staff-pages` would select a profile the user holds
+    // no grant for.
+    assert!(two_clients_case("citizen-read")
+        .refusal()
+        .contains(&"identity.person-audience.client-selects-ungranted-profile".to_owned()));
+    assert!(two_clients_case("citizen-read, staff-read").run().is_ok());
+}
+
+#[test]
+fn a_profile_with_a_scope_the_user_lacks_does_not_block_the_grant() {
+    let mut case = two_clients_case("citizen-read");
+    case.facts[0].1 = case.facts[0].1.replace(
+        "scopes: [documents:get]\n    requesterClients: [staff-pages]",
+        "scopes: [documents:get, documents:put]\n    requesterClients: [staff-pages]",
+    );
+    assert!(case.run().is_ok());
+}
+
+#[test]
+fn a_deployment_error_is_reported_even_when_a_person_audience_is_declared() {
+    let mut case = session_case();
+    case.deployment = case
+        .deployment
+        .replace("origin: https://pages.registry.example", "origin: http://pages.registry.example");
+    assert_eq!(case.refusal(), ["identity.deployment.invalid-origin"]);
+}
+
+#[test]
+fn a_declared_person_audience_no_product_uses_is_refused() {
+    let mut case = session_case();
+    case.deployment = case
+        .deployment
+        .replace("personAudience: urn:person:example", "personAudience: urn:person:other");
+    assert_eq!(case.refusal(), ["identity.facts.duplicate-audience"]);
+    case.facts[1].1 = case.facts[1].1.replace("urn:person:example", "urn:documents:example");
+    case.facts[0].1 = case.facts[0].1.replace("urn:person:example", "urn:breg:example");
+    assert_eq!(case.refusal(), ["identity.person-audience.unused"]);
+}
+
+#[test]
+fn the_receipt_records_the_person_audience_and_each_session_applications_audiences() {
+    let mut case = session_case();
+    case.facts.push((
+        "zebra".into(),
+        person_facts("zebra", "zebra:get").replace("urn:person:example", "urn:zebra:example"),
+    ));
+    case.facts.push((
+        "alpha".into(),
+        person_facts("alpha", "alpha:get").replace("urn:person:example", "urn:alpha:example"),
+    ));
+    case.deployment = case
+        .deployment
+        .replace("products: [breg, documents]", "products: [zebra, breg, alpha, documents]")
+        .replace(
+            "      - product: documents\n        accessProfiles: [read]\n",
+            "      - product: documents\n        accessProfiles: [read]\n      - product: zebra\n        accessProfiles: [read]\n      - product: alpha\n        accessProfiles: [read]\n",
+        );
+    let generated = case.run().expect("generates");
+    let receipt: serde_json::Value =
+        serde_json::from_str(&text(&generated, "identity-receipt.json")).unwrap();
+    assert_eq!(
+        receipt["personAudience"],
+        serde_json::json!({"audience": "urn:person:example", "products": ["breg", "documents"]})
+    );
+    assert_eq!(
+        receipt["sessionApps"]["citizen-pages"],
+        serde_json::json!({
+            "products": ["zebra", "breg", "alpha", "documents"],
+            "audiences": ["urn:person:example", "urn:alpha:example", "urn:zebra:example"]
+        })
+    );
+}
+
+#[test]
+fn a_receipt_without_session_applications_has_no_person_members() {
+    let generated = case().run().unwrap();
+    let receipt: serde_json::Value =
+        serde_json::from_str(&text(&generated, "identity-receipt.json")).unwrap();
+    assert!(receipt.get("personAudience").is_none());
+    assert!(receipt.get("sessionApps").is_none());
+}
+
+#[test]
+fn a_listed_product_without_a_resource_server_is_refused_at_its_member() {
+    let mut case = session_case();
+    case.facts.push((
+        "ledger".into(),
+        "apiVersion: id.registrystack.org/formats/platform/identity-facts/v1\nkind: PlatformIdentityFacts\nproduct: ledger\nissuer: https://id.registry.example\naudience: urn:ledger:example\nallowedClients:\n  - citizen-pages\nclaims:\n  registry_actor_kind: string\n".into(),
+    ));
+    case.deployment = case
+        .deployment
+        .replace("products: [breg, documents]", "products: [breg, documents, ledger]");
+    assert_eq!(case.refusal(), ["identity.deployment.product-without-resource-server"]);
+}
+
+#[test]
+fn a_role_on_the_shared_server_stays_within_the_permission_bound() {
+    let scopes = |range: std::ops::Range<usize>| {
+        range.map(|n| format!("documents:s{n:02}")).collect::<Vec<_>>().join(", ")
+    };
+    let mut case = session_case();
+    case.facts[1].1 = person_facts("documents", &scopes(0..15)).replace(
+        "accessProfiles:\n  - id: read\n",
+        &format!(
+            "accessProfiles:\n  - id: more\n    scopes: [{}]\n  - id: read\n",
+            scopes(16..32)
+        ),
+    );
+    case.deployment = case.deployment.replace(
+        "      - product: documents\n        accessProfiles: [read]\n",
+        "      - product: documents\n        accessProfiles: [read, more]\n",
+    );
+    case.facts[0].1 = person_facts("breg", "records:get");
+    assert!(case.run().is_ok(), "32 permissions on one server are within the bound: {:?}", case.run().err());
+    case.facts[1].1 = case.facts[1].1.replace("documents:s31", "documents:s31, documents:s32");
+    assert!(case
+        .refusal()
+        .contains(&"identity.deployment.too-many-permissions".to_owned()));
+}
+
+#[test]
+fn an_exchange_profile_is_granted_only_to_a_client_that_declares_side_registry() {
+    assert!(case().run().is_ok(), "the fixture's task-agent declares side: registry");
+    let mut unmarked = case();
+    assert!(unmarked.deployment.contains("    side: registry\n"));
+    unmarked.deployment = unmarked.deployment.replace("    side: registry\n", "");
+    assert!(unmarked
+        .refusal()
+        .contains(&"identity.deployment.exchange-on-host-client".to_owned()));
+    let mut host = case();
+    host.deployment = host.deployment.replace("side: registry", "side: host");
+    assert!(host
+        .refusal()
+        .contains(&"identity.deployment.exchange-on-host-client".to_owned()));
+}
+
+#[test]
+fn a_host_client_without_an_exchange_grant_needs_no_side() {
+    // case-portal and field-agent state no side and hold no exchange profile.
+    assert!(!case().deployment.contains("id: case-portal\n    publicJwksFile: keys/case-portal.jwks.json\n    side"));
+    assert!(case().run().is_ok());
+}
+
+#[test]
+fn a_browser_application_is_never_granted_an_exchange_profile() {
+    let mut case = case();
+    case.deployment = case.deployment.replace(
+        "    grants:\n      - product: breg\n        accessProfiles: [case-read]\nusers:",
+        "    grants:\n      - product: breg\n        accessProfiles: [case-read]\n      - product: evidence\n        accessProfiles: [task-invoke]\nusers:",
+    );
+    assert!(case
+        .refusal()
+        .contains(&"identity.deployment.exchange-not-interactive".to_owned()));
 }

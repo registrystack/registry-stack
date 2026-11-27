@@ -298,13 +298,32 @@ fn a_session_application_needs_https_addresses_and_one_to_eight_distinct_product
 
 #[test]
 fn a_session_application_lets_users_sign_in() {
-    let no_browser = with_session_app()
-        .replace("browserApps:\n  - id: staff-portal\n    clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET\n    origin: https://staff.registry.example\n    redirectUris: [https://staff.registry.example/auth/callback]\n    product: breg\n    tokenAttributes: [registry_actor_kind]\n    grants:\n      - product: breg\n        accessProfiles: [case-read]\n", "");
-    assert!(!codes(&no_browser).contains(&"identity.deployment.users-need-an-app".to_owned()));
+    let start = DEPLOYMENT.find("browserApps:").expect("the fixture states browserApps");
+    let end = DEPLOYMENT.find("users:\n").expect("the fixture states users");
+    let without_browser = format!("{}{}", &DEPLOYMENT[..start], &DEPLOYMENT[end..]);
+    assert!(!without_browser.contains("browserApps"));
+    assert!(codes(&without_browser).contains(&"identity.deployment.users-need-an-app".to_owned()));
+    let with_session = without_browser.replace("users:\n", &format!("{SESSION_APP}users:\n"));
+    assert_eq!(codes(&with_session), Vec::<String>::new());
 }
 
 #[test]
 fn the_person_audience_must_be_an_absolute_uri() {
     let bad = format!("personAudience: not a uri\n{DEPLOYMENT}");
     assert!(codes(&bad).contains(&"identity.person-audience.invalid".to_owned()));
+}
+
+#[test]
+fn a_client_declares_its_side_of_the_trust_line() {
+    let (deployment, _) = read_text(DEPLOYMENT).expect("reads");
+    assert_eq!(deployment.clients[0].side, None);
+    let marked = DEPLOYMENT.replacen(
+        "    publicJwksFile: keys/case-portal.jwks.json\n",
+        "    publicJwksFile: keys/case-portal.jwks.json\n    side: registry\n",
+        1,
+    );
+    let (deployment, _) = read_text(&marked).expect("reads");
+    assert_eq!(deployment.clients[0].side, Some(Side::Registry));
+    let unknown = marked.replace("side: registry", "side: elsewhere");
+    assert!(read_text(&unknown).is_err());
 }

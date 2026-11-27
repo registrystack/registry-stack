@@ -77,6 +77,20 @@ pub enum ClaimValue {
 
 registry_platform_yaml::shape_union!(ClaimValue { scalar => One, list => Many });
 
+/// Which side of the trust line a machine client sits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum Side {
+    /// A client of the Registry Stack itself: it may be granted an exchange
+    /// profile.
+    Registry,
+    /// A client that belongs to the host application. Whoever holds the
+    /// token-exchange grant can re-audience any live person token, so a host
+    /// client never holds it.
+    Host,
+}
+
 /// A machine client: authenticates with `private_key_jwt` against its own
 /// public key set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +102,10 @@ pub struct Client {
     pub id: String,
     /// A JWKS file holding public keys only, relative to this file.
     pub public_jwks_file: String,
+    /// The side of the trust line the client sits on. Only a `registry`
+    /// client may be granted an exchange profile; omitted counts as `host`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<Side>,
     pub grants: Vec<Grant>,
     /// Static claims the issuer puts in the client's tokens; each name and
     /// type must be one a product declares.
@@ -150,6 +168,10 @@ pub struct SessionApp {
     /// The `product` values whose audiences the application's tokens may
     /// reach: 1 to 8, each once.
     #[serde(deserialize_with = "set")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<registry_platform_yaml::LocalId>")
+    )]
     pub products: Vec<String>,
     /// Claims the application's tokens carry from the signed-in user.
     #[serde(deserialize_with = "set")]
@@ -227,6 +249,10 @@ pub struct IdentityDeployment {
     /// The audience that the products a person calls from a page may share
     /// (an absolute URI). Omitted: every product keeps its own audience.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Url>")
+    )]
     pub person_audience: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub users: Vec<User>,
@@ -277,19 +303,30 @@ pub(crate) fn relative_path(path: &str) -> bool {
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
-/// Read one deployment file through the shared reader and check what its
-/// types do not. Resolves no secret and opens no file it names.
-pub fn read(file: &str, bytes: &[u8]) -> Result<(IdentityDeployment, Document), ToolingError> {
-    let refused = |report| ToolingError::FileRefused {
+fn refused(report: registry_platform_yaml::Report) -> ToolingError {
+    ToolingError::FileRefused {
         what: "the identity deployment file",
         fix: "Correct the reported members; see the identity deployment format.",
         report: Box::new(report),
-    };
+    }
+}
+
+/// Decode one deployment file through the shared reader without checking it.
+/// The generator reads the declared `personAudience` from the result before
+/// the checks run, so a refusal of another member never hides it.
+pub fn decode(file: &str, bytes: &[u8]) -> Result<Decoded<IdentityDeployment>, ToolingError> {
     let mut hook = registry_platform_config::AuthoredExpressions;
-    let Decoded { value, document } = Reader::new(file)
+    Reader::new(file)
         .with_hook(&mut hook)
         .decode::<IdentityDeployment>(bytes, &Expect::one(&FORMAT))
-        .map_err(refused)?;
+        .map_err(refused)
+}
+
+/// Check a decoded deployment file for what its types do not enforce.
+pub fn check_decoded(
+    decoded: Decoded<IdentityDeployment>,
+) -> Result<(IdentityDeployment, Document), ToolingError> {
+    let Decoded { value, document } = decoded;
     let mut found = check(&document, &value);
     found.extend(crate::identity_facts::template_findings(&document));
     if found.is_empty() {
@@ -300,6 +337,12 @@ pub fn read(file: &str, bytes: &[u8]) -> Result<(IdentityDeployment, Document), 
         report.push(diagnostic);
     }
     Err(refused(report))
+}
+
+/// Read one deployment file through the shared reader and check what its
+/// types do not. Resolves no secret and opens no file it names.
+pub fn read(file: &str, bytes: &[u8]) -> Result<(IdentityDeployment, Document), ToolingError> {
+    check_decoded(decode(file, bytes)?)
 }
 
 /// Refuse an explicit `registry_actor_kind` the products' runtimes do not

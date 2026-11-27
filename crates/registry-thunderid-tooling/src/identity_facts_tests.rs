@@ -625,19 +625,84 @@ fn casework_never_shares_the_person_audience() {
 }
 
 #[test]
-fn a_product_that_checks_task_grants_never_shares_the_person_audience() {
-    // The facts reader already refuses such a claim, so build the document
-    // directly to reach the merge check.
-    let mut granting = facts(&store_like());
-    granting
-        .claims
-        .insert("registry_grant_ref".to_owned(), ClaimType::String);
+fn only_breg_and_documents_may_join_the_person_audience() {
+    let other = person_member("registrar", "registrar:get");
     assert_eq!(
-        refusal(merge_with_person_audience(
-            vec![facts(&breg_like()), granting],
+        refusal(person_merge(vec![breg_like(), other], Some(PERSON))),
+        "identity.person-audience.not-a-member-product"
+    );
+}
+
+/// Evidence facts as its generator writes them: a profile reached by an
+/// exchange and an institutional-grant assertion issuer.
+fn evidence_on_the_person_audience() -> String {
+    EVIDENCE
+        .replace("urn:evidence:example", PERSON)
+        .replace("allowedClients: unrestricted", "allowedClients:\n  - citizen-pages")
+}
+
+#[test]
+fn tool_shaped_evidence_facts_never_join_the_person_audience() {
+    assert_eq!(
+        refusal(person_merge(
+            vec![breg_like(), evidence_on_the_person_audience()],
             Some(PERSON)
         )),
+        "identity.person-audience.not-a-member-product"
+    );
+}
+
+#[test]
+fn a_member_with_an_exchange_profile_or_a_grant_issuer_is_refused_as_a_task_grant_product() {
+    let exchange = "assertionIssuers:\n  - id: authority\n    issuer: https://authority.example\n    jwksUrl: https://authority.example/jwks\n    mapping: institutional-grant\n";
+    let with_exchange = store_like().replace(
+        "accessProfiles:\n  - id: read\n",
+        "accessProfiles:\n  - id: read\n    exchange:\n      assertionIssuerId: authority\n      bootstrapAudience: urn:bootstrap:example\n      bootstrapScope: bootstrap:assert\n",
+    ) + exchange;
+    assert_eq!(
+        refusal(person_merge(vec![breg_like(), with_exchange], Some(PERSON))),
         "identity.person-audience.task-grant-member"
+    );
+    let only_issuer = store_like() + exchange;
+    assert_eq!(
+        refusal(person_merge(vec![breg_like(), only_issuer], Some(PERSON))),
+        "identity.person-audience.task-grant-member"
+    );
+}
+
+#[test]
+fn the_register_may_check_task_grants_in_the_person_audience() {
+    let exchange = "assertionIssuers:\n  - id: authority\n    issuer: https://authority.example\n    jwksUrl: https://authority.example/jwks\n    mapping: institutional-grant\n";
+    let breg_with_exchange = breg_like().replace(
+        "accessProfiles:\n  - id: read\n",
+        "accessProfiles:\n  - id: read\n    exchange:\n      assertionIssuerId: authority\n      bootstrapAudience: urn:bootstrap:example\n      bootstrapScope: bootstrap:assert\n",
+    ) + exchange;
+    assert!(person_merge(vec![breg_with_exchange, store_like()], Some(PERSON)).is_ok());
+}
+
+#[test]
+fn an_exchange_bootstrap_resource_is_never_the_person_audience() {
+    let bootstrap = EVIDENCE.replace(
+        "accessProfiles:\n",
+        &format!("accessProfiles:\n  - id: task\n    scopes: [evidence:task]\n    exchange:\n      assertionIssuerId: authority\n      bootstrapAudience: {PERSON}\n      bootstrapScope: bootstrap:assert\n"),
+    );
+    assert_eq!(
+        refusal(person_merge(
+            vec![breg_like(), store_like(), bootstrap],
+            Some(PERSON)
+        )),
+        "identity.person-audience.bootstrap-audience"
+    );
+}
+
+#[test]
+fn a_person_audience_no_product_uses_is_refused() {
+    assert_eq!(
+        refusal(person_merge(
+            vec![BREG.to_owned()],
+            Some("urn:person:unused")
+        )),
+        "identity.person-audience.unused"
     );
 }
 

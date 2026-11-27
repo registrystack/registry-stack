@@ -125,6 +125,17 @@
         "publicJwksFile": {
           "description": "A JWKS file holding public keys only, relative to this file.",
           "type": "string"
+        },
+        "side": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Side"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The side of the trust line the client sits on. Only a `registry`\nclient may be granted an exchange profile; omitted counts as `host`."
         }
       },
       "required": [
@@ -240,13 +251,15 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 8,
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "products": {
           "description": "The `product` values whose audiences the application's tokens may\nreach: 1 to 8, each once.",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/LocalId"
           },
           "maxItems": 8,
           "minItems": 1,
@@ -288,6 +301,21 @@
         "grants"
       ],
       "type": "object"
+    },
+    "Side": {
+      "description": "Which side of the trust line a machine client sits on.",
+      "oneOf": [
+        {
+          "const": "registry",
+          "description": "A client of the Registry Stack itself: it may be granted an exchange\nprofile.",
+          "type": "string"
+        },
+        {
+          "const": "host",
+          "description": "A client that belongs to the host application. Whoever holds the\ntoken-exchange grant can re-audience any live person token, so a host\nclient never holds it.",
+          "type": "string"
+        }
+      ]
     },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
@@ -413,11 +441,15 @@
       "$ref": "#/$defs/OrganizationUnit"
     },
     "personAudience": {
-      "description": "The audience that the products a person calls from a page may share\n(an absolute URI). Omitted: every product keeps its own audience.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Url"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The audience that the products a person calls from a page may share\n(an absolute URI). Omitted: every product keeps its own audience."
     },
     "sessionApps": {
       "items": {

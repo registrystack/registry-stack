@@ -892,11 +892,19 @@ pub fn merge(documents: Vec<IdentityFacts>) -> Result<MergedFacts, ToolingError>
 
 /// The product that always keeps its own audience.
 const CASEWORK: &str = "casework";
+/// The only products that may share the person audience: the ones a person
+/// calls from a page.
+/// The one member that may check task grants.
+const REGISTER: &str = "breg";
+const PERSON_AUDIENCE_PRODUCTS: [&str; 2] = ["breg", "documents"];
 
 /// [`merge`], where the products whose audience is `person_audience` may
-/// share it. Each such member must pass the membership checks: it is not
-/// casework, declares no task-grant claim, lists its clients, and states no
-/// scope another member states. Every other shared audience is refused.
+/// share it. Each such member must pass the membership checks: it is one of
+/// [`PERSON_AUDIENCE_PRODUCTS`], states no exchange profile and no
+/// institutional-grant assertion issuer, lists its clients, and states no
+/// scope another member states. No exchange may name the person audience as
+/// its bootstrap resource, and a declared person audience needs a member.
+/// Every other shared audience is refused.
 pub fn merge_with_person_audience(
     documents: Vec<IdentityFacts>,
     person_audience: Option<&str>,
@@ -922,6 +930,26 @@ pub fn merge_with_person_audience(
         claims: BTreeMap::new(),
         assertion_issuers: BTreeMap::new(),
     };
+    if let Some(audience) = person_audience {
+        for (index, facts) in documents.iter().enumerate() {
+            for (position, profile) in facts.access_profiles.iter().enumerate() {
+                if profile
+                    .exchange
+                    .as_ref()
+                    .is_some_and(|exchange| exchange.bootstrap_audience == audience)
+                {
+                    return Err(refuse(
+                        "identity.person-audience.bootstrap-audience",
+                        "an exchange names the person audience as its bootstrap resource, so a client holding the bootstrap scope would hold a member's permission. Give the bootstrap resource its own audience.",
+                        format!(
+                            "facts[{index}]/accessProfiles/{position}/exchange/bootstrapAudience"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    let mut members = 0;
     let mut audiences = BTreeSet::new();
     let mut member_scopes = BTreeSet::new();
     let mut issuer_urls: BTreeMap<String, String> = BTreeMap::new();
@@ -943,6 +971,7 @@ pub fn merge_with_person_audience(
         }
         let member = person_audience == Some(facts.audience.as_str());
         if member {
+            members += 1;
             check_person_member(&facts, &location, &mut member_scopes)?;
         }
         if !member && !audiences.insert(facts.audience.clone()) {
@@ -1007,6 +1036,13 @@ pub fn merge_with_person_audience(
             },
         );
     }
+    if members == 0 && person_audience.is_some() {
+        return Err(refuse(
+            "identity.person-audience.unused",
+            "no product's audience is the declared personAudience. Correct personAudience or the products' audience.",
+            "deployment/personAudience".to_owned(),
+        ));
+    }
     Ok(merged)
 }
 
@@ -1024,15 +1060,28 @@ fn check_person_member(
             format!("{location}/audience"),
         ));
     }
-    if facts
-        .claims
-        .keys()
-        .any(|name| crate::description::protected_attribute(name))
+    if !PERSON_AUDIENCE_PRODUCTS.contains(&facts.product.as_str()) {
+        return Err(refuse(
+            "identity.person-audience.not-a-member-product",
+            "only breg and documents may share the person audience. Give the product its own audience.",
+            format!("{location}/audience"),
+        ));
+    }
+    // The register is the one member that may check task grants.
+    if facts.product != REGISTER
+        && (facts
+            .access_profiles
+            .iter()
+            .any(|profile| profile.exchange.is_some())
+            || facts
+                .assertion_issuers
+                .iter()
+                .any(|issuer| issuer.mapping == AssertionMapping::InstitutionalGrant))
     {
         return Err(refuse(
             "identity.person-audience.task-grant-member",
-            "a member checks task grants, which are bound to its own audience. Give the product its own audience.",
-            format!("{location}/claims"),
+            "only the register may check task grants in the person audience, and this member states an exchange profile or an institutional-grant assertion issuer. Give the product its own audience.",
+            format!("{location}/accessProfiles"),
         ));
     }
     if facts.allowed_clients == Admission::Unrestricted {

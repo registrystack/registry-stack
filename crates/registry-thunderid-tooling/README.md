@@ -243,25 +243,57 @@ resolves no secret.
   every secret. A grant to a client a product does not admit, an unknown
   claim, or a JWK carrying `d`, `p`, `q`, `dp`, `dq` or `qi` is refused.
 - `personAudience` (an absolute URI) names the one audience that the products
-  a person calls from a page may share. They become one resource server, and a
-  grant still resolves to its own product's access profiles. Every member must
-  pass four checks, each its own refusal: it is not `casework`
-  (`identity.person-audience.casework-member`), it declares no
-  `registry_grant_` claim (`...task-grant-member`), it lists its clients
-  rather than `unrestricted` (`...unrestricted-member`), and it states no
-  scope name another member states (`...shared-scope`). A `personAudience`
-  that is not an absolute URI is `identity.person-audience.invalid`.
+  a person calls from a page may share. Only `breg` and `documents` may join
+  (`identity.person-audience.not-a-member-product`). They become one resource
+  server, and a grant still resolves to its own product's access profiles.
+  Every member must pass these checks, each its own refusal: it is not
+  `casework` (`identity.person-audience.casework-member`); unless it is
+  `breg`, it states no exchange profile and no `institutional-grant` assertion
+  issuer, so only the register checks task grants here
+  (`...task-grant-member`); it lists its clients rather than `unrestricted`
+  (`...unrestricted-member`); and it states no scope name another member
+  states (`...shared-scope`). No exchange may name the person audience as its
+  bootstrap resource (`...bootstrap-audience`), a declared `personAudience`
+  that no product uses is refused (`...unused`), and one that is not an
+  absolute URI is `identity.person-audience.invalid`. A user whose grants
+  already hold every scope of a profile that a client reaching them selects,
+  without being granted that profile, is refused
+  (`...client-selects-ungranted-profile`): on a shared audience the token
+  carries the user's own permissions whichever client signed them in.
 - A session application (`sessionApps`) is the confidential client a session
   service uses for one kind of sign-in. Beside a browser application's members
   it states `postLogoutRedirectUris` and `products` (1 to 8 distinct product
-  names). Each listed product must admit its client id, and a grant must name
-  a listed product. It renders with the authorization-code and refresh-token
-  grants, PKCE, the client secret in the token request body, its own sign-out
-  return addresses, and a role covering every listed product. Its access
+  names). Each listed product must admit its client id and state at least one
+  access profile, and a grant must name a listed product. It renders with the
+  authorization-code and refresh-token grants, PKCE, the client secret in the
+  token request body, and its own sign-out return addresses. Its access
   token's default audience is the first listed product's audience, and
-  products that share an audience count once. A client id is unique across
-  clients, browser applications and session applications. The summary counts
-  session applications apart from browser applications.
+  products that share an audience count once. The default audience only labels
+  a token requested with no `resource`: a session service must send `resource`
+  on every authorization and refresh, because ThunderID binds permission
+  tokens through it. A client id is unique across clients, browser
+  applications and session applications. The summary counts session
+  applications apart from browser applications.
+- The role rendered for an application, browser or session, is inert for its
+  sign-in tokens: ThunderID gives an authorization-code token the permissions
+  of the signed-in user, so the user's grants decide. A role holds at most 32
+  permissions per resource server, which a shared server pools across its
+  members (`identity.deployment.too-many-permissions`).
+- `side` on a client (`registry` or `host`) says which side of the trust line
+  it sits on. Only a client that declares `side: registry` may be granted an
+  exchange profile (`identity.deployment.exchange-on-host-client`): a client
+  holding the token-exchange grant can re-audience any live person token, so
+  an omitted `side` counts as `host`. A browser or session application is
+  never granted an exchange profile
+  (`identity.deployment.exchange-not-interactive`).
+- The receipt gains two members when the deployment declares a person
+  audience or session applications: `personAudience` is
+  `{"audience": "...", "products": [...]}` (the member products, sorted), and
+  `sessionApps` maps each session application's client id to
+  `{"products": [...], "audiences": [...]}`, where `audiences` are the distinct
+  audiences of its products with the person audience first and the others
+  sorted. A session service cross-checks its runtime file against them.
+
 - The output directory must not exist. It holds `deployment.yaml` (server
   members to merge into the environment's own file), `resources/resources.yaml`
   (one multi-document file), `registry-schema/agent-type.yaml` and

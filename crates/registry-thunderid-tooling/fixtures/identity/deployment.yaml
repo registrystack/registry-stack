@@ -23,6 +23,7 @@ clients:
       evidence_tags: [field]
   - id: task-agent
     publicJwksFile: keys/task-agent.jwks.json
+    side: registry
     grants:
       - product: evidence
         accessProfiles: [task-invoke]

@@ -340,6 +340,11 @@ fn install_deployment_constraints(schema: &mut Value) {
         "/$defs/SessionApp/properties/products",
         json!({"minItems": 1, "maxItems": deployment::MAXIMUM_SESSION_PRODUCTS}),
     );
+    install_bounds(
+        schema,
+        "/$defs/SessionApp/properties/postLogoutRedirectUris",
+        json!({"minItems": 1, "maxItems": 8}),
+    );
     for pointer in [
         "/$defs/Grant/properties/accessProfiles",
         "/$defs/BrowserApp/properties/redirectUris",

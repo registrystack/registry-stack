@@ -1192,6 +1192,93 @@ mod tests {
         assert!(refused(&users));
     }
 
+    /// A deployment description with one session application over the
+    /// synthetic resource server.
+    fn with_session_application() -> IssuerDescription {
+        let mut description = crate::testing::synthetic_description();
+        let audience = description.resource_servers[0].identifier.clone();
+        description
+            .interactive_applications
+            .push(InteractiveApplication {
+                id: "0197aaaa-0000-7000-8000-0000000000e1".into(),
+                client_id: "session-pages".into(),
+                client_secret_file: "secrets/app".into(),
+                origin: "https://pages.registry.example".into(),
+                redirect_uris: vec!["https://pages.registry.example/cb".into()],
+                audience: audience.clone(),
+                token_attributes: vec!["registry_role".into()],
+                session: Some(SessionSignIn {
+                    post_logout_redirect_uris: vec!["https://pages.registry.example/out".into()],
+                    audiences: vec![audience],
+                }),
+            });
+        description
+    }
+
+    fn deployment_profile() -> Profile<'static> {
+        Profile::Deployment {
+            issuer: "https://id.registry.example",
+        }
+    }
+
+    fn session_mut(description: &mut IssuerDescription) -> &mut SessionSignIn {
+        description.interactive_applications[0]
+            .session
+            .as_mut()
+            .expect("a session application")
+    }
+
+    #[test]
+    fn a_session_application_is_valid_in_a_deployment_and_never_in_a_development_session() {
+        let description = with_session_application();
+        assert!(
+            description.validate_for(deployment_profile()).is_ok(),
+            "{:?}",
+            description.validate_for(deployment_profile())
+        );
+        let mut development = description;
+        for app in &mut development.interactive_applications {
+            app.origin = "http://127.0.0.1:3000".into();
+            app.redirect_uris = vec!["http://127.0.0.1:3000/cb".into()];
+        }
+        assert!(development.validate().is_err());
+    }
+
+    #[test]
+    fn a_session_applications_audiences_and_return_addresses_are_checked() {
+        let refused = |change: &dyn Fn(&mut IssuerDescription)| {
+            let mut description = with_session_application();
+            change(&mut description);
+            matches!(
+                description.validate_for(deployment_profile()),
+                Err(ToolingError::InvalidDescription {
+                    reason:
+                        "session application audiences or sign-out return addresses are invalid"
+                })
+            )
+        };
+        assert!(refused(
+            &|d| session_mut(d).audiences = vec!["urn:other".into()]
+        ));
+        assert!(refused(&|d| {
+            let first = d.interactive_applications[0].audience.clone();
+            session_mut(d).audiences = vec![first.clone(), first];
+        }));
+        assert!(refused(&|d| session_mut(d).audiences.clear()));
+        assert!(refused(&|d| session_mut(d)
+            .post_logout_redirect_uris
+            .clear()));
+        assert!(refused(&|d| {
+            session_mut(d).post_logout_redirect_uris = (0..9)
+                .map(|n| format!("https://pages.registry.example/out{n}"))
+                .collect();
+        }));
+        assert!(refused(&|d| {
+            session_mut(d).post_logout_redirect_uris =
+                vec!["http://pages.registry.example/out".into()];
+        }));
+    }
+
     #[test]
     fn synthetic_users_require_distinct_emails() {
         let mut description = crate::testing::synthetic_description();

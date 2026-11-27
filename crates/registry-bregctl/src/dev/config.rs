@@ -1995,6 +1995,7 @@ pub(super) fn issuer_description(
                 redirect_uris: app.redirect_uris.clone(),
                 audience,
                 token_attributes: app.token_attributes.clone(),
+                session: None,
             });
         description.roles.push(Role {
             id: registry_thunderid_tooling::local::agent_id(

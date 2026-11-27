@@ -29,7 +29,7 @@ use crate::description::{
     TokenExchangeClient, DEFAULT_OU_HANDLE, DEFAULT_OU_ID, PRIVATE_JWK_MEMBERS,
 };
 use crate::identity_deployment::{
-    self as deployment_file, relative_path, ClaimValue, Grant, IdentityDeployment,
+    self as deployment_file, relative_path, ClaimValue, Grant, IdentityDeployment, Side,
 };
 use crate::identity_facts::{
     self as facts_file, https_url, AccessProfile, ActorKind, Admission, AssertionMapping,
@@ -906,6 +906,88 @@ fn assert_only_known_placeholders(
     Ok(())
 }
 
+/// The permissions of one role are bounded per resource server, and a
+/// shared server pools its members' scopes into one.
+const MAXIMUM_PERMISSIONS_PER_SERVER: usize = 32;
+
+fn check_permission_bound(
+    findings: &mut Findings<'_>,
+    pointer: &str,
+    permissions: &[(String, Vec<String>)],
+) {
+    if permissions
+        .iter()
+        .any(|(_, scopes)| scopes.len() > MAXIMUM_PERMISSIONS_PER_SERVER)
+    {
+        findings.error(
+            &format!("{pointer}/grants"),
+            "identity.deployment.too-many-permissions",
+            "the grants resolve to more than 32 permissions on one resource server, which a role cannot hold",
+            "Grant fewer access profiles, or give a product its own audience.",
+        );
+    }
+}
+
+/// On the person audience a user's tokens carry the user's own permissions,
+/// whichever client signed them in, and a product picks the access profile
+/// from the client id. Refuse a user whose grants already hold every scope
+/// of a profile that a client reaching them selects but who is not granted
+/// that profile: signing in through that client would resolve to it.
+fn check_person_selection(
+    findings: &mut Findings<'_>,
+    facts: &MergedFacts,
+    person_audience: &str,
+    pointer: &str,
+    grants: &[Grant],
+    granted: &Granted<'_>,
+    reaching: &dyn Fn(&str) -> Vec<String>,
+) {
+    for (name, product) in facts
+        .products
+        .iter()
+        .filter(|(_, product)| product.audience == person_audience)
+    {
+        let held: BTreeSet<&str> = granted
+            .iter()
+            .filter(|(granted_product, profile)| {
+                granted_product == name && profile.exchange.is_none()
+            })
+            .flat_map(|(_, profile)| profile.scopes.iter().map(String::as_str))
+            .collect();
+        let Some(grant) = grants.iter().position(|grant| &grant.product == name) else {
+            continue;
+        };
+        let clients = reaching(name);
+        for profile in product.access_profiles.values() {
+            let Some(selected) = &profile.requester_clients else {
+                continue;
+            };
+            let is_granted = granted.iter().any(|(granted_product, held_profile)| {
+                granted_product == name && held_profile.id == profile.id
+            });
+            if profile.exchange.is_some()
+                || profile.scopes.is_empty()
+                || is_granted
+                || !profile
+                    .scopes
+                    .iter()
+                    .all(|scope| held.contains(scope.as_str()))
+                || !clients.iter().any(|client| {
+                    selected.contains(client) && product.allowed_clients.admits(client)
+                })
+            {
+                continue;
+            }
+            findings.error(
+                &format!("{pointer}/grants/{grant}"),
+                "identity.person-audience.client-selects-ungranted-profile",
+                "a client that signs this user in selects an access profile the user is not granted, whose scopes the user already holds",
+                "Grant the user that profile too, give the products' profiles distinct scopes, or remove the client from the profile's requesterClients.",
+            );
+        }
+    }
+}
+
 /// The token attributes an application's tokens carry: those it lists, and
 /// beside them the actor kind and the purpose its products require when it
 /// has room to add them. `products` are the products whose audiences the
@@ -979,13 +1061,14 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         .map(|source| facts_file::read(source.label, source.bytes))
         .collect::<Result<Vec<_>, _>>()?;
     // The deployment declares the audience that products may share, so it is
-    // read before the facts merge; its own refusal is reported after the
-    // facts', as it always was.
-    let deployment_read = deployment_file::read(inputs.deployment.label, inputs.deployment.bytes);
-    let person_audience = deployment_read
+    // decoded before the facts merge. Its checks run after the merge, so the
+    // facts' refusal still comes first, and a refused member never hides the
+    // declared audience.
+    let decoded = deployment_file::decode(inputs.deployment.label, inputs.deployment.bytes);
+    let person_audience = decoded
         .as_ref()
         .ok()
-        .and_then(|(deployment, _)| deployment.person_audience.as_deref());
+        .and_then(|decoded| decoded.value.person_audience.as_deref());
     let facts = facts_file::merge_with_person_audience(documents, person_audience)?;
     if !https_url(&facts.issuer) {
         return Err(ToolingError::IdentityRefused {
@@ -994,7 +1077,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             location: "facts/issuer".to_owned(),
         });
     }
-    let (deployment, document) = deployment_read?;
+    let (deployment, document) = deployment_file::check_decoded(decoded?)?;
     let mut findings = Findings {
         document: &document,
         found: Vec::new(),
@@ -1113,6 +1196,9 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
     // For each browser application, the claims the profiles reached through
     // it require: its own grants' and those of every user it signs in.
     let mut projected_requirements: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // For each session application, what a session service reads from the
+    // receipt: its products and the audiences it fetches tokens for.
+    let mut session_receipts: BTreeMap<String, Value> = BTreeMap::new();
 
     for (index, client) in deployment.clients.iter().enumerate() {
         let pointer = format!("/clients/{index}");
@@ -1176,6 +1262,14 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         let agent_id = local::derived_uuid(&format!("{sid}:machine:{}", client.id));
         let mut role_permissions = permissions(&description, &facts, &granted);
         let mut token_exchange = None;
+        if !exchanges.is_empty() && client.side != Some(Side::Registry) {
+            findings.error(
+                &format!("{pointer}/grants"),
+                "identity.deployment.exchange-on-host-client",
+                "an exchange profile is granted to a client that does not declare side: registry, and a client holding the token-exchange grant can re-audience any live person token",
+                "Declare side: registry on a client of the Registry Stack, or remove the exchange grant from the host's client.",
+            );
+        }
         if let Some(exchange) = exchanges.iter().next() {
             if exchanges.len() > 1 {
                 findings.error(
@@ -1357,6 +1451,14 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 );
                 continue;
             };
+            if server_id(&description, &product.audience).is_none() {
+                findings.error(
+                    &format!("{pointer}/products/{position}"),
+                    "identity.deployment.product-without-resource-server",
+                    "the product states no access profile, so no resource server carries its audience",
+                    "Remove the product from the application, or regenerate its facts with an access profile.",
+                );
+            }
             if !product.allowed_clients.admits(&app.id) {
                 findings.error(
                     &format!("{pointer}/products/{position}"),
@@ -1388,6 +1490,24 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 audiences.push(product.audience.clone());
             }
         }
+        let role_permissions = permissions(&description, &facts, &granted);
+        check_permission_bound(&mut findings, &pointer, &role_permissions);
+        // A session service fetches the person audience first, then the
+        // others in sorted order.
+        let mut fetch_order = audiences.clone();
+        fetch_order.sort();
+        if let Some(position) = deployment
+            .person_audience
+            .as_ref()
+            .and_then(|person| fetch_order.iter().position(|audience| audience == person))
+        {
+            let person = fetch_order.remove(position);
+            fetch_order.insert(0, person);
+        }
+        session_receipts.insert(
+            app.id.clone(),
+            json!({"products": app.products, "audiences": fetch_order}),
+        );
         let app_id = local::derived_uuid(&format!("{sid}:application:{}", app.id));
         description
             .interactive_applications
@@ -1408,7 +1528,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             id: local::derived_uuid(&format!("{sid}:role:application:{}", app.id)),
             name: format!("Session {}", app.id),
             description: "Explicit deployment session application permissions".to_owned(),
-            permissions: permissions(&description, &facts, &granted),
+            permissions: role_permissions,
             assigned_agents: vec![],
             assigned_users: vec![],
             assigned_applications: vec![app_id.clone()],
@@ -1483,6 +1603,22 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             }
         }
         if resolved {
+            check_permission_bound(
+                &mut findings,
+                &pointer,
+                &permissions(&description, &facts, &granted),
+            );
+            if let Some(person) = deployment.person_audience.as_deref() {
+                check_person_selection(
+                    &mut findings,
+                    &facts,
+                    person,
+                    &pointer,
+                    &user.grants,
+                    &granted,
+                    &reaching,
+                );
+            }
             check_selection(
                 &mut findings,
                 &facts,
@@ -1654,7 +1790,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
     for (client, digest) in &jwks_digests {
         inputs_receipt["publicJwks"][client] = json!({"digest": digest});
     }
-    let receipt = json!({
+    let mut receipt = json!({
         "apiVersion": RECEIPT_API_VERSION,
         "kind": RECEIPT_KIND,
         "issuer": facts.issuer,
@@ -1664,6 +1800,18 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         "users": user_identities,
         "requiredEnvironment": required_environment,
     });
+    if let Some(audience) = &deployment.person_audience {
+        let members: Vec<&String> = facts
+            .products
+            .iter()
+            .filter(|(_, product)| &product.audience == audience)
+            .map(|(name, _)| name)
+            .collect();
+        receipt["personAudience"] = json!({"audience": audience, "products": members});
+    }
+    if !session_receipts.is_empty() {
+        receipt["sessionApps"] = json!(session_receipts);
+    }
     let mut receipt_text =
         serde_json::to_string_pretty(&receipt).map_err(|_| ToolingError::InvalidRender {
             reason: "the identity receipt did not serialize",
