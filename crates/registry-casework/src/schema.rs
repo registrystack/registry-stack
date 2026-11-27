@@ -595,7 +595,7 @@ mod tests {
             serde_json::json!({"url": url, "hmacSha256KeyRef": null}),
             serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current",
                 "previousHmacSha256KeyRef": null}),
-            serde_json::json!({"url": url, "bearerTokenRef": "secret:file/retired"}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current", "bearerTokenRef": "secret:file/retired"}),
             serde_json::json!({"url": url, "auth": {"secretRef": "secret:file/retired"}}),
         ] {
             let instance = with(refused);

@@ -201,7 +201,10 @@ fn assert_completion_credential_names_replacement(member: &str, value: &str) {
         stderr.contains(&format!("/reviewCompletionDestinations/receiver/{member}")),
         "{stderr}"
     );
-    assert!(stderr.contains("hmacSha256KeyRef"), "{stderr}");
+    assert!(
+        stderr.contains("Configure hmacSha256KeyRef with a Standard Webhooks signing key"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("secret:file/retired"), "{stderr}");
 }
 

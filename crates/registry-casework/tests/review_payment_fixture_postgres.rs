@@ -152,7 +152,7 @@ async fn receive_completion(
 ) -> impl IntoResponse {
     let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
     if header("registry-recipient-binding") != Some(RECEIVER_BINDING) {
-        return StatusCode::FORBIDDEN;
+        return StatusCode::UNAUTHORIZED;
     }
     let (Some(id), Some(timestamp), Some(signature)) = (
         header("webhook-id"),
@@ -851,7 +851,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
     .send()
     .await
     .expect("wrong recipient completion response");
-    assert_eq!(wrong_recipient.status(), StatusCode::FORBIDDEN);
+    assert_eq!(wrong_recipient.status(), StatusCode::UNAUTHORIZED);
     assert!(wrong_recipient
         .bytes()
         .await

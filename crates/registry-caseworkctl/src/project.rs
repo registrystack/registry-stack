@@ -1531,7 +1531,7 @@ mod doctor_tests {
 
     const CANARY: &str = "DOCTOR_SECRET_VALUE_CANARY";
 
-    fn setup() -> (tempfile::TempDir, PathBuf) {
+    fn setup(previous_key_ref: Option<&str>) -> (tempfile::TempDir, PathBuf) {
         let root = crate::canonical_tempdir();
         let project = root.path().join("project");
         init(&project, "standalone-decision").unwrap();
@@ -1546,11 +1546,11 @@ mod doctor_tests {
                 "postgresql://casework@127.0.0.1:1/casework?sslmode=require&connect_timeout=1",
             ),
             ("audit-key", CANARY),
-            ("completion-key", CANARY),
+            ("completion-key", "synthetic-doctor-completion-key!"),
         ] {
             write_secret(&secrets.join(name), bytes.as_bytes(), 0o600);
         }
-        let config = json!({
+        let mut config = json!({
             "apiVersion":registry_casework::RUNTIME_CONFIG_API_VERSION,"kind":registry_casework::RUNTIME_CONFIG_KIND,
             "identity":{"databaseId":"doctor-preflight"},"package":{"root":package_root},
             "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
@@ -1560,6 +1560,10 @@ mod doctor_tests {
             "audit":{"path":root.path().join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"},
             "reviewCompletionDestinations":{"receiver":{"url":"https://completion.example.test/reviews","hmacSha256KeyRef":"secret:file/completion-key"}}
         });
+        if let Some(reference) = previous_key_ref {
+            config["reviewCompletionDestinations"]["receiver"]["previousHmacSha256KeyRef"] =
+                json!(reference);
+        }
         let runtime = root.path().join("runtime.yaml");
         fs::write(&runtime, serde_norway::to_string(&config).unwrap()).unwrap();
         (root, runtime)
@@ -1579,7 +1583,7 @@ mod doctor_tests {
                 "reviewCompletionDestinations.receiver.hmacSha256KeyRef",
             ),
         ] {
-            let (root, runtime) = setup();
+            let (root, runtime) = setup(None);
             fs::remove_file(root.path().join("secrets").join(name)).unwrap();
             let error = doctor(&runtime).unwrap_err();
             let shown = format!("{error:#}");
@@ -1627,8 +1631,47 @@ mod doctor_tests {
     }
 
     #[test]
+    fn doctor_refuses_an_oversized_completion_signing_key() {
+        assert_doctor_refuses_completion_key(&[b'x'; 65], false, "65 bytes");
+    }
+
+    #[test]
+    fn doctor_refuses_repeated_completion_signing_key_bytes() {
+        assert_doctor_refuses_completion_key(
+            &[b'x'; 32],
+            true,
+            "To rotate, write 32 new random bytes",
+        );
+    }
+
+    #[test]
+    fn doctor_refuses_an_empty_completion_signing_key() {
+        assert_doctor_refuses_completion_key(b"", false, "Store a non-empty value");
+    }
+
+    fn assert_doctor_refuses_completion_key(bytes: &[u8], repeat: bool, expected: &str) {
+        let (root, runtime) = setup(repeat.then_some("secret:file/previous-key"));
+        write_secret(&root.path().join("secrets/completion-key"), bytes, 0o600);
+        let path = if repeat {
+            write_secret(&root.path().join("secrets/previous-key"), bytes, 0o600);
+            "/reviewCompletionDestinations/receiver/previousHmacSha256KeyRef"
+        } else {
+            "/reviewCompletionDestinations/receiver/hmacSha256KeyRef"
+        };
+        let error = doctor(&runtime).unwrap_err();
+        let report = error.downcast_ref::<Report>().expect("doctor diagnostic");
+        let [diagnostic] = report.diagnostics() else {
+            panic!("expected one completion key diagnostic");
+        };
+        assert_eq!(diagnostic.path, path);
+        let message = report.to_json_value().to_string();
+        assert!(message.contains(expected), "{message}");
+        assert!(!message.contains(CANARY));
+    }
+
+    #[test]
     fn serving_preflight_accepts_present_secrets_without_a_migration_credential() {
-        let (root, runtime) = setup();
+        let (root, runtime) = setup(None);
         let config = load_runtime_config(&runtime).unwrap();
         let resolver = secret_resolver(&config).unwrap();
         config.check_runtime_secrets(&resolver).unwrap();
@@ -1639,7 +1682,7 @@ mod doctor_tests {
     #[test]
     fn serving_preflight_names_all_unusable_secrets_without_printing_values() {
         for condition in ["mode", "empty", "nul", "oversized", "symlink"] {
-            let (root, runtime) = setup();
+            let (root, runtime) = setup(None);
             let audit = root.path().join("secrets/audit-key");
             match condition {
                 "mode" => write_secret(&audit, CANARY.as_bytes(), 0o644),

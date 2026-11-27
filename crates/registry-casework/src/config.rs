@@ -1023,8 +1023,8 @@ impl RuntimeConfig {
 
     /// Resolve serving secrets without contacting their consumers or retaining
     /// their values. Migration credentials may remain off the serving host and
-    /// are resolved only by `caseworkctl apply`. This checks provider/file
-    /// availability and bounded secret material, not key formats or remote services.
+    /// are resolved only by `caseworkctl apply`. This checks provider and file
+    /// availability, bounded secret material, and completion signing key policy.
     pub fn check_runtime_secrets(&self, resolver: &SecretResolver) -> Result<(), Report> {
         let references =
             self.direct_secret_references()
@@ -1048,13 +1048,30 @@ impl RuntimeConfig {
                 ));
             }
         }
-        for (segments, reference) in self.completion_key_references() {
-            if let Err(error) = resolver.resolve_binary_reference(reference) {
+        if let Err(errors) = crate::runtime::review_completion_targets(
+            &self.review_completion_destinations,
+            resolver,
+        ) {
+            use crate::runtime::CompletionKeyError;
+
+            for error in errors {
+                let (field, code) = match &error {
+                    CompletionKeyError::Unavailable { path, .. } => {
+                        (path, "casework.runtime.secret-unavailable")
+                    }
+                    CompletionKeyError::Invalid { path, .. }
+                    | CompletionKeyError::Repeated { second: path, .. }
+                    | CompletionKeyError::PreviousEqualsCurrent { previous: path, .. } => {
+                        (path, "casework.runtime.invalid-completion-key")
+                    }
+                };
+                let (section, field) = field.split_once('.').expect("completion key section");
+                let (destination, member) = field.rsplit_once('.').expect("completion key member");
                 diagnostics.push(Diagnostic::error(
-                    "casework.runtime.secret-unavailable",
-                    pointer_to(&segments),
-                    describe_secret_failure(&segments.join("."), reference.as_str(), &error),
-                    "Provision a runtime-readable signing key through the configured provider and retry doctor.",
+                    code,
+                    pointer_to(&[section, destination, member]),
+                    error.to_string(),
+                    "Retry doctor after correcting the completion signing key configuration.",
                 ));
             }
         }

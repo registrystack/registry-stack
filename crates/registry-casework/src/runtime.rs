@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use clap::{Arg, Command};
 use registry_casework_core::ReviewContextProvider;
 use registry_platform_audit::{AuditProfile, AuditWriter};
-use registry_platform_config::{SecretReference, SecretResolver};
+use registry_platform_config::{SecretError, SecretReference, SecretResolver};
 use registry_platform_crypto::delivery_signature::{self, DeliveryKey, DeliveryKeys};
 #[cfg(feature = "postgres-test")]
 use registry_platform_dispatch::postgres::DispatchOutcome;
@@ -26,7 +26,7 @@ use crate::{
     router, CaseworkAuthenticator, CaseworkService, HttpState, PostgresStore, RuntimeConfig,
 };
 
-struct ReviewCompletionTarget {
+pub(crate) struct ReviewCompletionTarget {
     url: String,
     keys: DeliveryKeys,
     timeout: Duration,
@@ -42,50 +42,51 @@ fn resolve_completion_key(
     secrets: &SecretResolver,
     path: &str,
     reference: &SecretReference,
-) -> Result<(DeliveryKey, usize, bool), RuntimeError> {
+) -> Result<DeliveryKey, CompletionKeyError> {
     let secret = secrets
         .resolve_binary_reference(reference)
-        .map_err(|_| RuntimeError::CompletionKeyUnavailable(path.to_owned()))?;
+        .map_err(|reason| CompletionKeyError::Unavailable {
+            path: path.to_owned(),
+            reason,
+        })?;
     let bytes = secret.expose_secret();
-    let length = bytes.len();
-    let trailing_newline = bytes.ends_with(b"\n");
-    let key = DeliveryKey::new(bytes).map_err(|source| RuntimeError::InvalidCompletionKey {
+    DeliveryKey::new(bytes).map_err(|source| CompletionKeyError::Invalid {
         path: path.to_owned(),
-        length,
-        trailing_newline,
+        length: bytes.len(),
+        trailing_newline: bytes.ends_with(b"\n"),
         source,
-    })?;
-    Ok((key, length, trailing_newline))
+    })
 }
 
 /// Resolve every configured completion destination and its signing keys.
-fn review_completion_targets(
+pub(crate) fn review_completion_targets(
     configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
     secrets: &SecretResolver,
-) -> Result<BTreeMap<String, Arc<ReviewCompletionTarget>>, RuntimeError> {
+) -> Result<BTreeMap<String, Arc<ReviewCompletionTarget>>, Vec<CompletionKeyError>> {
     use crate::config::{CURRENT_COMPLETION_KEY, PREVIOUS_COMPLETION_KEY};
 
     let mut targets = BTreeMap::new();
+    let mut errors = Vec::new();
     for (id, target) in configured {
-        let (current, _, _) = resolve_completion_key(
-            secrets,
-            &completion_key_path(id, CURRENT_COMPLETION_KEY),
-            &target.hmac_sha256_key_ref,
-        )?;
-        let keys = if let Some(reference) = &target.previous_hmac_sha256_key_ref {
-            let path = completion_key_path(id, PREVIOUS_COMPLETION_KEY);
-            let (previous, length, trailing_newline) =
-                resolve_completion_key(secrets, &path, reference)?;
-            DeliveryKeys::new(current, Some(previous)).map_err(|source| {
-                RuntimeError::InvalidCompletionKey {
-                    path,
-                    length,
-                    trailing_newline,
-                    source,
-                }
-            })?
-        } else {
-            DeliveryKeys::new(current, None).expect("one validated key")
+        let current_path = completion_key_path(id, CURRENT_COMPLETION_KEY);
+        let previous_path = completion_key_path(id, PREVIOUS_COMPLETION_KEY);
+        let current = resolve_completion_key(secrets, &current_path, &target.hmac_sha256_key_ref);
+        let previous = target
+            .previous_hmac_sha256_key_ref
+            .as_ref()
+            .map(|reference| resolve_completion_key(secrets, &previous_path, reference))
+            .transpose();
+        let current = current.map_err(|error| errors.push(error));
+        let previous = previous.map_err(|error| errors.push(error));
+        let (Ok(current), Ok(previous)) = (current, previous) else {
+            continue;
+        };
+        let Ok(keys) = DeliveryKeys::new(current, previous) else {
+            errors.push(CompletionKeyError::PreviousEqualsCurrent {
+                current: current_path,
+                previous: previous_path,
+            });
+            continue;
         };
         targets.insert(
             id.clone(),
@@ -113,14 +114,19 @@ fn review_completion_targets(
             )
         })
         .collect::<Vec<_>>();
-    delivery_signature::distinct_delivery_keys(
+    if let Err(error) = delivery_signature::distinct_delivery_keys(
         labeled_keys.iter().map(|(path, key)| (path.as_str(), *key)),
-    )
-    .map_err(|error| RuntimeError::RepeatedCompletionKey {
-        first: error.first().to_owned(),
-        second: error.second().to_owned(),
-    })?;
-    Ok(targets)
+    ) {
+        errors.push(CompletionKeyError::Repeated {
+            first: error.first().to_owned(),
+            second: error.second().to_owned(),
+        });
+    }
+    if errors.is_empty() {
+        Ok(targets)
+    } else {
+        Err(errors)
+    }
 }
 
 fn review_completion_client() -> Result<reqwest::Client, RuntimeError> {
@@ -616,7 +622,14 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .with_task_authority(task_authority);
     let completion_worker = review_completion_worker(
         store.clone(),
-        review_completion_targets(&config.review_completion_destinations, &secrets)?,
+        review_completion_targets(&config.review_completion_destinations, &secrets).map_err(
+            |errors| {
+                errors
+                    .into_iter()
+                    .next()
+                    .expect("completion target refusal")
+            },
+        )?,
     )
     .await?;
 
@@ -887,23 +900,98 @@ mod tests {
         completion_key_file(root.path(), "other", &[1; 32]);
         completion_key_file(root.path(), "previous", &[0; 32]);
         let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
-        let destinations = BTreeMap::from([
+        let current_path = "reviewCompletionDestinations.first.hmacSha256KeyRef";
+        for (destinations, second_path) in [
             (
-                "first".to_owned(),
-                completion_config("secret:file/current", None),
+                BTreeMap::from([
+                    (
+                        "first".to_owned(),
+                        completion_config("secret:file/current", None),
+                    ),
+                    (
+                        "second".to_owned(),
+                        completion_config("secret:file/other", Some("secret:file/previous")),
+                    ),
+                ]),
+                "reviewCompletionDestinations.second.previousHmacSha256KeyRef",
             ),
             (
-                "second".to_owned(),
-                completion_config("secret:file/other", Some("secret:file/previous")),
+                BTreeMap::from([
+                    (
+                        "first".to_owned(),
+                        completion_config("secret:file/current", None),
+                    ),
+                    (
+                        "second".to_owned(),
+                        completion_config("secret:file/previous", None),
+                    ),
+                ]),
+                "reviewCompletionDestinations.second.hmacSha256KeyRef",
             ),
-        ]);
-        let error = review_completion_targets(&destinations, &secrets)
+        ] {
+            let errors = review_completion_targets(&destinations, &secrets)
+                .err()
+                .unwrap();
+            let [error] = errors.as_slice() else {
+                panic!("expected one completion key refusal");
+            };
+            assert_eq!(
+                error.to_string(),
+                format!("{current_path} and {second_path} resolve to the same key bytes. Give {second_path} its own key by writing 32 new random bytes to another secret and referencing it there.")
+            );
+        }
+
+        let previous_path = "reviewCompletionDestinations.first.previousHmacSha256KeyRef";
+        let destinations = BTreeMap::from([(
+            "first".to_owned(),
+            completion_config("secret:file/current", Some("secret:file/previous")),
+        )]);
+        let errors = review_completion_targets(&destinations, &secrets)
             .err()
             .unwrap();
-        assert!(matches!(error, RuntimeError::RepeatedCompletionKey { .. }));
-        let message = error.to_string();
-        assert!(message.contains("reviewCompletionDestinations.first.hmacSha256KeyRef"));
-        assert!(message.contains("reviewCompletionDestinations.second.previousHmacSha256KeyRef"));
+        let [error] = errors.as_slice() else {
+            panic!("expected one completion key refusal");
+        };
+        assert_eq!(
+            error.to_string(),
+            format!("{previous_path} holds the same bytes as {current_path}. To rotate, write 32 new random bytes to the secret {current_path} references and keep the old bytes behind {previous_path}.")
+        );
+    }
+
+    #[test]
+    fn missing_completion_signing_key_reports_its_resolution_failure() {
+        assert_completion_secret_failure(
+            "missing",
+            registry_platform_config::SecretError::Unavailable,
+        );
+    }
+
+    #[test]
+    fn empty_completion_signing_key_reports_its_resolution_failure() {
+        assert_completion_secret_failure(
+            "empty",
+            registry_platform_config::SecretError::InvalidValue,
+        );
+    }
+
+    fn assert_completion_secret_failure(name: &str, reason: registry_platform_config::SecretError) {
+        let root = tempfile::tempdir().unwrap();
+        completion_key_file(root.path(), "empty", b"");
+        let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
+        let destinations = BTreeMap::from([(
+            "receiver".to_owned(),
+            completion_config(&format!("secret:file/{name}"), None),
+        )]);
+        let errors = review_completion_targets(&destinations, &secrets)
+            .err()
+            .unwrap();
+        let [error] = errors.as_slice() else {
+            panic!("expected one completion key refusal");
+        };
+        assert_eq!(
+            error.to_string(),
+            format!("could not resolve reviewCompletionDestinations.receiver.hmacSha256KeyRef: {reason}. {}", reason.suggested_action())
+        );
     }
 
     #[test]
@@ -917,10 +1005,13 @@ mod tests {
             "receiver".to_owned(),
             completion_config("secret:file/oversized", None),
         )]);
-        let error = review_completion_targets(&destinations, &secrets)
+        let errors = review_completion_targets(&destinations, &secrets)
             .err()
             .unwrap();
-        assert!(matches!(error, RuntimeError::InvalidCompletionKey { .. }));
+        let [error] = errors.as_slice() else {
+            panic!("expected one completion key refusal");
+        };
+        assert!(matches!(error, CompletionKeyError::Invalid { .. }));
         let message = error.to_string();
         assert!(message.contains("reviewCompletionDestinations.receiver.hmacSha256KeyRef"));
         assert!(message.contains("65 bytes"));
@@ -1030,6 +1121,28 @@ mod tests {
 
         assert!(!deliver_review_completion(&client, &target, &delivery).await);
         assert!(deliver_review_completion(&client, &target, &delivery).await);
+
+        let attempts = server.received_requests().await.expect("recorded requests");
+        let [first, second] = attempts.as_slice() else {
+            panic!("expected exactly two completion attempts");
+        };
+        assert_eq!(first.headers["webhook-id"], second.headers["webhook-id"]);
+        assert_eq!(first.body, second.body);
+        for attempt in [first, second] {
+            let header = |name: &str| attempt.headers[name].to_str().unwrap();
+            delivery_signature::verify(
+                &target.keys,
+                delivery_signature::SignedContent {
+                    id: header("webhook-id"),
+                    timestamp: header("webhook-timestamp"),
+                    signature: header("webhook-signature"),
+                    body: &attempt.body,
+                },
+                SystemTime::now(),
+                delivery_signature::DELIVERY_TOLERANCE,
+            )
+            .unwrap();
+        }
 
         Mock::given(method("POST"))
             .and(path("/nonempty-success"))
@@ -1158,8 +1271,30 @@ mod tests {
         assert_eq!(header("webhook-id"), delivery.event.event_id.to_string());
         assert_eq!(header("accept"), "application/json");
         assert_eq!(header("content-type"), "application/json");
-        assert!(!request.headers.contains_key("authorization"));
-        assert!(!request.headers.contains_key("idempotency-key"));
+        let names: std::collections::BTreeSet<_> = request
+            .headers
+            .keys()
+            .map(|name| name.as_str())
+            .filter(|name| !matches!(*name, "host" | "content-length" | "connection"))
+            .collect();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from([
+                "accept",
+                "content-type",
+                "registry-recipient-binding",
+                "webhook-id",
+                "webhook-signature",
+                "webhook-timestamp",
+            ])
+        );
+        assert!(verify(
+            &completion_test_keys(),
+            content,
+            SystemTime::now(),
+            DELIVERY_TOLERANCE,
+        )
+        .is_err());
     }
 
     #[test]
@@ -1394,17 +1529,8 @@ pub enum RuntimeError {
     AuditDestination(String),
     #[error("the Casework review completion destination configuration is invalid")]
     CompletionConfiguration,
-    #[error("could not resolve {0}. Check the configured secret reference")]
-    CompletionKeyUnavailable(String),
-    #[error("{path} has {length} bytes (trailing newline: {trailing_newline}). {source}")]
-    InvalidCompletionKey {
-        path: String,
-        length: usize,
-        trailing_newline: bool,
-        source: delivery_signature::DeliveryKeyError,
-    },
-    #[error("{first} and {second} share the same signing key bytes. Configure distinct keys")]
-    RepeatedCompletionKey { first: String, second: String },
+    #[error(transparent)]
+    CompletionKey(#[from] CompletionKeyError),
     #[error("the CASEWORK_LOG level is invalid; it must be one of error, warn, or info")]
     Logging,
     #[error(transparent)]
@@ -1417,6 +1543,28 @@ pub enum RuntimeError {
     MetricsListen(#[source] std::io::Error),
     #[error("a Casework background worker stopped")]
     WorkerStopped,
+}
+
+/// A value-free refusal of a configured completion signing key.
+#[derive(Debug, Error)]
+pub enum CompletionKeyError {
+    #[error("could not resolve {path}: {reason}. {}", reason.suggested_action())]
+    Unavailable {
+        path: String,
+        #[source]
+        reason: SecretError,
+    },
+    #[error("{path} has {length} bytes (trailing newline: {trailing_newline}). {source}")]
+    Invalid {
+        path: String,
+        length: usize,
+        trailing_newline: bool,
+        source: delivery_signature::DeliveryKeyError,
+    },
+    #[error("{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there.")]
+    Repeated { first: String, second: String },
+    #[error("{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}.")]
+    PreviousEqualsCurrent { current: String, previous: String },
 }
 
 impl RuntimeError {

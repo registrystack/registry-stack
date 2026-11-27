@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -40,10 +40,12 @@ Check each delivery in this order.
 
 1. Match `registry-recipient-binding` to your configured recipient and select its signing keys.
    Require a single header value for the binding and for each of the three `webhook-*` headers.
+   Return the same 401 response for an unknown binding and a bad signature.
    This unsigned binding only selects keys.
    Use distinct keys for each recipient so a substituted binding selects a different key.
 2. Read the raw body with a size limit.
 3. Verify the Standard Webhooks HMAC-SHA256 signature over the exact bytes of `webhook-id + "." + webhook-timestamp + "." + body`.
+   Give a Standard Webhooks library the raw key bytes.
    Accept a valid signature for either configured key and require the signed timestamp to be within 300 seconds of your clock in either direction.
 4. Require the `application/json` content type.
 5. Parse the JSON strictly as the five fields above.
@@ -51,9 +53,14 @@ Check each delivery in this order.
    Refuse duplicate, unknown or missing members.
 6. Require `eventId` to equal `webhook-id`.
 
+For canonical hook envelopes, the maintained Rust verifier is `registry_platform_hooks::receiver::verify_hook_delivery`.
+For the Casework completion body shown above, use `registry_platform_crypto::delivery_signature::verify` and then parse the authenticated bytes as described in steps 4 through 6.
+See the receiver procedure and tested example in the [delivery signing reference](../../reference/delivery-signing/).
+
 {/* Evidence: crates/registry-casework/src/runtime.rs deliver_review_completion, review_completion_signs_the_exact_bytes_it_sends;
     crates/registry-casework/tests/review_payment_fixture_postgres.rs receive_completion;
-    crates/registry-platform-crypto/src/delivery_signature.rs verify */}
+    crates/registry-platform-crypto/src/delivery_signature.rs verify;
+    crates/registry-platform-hooks/src/receiver.rs verify_hook_delivery */}
 
 ### Acknowledgement
 
