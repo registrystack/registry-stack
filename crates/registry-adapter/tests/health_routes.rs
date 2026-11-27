@@ -14,7 +14,6 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use registry_adapter::engine::effective_contract::WELL_KNOWN_PATH;
 use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
 use served_harness::upstream::UpstreamDouble;
 use served_harness::{copy_example_project, replace_profile_text, Served};
@@ -201,11 +200,8 @@ async fn probes_append_no_journal_row() {
 }
 
 #[tokio::test]
-async fn a_project_declaring_health_or_ready_is_unserved_with_the_reserved_path_reason() {
-    for (record_type, probe_path, body) in [
-        ("health", HEALTH_PATH, HEALTH_BODY),
-        ("ready", READY_PATH, READY_BODY),
-    ] {
+async fn a_project_declaring_health_or_ready_refuses_to_start() {
+    for record_type in ["health", "ready"] {
         let upstream = UpstreamDouble::start();
         let directory = tempfile::tempdir().expect("a copied Adapter project");
         copy_example_project(directory.path());
@@ -220,29 +216,21 @@ async fn a_project_declaring_health_or_ready_is_unserved_with_the_reserved_path_
         std::fs::write(&project_path, project.replace("person", record_type))
             .expect("write the colliding project");
 
-        let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
-        assert_probe(&raw(&served, "GET", probe_path, None), 200, body);
-
-        let token = served.token("");
-        let readback = served.get(WELL_KNOWN_PATH, Some(&token));
-        assert_eq!(readback.0, 200, "{}", readback.2);
-        let unserved = readback.2["contract"]["unserved"]
-            .as_array()
-            .expect("the contract carries unserved operations");
-        let colliding: Vec<_> = unserved
-            .iter()
-            .filter(|entry| entry["reasonCode"] == "adapter.operation.reserved-facade-path")
-            .collect();
+        // The workspace check refuses the colliding binding before the facade
+        // builds a router, so the probe route is never shadowed.
+        let stderr = Served::refusal_with_project(&upstream.url(""), directory.path()).await;
         assert!(
-            !colliding.is_empty(),
-            "{probe_path} is refused as reserved: {unserved:?}"
+            stderr.contains("the workspace check refused the deployment"),
+            "{record_type}: {stderr}"
         );
-        for entry in colliding {
-            assert_eq!(
-                entry["reason"],
-                "the facade path is reserved for the Adapter effective-contract, health and ready routes"
-            );
-        }
-        assert_eq!(upstream.request_count(), 0);
+        assert!(
+            stderr.contains("adapter.project.reserved-facade-path"),
+            "{record_type}: {stderr}"
+        );
+        assert_eq!(
+            upstream.request_count(),
+            0,
+            "a refused deployment performs no source I/O"
+        );
     }
 }
