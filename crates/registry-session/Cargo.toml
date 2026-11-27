@@ -1,0 +1,32 @@
+[package]
+name = "registry-session"
+description = "A small session service beside a gateway: signs a person in once, keeps their tokens on the server, and tells the gateway which bearer token to attach to each call."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+axum.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { workspace = true, features = ["util"] }

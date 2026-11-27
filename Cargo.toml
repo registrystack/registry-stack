@@ -79,6 +79,7 @@ members = [
     "crates/registry-mcp-edge",
     "crates/registry-mcp",
     "crates/registry-breg-review",
+    "crates/registry-session",
     "crates/registry-breg-client-node",
     "crates/registry-breg-client-py",
     "crates/registry-breg",

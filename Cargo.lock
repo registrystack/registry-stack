@@ -8572,6 +8572,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-session"
+version = "0.49.0"
+dependencies = [
+ "axum",
+ "registry-platform-audit",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-yaml",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "registry-stack-client"
 version = "0.49.0"
 dependencies = [
