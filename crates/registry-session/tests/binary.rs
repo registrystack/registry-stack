@@ -114,3 +114,103 @@ async fn the_check_reports_a_refused_file_without_serving() {
     assert_eq!(code, 1);
     assert!(stderr.contains("refused"), "{stderr}");
 }
+
+const GATEWAY_FIXTURE: &str = include_str!("gateway/runtime.yaml");
+
+/// Run `gateway envoy` on `runtime_text`, with the sentinel secrets in the
+/// process environment and in the file provider's directory. Returns the exit
+/// code, everything the command printed, and the content of every file it
+/// wrote.
+fn gateway_with_secrets(runtime_text: &str, extra: &[&str]) -> (i32, String, String) {
+    let directory = tempfile::tempdir().expect("directory");
+    let root = directory.path().canonicalize().expect("canonical");
+    let secrets = root.join("secrets");
+    std::fs::create_dir(&secrets).expect("secrets directory");
+    for name in ["citizen-secret", "staff-secret"] {
+        std::fs::write(secrets.join(name), "SENTINEL-FILE-SECRET").expect("secret file");
+    }
+    let runtime = root.join("runtime.yaml");
+    std::fs::write(
+        &runtime,
+        runtime_text.replacen(
+            "root: /run/secrets",
+            &format!("root: {}", secrets.display()),
+            1,
+        ),
+    )
+    .expect("runtime file");
+    let out = root.join("out");
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-session"))
+        .arg("--runtime-config")
+        .arg(&runtime)
+        .args(["gateway", "envoy", "--out"])
+        .arg(&out)
+        .args(extra)
+        .env("SESSION_AUDIT_KEY", "SENTINEL-ENVIRONMENT-SECRET")
+        .env("SESSION_TEST_GATEWAY_HOST", "SENTINEL-ENVIRONMENT-HOST")
+        .output()
+        .expect("run the binary");
+    let mut written = String::new();
+    if let Ok(entries) = std::fs::read_dir(&out) {
+        for entry in entries {
+            written.push_str(
+                &std::fs::read_to_string(entry.expect("entry").path()).expect("generated file"),
+            );
+        }
+    }
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (output.status.code().expect("exit code"), printed, written)
+}
+
+#[test]
+fn the_gateway_fragments_carry_no_secret_the_process_can_reach() {
+    let (code, printed, written) = gateway_with_secrets(GATEWAY_FIXTURE, &[]);
+    assert_eq!(code, 0, "{printed}");
+    assert!(
+        written.contains("registry-session.check"),
+        "files were written"
+    );
+    for text in [&printed, &written] {
+        for needle in [
+            "SENTINEL-FILE-SECRET",
+            "SENTINEL-ENVIRONMENT-SECRET",
+            "citizen-secret",
+            "SESSION_AUDIT_KEY",
+        ] {
+            assert!(!text.contains(needle), "{needle} reached the output");
+        }
+    }
+}
+
+#[test]
+fn an_environment_value_never_reaches_the_fragments_through_a_gateway_member() {
+    let text = GATEWAY_FIXTURE.replacen(
+        "host: registry-session",
+        "host: ${SESSION_TEST_GATEWAY_HOST}",
+        1,
+    );
+    let (code, printed, written) = gateway_with_secrets(&text, &[]);
+    assert_eq!(code, 1, "{printed}");
+    assert!(printed.contains("/gateway"), "{printed}");
+    assert!(written.is_empty(), "nothing was written");
+    assert!(!printed.contains("SENTINEL"), "{printed}");
+}
+
+#[test]
+fn verifying_an_assembled_file_needs_the_runtime_file() {
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-session"))
+        .args([
+            "gateway",
+            "envoy",
+            "--verify-assembled",
+            "/nonexistent/envoy.yaml",
+        ])
+        .output()
+        .expect("run the binary");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--runtime-config is required"));
+}

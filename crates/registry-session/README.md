@@ -95,3 +95,33 @@ as a scheduling product, is written with that audience instead of `person`.
 scheme and host, no default port, no path, no trailing slash. Under
 `development-loopback` it must be `http://127.0.0.1`, `http://[::1]` or
 `http://localhost`, with any port.
+
+### The generated gateway fragments and the host's chain
+
+`registry-session gateway envoy` writes four fragments from the runtime file.
+Splice them in as their header comments say, and check the result with
+`registry-session --runtime-config <file> gateway envoy --verify-assembled <envoy.yaml>`.
+
+- **Filter order.** The three filters (`registry-session.csrf`,
+  `registry-session.check`, `registry-session.strip-cookies`) go at the head of the
+  host's HTTP filter chain, ahead of the host's own filters and its router, in that
+  order. Host filters then never see the session cookie on a host route, and on a
+  signed-in route they see the check's `Authorization`, not the browser's.
+- **Local reply.** The generated mapper must be the first mapper of the connection
+  manager's `local_reply_config`. Envoy uses the first mapper that matches.
+- **Routes.** The generated routes go first in the virtual host that serves the
+  public authority, in the generated order. Routes delivered by RDS cannot be
+  verified, so write the route configuration inline.
+- **Authority and ports.** `gateway.authority` is lower case, as a browser sends it.
+  When it carries a port, the connection manager must not strip ports before routing
+  (`strip_any_host_port` and `strip_matching_host_port` are refused by the verifier),
+  or no generated route would match.
+- **Host filters.** `gateway.hostFilters` lists the host's own filters. It may not
+  name the service's filters or the router.
+- **No environment.** The generator reads no environment variable: a `${NAME}`
+  expression in the gateway members, a module id or prefix, or `publicOrigin` is
+  refused, so `--check` gives the same answer everywhere.
+- **Writes need an `Origin`.** A write to a module is refused (403 `session.refused`)
+  unless it carries the page header, an `Origin` equal to the public origin, and, when
+  sent, `Sec-Fetch-Site: same-origin`. A browser sends `Origin` on every write, so its
+  absence means the gateway dropped it.

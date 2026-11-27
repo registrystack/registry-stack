@@ -28,7 +28,10 @@ use crate::config::{ModuleConfig, Route, RuntimeConfig};
 use crate::grants::{GrantError, Grants};
 use crate::journal::{Action, Journal, Outcome};
 use crate::store::{well_formed_token, Store};
-use crate::wire::{problem, ProblemKind, ANSWER_MARKER_HEADER, ANSWER_MARKER_VALUE};
+use crate::wire::{
+    problem, ProblemKind, ANSWER_MARKER_HEADER, ANSWER_MARKER_VALUE, CLIENT_HEADER,
+    FETCH_SITE_HEADER, ORIGIN_HEADER,
+};
 
 /// The path prefix the gateway adds to the original path.
 pub const CHECK_PREFIX: &str = "/check";
@@ -224,7 +227,7 @@ impl<G: Grants> Checker<G> {
         // whatever its method: it could trigger a read with side effects.
         if matches!(route, Route::Module(_))
             && matches!(
-                single_header(headers, "sec-fetch-site"),
+                single_header(headers, FETCH_SITE_HEADER),
                 Ok(Some("cross-site")) | Err(())
             )
         {
@@ -469,12 +472,14 @@ pub(crate) fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Op
 }
 
 /// Whether a write to a module comes from the service's own page: the page
-/// header exactly, an `Origin` equal to the public origin when present, and a
-/// `Sec-Fetch-Site` of `same-origin` when present.
+/// header exactly, an `Origin` equal to the public origin, and a
+/// `Sec-Fetch-Site` of `same-origin` when present. A browser sends `Origin` on
+/// every request that is not a GET or HEAD, so a write without one was
+/// stripped on the way or did not come from a browser.
 fn same_origin_page_call(headers: &HeaderMap, origin: &str) -> bool {
-    single_header(headers, "registry-client") == Ok(Some("page"))
-        && single_header(headers, "origin").is_ok_and(|value| value.is_none_or(|v| v == origin))
-        && single_header(headers, "sec-fetch-site")
+    single_header(headers, CLIENT_HEADER) == Ok(Some("page"))
+        && single_header(headers, ORIGIN_HEADER) == Ok(Some(origin))
+        && single_header(headers, FETCH_SITE_HEADER)
             .is_ok_and(|value| value.is_none_or(|v| v == "same-origin"))
 }
 
@@ -1038,8 +1043,22 @@ mod tests {
                 "session.refused",
             );
         }
-        let allowed = post(vec![("registry-client", "page")]).await;
-        assert_allowed(&allowed);
+        // A browser sends Origin on every write, so a write without one was
+        // stripped by the gateway or did not come from a browser.
+        assert_problem(
+            &post(vec![("registry-client", "page")]).await,
+            StatusCode::FORBIDDEN,
+            "session.refused",
+        );
+        assert_problem(
+            &post(vec![
+                ("registry-client", "page"),
+                ("sec-fetch-site", "same-origin"),
+            ])
+            .await,
+            StatusCode::FORBIDDEN,
+            "session.refused",
+        );
         let allowed = post(vec![
             ("registry-client", "page"),
             ("origin", "https://app.example"),

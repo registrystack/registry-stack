@@ -16,6 +16,22 @@ pub const ANSWER_MARKER_HEADER: &str = "registry-session-answer";
 /// The value of [`ANSWER_MARKER_HEADER`].
 pub const ANSWER_MARKER_VALUE: &str = "1";
 
+/// The request header a page sets on its calls to a module.
+pub const CLIENT_HEADER: &str = "registry-client";
+
+/// The request header that names the site a request came from.
+pub const ORIGIN_HEADER: &str = "origin";
+
+/// The request header the browser fills in with the relation between the
+/// requesting site and the target.
+pub const FETCH_SITE_HEADER: &str = "sec-fetch-site";
+
+/// The request headers the gateway forwards to the check: the session cookie
+/// and the three the check's cross-site rules read. The check reads no other
+/// request header than the method and the path.
+pub const CHECK_REQUEST_HEADERS: [&str; 4] =
+    ["cookie", ORIGIN_HEADER, FETCH_SITE_HEADER, CLIENT_HEADER];
+
 /// The prefix of every session problem's `type` URI.
 const PROBLEM_TYPE_PREFIX: &str =
     "https://id.registrystack.org/problems/registry-platform/session/";
@@ -78,7 +94,9 @@ impl ProblemKind {
         format!("{PROBLEM_TYPE_PREFIX}{}", self.suffix())
     }
 
-    const fn title(self) -> &'static str {
+    /// The problem's `title` member.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
         match self {
             Self::Refused => "Forbidden",
             Self::Expired => "Session expired",

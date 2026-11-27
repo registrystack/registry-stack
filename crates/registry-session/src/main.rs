@@ -44,13 +44,7 @@ fn operational_log_level(
 async fn main() -> ExitCode {
     let matches = command().get_matches();
     let given = matches.get_one::<PathBuf>("runtime-config");
-    let verify_only = matches
-        .subcommand_matches("gateway")
-        .and_then(|gateway| gateway.subcommand_matches("envoy"))
-        .is_some_and(|envoy| envoy.contains_id("verify-assembled"));
-    // Verifying an assembled file reads no runtime file.
-    let none = PathBuf::new();
-    let Some(path) = given.or(verify_only.then_some(&none)) else {
+    let Some(path) = given else {
         eprintln!("registry-session: --runtime-config is required");
         return ExitCode::from(2);
     };
@@ -79,17 +73,8 @@ async fn main() -> ExitCode {
         let Some(("envoy", arguments)) = gateway_arguments.subcommand() else {
             return ExitCode::from(2);
         };
-        if let Some(assembled) = arguments.get_one::<PathBuf>("verify-assembled") {
-            return match gateway::verify_assembled(assembled) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    eprintln!("registry-session: {error}");
-                    ExitCode::FAILURE
-                }
-            };
-        }
         let result = if let Some(assembled) = arguments.get_one::<PathBuf>("verify-assembled") {
-            gateway::verify_assembled(assembled)
+            gateway::verify_assembled(path, assembled)
         } else {
             let mode = match (
                 arguments.get_one::<PathBuf>("out"),

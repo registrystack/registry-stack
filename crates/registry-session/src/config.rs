@@ -683,17 +683,18 @@ checked_text!(
 
 checked_text!(
     /// An `:authority` value: a host with an optional port, 1 to 260 ASCII
-    /// letters, digits, `.`, `-`, `_`, `:`, `[` or `]`.
+    /// lower-case letters, digits, `.`, `-`, `_`, `:`, `[` or `]`.
     Authority,
     |text| {
         (1..=260).contains(&text.len())
             && text.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':' | b'[' | b']')
+                (byte.is_ascii_alphanumeric() && !byte.is_ascii_uppercase())
+                    || matches!(byte, b'.' | b'-' | b'_' | b':' | b'[' | b']')
             })
     },
     Invalid::expected(
-        "a host with an optional port, such as app.example or 127.0.0.1:8120",
-        "Write the authority the browser sends, without the scheme."
+        "a lower-case host with an optional port, such as app.example or 127.0.0.1:8120",
+        "Write the authority as the browser sends it, in lower case and without the scheme."
     )
 );
 
@@ -1327,7 +1328,7 @@ fn endpoint_findings(
 /// Whether `prefix` is a path prefix the check can match exactly: it starts
 /// and ends with `/`, holds only visible ASCII, and has no empty segment, dot
 /// segment, percent sign, backslash, query, or fragment.
-fn clean_prefix(prefix: &str) -> bool {
+pub(crate) fn clean_prefix(prefix: &str) -> bool {
     prefix.len() <= MAXIMUM_PREFIX_BYTES
         && prefix.starts_with('/')
         && prefix.ends_with('/')
@@ -1504,6 +1505,19 @@ fn gateway_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
              check on the public listener",
             "Give the check its own port, the one checkListener binds.",
         ));
+    }
+    for (position, name) in gateway.host_filters.iter().enumerate() {
+        if name.as_str().starts_with("registry-session.")
+            || name.as_str() == "envoy.filters.http.router"
+        {
+            findings.push(Finding::new(
+                "platform.session-runtime.reserved-host-filter",
+                &format!("/gateway/hostFilters/{position}"),
+                "hostFilters names a filter the service adds itself, or the router, and \
+                 switching one off on a signed-in route would remove the check or the cookie strip",
+                "List only the host's own filters, by the names its HTTP filter chain gives them.",
+            ));
+        }
     }
     let routes = config
         .modules

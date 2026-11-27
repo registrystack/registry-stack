@@ -40,7 +40,7 @@ pub fn command() -> Command {
             Arg::new("runtime-config")
                 .long("runtime-config")
                 .value_name("FILE")
-                .help("Runtime configuration file (every command but `gateway envoy --verify-assembled`)")
+                .help("Runtime configuration file")
                 .value_parser(value_parser!(PathBuf)),
         )
         .subcommand(
@@ -121,7 +121,10 @@ pub fn command() -> Command {
                             Arg::new("verify-assembled")
                                 .long("verify-assembled")
                                 .value_name("FILE")
-                                .help("Verify an assembled Envoy configuration file")
+                                .help(
+                                    "Verify an assembled Envoy configuration file against the fragments the \
+                                     runtime file generates",
+                                )
                                 .value_parser(value_parser!(PathBuf)),
                         ),
                 ),
@@ -159,13 +162,6 @@ mod tests {
             "/d",
             "--check",
             "/d",
-            "--verify-assembled",
-            "/e.yaml"
-        ]));
-        // Verifying an assembled file reads no runtime file.
-        assert!(parses(&[
-            "gateway",
-            "envoy",
             "--verify-assembled",
             "/e.yaml"
         ]));
