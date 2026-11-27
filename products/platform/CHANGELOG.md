@@ -54,6 +54,17 @@
   post-logout return URIs. Generated applications use authorization-code and
   refresh-token grants with PKCE. The receipt records each application's
   distinct audiences, with the person audience first and the rest sorted.
+- `rstack identity generate thunderid` writes `front-gateway/envoy.yaml`, a
+  static Envoy file that sits in front of ThunderID. People cannot change their
+  own user record through the identity provider's self-service API;
+  administrators manage it. `PUT`, `PATCH` and `DELETE` on `/users/me` and every
+  path below it answer 403 `identity.self-service-edit-refused`, and a
+  method-override header answers 403 `identity.method-override-refused`. The
+  file routes sign-in, OAuth 2.0, discovery, the flow API, the sign-in page,
+  reading one's own record and changing one's password. Every other path,
+  including the admin API and the console, answers 404. It listens on 8080
+  and forwards to `thunderid:8090`. ThunderID publishes no host port, and
+  operators reach the admin API and console on the internal network.
 - Every token attribute in generated identity output comes from the
   deployment file, a declared federated issuer or the generator. Every
   generated user type carries `allowSelfRegistration: false`, every browser
