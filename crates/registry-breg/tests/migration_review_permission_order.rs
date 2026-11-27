@@ -69,6 +69,7 @@ fn reversed(action: &CompiledAction) -> CompiledAction {
 
 #[test]
 fn reordering_grants_keeps_the_migration_review_revision() {
+    // Submit, not Edit: an Edit grant must hold Get, which would overlap the other default's Get.
     let action = compile_action(&project(json!(["submit"]), json!(["get"])));
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
         panic!("Proposal")

@@ -777,3 +777,52 @@ fn module_contributed_profiles_cannot_declare_a_task_grant() {
         );
     }
 }
+
+/// Only a standing agent drafts blind. A human profile, a task-granted agent
+/// and a profile with no actor kind that may edit must read every input.
+#[test]
+fn only_a_standing_agent_may_edit_inputs_it_cannot_read() {
+    const UNREADABLE: &str = "breg.proposal.input-write-unreadable";
+    let editing = |value: &mut Value| {
+        value["accessProfiles"]["assistant"]["permissions"]["proposals"][0]["operations"] =
+            json!(["get", "edit"]);
+    };
+    let mut human = project();
+    human["accessProfiles"]["assistant"]["actorKind"] = json!("human");
+    editing(&mut human);
+    let mut delegated = project();
+    delegated["accessProfiles"]["assistant"]["requiredPurposes"] = json!(["correction-review"]);
+    delegated["accessProfiles"]["assistant"]["taskGrant"] =
+        json!({"sourceIssuer":"https://casework.example"});
+    editing(&mut delegated);
+    let mut unspecified = project();
+    let profile = unspecified["accessProfiles"]["assistant"]
+        .as_object_mut()
+        .expect("profile object");
+    profile.remove("actorKind");
+    profile.remove("requesterClients");
+    editing(&mut unspecified);
+    for (case, value) in [
+        ("human", human),
+        ("task-granted agent", delegated),
+        ("no actor kind", unspecified),
+    ] {
+        let failure = refused(compile(&value), case);
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == UNREADABLE)
+            .unwrap_or_else(|| panic!("{case}: {:?}", codes(&failure)));
+        assert!(
+            diagnostic.message.contains("`assistant`"),
+            "{case}: {diagnostic:?}"
+        );
+        let mut reads = value.clone();
+        assistant_reads_its_inputs(&mut reads);
+        if let Err(failure) = compile(&reads) {
+            assert!(!codes(&failure).contains(&UNREADABLE), "{case}");
+        }
+    }
+    // The standing agent edits without Get or readableInputs.
+    compile(&project()).expect("a standing agent drafts blind");
+}

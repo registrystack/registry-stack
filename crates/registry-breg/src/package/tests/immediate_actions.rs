@@ -938,7 +938,15 @@ fn proposal_write_grants_must_read_every_input_they_may_write() {
                 && diagnostics.contains("operator")
                 && diagnostics.contains("rename-item")
                 && diagnostics.contains("item")
-                && diagnostics.contains("readableInputs"),
+                && diagnostics.contains(
+                    "accessProfiles[id=operator].permissions.proposals[action=rename-item].readableInputs"
+                ),
+            "{operation}: {diagnostics}"
+        );
+        // The fixed-input rule keeps every input outside writableInputs readable, so
+        // narrowing writableInputs never resolves this refusal.
+        assert!(
+            !diagnostics.contains("narrow writableInputs"),
             "{operation}: {diagnostics}"
         );
         // writableInputs present: only the writable inputs must be readable.

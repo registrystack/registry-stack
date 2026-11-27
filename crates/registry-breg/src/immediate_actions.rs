@@ -3331,11 +3331,16 @@ fn compile_execution(
                     .cloned()
                     .collect::<Vec<_>>();
                 if !unreadable.is_empty() {
+                    // Narrowing writableInputs cannot help: the fixed-input rule below
+                    // requires every input outside it to be readable too.
                     errors.push(Diagnostic::error(
                         "breg.proposal.input-write-unreadable",
-                        "accessProfiles[].permissions.proposals[].readableInputs",
+                        format!(
+                            "accessProfiles[id={}].permissions.proposals[action={}].readableInputs",
+                            profile.id, action.id
+                        ),
                         &format!(
-                            "access profile `{}` may write input(s) {} of Action `{}` through edit, revise, or rebase but cannot read them, so a client would clear or lose them. Next: add {} to readableInputs (with get), or narrow writableInputs",
+                            "access profile `{}` may write input(s) {} of Action `{}` through edit, revise, or rebase but cannot read them, so a client would clear or lose them. Next: add {} to readableInputs (with get)",
                             profile.id,
                             unreadable.join(", "),
                             action.id,
