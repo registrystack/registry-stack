@@ -8,6 +8,7 @@ impl CaseworkService {
         if !self.store.audit_ready().await {
             return Err(StoreError::AuditUnavailable.into());
         }
+        let expired = self.store.expire_due_review_asks(maximum).await?;
         let candidates = self.store.due_review_clock_tasks(maximum).await?;
         let mut verified = Vec::new();
         for task_id in candidates {
@@ -40,9 +41,11 @@ impl CaseworkService {
                 self.store.defer_review_clock_task(task_id).await?;
             }
         }
-        self.store
+        let applied = self
+            .store
             .process_due_review_clocks(maximum, &verified)
-            .await
+            .await?;
+        Ok(expired + applied)
     }
 }
 impl PostgresStore {

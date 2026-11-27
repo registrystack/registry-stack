@@ -242,6 +242,7 @@ fn project(issuer: &str) -> CaseworkProject {
         teams: vec![serde_json::from_value(json!({"id":"review-team","label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]})).unwrap()],
         review_policies: vec![
             ReviewPolicy {
+                resubmission: ReviewResubmissionPolicy::default(),
                 id: "registry-correction".to_owned(),
                 label: None,
                 version: "1".to_owned(),
@@ -285,6 +286,7 @@ fn project(issuer: &str) -> CaseworkProject {
                     }],
             },
             ReviewPolicy {
+                resubmission: ReviewResubmissionPolicy::default(),
                 id: "registry-answer".to_owned(),
                 label: None,
                 version: "1".to_owned(),
@@ -7010,7 +7012,7 @@ async fn a_subject_from_one_issuer_does_not_reach_records_of_the_same_subject_fr
 fn asks_http_project(idp: &MockIdp) -> CaseworkProject {
     let mut asking = project(&idp.issuer());
     asking.review_policies[0].context = ReviewContextPolicy::Submitted;
-    asking.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {});
+    asking.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy::default());
     asking.trusted_producers[0].reads_asks = true;
     asking.trusted_producers[1].reads_asks = true;
     asking.check().expect("asking project");
@@ -7043,6 +7045,138 @@ async fn http_json(
         .expect("bounded body")
         .to_vec();
     (status, response_headers, bytes)
+}
+
+#[tokio::test]
+async fn c2_due_pause_expiry_and_delivery_lag_follow_the_http_contract() {
+    let idp = MockIdp::start().await;
+    let mut project = asks_http_project(&idp);
+    project.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {
+        answer_within: Some(ElapsedDuration::Hours(1)),
+        pause_clocks: true,
+        ..Default::default()
+    });
+    project.clocks.push(ClockPolicy::Subject {
+        id: "subject-budget".into(),
+        anchor: SubjectClockAnchor {
+            kind: SubjectClockAnchorType::RequestAccepted,
+        },
+        after: ElapsedDuration::Days(5),
+    });
+    project.review_policies[0]
+        .clocks
+        .push("subject-budget".into());
+    let (app, service, _, _, _, _, database) = app_with_project(&idp, project).await;
+    let mut input = review_request_for_subject("ask-due-http", "ask-due-http-ref", &idp.issuer());
+    input.context = ReviewContext::Submitted {
+        snapshot: json!({"summary": "Timed ask"}),
+    };
+    let (created, task) = create_task(&app, &database, &idp, &input).await;
+    let reviewer = reviewer_token(&idp);
+    claim_task_over_http(&app, task, &reviewer, "claim").await;
+    let staff = vec![
+        ("authorization", format!("Bearer {reviewer}")),
+        (CASEWORK_PROFILE_HEADER, "staff".into()),
+    ];
+    let mut mutation = staff.clone();
+    mutation.extend([
+        ("if-match", "\"2\"".into()),
+        ("idempotency-key", "ask".into()),
+    ]);
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        format!("/v1/review-tasks/{task}/asks"),
+        &mutation,
+        Some(json!({"text":"Why?","wants":[{"kind":"answer"}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let asked: ReviewTaskAsked = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        asked.ask.due_at,
+        Some(asked.ask.asked_at + chrono::TimeDelta::hours(1))
+    );
+    let clock_uri = format!("/v1/review-requests/{}/clocks", created.request_id);
+    let (status, _, body) = http_json(&app, "GET", clock_uri.clone(), &staff, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()[0]["state"],
+        "paused"
+    );
+    let due = chrono::Utc::now() - chrono::TimeDelta::minutes(1);
+    let due = chrono::DateTime::parse_from_rfc3339(
+        &due.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+    )
+    .unwrap()
+    .with_timezone(&chrono::Utc);
+    database
+        .execute(
+            "UPDATE casework_review_asks SET asked_at=$2,due_at=$3 WHERE ask_id=$1",
+            &[
+                &asked.ask.ask_id,
+                &(due - chrono::TimeDelta::hours(1)),
+                &due,
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(service.process_due_review_clocks(100).await.unwrap(), 1);
+    let (status, _, body) = http_json(
+        &app,
+        "GET",
+        "/v1/review-tasks?marker=expired".into(),
+        &staff,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let page: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["items"][0]["marker"], "expired");
+    let producer = vec![
+        ("authorization", format!("Bearer {}", token(&idp))),
+        (REVIEW_PROFILE_HEADER, "producer".into()),
+        ("idempotency-key", "answer-late".into()),
+    ];
+    let answer_uri = format!(
+        "/v1/review-requests/{}/asks/{}/answer",
+        created.request_id, asked.ask.ask_id
+    );
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        answer_uri.clone(),
+        &producer,
+        Some(json!({"subject":input.subject,"answeredAt":due+chrono::TimeDelta::microseconds(1)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["code"],
+        "review.ask-not-open"
+    );
+    let mut producer = producer;
+    producer[2].1 = "answer-on-time".into();
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        answer_uri,
+        &producer,
+        Some(json!({"subject":input.subject,"answeredAt":due})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["state"],
+        "answered"
+    );
+    let (_, _, body) = http_json(&app, "GET", clock_uri, &staff, None).await;
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()[0]["state"],
+        "running"
+    );
+    idp.stop().await;
 }
 
 #[tokio::test]

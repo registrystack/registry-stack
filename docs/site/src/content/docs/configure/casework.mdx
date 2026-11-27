@@ -458,7 +458,19 @@ Omitting the field offers every policy outcome.
 `caseworkctl explain` always reports the effective outcomes for each stage, including the all-policy default.
 
 A `changes-requested` result ends that review version.
-A resubmission is a new version that starts at the policy's first stage; it does not resume the earlier review in place.
+A resubmission creates a new request and starts at the first stage by default.
+Set `resubmission: resume-at-returning-stage` on the review policy to start at the stage that requested changes.
+Casework finds the same producer's latest earlier request that settled as `changes-requested`.
+The subject source, type, and ID must match.
+Casework also requires the same policy ID.
+Casework reads the stage of the decision that settled the earlier request.
+Casework matches the returning stage by its ID in the new policy.
+If that stage no longer exists, Casework starts at the first stage.
+Casework resumes within the earlier request's result retention, and starts a resubmission at the first stage after that.
+The `review-resumed-at-stage` history row names the earlier request and stage.
+Earlier approvals are not carried over.
+The subject clock starts with a fresh budget.
+Omitting `resubmission` preserves the policy digest.
 
 {/* Evidence: crates/registry-casework-core/src/review.rs ReviewNegativeDecisionMode;
     products/casework/examples/stage-outcomes/casework.yaml outcomes */}
@@ -522,16 +534,62 @@ The task stays claimed by the same holder.
 The producer reads the ask on `GET /v1/review-asks`, a resumable feed of announcements, and then on `GET /v1/review-requests/{requestId}/asks/{askId}`.
 It reports the answer with `POST /v1/review-requests/{requestId}/asks/{askId}/answer`, which carries the subject binding and the time the answer was committed.
 It carries no text.
-Only the producer that created the request can answer, an unknown or foreign ask answers with an empty `404`, and an ask that is not open answers `409` with `review.ask-not-open`.
+Only the producer that created the request can answer.
+Casework returns an empty `404` for an unknown or foreign ask.
+Casework returns `409 review.ask-not-open` for answered or closed asks and for answers given after `dueAt`.
 The answer time must not precede the ask or lie more than five minutes ahead of Casework's clock, or Casework answers `review.ask-answer-time-invalid`.
 
 A task with an open ask carries the marker `waiting`, and the marker becomes `answered` when the producer reports the answer.
 The marker stays with the task if the holder releases it or a supervisor reassigns it, so the next holder sees it.
-`GET /v1/review-tasks` and the holdings list take `marker=waiting` or `marker=answered`.
+`GET /v1/review-tasks` and the holdings list accept `marker=waiting`, `marker=answered`, or `marker=expired`.
 The task context lists the request's asks with their text, wants, times, state and the task that asked.
 
 An ask closes when the task that holds it is decided, and every open ask closes when the request settles or is cancelled.
 Asks and their feed announcements are erased with the request's history.
+
+Set `answerWithin` under `asks` to give the applicant an elapsed-time budget:
+
+```yaml
+asks:
+  answerWithin:
+    hours: 48
+  onDue: return-to-reviewer
+  pauseClocks: true
+```
+
+`answerWithin` accepts one unit: `minutes`, `hours`, or `days`, as elapsed clocks do.
+Casework calculates the absolute `dueAt` from its own `askedAt` time.
+Without `answerWithin`, the ask has no due date.
+`onDue` defaults to `return-to-reviewer`, its only supported value.
+After `dueAt`, clock maintenance expires an open ask and records `closedAt`.
+Casework sets the task marker to `expired` and leaves the task with its holder.
+Casework writes an `ask-expired` history row, an audit record, and a producer feed announcement.
+
+The producer learns of asks by polling, so delivery can lag.
+Casework judges timeliness by `answeredAt`, the time the applicant answered, rather than when the report arrives.
+Casework accepts an answer at or before `dueAt` even after maintenance marks the ask expired.
+Delivery lag therefore never makes an on-time answer late.
+The ask becomes `answered` and the task marker becomes `answered`.
+The `ask-answered` history detail records `arrivedAfterDue` when the report arrives after the deadline.
+An answer after `dueAt` receives `409 review.ask-not-open` and changes nothing.
+
+`pauseClocks` defaults to `false`.
+When `true`, Casework pauses the subject clock and current stage activity clocks while the ask is open.
+Paused clocks produce no reminders, steps, or task deadlines.
+`GET /v1/review-requests/{requestId}/clocks` shows their state as `paused`.
+An answer, expiry, or close resumes those clocks.
+Casework moves pending instants later by the elapsed wall-clock pause duration for both elapsed-time and working-day clocks.
+Casework uses wall time for working-day clocks too, including weekends and holidays.
+The `clock-paused` and `clock-resumed` history rows identify each clock.
+The resume row records `pausedSeconds`.
+Casework audits both transitions.
+
+{/* Evidence: crates/registry-casework/tests/review_postgres.rs,
+    c2_ask_due_date_is_absolute_and_delivery_lag_does_not_make_an_answer_late;
+    c2_a_late_answer_is_refused_before_the_expiry_runner_runs;
+    c2_ask_pause_shifts_the_clock_and_resumes_on_answer;
+    c2_resubmission_resumes_at_the_returning_stage_with_a_fresh_clock;
+    c2_resubmission_starts_at_first_stage_after_result_retention */}
 
 {/* Evidence: crates/registry-casework/tests/review_postgres.rs,
     the_holder_asks_the_applicant_and_the_producer_reads_the_ask;

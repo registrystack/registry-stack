@@ -23,9 +23,9 @@ use registry_casework_core::{
     InboxPolicy, IssuerPrincipal, ProjectIdentity, QueuePolicy, ReviewCompletion,
     ReviewCompletionDestinationPolicy, ReviewCompletionType, ReviewContext, ReviewContextPolicy,
     ReviewCreateRequest, ReviewNegativeDecisionMode, ReviewPolicy, ReviewProducerPolicy,
-    ReviewPurpose, ReviewRequestAccepted, ReviewResult, ReviewResultFeedPage, ReviewResultStatus,
-    ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage, SubjectBinding,
-    CASEWORK_PROFILE_HEADER, REVIEW_PROFILE_HEADER,
+    ReviewPurpose, ReviewRequestAccepted, ReviewResubmissionPolicy, ReviewResult,
+    ReviewResultFeedPage, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
+    ReviewTaskPage, SubjectBinding, CASEWORK_PROFILE_HEADER, REVIEW_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_crypto::delivery_signature::{
@@ -389,6 +389,7 @@ fn project(issuer: &str) -> CaseworkProject {
         teams: Vec::new(),
         context_providers: Vec::new(),
         review_policies: vec![ReviewPolicy {
+            resubmission: ReviewResubmissionPolicy::default(),
             id: "payment-batch".to_owned(),
             label: None,
             version: "1".to_owned(),

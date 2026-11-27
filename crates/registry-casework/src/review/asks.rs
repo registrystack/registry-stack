@@ -23,7 +23,7 @@ fn stored_time(time: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 const ASK_COLUMNS: &str =
-    "ask_id,request_id,task_id,text,wants,state,asked_at,answered_at,closed_at";
+    "ask_id,request_id,task_id,text,wants,state,asked_at,answered_at,closed_at,due_at";
 
 impl CaseworkService {
     /// Opens an ask from the task the caller holds.
@@ -111,6 +111,56 @@ impl CaseworkService {
 }
 
 impl PostgresStore {
+    /// Expiry shares the request lock with answering and deciding. The answer
+    /// time, rather than which transaction wins that lock, decides lateness.
+    pub(super) async fn expire_due_review_asks(
+        &self,
+        maximum: usize,
+    ) -> Result<usize, ReviewRuntimeError> {
+        let now = stored_time(Utc::now());
+        let limit =
+            i64::try_from(maximum.clamp(1, 100)).map_err(|_| ReviewRuntimeError::Invalid)?;
+        let mut client = self.client().await?;
+        let rows = client
+            .query(
+                "SELECT a.ask_id,a.request_id,a.task_id FROM casework_review_asks a
+             JOIN casework_review_requests r USING(request_id)
+             WHERE a.state='open' AND a.due_at<$1 AND r.lifecycle='reviewing'
+             ORDER BY a.due_at,a.ask_id LIMIT $2",
+                &[&now, &limit],
+            )
+            .await?;
+        let mut expired = 0;
+        for row in rows {
+            // Commit each request before taking another request lock. Holding
+            // the producer's feed lock while waiting for its next request
+            // would invert the lock order of an answering producer.
+            let mut audit = self.begin_background_audit().await?;
+            let tx = client.transaction().await?;
+            let ask_id: Uuid = row.get(0);
+            let request_id: Uuid = row.get(1);
+            let task_id: Uuid = row.get(2);
+            if tx.query_opt("SELECT request_id FROM casework_review_requests WHERE request_id=$1 AND lifecycle='reviewing' FOR UPDATE SKIP LOCKED", &[&request_id]).await?.is_none() {
+                continue;
+            }
+            let record = load_request_by_id(&tx, request_id, false).await?;
+            if tx.execute("UPDATE casework_review_asks SET state='expired',closed_at=$2 WHERE ask_id=$1 AND state='open' AND due_at<$2", &[&ask_id,&now]).await? == 0 {
+                continue;
+            }
+            tx.execute("UPDATE casework_review_tasks SET ask_marker='expired',revision=revision+1,updated_at=$2 WHERE task_id=$1 AND state IN ('open','claimed')", &[&task_id,&now]).await?;
+            tx.execute("UPDATE casework_review_requests SET revision=revision+1,updated_at=$2 WHERE request_id=$1", &[&request_id,&now]).await?;
+            insert_ask_event(&tx, &record, ask_id, "expired", now).await?;
+            super::ask_clocks::resume(&tx, request_id, ask_id, now).await?;
+            let event_id = Uuid::new_v4();
+            tx.execute("INSERT INTO casework_review_history(event_id,request_id,task_id,kind,actor_ref,detail,occurred_at) VALUES($1,$2,$3,'ask-expired',NULL,$4,$5)", &[&event_id,&request_id,&task_id,&json!({"askId":ask_id}),&now]).await?;
+            audit.record(event_id, json!({"event":"casework.review-ask-expired","profileId":"system:clocks","reviewRequestId":request_id,"reviewTaskId":task_id,"reviewAskId":ask_id}))?;
+            super::ask_clocks::audit_events(&tx, request_id, &mut audit).await?;
+            audit.commit(tx).await?;
+            expired += 1;
+        }
+        Ok(expired)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn ask_applicant(
         &self,
@@ -187,20 +237,21 @@ impl PostgresStore {
             .stages
             .get(usize::from(stage_index))
             .ok_or(ReviewRuntimeError::Corrupt)?;
-        if stage.asks.is_none() {
-            return Err(ReviewRuntimeError::ReviewAskNotOffered);
-        }
+        let options = stage.asks.ok_or(ReviewRuntimeError::ReviewAskNotOffered)?;
         if !producer_reads_asks {
             return Err(ReviewRuntimeError::ReviewAskProducerUnsupported);
         }
         let ask_id = Uuid::new_v4();
+        let due_at = options
+            .answer_within
+            .map(|duration| now + TimeDelta::seconds(duration.seconds()));
         let actor_ref = actor_reference(&actor.principal);
         let wants = serde_json::to_value(&request.wants)?;
         transaction
             .execute(
                 "INSERT INTO casework_review_asks(
-                    ask_id,request_id,task_id,stage_index,text,wants,state,asked_at,asked_by_ref)
-                 VALUES($1,$2,$3,$4,$5,$6,'open',$7,$8)",
+                    ask_id,request_id,task_id,stage_index,text,wants,state,asked_at,asked_by_ref,due_at)
+                 VALUES($1,$2,$3,$4,$5,$6,'open',$7,$8,$9)",
                 &[
                     &ask_id,
                     &request_id,
@@ -210,11 +261,15 @@ impl PostgresStore {
                     &wants,
                     &now,
                     &actor_ref,
+                    &due_at,
                 ],
             )
             .await
             .map_err(map_open_ask_conflict)?;
         insert_ask_event(&transaction, &record, ask_id, "opened", now).await?;
+        if options.pause_clocks {
+            super::ask_clocks::pause(&transaction, request_id, ask_id, now).await?;
+        }
         let metadata = transaction
             .query_one(
                 "UPDATE casework_review_tasks
@@ -259,7 +314,7 @@ impl PostgresStore {
             text: request.text,
             wants: request.wants,
             asked_at: now,
-            due_at: None,
+            due_at,
             state: ReviewAskState::Open,
             answered_at: None,
             closed_at: None,
@@ -310,6 +365,7 @@ impl PostgresStore {
             &serde_json::to_value(&response)?,
         )
         .await?;
+        super::ask_clocks::audit_events(&transaction, request_id, &mut audit).await?;
         audit.commit(transaction).await?;
         Ok(response)
     }
@@ -449,7 +505,11 @@ impl PostgresStore {
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
         let current = ask_from_row(&row, &record)?;
-        if current.state != ReviewAskState::Open {
+        if !matches!(
+            current.state,
+            ReviewAskState::Open | ReviewAskState::Expired
+        ) || current.due_at.is_some_and(|due| answer.answered_at > due)
+        {
             return Err(ReviewRuntimeError::ReviewAskNotOpen);
         }
         if answer.answered_at < current.asked_at || answer.answered_at > now + ASK_ANSWER_CLOCK_SKEW
@@ -459,7 +519,7 @@ impl PostgresStore {
         let task_id = row.get::<_, Uuid>(2);
         let answered_at = transaction
             .query_one(
-                "UPDATE casework_review_asks SET state='answered',answered_at=$2
+                "UPDATE casework_review_asks SET state='answered',answered_at=$2,closed_at=NULL
                  WHERE ask_id=$1 RETURNING answered_at",
                 &[&ask_id, &answer.answered_at],
             )
@@ -481,6 +541,7 @@ impl PostgresStore {
             )
             .await?;
         insert_ask_event(&transaction, &record, ask_id, "answered", now).await?;
+        super::ask_clocks::resume(&transaction, request_id, ask_id, now).await?;
         let history_event_id = Uuid::new_v4();
         transaction
             .execute(
@@ -491,7 +552,7 @@ impl PostgresStore {
                     &history_event_id,
                     &request_id,
                     &task_id,
-                    &json!({"askId": ask_id}),
+                    &json!({"askId": ask_id, "arrivedAfterDue": current.due_at.is_some_and(|due| now > due)}),
                     &now,
                 ],
             )
@@ -514,6 +575,7 @@ impl PostgresStore {
         let response = ReviewAsk {
             state: ReviewAskState::Answered,
             answered_at: Some(answered_at),
+            closed_at: None,
             ..current
         };
         response.check().map_err(|_| ReviewRuntimeError::Corrupt)?;
@@ -528,6 +590,7 @@ impl PostgresStore {
             &serde_json::to_value(&response)?,
         )
         .await?;
+        super::ask_clocks::audit_events(&transaction, request_id, &mut audit).await?;
         audit.commit(transaction).await?;
         Ok(response)
     }
@@ -561,8 +624,8 @@ impl PostgresStore {
     }
 }
 
-/// Closes the open ask of a request when the task that holds it is decided or
-/// the request ends. `task_id` limits the close to that task's ask. Every close
+/// Closes open and expired asks when their task is decided or the request
+/// ends. `task_id` limits the close to that task's asks. Every close
 /// is announced on the producer's feed in the same transaction.
 pub(super) async fn close_open_asks(
     transaction: &impl GenericClient,
@@ -574,14 +637,16 @@ pub(super) async fn close_open_asks(
     let closed = transaction
         .query(
             "UPDATE casework_review_asks SET state='closed',closed_at=$2
-             WHERE request_id=$1 AND state='open'
+             WHERE request_id=$1 AND state IN ('open','expired')
                AND ($3::uuid IS NULL OR task_id=$3)
              RETURNING ask_id",
             &[&record.request_id, &now, &task_id],
         )
         .await?;
     for row in closed {
-        insert_ask_event(transaction, record, row.get(0), "closed", now).await?;
+        let ask_id = row.get(0);
+        insert_ask_event(transaction, record, ask_id, "closed", now).await?;
+        super::ask_clocks::resume(transaction, record.request_id, ask_id, now).await?;
     }
     Ok(())
 }
@@ -670,7 +735,7 @@ fn ask_from_row(row: &Row, record: &ReviewRequestRecord) -> Result<ReviewAsk, Re
         text: row.get(3),
         wants: wants_from_json(row.get(4))?,
         asked_at: row.get(6),
-        due_at: None,
+        due_at: row.get(9),
         state,
         answered_at: row.get(7),
         closed_at: row.get(8),

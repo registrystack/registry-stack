@@ -19,7 +19,7 @@ const PINS: &[(&str, &str)] = &[
     ),
     (
         "0202_review_asks.sql",
-        "a423a281c3c6da4a0213ac6fece8c8d7e93f30b7a0aa88098f3fbbdac851ffa9",
+        "cba29b3218068da9c18db567fdc5583da8023a7cbec58147a6d557ec87079577",
     ),
 ];
 

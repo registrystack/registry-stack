@@ -71,6 +71,19 @@
 - The runtime schema declares no empty default for an issuer entry's
   `assertionIssuers`. Omitting the member still means no assertion-issuer rule
   applies.
+- Stages can set `asks.answerWithin` and `asks.onDue: return-to-reviewer`.
+  Casework expires overdue asks and marks their tasks `expired`. Answers are
+  judged by `answeredAt`, including on-time answers delivered after expiry.
+- Stages can set `asks.pauseClocks: true`. Clocks read as `paused` until the
+  ask is answered, expires, or closes. Pending instants move by the wall-clock
+  pause duration for both elapsed-time and working-day clocks. History and
+  audit record pause and resume.
+- Policies can set `resubmission: resume-at-returning-stage`. New requests
+  start at the latest returning stage for the same producer, subject, and
+  policy, using the settling decision within result retention, with fresh
+  clocks and no carried approvals. Later resubmissions start at the first
+  stage. Omission keeps the
+  first-stage default and the policy digest.
 - A reviewer who holds a task can ask the applicant. A stage opts in with
   `asks: {}` (approval policies only), and a producer declares
   `readsAsks: true`. `POST /v1/review-tasks/{task_id}/asks` opens the ask. The
