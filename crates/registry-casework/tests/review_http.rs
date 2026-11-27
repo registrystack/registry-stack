@@ -7006,3 +7006,213 @@ async fn a_subject_from_one_issuer_does_not_reach_records_of_the_same_subject_fr
     idp.stop().await;
     other.stop().await;
 }
+
+fn asks_http_project(idp: &MockIdp) -> CaseworkProject {
+    let mut asking = project(&idp.issuer());
+    asking.review_policies[0].context = ReviewContextPolicy::Submitted;
+    asking.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {});
+    asking.trusted_producers[0].reads_asks = true;
+    asking.trusted_producers[1].reads_asks = true;
+    asking.check().expect("asking project");
+    asking
+}
+
+async fn http_json(
+    app: &axum::Router,
+    method: &str,
+    uri: String,
+    headers: &[(&str, String)],
+    body: Option<Value>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let mut request = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    let request = match body {
+        Some(body) => request
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap())),
+        None => request.body(Body::empty()),
+    }
+    .expect("request");
+    let response = app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let response_headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("bounded body")
+        .to_vec();
+    (status, response_headers, bytes)
+}
+
+#[tokio::test]
+async fn the_ask_command_and_the_producer_ask_routes_follow_the_contract_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_project(&idp, asks_http_project(&idp)).await;
+    let mut created_request = review_request_for_subject("ask-http", "ask-http-ref", &idp.issuer());
+    created_request.context = ReviewContext::Submitted {
+        snapshot: json!({"summary": "Ask over HTTP"}),
+    };
+    let (created, task) = create_task(&app, &database, &idp, &created_request).await;
+    let request_id = created.request_id;
+    let reviewer = reviewer_token(&idp);
+    claim_task_over_http(&app, task, &reviewer, "claim-ask-http").await;
+    let staff_headers = |key: &str, revision: &str| {
+        vec![
+            ("authorization", format!("Bearer {reviewer}")),
+            (CASEWORK_PROFILE_HEADER, "staff".to_owned()),
+            ("if-match", format!("\"{revision}\"")),
+            ("idempotency-key", key.to_owned()),
+        ]
+    };
+    let ask_body = json!({"text": "Send the signed form.", "wants": [{"kind": "answer"}]});
+    let uri = format!("/v1/review-tasks/{task}/asks");
+
+    // A stale revision is refused before anything changes.
+    let (status, _, _) = http_json(
+        &app,
+        "POST",
+        uri.clone(),
+        &staff_headers("ask-stale", "1"),
+        Some(ask_body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        uri.clone(),
+        &staff_headers("ask-1", "2"),
+        Some(ask_body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let asked: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(asked["task"]["marker"], "waiting");
+    assert_eq!(asked["task"]["revision"], 3);
+    assert_eq!(asked["ask"]["state"], "open");
+    let ask_id = asked["ask"]["askId"].as_str().unwrap().to_owned();
+
+    // A second open ask is its own problem.
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        uri.clone(),
+        &staff_headers("ask-2", "3"),
+        Some(ask_body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["code"],
+        "review.ask-already-open"
+    );
+
+    let producer = vec![
+        ("authorization", format!("Bearer {}", token(&idp))),
+        (REVIEW_PROFILE_HEADER, "producer".to_owned()),
+    ];
+    let other = vec![
+        (
+            "authorization",
+            format!("Bearer {}", alternate_producer_token(&idp)),
+        ),
+        (REVIEW_PROFILE_HEADER, "producer-alternate".to_owned()),
+    ];
+    let (status, _, body) = http_json(
+        &app,
+        "GET",
+        "/v1/review-asks?limit=10".to_owned(),
+        &producer,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let feed: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(feed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(feed["items"][0]["askId"], ask_id.as_str());
+    let (_, _, body) = http_json(&app, "GET", "/v1/review-asks".to_owned(), &other, None).await;
+    assert!(serde_json::from_slice::<Value>(&body).unwrap()["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let ask_uri = format!("/v1/review-requests/{request_id}/asks/{ask_id}");
+    let (status, _, body) = http_json(&app, "GET", ask_uri.clone(), &producer, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["text"],
+        "Send the signed form."
+    );
+    // Another producer's read is a bare empty 404 with no content type.
+    let (status, headers, body) = http_json(&app, "GET", ask_uri.clone(), &other, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.is_empty());
+    assert!(headers.get(CONTENT_TYPE).is_none());
+
+    let subject = serde_json::to_value(&created_request.subject).unwrap();
+    let answered_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    let answer_uri = format!("{ask_uri}/answer");
+    let answer_headers = |key: &str, mut base: Vec<(&'static str, String)>| {
+        base.push(("idempotency-key", key.to_owned()));
+        base
+    };
+    let answer = json!({"subject": subject, "answeredAt": answered_at});
+
+    // The answer carries no text: an extra member is refused.
+    let mut with_text = answer.clone();
+    with_text["text"] = json!("my answer");
+    let (status, _, _) = http_json(
+        &app,
+        "POST",
+        answer_uri.clone(),
+        &answer_headers("answer-text", producer.clone()),
+        Some(with_text),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // Another producer: concealed.
+    let (status, headers, body) = http_json(
+        &app,
+        "POST",
+        answer_uri.clone(),
+        &answer_headers("answer-other", other.clone()),
+        Some(answer.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.is_empty() && headers.get(CONTENT_TYPE).is_none());
+
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        answer_uri.clone(),
+        &answer_headers("answer-1", producer.clone()),
+        Some(answer.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let answered: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(answered["state"], "answered");
+    assert_eq!(answered["answeredAt"], answered_at.as_str());
+    // A second answer under another key is the not-open problem.
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        answer_uri,
+        &answer_headers("answer-2", producer),
+        Some(answer),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["code"],
+        "review.ask-not-open"
+    );
+
+    // The reviewer's task read carries the answered marker.
+    let task_json = read_task_json(&app, task, &reviewer).await;
+    assert_eq!(task_json["marker"], "answered");
+    idp.stop().await;
+}
