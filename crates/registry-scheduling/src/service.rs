@@ -2912,9 +2912,9 @@ impl SchedulingService {
                     CommitError::KeyReused | CommitError::KeyExpired => {
                         Unanswered::Unfinished(key_refusal_reason(&error))
                     }
-                    CommitError::Unauthorized | CommitError::GrantLapsed => {
-                        Unanswered::Denied("authorization.refused")
-                    }
+                    CommitError::Unauthorized
+                    | CommitError::NotAttendable
+                    | CommitError::GrantLapsed => Unanswered::Denied("authorization.refused"),
                     CommitError::Refused(_)
                     | CommitError::HoldCeiling
                     | CommitError::RevisionMismatch
@@ -3015,16 +3015,18 @@ impl SchedulingService {
                 };
                 self.record_refusal(correlation, record).await?;
                 Err(match RefusalCode::of(problem) {
-                    // `CommitError::Unauthorized` and `CommitError::GrantLapsed`
-                    // are the only commit failures that refuse authority: the
-                    // target is not this caller's to change, or the grant or
-                    // its access token lapsed inside the transaction.
+                    // `CommitError::Unauthorized`, `CommitError::NotAttendable`
+                    // and `CommitError::GrantLapsed` are the only commit
+                    // failures that refuse authority: the target is not this
+                    // caller's to change, the appointment takes no attendance
+                    // in its current state, or the grant or its access token
+                    // lapsed inside the transaction.
                     Some(code) => ServiceError::Refused {
                         code,
-                        check: if matches!(error, CommitError::GrantLapsed) {
-                            FailedCheck::TaskGrantExpired
-                        } else {
-                            FailedCheck::Ownership
+                        check: match error {
+                            CommitError::GrantLapsed => FailedCheck::TaskGrantExpired,
+                            CommitError::NotAttendable => FailedCheck::Visibility,
+                            _ => FailedCheck::Ownership,
                         },
                     },
                     None => ServiceError::Problem(problem),
@@ -3878,7 +3880,9 @@ fn problem_of(error: &CommitError) -> ProblemCode {
         CommitError::KeyReused => ProblemCode::IdempotencyKeyReused,
         CommitError::KeyExpired => ProblemCode::IdempotencyExpired,
         CommitError::HoldCeiling => ProblemCode::CapacityExhausted,
-        CommitError::Unauthorized | CommitError::GrantLapsed => ProblemCode::OperationNotAuthorized,
+        CommitError::Unauthorized | CommitError::NotAttendable | CommitError::GrantLapsed => {
+            ProblemCode::OperationNotAuthorized
+        }
         CommitError::RevisionMismatch => ProblemCode::RevisionMismatch,
         CommitError::ObservationInFuture => ProblemCode::RequestUnprocessable,
         CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed,
@@ -3893,8 +3897,9 @@ fn problem_of(error: &CommitError) -> ProblemCode {
 /// The decision a stored receipt carries, as its replay's `response` entry
 /// records it. A success receipt was allowed. A refusal receipt was written
 /// only for a decision the ledger took, so it keeps the reason its first
-/// answer recorded: a lapsed grant is `authorization.refused`, every other
-/// ledger refusal `authorization.profile`.
+/// answer recorded: an `operation.not-authorized` receipt (a lapsed grant, or
+/// a target the caller does not manage) is `authorization.refused`, every
+/// other ledger refusal `authorization.profile`.
 fn replayed_decision(status_code: u16, receipt: &Value) -> (AuthorizationOutcome, &'static str) {
     if status_code < 400 {
         return (AuthorizationOutcome::Allowed, "authorization.allowed");
@@ -4587,6 +4592,10 @@ mod tests {
         );
         assert_eq!(
             problem_of(&CommitError::Unauthorized),
+            ProblemCode::OperationNotAuthorized
+        );
+        assert_eq!(
+            problem_of(&CommitError::NotAttendable),
             ProblemCode::OperationNotAuthorized
         );
         assert_eq!(
