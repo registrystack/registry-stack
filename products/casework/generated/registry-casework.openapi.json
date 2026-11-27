@@ -4577,6 +4577,25 @@
       },
       "ReviewStageAsksPolicy": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "pauseClocks": {
+                  "const": true
+                }
+              },
+              "required": [
+                "pauseClocks"
+              ]
+            },
+            "then": {
+              "required": [
+                "answerWithin"
+              ]
+            }
+          }
+        ],
         "description": "`asks: {}` offers an ask without a deadline or clock pause.",
         "properties": {
           "answerWithin": {

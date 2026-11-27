@@ -277,6 +277,13 @@ pub struct ReviewStagePolicy {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(
+    feature = "schema",
+    schemars(extend("allOf" = [{
+        "if": {"properties": {"pauseClocks": {"const": true}}, "required": ["pauseClocks"]},
+        "then": {"required": ["answerWithin"]}
+    }]))
+)]
 pub struct ReviewStageAsksPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer_within: Option<crate::ElapsedDuration>,

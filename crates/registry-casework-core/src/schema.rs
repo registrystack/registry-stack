@@ -332,6 +332,34 @@ mod tests {
     }
 
     #[test]
+    fn project_schema_requires_an_answer_deadline_when_asks_pause_clocks() {
+        let documents = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
+        let schema = compiled(&document);
+        let authored =
+            include_str!("../../../products/casework/examples/stage-outcomes/casework.yaml");
+        let decoded = crate::CaseworkProject::read("casework.yaml", authored.as_bytes()).unwrap();
+        let mut project = decoded.document.to_json_value();
+        for asks in [
+            serde_json::json!({}),
+            serde_json::json!({"pauseClocks":false}),
+            serde_json::json!({"pauseClocks":true,"answerWithin":{"hours":1}}),
+        ] {
+            project["reviewPolicies"]["grant-review"]["stages"][0]["asks"] = asks;
+            assert!(
+                schema.is_valid(&project),
+                "bounded or unpaused asks remain valid"
+            );
+        }
+        project["reviewPolicies"]["grant-review"]["stages"][0]["asks"] =
+            serde_json::json!({"pauseClocks":true});
+        assert!(
+            !schema.is_valid(&project),
+            "editors must refuse an unbounded clock pause"
+        );
+    }
+
+    #[test]
     fn project_schema_and_reader_refuse_duplicate_stage_outcomes() {
         let documents = project_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
