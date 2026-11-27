@@ -1677,6 +1677,7 @@ impl HeaderValueTemplate {
     }
 }
 
+#[derive(PartialEq)]
 enum HeaderTemplateInput<'a> {
     Dynamic {
         name: &'a str,
@@ -1692,6 +1693,7 @@ enum RequestTemplateKind {
     General(DestinationMethod),
     OAuth2ClientCredentials(OAuth2ClientCredentialsBodyFormat),
     EventDelivery,
+    SignedEventDelivery,
 }
 
 /// Slot-typed, immutable request shape compiled before any sensitive values exist.
@@ -1772,6 +1774,19 @@ pub struct EventDeliveryHeaders<'a> {
     pub delivery_time: &'a [u8],
     pub idempotency_key: &'a [u8],
     pub signature: &'a [u8],
+}
+
+/// Caller-supplied Standard Webhooks header values.
+pub struct SignedEventHeaders<'a> {
+    pub id: &'a [u8],
+    pub timestamp: &'a [u8],
+    pub signature: &'a [u8],
+}
+
+impl fmt::Debug for SignedEventHeaders<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SignedEventHeaders([REDACTED])")
+    }
 }
 
 impl fmt::Debug for EventDeliveryHeaders<'_> {
@@ -1976,6 +1991,48 @@ impl BoundedDestinationRequestTemplate<EventDestination> {
                 max_bytes: max_body_bytes,
             },
             max_request_bytes,
+        )
+    }
+
+    /// Compile a fixed JSON POST with the Standard Webhooks headers.
+    pub fn signed_event_delivery(
+        fixed_path: &str,
+        max_body_bytes: usize,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        Self::new_with_headers(
+            RequestTemplateKind::SignedEventDelivery,
+            fixed_path,
+            &[],
+            &SIGNED_EVENT_HEADERS,
+            DestinationAuthorizationTemplate::Forbidden,
+            DestinationBodyTemplate::Required {
+                max_bytes: max_body_bytes,
+            },
+            max_request_bytes,
+        )
+    }
+
+    /// Render Standard Webhooks headers and already-canonical JSON bytes.
+    pub fn render_signed_event(
+        &self,
+        headers: SignedEventHeaders<'_>,
+        body: Vec<u8>,
+    ) -> Result<EventDestinationRequest, DestinationRequestError> {
+        self.render_signed_event_zeroizing(headers, Zeroizing::new(body))
+    }
+
+    /// Render a signed event with a body already held in zeroizing storage.
+    pub fn render_signed_event_zeroizing(
+        &self,
+        headers: SignedEventHeaders<'_>,
+        body: Zeroizing<Vec<u8>>,
+    ) -> Result<EventDestinationRequest, DestinationRequestError> {
+        self.render_zeroizing(
+            &[],
+            &[headers.id, headers.timestamp, headers.signature],
+            None,
+            Some(body),
         )
     }
 
@@ -2590,7 +2647,9 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             RequestTemplateKind::OAuth2ClientCredentials(format) => {
                 (DestinationMethod::OAuth2ClientCredentialsPost, Some(format))
             }
-            RequestTemplateKind::EventDelivery => (DestinationMethod::EventPost, None),
+            RequestTemplateKind::EventDelivery | RequestTemplateKind::SignedEventDelivery => {
+                (DestinationMethod::EventPost, None)
+            }
         };
         validate_fixed_destination_path(fixed_path)?;
         if query.len() > MAX_DESTINATION_REQUEST_QUERY_COMPONENTS {
@@ -2611,7 +2670,13 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
         if method == DestinationMethod::EventPost
-            && (!query.is_empty() || !closed_event_headers(headers))
+            && (!query.is_empty()
+                || !match kind {
+                    RequestTemplateKind::SignedEventDelivery => {
+                        closed_signed_event_headers(headers)
+                    }
+                    _ => closed_event_headers(headers),
+                })
         {
             return Err(DestinationRequestError::MethodSlotMismatch);
         }
@@ -3018,6 +3083,33 @@ fn closed_event_headers(headers: &[HeaderTemplateInput<'_>]) -> bool {
                 ) => *name == expected_name && *max_value_bytes == expected_max,
                 _ => false,
             })
+}
+
+const SIGNED_EVENT_HEADERS: [HeaderTemplateInput<'static>; 5] = [
+    HeaderTemplateInput::Exact {
+        name: "accept",
+        value: b"application/json",
+    },
+    HeaderTemplateInput::Exact {
+        name: "content-type",
+        value: b"application/json",
+    },
+    HeaderTemplateInput::Dynamic {
+        name: "webhook-id",
+        max_value_bytes: 256,
+    },
+    HeaderTemplateInput::Dynamic {
+        name: "webhook-timestamp",
+        max_value_bytes: 20,
+    },
+    HeaderTemplateInput::Dynamic {
+        name: "webhook-signature",
+        max_value_bytes: 256,
+    },
+];
+
+fn closed_signed_event_headers(headers: &[HeaderTemplateInput<'_>]) -> bool {
+    headers == SIGNED_EVENT_HEADERS
 }
 
 struct BoundedTargetWriter {
@@ -7464,6 +7556,58 @@ mod tests {
             !diagnostic.contains("Basic dXNlcjpwYXNz"),
             "the rendered authorization value must not appear in diagnostics"
         );
+    }
+
+    #[test]
+    fn the_signed_event_template_admits_exactly_its_five_headers() {
+        let template = EventDestinationRequestTemplate::signed_event_delivery(
+            "/hooks",
+            256,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .unwrap();
+        let request = template
+            .render_signed_event(
+                SignedEventHeaders {
+                    id: b"event",
+                    timestamp: b"123",
+                    signature: b"v1,signature",
+                },
+                b"{}".to_vec(),
+            )
+            .unwrap();
+        assert_eq!(request.method, DestinationMethod::EventPost);
+        let headers: Vec<_> = request
+            .headers
+            .iter()
+            .map(|header| (header.name.as_str(), header.value.as_slice()))
+            .collect();
+        assert_eq!(
+            headers,
+            [
+                ("accept", b"application/json".as_slice()),
+                ("content-type", b"application/json"),
+                ("webhook-id", b"event"),
+                ("webhook-timestamp", b"123"),
+                ("webhook-signature", b"v1,signature"),
+            ]
+        );
+        for (id, timestamp, signature) in [
+            (vec![b'a'; 257], vec![b'1'; 20], vec![b'a'; 256]),
+            (vec![b'a'; 256], vec![b'1'; 21], vec![b'a'; 256]),
+            (vec![b'a'; 256], vec![b'1'; 20], vec![b'a'; 257]),
+        ] {
+            assert!(template
+                .render_signed_event(
+                    SignedEventHeaders {
+                        id: &id,
+                        timestamp: &timestamp,
+                        signature: &signature
+                    },
+                    b"{}".to_vec(),
+                )
+                .is_err());
+        }
     }
 
     #[test]
