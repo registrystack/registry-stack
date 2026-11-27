@@ -264,7 +264,7 @@ pub(super) struct Plan {
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
-    /// The audience that products a person calls from a page will share: an absolute URI of at most 256 characters, with no fragment or user information. Today only BReg can be a member, by setting its `audience` to the same value. Casework keeps its own audience, Messaging takes no person token, and Evidence cannot join yet. Declaring `personAudience` alone changes nothing at run time.
+    /// The audience that products a person calls from a page will share: an absolute URI of at most 256 characters, with no fragment or user information. Only BReg can be a member, by setting its `audience` to the same value, whether or not it checks task grants. Casework keeps its own audience, Messaging takes no person token, and Evidence cannot join yet. Declaring `personAudience` alone changes nothing at run time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "person_audience_schema"))]
     pub person_audience: Option<String>,

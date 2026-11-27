@@ -294,12 +294,11 @@ To adapt a plan to your own project, change these parts and leave the structure 
   non-empty subset of `breg`, `casework`, `evidence` and `messaging`. The run starts BReg before
   Casework. An application needs BReg.
 - `personAudience` is optional. It names one audience, an absolute URI, that products a person
-  calls from a page will share. Today only BReg can be a member, by setting its `audience` to the
-  same value. Casework keeps its own audience, Messaging takes no person token, and Evidence cannot
-  join yet, so `check` and `start` refuse each of them as a member. `check` also refuses BReg as a
-  member when its access profiles declare a task grant, because a product that checks task grants
-  keeps its own audience. Declaring `personAudience` alone changes nothing at run time. Every other
-  audience must stay distinct.
+  calls from a page will share. Only BReg can be a member, by setting its `audience` to the same
+  value. It may be a member whether or not it checks task grants, because it is the one member
+  allowed to. Casework keeps its own audience, Messaging takes no person token, and Evidence cannot
+  join yet, so `check` and `start` refuse each of them as a member. Declaring `personAudience` alone
+  changes nothing at run time. Every other audience must stay distinct.
 - `people` declares synthetic test people, each with a subject and one grant per product. A grant
   selects an access profile of that product's project, its scopes, and extra claims. A BReg grant
   must name a profile the BReg project declares. When several people could fill a BReg schema-test
@@ -513,7 +512,7 @@ List the project's issuer, product directories, and audiences in any order (the 
 A grant selects the access profile, scopes, and additional claims.
 Each selected profile gets the test person's subject in its principal claim.
 The products enforce their ordinary permissions.
-Every product keeps its own audience. `personAudience` records the audience that products a person calls from a page will share. Today only BReg can take it, by setting its `audience` to the same value.
+Every product keeps its own audience. `personAudience` records the audience that products a person calls from a page will share. Only BReg can take it, by setting its `audience` to the same value.
 If several people match a step in the BReg project's `tests/journeys.yaml`, select its alias under `schemaTestPeople.<journey-id>.<step-id>`.
 The run obtains the normal schema-test receipt before packaging.
 
