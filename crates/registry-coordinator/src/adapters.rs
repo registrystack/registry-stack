@@ -352,6 +352,11 @@ impl HttpAdapters {
                                 format!("connections.{name}.completion"),
                                 &completion.hmac_sha256_key_ref,
                                 completion.previous_hmac_sha256_key_ref.as_ref(),
+                                |path, advice| {
+                                    config_error()
+                                        .at("runtime.yaml", crate::runtime::pointer(path))
+                                        .suggest(advice)
+                                },
                             )?;
                             Ok(crate::review::CompletionSender {
                                 ingress,

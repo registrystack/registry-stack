@@ -956,7 +956,8 @@
           "description": "The exact HMAC-SHA-256 key shared with Casework's completion destination."
         },
         "previousHmacSha256KeyRef": {
-          "$ref": "#/$defs/SecretReference"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Optional previous key accepted during rotation."
         },
         "recipientBinding": {
           "description": "The recipientBinding the Casework project names for this producer's\ncompletion destination: 1 to 256 printable ASCII characters without\nspaces. Casework sends it in the registry-recipient-binding header.",
@@ -1073,12 +1074,15 @@
     },
     "TriggerKeyConfig": {
       "additionalProperties": false,
+      "description": "Standard Webhooks keys for one event trigger URL.",
       "properties": {
         "hmacSha256KeyRef": {
-          "$ref": "#/$defs/SecretReference"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Reference to 32 to 64 exact key bytes shared only with this trigger's sender."
         },
         "previousHmacSha256KeyRef": {
-          "$ref": "#/$defs/SecretReference"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Optional previous key accepted during rotation."
         }
       },
       "required": [

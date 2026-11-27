@@ -138,11 +138,6 @@ pub(crate) fn authenticate(
         .failing(check)
     };
     let signature_refused = || refused(FailedCheck::DeliverySignature);
-    let recipient =
-        single_header(headers, RECIPIENT_BINDING_HEADER).ok_or_else(signature_refused)?;
-    let (connection, keys) = adapters
-        .review_completion(recipient)
-        .ok_or_else(signature_refused)?;
     let invalid = || {
         CoordinatorError::new(
             "request.invalid",
@@ -156,6 +151,11 @@ pub(crate) fn authenticate(
             format!("supply a review completion event of at most {MAXIMUM_BODY_BYTES} bytes"),
         ));
     }
+    let recipient =
+        single_header(headers, RECIPIENT_BINDING_HEADER).ok_or_else(signature_refused)?;
+    let (connection, keys) = adapters
+        .review_completion(recipient)
+        .ok_or_else(signature_refused)?;
     let id = single_header(headers, "webhook-id").ok_or_else(signature_refused)?;
     let timestamp = single_header(headers, "webhook-timestamp").ok_or_else(signature_refused)?;
     let signature = single_header(headers, "webhook-signature").ok_or_else(signature_refused)?;
@@ -325,6 +325,24 @@ mod tests {
                     "{name}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn oversized_completions_are_refused_independently_of_the_recipient() {
+        let receiver = receiver();
+        let now = Utc::now();
+        let body = vec![b'x'; MAXIMUM_BODY_BYTES + 1];
+        for recipient in [RECIPIENT, "other-recipient"] {
+            let mut headers = headers(&receiver, Uuid::new_v4(), &body, now);
+            headers.insert(
+                RECIPIENT_BINDING_HEADER,
+                HeaderValue::from_static(recipient),
+            );
+            assert_eq!(
+                code(authenticate(&receiver, &headers, Some(&body), now)),
+                "request.body-too-large"
+            );
         }
     }
 

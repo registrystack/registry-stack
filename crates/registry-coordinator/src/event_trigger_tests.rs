@@ -972,7 +972,7 @@ mod postgres {
             .unwrap();
     }
 
-    async fn assert_one_run_for_deliveries(senders: Vec<DeliveryKeys>, receiver: &DeliveryKeys) {
+    async fn assert_one_run_for_deliveries(stages: &[(&DeliveryKeys, &[&DeliveryKeys])]) {
         let database = std::env::var("COORDINATOR_TEST_DATABASE_URL")
             .expect("a disposable real PostgreSQL database is required");
         let namespace = format!("coordinator_{}", Uuid::new_v4().simple());
@@ -987,9 +987,31 @@ mod postgres {
             .unwrap()
             .as_secs();
         let mut prior = None;
-        for sender in senders {
-            let headers = signed_headers(&sender, value["id"].as_str().unwrap(), timestamp, &body);
-            let verified = verify_delivery(
+        for (receiver, senders) in stages {
+            for sender in *senders {
+                let headers =
+                    signed_headers(sender, value["id"].as_str().unwrap(), timestamp, &body);
+                let verified = verify_delivery(
+                    &source(),
+                    &trigger(),
+                    "record-saved",
+                    &headers,
+                    &body,
+                    receiver,
+                    SystemTime::now(),
+                )
+                .unwrap();
+                let run = admit(&store, &definition, &runtime, verified)
+                    .await
+                    .unwrap();
+                assert_eq!(*prior.get_or_insert(run), run);
+            }
+        }
+        if stages.len() > 1 {
+            let receiver = stages.last().unwrap().0;
+            let retired = stages.first().unwrap().0;
+            let headers = signed_headers(retired, value["id"].as_str().unwrap(), timestamp, &body);
+            let error = verify_delivery(
                 &source(),
                 &trigger(),
                 "record-saved",
@@ -998,33 +1020,39 @@ mod postgres {
                 receiver,
                 SystemTime::now(),
             )
-            .unwrap();
-            let run = admit(&store, &definition, &runtime, verified)
-                .await
-                .unwrap();
-            assert_eq!(*prior.get_or_insert(run), run);
+            .err()
+            .expect("the retired key must be refused");
+            assert_eq!(error.check, Some(FailedCheck::DeliverySignature));
         }
         assert_eq!(store.list_runs(100).await.unwrap().len(), 1);
+        let (client, connection) = tokio_postgres::connect(&database, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            connection.await.unwrap();
+        });
+        client
+            .batch_execute(&format!("DROP SCHEMA {namespace} CASCADE"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn a_repeated_webhook_id_admits_one_run() {
-        assert_one_run_for_deliveries(vec![keys(KEY, None), keys(KEY, None)], &keys(KEY, None))
-            .await;
+        let initial = keys(KEY, None);
+        assert_one_run_for_deliveries(&[(&initial, &[&initial, &initial])]).await;
     }
 
     #[tokio::test]
     async fn an_event_from_a_rotating_source_is_admitted_once_through_all_three_steps() {
-        let current = &[0x71; 32];
-        let rotated = keys(current, Some(KEY));
-        assert_one_run_for_deliveries(
-            vec![
-                keys(KEY, None),
-                keys(current, Some(KEY)),
-                keys(current, None),
-            ],
-            &rotated,
-        )
+        let initial = keys(KEY, None);
+        let overlap = keys(&[0x71; 32], Some(KEY));
+        let rotated = keys(&[0x71; 32], None);
+        assert_one_run_for_deliveries(&[
+            (&initial, &[&initial]),
+            (&overlap, &[&initial, &overlap]),
+            (&rotated, &[&rotated]),
+        ])
         .await;
     }
 

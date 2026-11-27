@@ -22,7 +22,15 @@
   host, an IPv4-mapped loopback literal such as `[::ffff:127.0.0.1]` counts as
   loopback, the same as `127.0.0.1`. A database host of `localhost` is matched
   in any letter case. Host names other than `localhost` stay refused.
-- Coordinator refuses startup when a configured event trigger key file is missing. The event route no longer returns a source-key-unavailable response.
+- **BREAKING**. Coordinator resolves every event trigger and review completion
+  key at startup and refuses a key it cannot use or that another trigger or
+  completion connection shares. Event and completion routes take Standard
+  Webhooks headers and answer a
+  `WWW-Authenticate: Registry-Signature scheme="standard-webhooks", version="v1"`
+  challenge. Completions no longer read `Idempotency-Key` or `Authorization`.
+  Startup refuses a deployed trigger without a key entry and a key entry
+  without a deployed trigger. The event route no longer answers
+  `503 event.source-unavailable`.
 - A static key set that startup refuses now names the rule it broke, and the
   key's position for a rule about one key, in the `access.configuration`
   message instead of pointing at the issuer and policy configuration.

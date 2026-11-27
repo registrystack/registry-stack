@@ -2510,20 +2510,20 @@ fn a_key_for_an_undeployed_trigger_is_refused() {
 
 fn with_ingress_keys(document: &mut Value, root: &std::path::Path, key: &[u8]) {
     use registry_platform_testing::fixtures::ED25519_PRIVATE_JWK;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     let root = root.canonicalize().unwrap();
     document["secretProviders"]["file"]["root"] = json!(root);
     document["eventSources"] = json!({"registry":event_source()});
-    for (name, bytes) in [
-        ("event-key", key),
-        ("client-key", ED25519_PRIVATE_JWK.as_bytes()),
-    ] {
-        let path = root.join(name);
-        fs::write(&path, bytes).unwrap();
-        #[cfg(unix)]
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    write_ingress_secret(&root, "event-key", key);
+    write_ingress_secret(&root, "client-key", ED25519_PRIVATE_JWK.as_bytes());
+}
+
+fn write_ingress_secret(root: &std::path::Path, name: &str, bytes: &[u8]) {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    let path = root.join(name);
+    fs::write(&path, bytes).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
 fn startup_error(document: &Value) -> registry_coordinator::CoordinatorError {
@@ -2537,17 +2537,44 @@ fn startup_error(document: &Value) -> registry_coordinator::CoordinatorError {
 const TRIGGER_KEY_PATH: &str =
     "eventSources.registry.triggers.delayed-follow-up.saved.hmacSha256KeyRef";
 
+const COMPLETION_KEY_PATH: &str = "connections.review.completion.hmacSha256KeyRef";
+const OTHER_TRIGGER_PATH: &str = "eventSources.registry.triggers.delayed-follow-up.other";
+
+fn shared_key_message(first: &str, second: &str) -> String {
+    format!("{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there.")
+}
+
 #[test]
 fn two_triggers_sharing_key_bytes_are_refused_naming_both_paths() {
     let root = tempfile::tempdir().unwrap();
     let mut document = yaml_value(RUNTIME).unwrap();
     with_ingress_keys(&mut document, root.path(), &[0x78; 32]);
+    write_ingress_secret(root.path(), "other-key", &[0x78; 32]);
     document["eventSources"]["registry"]["triggers"]["delayed-follow-up"]["other"] =
-        json!({"hmacSha256KeyRef":"secret:file/event-key"});
-    let error = startup_error(&document);
+        json!({"hmacSha256KeyRef":"secret:file/other-key"});
     assert_eq!(
-        error.message,
-        format!("`eventSources.registry.triggers.delayed-follow-up.other.hmacSha256KeyRef` and `{TRIGGER_KEY_PATH}` resolve to the same key bytes. Give `{TRIGGER_KEY_PATH}` its own key by writing 32 new random bytes to another secret and referencing it there."),
+        startup_error(&document).message,
+        shared_key_message(
+            &format!("{OTHER_TRIGGER_PATH}.hmacSha256KeyRef"),
+            TRIGGER_KEY_PATH
+        ),
+    );
+}
+
+#[test]
+fn a_triggers_previous_key_equal_to_another_triggers_current_key_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let mut document = yaml_value(RUNTIME).unwrap();
+    with_ingress_keys(&mut document, root.path(), &[0x78; 32]);
+    write_ingress_secret(root.path(), "other-key", &[0x79; 32]);
+    write_ingress_secret(root.path(), "old-key", &[0x78; 32]);
+    document["eventSources"]["registry"]["triggers"]["delayed-follow-up"]["other"] = json!({"hmacSha256KeyRef":"secret:file/other-key","previousHmacSha256KeyRef":"secret:file/old-key"});
+    assert_eq!(
+        startup_error(&document).message,
+        shared_key_message(
+            &format!("{OTHER_TRIGGER_PATH}.previousHmacSha256KeyRef"),
+            TRIGGER_KEY_PATH
+        ),
     );
 }
 
@@ -2556,13 +2583,126 @@ fn a_trigger_key_equal_to_a_completion_key_is_refused() {
     let root = tempfile::tempdir().unwrap();
     let mut document = with_review_connection();
     with_ingress_keys(&mut document, root.path(), &[0x78; 32]);
+    write_ingress_secret(root.path(), "completion-key", &[0x78; 32]);
     document["connections"]["review"]["completion"]["hmacSha256KeyRef"] =
-        json!("secret:file/event-key");
+        json!("secret:file/completion-key");
+    assert_eq!(
+        startup_error(&document).message,
+        shared_key_message(TRIGGER_KEY_PATH, COMPLETION_KEY_PATH)
+    );
+}
+
+fn ingress_binding(document: &mut Value, completion: bool) -> &mut Value {
+    if completion {
+        &mut document["connections"]["review"]["completion"]
+    } else {
+        &mut document["eventSources"]["registry"]["triggers"]["delayed-follow-up"]["saved"]
+    }
+}
+
+#[test]
+fn a_previous_key_equal_to_its_current_key_names_the_rotation_steps() {
+    for completion in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut document = if completion {
+            with_review_connection()
+        } else {
+            yaml_value(RUNTIME).unwrap()
+        };
+        with_ingress_keys(&mut document, root.path(), &[0x78; 32]);
+        write_ingress_secret(root.path(), "current-key", &[0x79; 32]);
+        write_ingress_secret(root.path(), "old-key", &[0x79; 32]);
+        let binding = ingress_binding(&mut document, completion);
+        binding["hmacSha256KeyRef"] = json!("secret:file/current-key");
+        binding["previousHmacSha256KeyRef"] = json!("secret:file/old-key");
+        let current = if completion {
+            COMPLETION_KEY_PATH
+        } else {
+            TRIGGER_KEY_PATH
+        };
+        let previous = current.replace(".hmacSha256KeyRef", ".previousHmacSha256KeyRef");
+        let error = startup_error(&document);
+        assert_eq!(error.suggested_action.as_deref(), Some(format!(
+            "{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."
+        ).as_str()));
+    }
+}
+
+#[test]
+fn missing_ingress_keys_explain_how_to_restore_them() {
+    assert_ingress_resolution_failure(
+        "the referenced secret is unavailable",
+        "Create the secret under the configured provider, or correct the name.",
+        |_| {},
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn group_readable_ingress_keys_explain_how_to_secure_them() {
+    use registry_platform_config::SecretError;
+    use std::os::unix::fs::PermissionsExt;
+    assert_ingress_resolution_failure(
+        "the referenced secret file is unsafe",
+        SecretError::UnsafeFile(registry_platform_config::SecretFileCheck::GroupAccess)
+            .suggested_action(),
+        |root| {
+            write_ingress_secret(root, "refused-key", &[0x79; 32]);
+            fs::set_permissions(root.join("refused-key"), fs::Permissions::from_mode(0o640))
+                .unwrap();
+        },
+    );
+}
+
+fn assert_ingress_resolution_failure(
+    reason: &str,
+    action: &str,
+    prepare: impl Fn(&std::path::Path),
+) {
+    for completion in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut document = if completion {
+            with_review_connection()
+        } else {
+            yaml_value(RUNTIME).unwrap()
+        };
+        with_ingress_keys(&mut document, root.path(), &[0x78; 32]);
+        prepare(root.path());
+        ingress_binding(&mut document, completion)["hmacSha256KeyRef"] =
+            json!("secret:file/refused-key");
+        let path = if completion {
+            COMPLETION_KEY_PATH
+        } else {
+            TRIGGER_KEY_PATH
+        };
+        let error = startup_error(&document);
+        assert_eq!(
+            error.suggested_action.as_deref(),
+            Some(format!("{path} could not be resolved: {reason}. {action}").as_str())
+        );
+    }
+}
+
+#[test]
+fn a_65_byte_completion_key_is_refused_as_connection_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let mut document = with_review_connection();
+    with_ingress_keys(&mut document, root.path(), &[0x78; 32]);
+    write_ingress_secret(root.path(), "completion-key", &[0x79; 65]);
+    ingress_binding(&mut document, true)["hmacSha256KeyRef"] = json!("secret:file/completion-key");
     let error = startup_error(&document);
-    assert!(error.message.contains(TRIGGER_KEY_PATH), "{error:?}");
-    assert!(error
-        .message
-        .contains("connections.review.completion.hmacSha256KeyRef"));
+    assert_eq!(error.code, "adapter.configuration");
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/connections/review/completion/hmacSha256KeyRef")
+    );
+    assert_eq!(
+        error.suggested_action.as_deref(),
+        Some(
+            format!("{COMPLETION_KEY_PATH} resolved to 65 bytes. Supply 32 to 64 exact key bytes.")
+                .as_str()
+        )
+    );
 }
 
 #[test]

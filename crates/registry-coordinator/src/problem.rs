@@ -362,7 +362,7 @@ impl ProblemCode {
                 "The operation may have completed, but its audited result could not be released. Inspect the run before repeating the operation."
             }
             Self::AuthenticationRefused => {
-                "The bearer credential is missing, invalid, or expired."
+                "The caller credential or completion signature is missing, invalid, or expired."
             }
             Self::BindingConflict => {
                 "The run's original connection settings differ from this service's runtime configuration."

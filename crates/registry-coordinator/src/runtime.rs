@@ -510,6 +510,7 @@ pub struct ReviewCompletionConfig {
     pub recipient_binding: String,
     /// The exact HMAC-SHA-256 key shared with Casework's completion destination.
     pub hmac_sha256_key_ref: SecretReference,
+    /// Optional previous key accepted during rotation.
     #[serde(
         default,
         deserialize_with = "crate::event_trigger::present_hook_key_reference",

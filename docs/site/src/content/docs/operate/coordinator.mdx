@@ -785,12 +785,12 @@ They expose every label value from the first scrape.
   `maybe-sent` is an attempt whose effect is uncertain and that waits for an operator.
   `transient` also counts a `wait-for` read that failed and left its wait open.
   `unavailable` is an attempt that ended in an internal error, such as an unreadable store, before the step answered.
-- An authentication refusal is a bearer credential refused before a caller is resolved.
-  `refused` is a missing, malformed, or unverified token, or a completion event with a refused signature or recipient binding.
+- An authentication refusal records a rejected caller credential or signed completion.
+  `refused` covers a missing, malformed, or unverified token and a completion with a refused signature or recipient binding.
   `policy` is a verified token no caller policy admits, and `unavailable` means the token verifier cannot answer.
   A resolved caller refused an action is not counted here, but `coordinator_request_refusals_total` counts it.
 - `coordinator_request_refusals_total` counts every refused request under the check that refused it, and no label carries caller text.
-  It covers a refused credential, a policy denial after authentication, a refused signed event delivery or completion callback, a key source the service cannot reach or use (the token verifier's keys), and a run the caller cannot see.
+  It covers a refused credential, a policy denial after authentication, an event delivery refused under the key configured for its trigger URL, a refused completion callback, a key source the service cannot reach or use (the token verifier's keys), and a run the caller cannot see.
   Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute.
 
 `coordinator_dispatch_jobs` is read from the database on each scrape.

@@ -2,9 +2,9 @@
 //! Authenticated committed product events admitted into the ordinary Run machine.
 //!
 //! Products own event capture and disclosure. A reviewed trigger names one exact
-//! source, event contract and typed mapping; deployment configuration supplies
-//! only that source's authentication. Neither the event nor its signature grants
-//! authority for a later product call.
+//! source, event contract and typed mapping. Deployment configuration supplies
+//! a distinct delivery key for each trigger URL. Authority for later product
+//! calls comes from the receiving product.
 
 use std::{collections::BTreeMap, time::SystemTime};
 
@@ -62,11 +62,14 @@ pub struct WorkflowTriggerKeys(
     pub  BTreeMap<LocalId, TriggerKeyConfig>,
 );
 
+/// Standard Webhooks keys for one event trigger URL.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TriggerKeyConfig {
+    /// Reference to 32 to 64 exact key bytes shared only with this trigger's sender.
     pub hmac_sha256_key_ref: SecretReference,
+    /// Optional previous key accepted during rotation.
     #[serde(
         default,
         deserialize_with = "present_hook_key_reference",
@@ -97,15 +100,20 @@ impl IngressKeys {
         path: String,
         current: &SecretReference,
         previous: Option<&SecretReference>,
+        refuse: fn(&str, &str) -> CoordinatorError,
     ) -> Result<Self> {
         let current_path = format!("{path}.hmacSha256KeyRef");
         let previous_path = format!("{path}.previousHmacSha256KeyRef");
-        let current = resolve_key(resolver, &current_path, current)?;
+        let current = resolve_key(resolver, &current_path, current, refuse)?;
         let previous = previous
-            .map(|reference| resolve_key(resolver, &previous_path, reference))
+            .map(|reference| resolve_key(resolver, &previous_path, reference, refuse))
             .transpose()?;
-        let keys = DeliveryKeys::new(current, previous)
-            .map_err(|_| duplicate_key(&current_path, &previous_path))?;
+        let keys = DeliveryKeys::new(current, previous).map_err(|_| {
+            refuse(
+                &previous_path,
+                &format!("{previous_path} holds the same bytes as {current_path}. To rotate, write 32 new random bytes to the secret {current_path} references and keep the old bytes behind {previous_path}."),
+            )
+        })?;
         Ok(Self {
             keys,
             path: current_path,
@@ -126,19 +134,24 @@ fn resolve_key(
     resolver: &SecretResolver,
     path: &str,
     reference: &SecretReference,
+    refuse: fn(&str, &str) -> CoordinatorError,
 ) -> Result<DeliveryKey> {
-    let secret = resolver.resolve_binary_reference(reference).map_err(|_| {
-        configuration(
-            path,
-            &format!("Make the key at {path} available to Coordinator."),
-        )
-    })?;
+    let secret = resolver
+        .resolve_binary_reference(reference)
+        .map_err(|error| {
+            refuse(
+                path,
+                &format!(
+                    "{path} could not be resolved: {error}. {}",
+                    error.suggested_action()
+                ),
+            )
+        })?;
     let bytes = secret.expose_secret();
     let length = bytes.len();
     let trailing_newline = bytes.ends_with(b"\n");
-    DeliveryKey::new(bytes).map_err(|error| {
-        configuration(path, &key_diagnostic(path, length, trailing_newline, error))
-    })
+    DeliveryKey::new(bytes)
+        .map_err(|error| refuse(path, &key_diagnostic(path, length, trailing_newline, error)))
 }
 
 fn key_diagnostic(
@@ -165,7 +178,7 @@ fn key_diagnostic(
 pub(crate) fn duplicate_key(first: &str, second: &str) -> CoordinatorError {
     CoordinatorError::new(
         "adapter.configuration",
-        format!("`{first}` and `{second}` resolve to the same key bytes. Give `{second}` its own key by writing 32 new random bytes to another secret and referencing it there."),
+        format!("{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there."),
     )
 }
 
@@ -290,6 +303,7 @@ pub(crate) fn resolve_keys(config: &crate::runtime::RuntimeConfig) -> Result<Eve
                     path.clone(),
                     &key.hmac_sha256_key_ref,
                     key.previous_hmac_sha256_key_ref.as_ref(),
+                    configuration,
                 )?;
                 if keys
                     .insert((workflow.clone(), trigger.clone()), keys_for_trigger)

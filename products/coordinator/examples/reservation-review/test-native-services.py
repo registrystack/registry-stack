@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -1035,7 +1036,7 @@ class ReservationJourney(native.Journey):
 
         (coordinator_port,) = native.free_ports(1)
         casework_port = self.ports["casework"]
-        completion_key = uuid.uuid4().bytes + uuid.uuid4().bytes
+        completion_key = secrets.token_bytes(32)
         receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
         casework_project = write_review_casework(
             self.root / "review-casework-source", self.urls, agent_subject

@@ -785,10 +785,15 @@ async fn an_inauthentic_or_malformed_event_is_refused_and_wakes_nothing() {
         };
         assert_eq!(problem["code"], code, "{case}");
         assert_eq!(problem["status"], expected.as_u16(), "{case}");
-        assert!(
-            !problem.to_string().contains("canary"),
-            "a refusal repeats no key bytes: {case}"
-        );
+        let response_body = problem.to_string();
+        for name in ["webhook-signature", "webhook-id"] {
+            if let Some(value) = headers.get(name) {
+                assert!(
+                    !response_body.contains(value.to_str().unwrap()),
+                    "a refusal omits {name}: {case}"
+                );
+            }
+        }
     }
     assert!(!h.wait_row(run).await.unwrap().woken);
     let due = h.due_in(run).await.unwrap();
