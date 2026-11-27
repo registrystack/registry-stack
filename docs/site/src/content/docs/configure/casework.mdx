@@ -460,14 +460,15 @@ Omitting the field offers every policy outcome.
 A `changes-requested` result ends that review version.
 A resubmission creates a new request and starts at the first stage by default.
 Set `resubmission: resume-at-returning-stage` on the review policy to start at the stage that requested changes.
-Casework finds the same producer's latest earlier request that settled as `changes-requested`.
+Casework finds the same producer's latest earlier request, and resumes only if that request settled as `changes-requested`.
+If the latest round was approved, rejected, cancelled, or is still open, the new request starts at the first stage.
 The subject source, type, and ID must match.
 Casework also requires the same policy ID.
 Casework reads the stage of the decision that settled the earlier request.
 Casework matches the returning stage by its ID in the new policy.
 If that stage no longer exists, Casework starts at the first stage.
 Casework resumes within the earlier request's result retention, and starts a resubmission at the first stage after that.
-The `review-resumed-at-stage` history row names the earlier request and stage.
+The `review-resumed-at-stage` history detail carries only `stageId`, without linking to the earlier request.
 Earlier approvals are not carried over.
 The subject clock starts with a fresh budget.
 Omitting `resubmission` preserves the policy digest.
@@ -569,17 +570,23 @@ The producer learns of asks by polling, so delivery can lag.
 Casework judges timeliness by `answeredAt`, the time the applicant answered, rather than when the report arrives.
 Casework accepts an answer at or before `dueAt` even after maintenance marks the ask expired.
 Delivery lag therefore never makes an on-time answer late.
-The ask becomes `answered` and the task marker becomes `answered`.
+The ask becomes `answered` and the task marker becomes `answered`, unless another ask on that task is open, when it remains `waiting`.
+Closing a task or request preserves an already expired ask's state and expiry time.
+An expired ask can receive an on-time answer only while its request is still under review.
 The `ask-answered` history detail records `arrivedAfterDue` when the report arrives after the deadline.
 An answer after `dueAt` receives `409 review.ask-not-open` and changes nothing.
 
 `pauseClocks` defaults to `false`.
 When `true`, Casework pauses the subject clock and current stage activity clocks while the ask is open.
+Setting `pauseClocks: true` requires `answerWithin` on the same stage's asks.
+Otherwise validation reports `casework.review-policy.ask-pause-requires-answer-within`.
 Paused clocks produce no reminders, steps, or task deadlines.
 `GET /v1/review-requests/{requestId}/clocks` shows their state as `paused`.
 An answer, expiry, or close resumes those clocks.
 Casework moves pending instants later by the elapsed wall-clock pause duration for both elapsed-time and working-day clocks.
 Casework uses wall time for working-day clocks too, including weekends and holidays.
+Clock recomputation retains the accumulated pause duration.
+Reviewers see each ask's absolute `dueAt` in the task context.
 The `clock-paused` and `clock-resumed` history rows identify each clock.
 The resume row records `pausedSeconds`.
 Casework audits both transitions.

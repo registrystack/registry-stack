@@ -810,7 +810,7 @@ async fn calculate_review_clocks(
     record: &ReviewRequestRecord,
     task_id: Uuid,
 ) -> Result<Vec<ClockCalculationPlan>, ReviewRuntimeError> {
-    let rows=tx.query("SELECT clock_occurrence_id,policy,anchor_at,updated_at FROM casework_review_clock_occurrences WHERE request_id=$1 AND task_id=$2 AND scope='activity' AND state IN('running','source-facts-missing') ORDER BY clock_occurrence_id FOR SHARE",&[&record.request_id,&task_id]).await?;
+    let rows=tx.query("SELECT clock_occurrence_id,policy,anchor_at,updated_at,paused_duration_micros FROM casework_review_clock_occurrences WHERE request_id=$1 AND task_id=$2 AND scope='activity' AND state IN('running','source-facts-missing') ORDER BY clock_occurrence_id FOR SHARE",&[&record.request_id,&task_id]).await?;
     let mut plans = Vec::new();
     for row in rows {
         let definition: ReviewClockDefinition = serde_json::from_value(row.get(1))?;
@@ -829,8 +829,9 @@ async fn calculate_review_clocks(
         }
         let holiday_row=tx.query_opt("SELECT document FROM casework_holiday_sets WHERE holiday_set=$1 ORDER BY revision DESC LIMIT 1",&[&calendar.holiday_set]).await?.ok_or(ReviewRuntimeError::Invalid)?;
         let holiday: HolidaySetDocument = serde_json::from_value(holiday_row.get(0))?;
-        let evaluated = evaluate_stage_clock(&definition.clock, calendar, &holiday, row.get(2))
+        let mut evaluated = evaluate_stage_clock(&definition.clock, calendar, &holiday, row.get(2))
             .map_err(|error| clock_evaluation_error(&definition.clock, error))?;
+        super::ask_clocks::shift_evaluation(&mut evaluated, row.get(4))?;
         let occurrence_id: Uuid = row.get(0);
         let applied=tx.query("SELECT effect_kind,effect_id FROM casework_review_clock_effects WHERE clock_occurrence_id=$1",&[&occurrence_id]).await?.into_iter().map(|r|(r.get::<_,String>(0),r.get::<_,String>(1))).collect();
         let next_action_at =

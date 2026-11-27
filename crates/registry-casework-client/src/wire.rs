@@ -228,8 +228,8 @@ struct ReviewOutcomePolicyWire {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReviewPolicyWire {
-    #[serde(default)]
-    resubmission: registry_casework_core::ReviewResubmissionPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resubmission: Option<registry_casework_core::ReviewResubmissionPolicy>,
     id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
@@ -707,6 +707,8 @@ struct ReviewContextAskWire {
     text: String,
     wants: Vec<registry_casework_core::ReviewAskWant>,
     asked_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    due_at: Option<chrono::DateTime<chrono::Utc>>,
     state: registry_casework_core::ReviewAskState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     answered_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -1000,5 +1002,29 @@ impl ClientResponse for registry_casework_core::ReviewTaskContext {
 
     fn from_wire(wire: Self::Wire) -> Self {
         wire.into_inner()
+    }
+}
+
+#[cfg(test)]
+mod fix_round_tests {
+    use super::*;
+
+    #[test]
+    fn absent_resubmission_stays_absent_on_the_client_wire() {
+        let policy: ReviewPolicyWire = serde_json::from_value(serde_json::json!({
+            "id":"review", "version":"1", "purpose":"approval", "context":{"mode":"submitted"},
+            "stages":[], "retention":{"terminalRetentionDays":1,"accountabilityRetentionDays":1}, "displaySchema":{}
+        })).unwrap();
+        assert!(serde_json::to_value(policy)
+            .unwrap()
+            .get("resubmission")
+            .is_none());
+    }
+
+    #[test]
+    fn reviewer_ask_due_at_survives_client_decoding() {
+        let value = serde_json::json!({"askId":uuid::Uuid::new_v4(), "taskId":uuid::Uuid::new_v4(), "text":"Why?", "wants":[{"kind":"answer"}], "askedAt":"2026-11-27T00:00:00Z", "dueAt":"2026-11-27T01:00:00Z", "state":"open"});
+        let wire: ReviewContextAskWire = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(wire).unwrap()["dueAt"], value["dueAt"]);
     }
 }

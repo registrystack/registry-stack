@@ -12377,6 +12377,14 @@ async fn c2_ask_due_date_is_absolute_and_delivery_lag_does_not_make_an_answer_la
         asked.ask.due_at,
         Some(asked.ask.asked_at + TimeDelta::hours(1))
     );
+    let context = service
+        .review_task_context(&fixture.reviewer_a, task, None, "")
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&context.asks[0]).unwrap()["dueAt"],
+        json!(asked.ask.due_at.unwrap())
+    );
     assert_eq!(
         service
             .review_ask(&fixture.producer, request_id, asked.ask.ask_id)
@@ -12649,6 +12657,7 @@ async fn c2_pause_covers_activity_effects_and_resume_uses_wall_time_for_both_clo
     });
     project.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {
         pause_clocks: true,
+        answer_within: Some(ElapsedDuration::Hours(1)),
         ..Default::default()
     });
     project.trusted_producers[0].reads_asks = true;
@@ -12795,6 +12804,11 @@ async fn c2_expiry_and_close_resume_clocks_and_a_closed_expired_ask_cannot_be_an
             .review_task(&fixture.reviewer_a, task, None, "")
             .await
             .unwrap();
+        let expiry_time = service
+            .review_ask(&fixture.producer, request_id, asked.ask.ask_id)
+            .await
+            .unwrap()
+            .closed_at;
         service
             .decide_review_task(
                 &fixture.reviewer_a,
@@ -12812,7 +12826,20 @@ async fn c2_expiry_and_close_resume_clocks_and_a_closed_expired_ask_cannot_be_an
             )
             .await
             .unwrap();
-        assert_eq!(ask_states(&fixture, request_id).await, ["closed"]);
+        assert_eq!(
+            ask_states(&fixture, request_id).await,
+            [if expire { "expired" } else { "closed" }]
+        );
+        if expire {
+            assert_eq!(
+                service
+                    .review_ask(&fixture.producer, request_id, asked.ask.ask_id)
+                    .await
+                    .unwrap()
+                    .closed_at,
+                expiry_time
+            );
+        }
         assert_eq!(
             service
                 .review_clocks(&fixture.producer, request_id, None, "")
@@ -12929,11 +12956,7 @@ async fn c2_resubmission_resumes_at_the_returning_stage_with_a_fresh_clock() {
     assert_eq!(rows[0].get::<_, i32>(0), 1);
     assert_eq!(rows[0].get::<_, String>(1), "secondary");
     let detail: serde_json::Value = fixture.database.query_one("SELECT detail FROM casework_review_history WHERE request_id=$1 AND kind='review-resumed-at-stage'", &[&second.accepted.request_id]).await.unwrap().get(0);
-    assert_eq!(
-        detail["earlierRequestId"],
-        first.accepted.request_id.to_string()
-    );
-    assert_eq!(detail["stageId"], "secondary");
+    assert_eq!(detail, json!({"stageId":"secondary"}));
     let clocks = service
         .review_clocks(&fixture.producer, second.accepted.request_id, None, "")
         .await
@@ -13130,6 +13153,472 @@ fn now_micros() -> chrono::DateTime<Utc> {
 
 fn other_producer() -> ActorContext {
     actor("other-service", CaseworkActsAs::Requester, "other-producer")
+}
+
+#[tokio::test]
+async fn c2_fix_old_answer_preserves_a_new_asks_waiting_marker() {
+    let fixture = fixture().await;
+    let service = timed_asks_service(&fixture, true);
+    let (request_id, task, create) = claimed_for_asks(&fixture, &service, "marker-round").await;
+    let old = service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("First?"),
+            None,
+            "",
+            2,
+            "old",
+        )
+        .await
+        .unwrap();
+    let due = now_micros() - TimeDelta::minutes(1);
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_asks SET asked_at=$2,due_at=$3 WHERE ask_id=$1",
+            &[&old.ask.ask_id, &(due - TimeDelta::hours(1)), &due],
+        )
+        .await
+        .unwrap();
+    service.process_due_review_clocks(100).await.unwrap();
+    let current = service
+        .review_task(&fixture.reviewer_a, task, None, "")
+        .await
+        .unwrap();
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Second?"),
+            None,
+            "",
+            current.revision,
+            "new",
+        )
+        .await
+        .unwrap();
+    service
+        .answer_review_ask(
+            &fixture.producer,
+            request_id,
+            old.ask.ask_id,
+            ReviewAskAnswer {
+                subject: create.subject,
+                answered_at: due,
+            },
+            "old-answer",
+        )
+        .await
+        .unwrap();
+    assert_eq!(ask_marker(&fixture, task).await.as_deref(), Some("waiting"));
+    assert_eq!(
+        service
+            .review_clocks(&fixture.producer, request_id, None, "")
+            .await
+            .unwrap()[0]
+            .state,
+        ReviewClockState::Paused
+    );
+}
+
+#[tokio::test]
+async fn c2_fix_recompute_preserves_the_pause() {
+    let fixture = fixture().await;
+    let mut project = activity_clock_project();
+    project.trusted_producers[0].reads_asks = true;
+    project.trusted_producers[0].completion = None;
+    project.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {
+        answer_within: Some(ElapsedDuration::Hours(1)),
+        pause_clocks: true,
+        ..Default::default()
+    });
+    project
+        .access_profiles
+        .push(profile("clock-admin", CaseworkActsAs::Administrator));
+    let service = CaseworkService::new(fixture.store.clone(), project, Vec::new()).unwrap();
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkActsAs::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".into(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "holidays",
+        )
+        .await
+        .unwrap();
+    let (request_id, task, create) = claimed_for_asks(&fixture, &service, "recompute-pause").await;
+    let asked = service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .unwrap();
+    fixture.database.execute("UPDATE casework_review_clock_occurrences SET paused_at=paused_at-interval '2 hours' WHERE request_id=$1", &[&request_id]).await.unwrap();
+    service
+        .answer_review_ask(
+            &fixture.producer,
+            request_id,
+            asked.ask.ask_id,
+            ReviewAskAnswer {
+                subject: create.subject,
+                answered_at: asked.ask.asked_at,
+            },
+            "answer",
+        )
+        .await
+        .unwrap();
+    let due = service
+        .review_clocks(&fixture.producer, request_id, None, "")
+        .await
+        .unwrap()[0]
+        .due_at;
+    let admin = actor("clock-admin", CaseworkActsAs::Administrator, "clock-admin");
+    let preview = service
+        .preview_review_clock_recompute(
+            &admin,
+            None,
+            "",
+            ReviewClockRecomputeRequest {
+                task_ids: vec![task],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.tasks[0].deadline_at, due);
+    service
+        .apply_review_clock_recompute(
+            &admin,
+            None,
+            "",
+            ReviewClockRecomputeApplyRequest {
+                preview_id: preview.preview_id,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .review_clocks(&fixture.producer, request_id, None, "")
+            .await
+            .unwrap()[0]
+            .due_at,
+        due
+    );
+}
+
+async fn c2_later_round_fallback(lifecycle: &str) {
+    let fixture = fixture().await;
+    let service = c2_resumption_service(&fixture);
+    c2_returning_stage_round(&fixture, &service, "latest-round").await;
+    let mut next = bind_request(&service, request("latest-round", "ref-latest-round-2"));
+    next.subject.version = "2".into();
+    next.subject.digest = ContentDigest::for_bytes(b"latest-round-2");
+    let second = service
+        .create_review_request(&fixture.producer, next.clone(), "create-second")
+        .await
+        .unwrap();
+    if lifecycle == "cancelled" {
+        service
+            .cancel_review_request(
+                &fixture.producer,
+                second.accepted.request_id,
+                ReviewCancelRequest {
+                    subject: next.subject,
+                    reason: "No longer needed".into(),
+                },
+                "cancel",
+            )
+            .await
+            .unwrap();
+    } else if lifecycle != "open" {
+        let task = task_id(&fixture, second.accepted.request_id, 1).await;
+        service
+            .claim_review_task(&fixture.reviewer_b, task, None, "", 1, "claim")
+            .await
+            .unwrap();
+        let decision = if lifecycle == "approved" {
+            DecisionKind::Approve {
+                outcome: "approved".into(),
+                public_reason: None,
+            }
+        } else {
+            DecisionKind::Reject {
+                outcome: "incorrect".into(),
+                public_reason: Some("Refused".into()),
+                reason: Some("Refused".into()),
+                result: Some(json!({"correction":"name"})),
+            }
+        };
+        service
+            .decide_review_task(
+                &fixture.reviewer_b,
+                task,
+                ReviewTaskDecisionRequest { decision },
+                None,
+                "",
+                2,
+                "decide",
+            )
+            .await
+            .unwrap();
+    }
+    let mut third = bind_request(&service, request("latest-round", "ref-latest-round-3"));
+    third.subject.version = "3".into();
+    third.subject.digest = ContentDigest::for_bytes(b"latest-round-3");
+    let third = service
+        .create_review_request(&fixture.producer, third, "create-third")
+        .await
+        .unwrap();
+    let stage: i32 = fixture
+        .database
+        .query_one(
+            "SELECT active_stage_index FROM casework_review_requests WHERE request_id=$1",
+            &[&third.accepted.request_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        stage, 0,
+        "latest {lifecycle} round must prevent reuse of an older return"
+    );
+}
+
+#[tokio::test]
+async fn c2_fix_latest_approved_round_starts_at_first_stage() {
+    c2_later_round_fallback("approved").await;
+}
+#[tokio::test]
+async fn c2_fix_latest_cancelled_round_starts_at_first_stage() {
+    c2_later_round_fallback("cancelled").await;
+}
+#[tokio::test]
+async fn c2_fix_latest_rejected_round_starts_at_first_stage() {
+    c2_later_round_fallback("rejected").await;
+}
+#[tokio::test]
+async fn c2_fix_latest_open_round_starts_at_first_stage() {
+    c2_later_round_fallback("open").await;
+}
+
+#[tokio::test]
+async fn c2_fix_resumption_isolates_subject_and_policy() {
+    let fixture = fixture().await;
+    let service = c2_resumption_service(&fixture);
+    c2_returning_stage_round(&fixture, &service, "isolated-return").await;
+    assert_eq!(
+        c2_next_round_stage(&fixture, &service, "other-subject").await,
+        0
+    );
+    let mut project = asks_project(true, true);
+    project.review_policies[0].id = "other-policy".into();
+    for producer in &mut project.trusted_producers {
+        producer.review_policies = vec!["other-policy".into()];
+    }
+    project.review_policies[0].resubmission = ReviewResubmissionPolicy::ResumeAtReturningStage;
+    let other = CaseworkService::new(fixture.store.clone(), project, Vec::new()).unwrap();
+    let mut next = request("isolated-return", "ref-other-policy");
+    next.policy.id = "other-policy".into();
+    let next = bind_request(&other, next);
+    let next = other
+        .create_review_request(&fixture.producer, next, "other-policy")
+        .await
+        .unwrap();
+    let stage: i32 = fixture
+        .database
+        .query_one(
+            "SELECT active_stage_index FROM casework_review_requests WHERE request_id=$1",
+            &[&next.accepted.request_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(stage, 0);
+}
+
+#[tokio::test]
+async fn c2_fix_pause_expiry_and_resume_are_audited_in_both_orders() {
+    for expiry_first in [true, false] {
+        let fixture = fixture().await;
+        let mut project = asks_project(true, true);
+        project.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {
+            answer_within: Some(ElapsedDuration::Hours(1)),
+            pause_clocks: true,
+            ..Default::default()
+        });
+        let (service, audit) = service_with_audit(&fixture, project);
+        let (request_id, task, create) = claimed_for_asks(&fixture, &service, "ordered-race").await;
+        let asked = service
+            .ask_applicant(
+                &fixture.reviewer_a,
+                task,
+                ask_request("Why?"),
+                None,
+                "",
+                2,
+                "ask",
+            )
+            .await
+            .unwrap();
+        assert_eq!(audit.responses("review-clock-paused").len(), 1);
+        let due = now_micros() - TimeDelta::minutes(1);
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_asks SET asked_at=$2,due_at=$3 WHERE ask_id=$1",
+                &[&asked.ask.ask_id, &(due - TimeDelta::hours(1)), &due],
+            )
+            .await
+            .unwrap();
+        fixture.database.batch_execute("BEGIN").await.unwrap();
+        if expiry_first {
+            fixture.database.query("SELECT clock_occurrence_id FROM casework_review_clock_occurrences WHERE request_id=$1 FOR UPDATE", &[&request_id]).await.unwrap();
+        } else {
+            fixture
+                .database
+                .query(
+                    "SELECT ask_id FROM casework_review_asks WHERE ask_id=$1 FOR UPDATE",
+                    &[&asked.ask.ask_id],
+                )
+                .await
+                .unwrap();
+        }
+        let answer = service.answer_review_ask(
+            &fixture.producer,
+            request_id,
+            asked.ask.ask_id,
+            ReviewAskAnswer {
+                subject: create.subject,
+                answered_at: due,
+            },
+            "answer",
+        );
+        let expiry = service.process_due_review_clocks(100);
+        tokio::pin!(answer, expiry);
+        if expiry_first {
+            tokio::select! {
+                result = &mut expiry => panic!("expiry must wait on the clock lock: {result:?}"),
+                () = c2_wait_for_blocked_sessions(&fixture, 1) => {}
+            }
+            tokio::select! {
+                result = &mut answer => panic!("answer must wait behind expiry: {result:?}"),
+                () = c2_wait_for_blocked_sessions(&fixture, 2) => {}
+            }
+            release_lock(&fixture).await;
+            let (expiry, answer) = tokio::join!(&mut expiry, &mut answer);
+            assert_eq!(expiry.unwrap(), 1);
+            assert_eq!(answer.unwrap().state, ReviewAskState::Answered);
+        } else {
+            tokio::select! {
+                result = &mut answer => panic!("answer must wait on the ask lock: {result:?}"),
+                () = c2_wait_for_blocked_sessions(&fixture, 1) => {}
+            }
+            assert_eq!(
+                expiry.await.unwrap(),
+                0,
+                "expiry skips the request locked by the answer"
+            );
+            release_lock(&fixture).await;
+            assert_eq!(answer.await.unwrap().state, ReviewAskState::Answered);
+        }
+        assert_eq!(service.process_due_review_clocks(100).await.unwrap(), 0);
+        assert_eq!(
+            audit.responses("review-ask-expired").len(),
+            usize::from(expiry_first)
+        );
+        assert_eq!(audit.responses("review-clock-resumed").len(), 1);
+        assert_eq!(
+            ask_changes(&fixture, request_id).await,
+            if expiry_first {
+                vec!["opened", "expired", "answered"]
+            } else {
+                vec!["opened", "answered"]
+            }
+        );
+    }
+}
+
+async fn c2_wait_for_blocked_sessions(fixture: &Fixture, minimum: i64) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            fixture.database.batch_execute("SELECT pg_stat_clear_snapshot()").await.unwrap();
+            let waiting:i64 = fixture.database.query_one("SELECT count(*) FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND pid<>pg_backend_pid()", &[&fixture.application_name]).await.unwrap().get(0);
+            if waiting >= minimum { return; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("the intended transaction order must be observed, without timing guesses");
+}
+
+#[tokio::test]
+async fn c2_fix_cancellation_and_supersession_resume_paused_clocks() {
+    for supersede in [false, true] {
+        let fixture = fixture().await;
+        let mut project = asks_project(true, true);
+        project.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {
+            answer_within: Some(ElapsedDuration::Hours(1)),
+            pause_clocks: true,
+            ..Default::default()
+        });
+        let (service, audit) = service_with_audit(&fixture, project);
+        let (request_id, task, create) = claimed_for_asks(&fixture, &service, "close-paused").await;
+        service
+            .ask_applicant(
+                &fixture.reviewer_a,
+                task,
+                ask_request("Why?"),
+                None,
+                "",
+                2,
+                "ask",
+            )
+            .await
+            .unwrap();
+        if supersede {
+            let mut next = create;
+            next.requester_reference = "superseding-ref".into();
+            next.subject.version = "2".into();
+            next.subject.digest = ContentDigest::for_bytes(b"superseding");
+            service
+                .create_review_request(&fixture.producer, next, "supersede")
+                .await
+                .unwrap();
+        } else {
+            service
+                .cancel_review_request(
+                    &fixture.producer,
+                    request_id,
+                    ReviewCancelRequest {
+                        subject: create.subject,
+                        reason: "Withdrawn".into(),
+                    },
+                    "cancel",
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(ask_states(&fixture, request_id).await, ["closed"]);
+        let paused:i64 = fixture.database.query_one("SELECT count(*) FROM casework_review_clock_occurrences WHERE request_id=$1 AND (state='paused' OR paused_at IS NOT NULL OR paused_ask_id IS NOT NULL)", &[&request_id]).await.unwrap().get(0);
+        assert_eq!(paused, 0);
+        assert_eq!(
+            audit
+                .responses(if supersede {
+                    "clock-resumed"
+                } else {
+                    "review-clock-resumed"
+                })
+                .len(),
+            1
+        );
+    }
 }
 
 fn ask_request(text: &str) -> ReviewTaskAskRequest {

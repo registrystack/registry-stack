@@ -353,6 +353,7 @@ export interface ReviewContextAsk {
   text: string
   wants: ReadonlyArray<ReviewAskWant>
   askedAt: string
+  dueAt?: string
   state: ReviewAskState
   answeredAt?: string
 }

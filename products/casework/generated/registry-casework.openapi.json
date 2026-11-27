@@ -3474,6 +3474,13 @@
             "format": "date-time",
             "type": "string"
           },
+          "dueAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "state": {
             "$ref": "#/components/schemas/ReviewAskState"
           },

@@ -653,6 +653,7 @@ class ReviewTaskAsked(TypedDict):
     task: ReviewTask
     ask: ReviewAsk
 class _ReviewContextAskOptional(TypedDict, total=False):
+    dueAt: str
     answeredAt: str
 class ReviewContextAsk(_ReviewContextAskOptional):
     askId: Uuid

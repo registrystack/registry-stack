@@ -71,6 +71,12 @@
 - The runtime schema declares no empty default for an issuer entry's
   `assertionIssuers`. Omitting the member still means no assertion-issuer rule
   applies.
+- Resubmission considers only the latest matching round and records only
+  `stageId` in its resume history, without a link to the earlier request.
+- Clock recomputation preserves accumulated ask pauses. Pausing requires
+  `answerWithin` on the same stage.
+- An older ask's answer preserves a newer ask's waiting marker. Closing
+  preserves already expired asks. Task contexts expose each ask's `dueAt`.
 - Stages can set `asks.answerWithin` and `asks.onDue: return-to-reviewer`.
   Casework expires overdue asks and marks their tasks `expired`. Answers are
   judged by `answeredAt`, including on-time answers delivered after expiry.

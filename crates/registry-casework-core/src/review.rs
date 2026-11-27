@@ -718,6 +718,20 @@ impl ReviewPolicy {
         tag(ReviewPolicyError::FinalStageAdvisory, advisory_stages);
 
         let mut asks = Findings::default();
+        for (index, stage) in self.stages.iter().enumerate() {
+            if stage
+                .asks
+                .as_ref()
+                .is_some_and(|asks| asks.pause_clocks && asks.answer_within.is_none())
+            {
+                asks.push(
+                    "casework.review-policy.ask-pause-requires-answer-within",
+                    format!("/stages/{index}/asks/answerWithin"),
+                    "pausing clocks requires an ask deadline",
+                    "Set answerWithin on this stage's asks, or disable pauseClocks.",
+                );
+            }
+        }
         if self.purpose == ReviewPurpose::Answer {
             for (index, stage) in self.stages.iter().enumerate() {
                 if stage.asks.is_some() {
@@ -1382,6 +1396,8 @@ pub struct ReviewContextAsk {
     pub text: String,
     pub wants: Vec<registry_review_protocol::ReviewAskWant>,
     pub asked_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<DateTime<Utc>>,
     pub state: registry_review_protocol::ReviewAskState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_at: Option<DateTime<Utc>>,
@@ -2177,7 +2193,7 @@ pub enum ReviewPolicyError {
     Stages,
     #[error("the final review stage cannot be advisory")]
     FinalStageAdvisory,
-    #[error("only an approval review policy can let a stage ask the applicant")]
+    #[error("stage asks require an approval policy and a due date when pausing clocks")]
     StageAsks,
     #[error("review stage identifiers, queues, or deciding profiles are invalid")]
     StageIdentity,
@@ -4699,6 +4715,27 @@ mod tests {
             .find(|finding| finding.code == "casework.review-policy.asks-in-answer-policy")
             .expect("an answer policy that asks is reported");
         assert_eq!(finding.pointer, "/stages/0/asks");
+    }
+
+    #[test]
+    fn pausing_asks_require_a_due_date() {
+        let mut policy = approval_policy(vec![stage("review", 1)]);
+        policy.stages[0].asks = Some(ReviewStageAsksPolicy {
+            pause_clocks: true,
+            ..Default::default()
+        });
+        let finding = policy
+            .findings()
+            .into_iter()
+            .find(|finding| {
+                finding.code == "casework.review-policy.ask-pause-requires-answer-within"
+            })
+            .expect("unbounded clock pause must be reported");
+        assert_eq!(finding.pointer, "/stages/0/asks/answerWithin");
+        assert_eq!(policy.check(), Err(ReviewPolicyError::StageAsks));
+        policy.stages[0].asks.as_mut().unwrap().answer_within =
+            Some(crate::ElapsedDuration::Hours(1));
+        assert_eq!(policy.check(), Ok(()));
     }
 
     #[test]

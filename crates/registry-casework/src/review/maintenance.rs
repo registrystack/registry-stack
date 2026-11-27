@@ -166,7 +166,7 @@ impl PostgresStore {
                 .ok_or(ReviewRuntimeError::Corrupt)?;
             let Some(occurrence) = transaction
                 .query_opt(
-                    "SELECT policy,state,anchor_at,holiday_document,reminders,steps
+                    "SELECT policy,state,anchor_at,holiday_document,reminders,steps,paused_duration_micros
                      FROM casework_review_clock_occurrences
                      WHERE clock_occurrence_id=$1 AND scope='activity'
                        AND ((state='source-facts-missing'
@@ -220,9 +220,10 @@ impl PostgresStore {
                     continue;
                 };
                 let holiday: HolidaySetDocument = serde_json::from_value(holiday_row.get(0))?;
-                let evaluated =
+                let mut evaluated =
                     evaluate_stage_clock(&definition.clock, calendar, &holiday, anchor_at)
                         .map_err(|error| clock_evaluation_error(&definition.clock, error))?;
+                super::ask_clocks::shift_evaluation(&mut evaluated, occurrence.get(6))?;
                 let next_action_at = next_review_clock_action(
                     &evaluated.reminders,
                     &evaluated.steps,

@@ -2800,19 +2800,20 @@ impl PostgresStore {
         let returning = if policy.resubmission == ReviewResubmissionPolicy::ResumeAtReturningStage {
             transaction
                 .query_opt(
-                    "SELECT r.request_id,settling.stage_id
+                    "SELECT settling.stage_id
                  FROM casework_review_requests r
                  LEFT JOIN LATERAL (
                      SELECT t.stage_id FROM casework_review_decisions d
                      JOIN casework_review_tasks t ON t.task_id=d.task_id
                      WHERE d.request_id=r.request_id AND d.decision='changes-requested'
+                       AND r.lifecycle='changes-requested'
                        AND r.result_erased_at IS NULL AND r.result_available_until>$8
                      ORDER BY d.stage_index DESC,d.decided_at DESC,d.decision_id DESC LIMIT 1
                  ) settling ON true
                  WHERE r.producer_id=$1 AND r.producer_issuer=$2 AND r.producer_subject=$3
                    AND r.subject_source=$4 AND r.subject_type=$5 AND r.subject_id=$6
-                   AND r.policy_id=$7 AND r.lifecycle='changes-requested'
-                 ORDER BY r.terminal_at DESC,r.created_at DESC,r.request_id DESC LIMIT 1",
+                   AND r.policy_id=$7
+                 ORDER BY r.created_at DESC,r.request_id DESC LIMIT 1",
                     &[
                         &producer.id,
                         &producer.issuer,
@@ -2826,20 +2827,19 @@ impl PostgresStore {
                 )
                 .await?
                 .and_then(|row| {
-                    let earlier_request_id: Uuid = row.get(0);
-                    let stage_id: Option<String> = row.get(1);
+                    let stage_id: Option<String> = row.get(0);
                     stage_id.and_then(|id| {
                         policy
                             .stages
                             .iter()
                             .position(|stage| stage.id == id)
-                            .map(|index| (earlier_request_id, index, id))
+                            .map(|index| (index, id))
                     })
                 })
         } else {
             None
         };
-        let initial_stage = returning.as_ref().map_or(0, |(_, index, _)| *index);
+        let initial_stage = returning.as_ref().map_or(0, |(index, _)| *index);
         let initial_stage =
             u16::try_from(initial_stage).map_err(|_| ReviewRuntimeError::Corrupt)?;
         let retained_until = now
@@ -2992,11 +2992,11 @@ impl PostgresStore {
             now,
         )
         .await?;
-        if let Some((earlier_request_id, _, stage_id)) = returning {
+        if let Some((_, stage_id)) = returning {
             transaction.execute(
                 "INSERT INTO casework_review_history(event_id,request_id,kind,actor_ref,detail,occurred_at)
                  VALUES($1,$2,'review-resumed-at-stage',NULL,$3,$4)",
-                &[&Uuid::new_v4(),&request_id,&json!({"earlierRequestId":earlier_request_id,"stageId":stage_id}),&now],
+                &[&Uuid::new_v4(),&request_id,&json!({"stageId":stage_id}),&now],
             ).await?;
         }
         insert_initial_review_clocks(

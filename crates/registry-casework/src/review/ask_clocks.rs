@@ -82,17 +82,17 @@ pub(super) async fn resume(
             }
         }
         let anchor: DateTime<Utc> = row.get(10);
-        // An unresolved working-day clock will be evaluated when its holiday
-        // facts arrive. Move its anchor so that evaluation includes the pause.
-        let anchor = if state == "source-facts-missing" {
-            shift(Some(anchor))?.ok_or(ReviewRuntimeError::Corrupt)?
-        } else {
-            anchor
-        };
+        // Keep the original anchor and accumulate the exact wall-time offset.
+        // Re-evaluation adds this offset after calendar evaluation, since a
+        // working-day due time cannot be shifted by moving its anchor alone.
+        let paused_micros = duration
+            .num_microseconds()
+            .ok_or(ReviewRuntimeError::Corrupt)?;
         tx.execute(
             "UPDATE casework_review_clock_occurrences SET state=$2,paused_at=NULL,
                  paused_state=NULL,paused_ask_id=NULL,due_at=$3,at_risk_at=$4,
-                 next_action_at=$5,reminders=$6,steps=$7,anchor_at=$8,updated_at=$9
+                 next_action_at=$5,reminders=$6,steps=$7,anchor_at=$8,updated_at=$9,
+                 paused_duration_micros=paused_duration_micros+$10
              WHERE clock_occurrence_id=$1",
             &[
                 &occurrence,
@@ -104,6 +104,7 @@ pub(super) async fn resume(
                 &serde_json::to_value(steps)?,
                 &anchor,
                 &now,
+                &paused_micros,
             ],
         )
         .await?;
@@ -112,6 +113,25 @@ pub(super) async fn resume(
         }), now).await?;
     }
     refresh_review_deadlines(tx, request_id).await?;
+    Ok(())
+}
+
+pub(super) fn shift_evaluation(
+    evaluation: &mut registry_casework_core::StageClockEvaluation,
+    paused_micros: i64,
+) -> Result<(), ReviewRuntimeError> {
+    let shift = |at: DateTime<Utc>| {
+        at.checked_add_signed(TimeDelta::microseconds(paused_micros))
+            .ok_or(ReviewRuntimeError::Corrupt)
+    };
+    evaluation.due_at = shift(evaluation.due_at)?;
+    evaluation.at_risk_at = evaluation.at_risk_at.map(shift).transpose()?;
+    for reminder in &mut evaluation.reminders {
+        reminder.at = shift(reminder.at)?;
+    }
+    for step in &mut evaluation.steps {
+        step.at = shift(step.at)?;
+    }
     Ok(())
 }
 

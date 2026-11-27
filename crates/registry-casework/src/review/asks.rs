@@ -505,10 +505,12 @@ impl PostgresStore {
             return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
         }
         let current = ask_from_row(&row, &record)?;
-        if !matches!(
-            current.state,
-            ReviewAskState::Open | ReviewAskState::Expired
-        ) || current.due_at.is_some_and(|due| answer.answered_at > due)
+        if record.lifecycle != ReviewRequestLifecycle::Reviewing
+            || !matches!(
+                current.state,
+                ReviewAskState::Open | ReviewAskState::Expired
+            )
+            || current.due_at.is_some_and(|due| answer.answered_at > due)
         {
             return Err(ReviewRuntimeError::ReviewAskNotOpen);
         }
@@ -517,6 +519,16 @@ impl PostgresStore {
             return Err(ReviewRuntimeError::ReviewAskAnswerTimeInvalid);
         }
         let task_id = row.get::<_, Uuid>(2);
+        let task_is_active: bool = transaction
+            .query_one(
+                "SELECT state IN ('open','claimed') FROM casework_review_tasks WHERE task_id=$1",
+                &[&task_id],
+            )
+            .await?
+            .get(0);
+        if !task_is_active {
+            return Err(ReviewRuntimeError::ReviewAskNotOpen);
+        }
         let answered_at = transaction
             .query_one(
                 "UPDATE casework_review_asks SET state='answered',answered_at=$2,closed_at=NULL
@@ -528,7 +540,9 @@ impl PostgresStore {
         transaction
             .execute(
                 "UPDATE casework_review_tasks
-                 SET ask_marker='answered',revision=revision+1,updated_at=$2
+                 SET ask_marker=CASE WHEN EXISTS (
+                     SELECT 1 FROM casework_review_asks a WHERE a.task_id=$1 AND a.state='open'
+                 ) THEN 'waiting' ELSE 'answered' END,revision=revision+1,updated_at=$2
                  WHERE task_id=$1 AND state IN ('open','claimed')",
                 &[&task_id, &now],
             )
@@ -603,7 +617,7 @@ impl PostgresStore {
         let client = self.client().await?;
         client
             .query(
-                "SELECT ask_id,task_id,text,wants,state,asked_at,answered_at
+                "SELECT ask_id,task_id,text,wants,state,asked_at,answered_at,due_at
                  FROM casework_review_asks WHERE request_id=$1 ORDER BY asked_at,ask_id",
                 &[&request_id],
             )
@@ -618,13 +632,14 @@ impl PostgresStore {
                     state: ask_state(&row.get::<_, String>(4))?,
                     asked_at: row.get(5),
                     answered_at: row.get(6),
+                    due_at: row.get(7),
                 })
             })
             .collect()
     }
 }
 
-/// Closes open and expired asks when their task is decided or the request
+/// Closes open asks when their task is decided or the request
 /// ends. `task_id` limits the close to that task's asks. Every close
 /// is announced on the producer's feed in the same transaction.
 pub(super) async fn close_open_asks(
@@ -637,7 +652,7 @@ pub(super) async fn close_open_asks(
     let closed = transaction
         .query(
             "UPDATE casework_review_asks SET state='closed',closed_at=$2
-             WHERE request_id=$1 AND state IN ('open','expired')
+             WHERE request_id=$1 AND state='open'
                AND ($3::uuid IS NULL OR task_id=$3)
              RETURNING ask_id",
             &[&record.request_id, &now, &task_id],

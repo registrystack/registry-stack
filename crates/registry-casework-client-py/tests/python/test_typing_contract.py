@@ -26,6 +26,7 @@ class TypingContractTests(unittest.TestCase):
             "pauseClocks": "bool",
         })
         self.assertEqual(fields("_ReviewPolicyOptional")["resubmission"], "Literal['first-stage', 'resume-at-returning-stage']")
+        self.assertEqual(fields("_ReviewContextAskOptional")["dueAt"], "str")
 
     def test_client_configuration_uses_the_canonical_authored_names(self) -> None:
         module = ast.parse(STUB.read_text(encoding="utf-8"))

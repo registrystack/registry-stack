@@ -69,6 +69,7 @@ ALTER TABLE casework_review_clock_occurrences
     ADD CONSTRAINT casework_review_clock_occurrences_state_check
         CHECK (state IN ('running','paused','completed','cancelled','source-facts-missing')),
     ADD COLUMN paused_at timestamptz,
+    ADD COLUMN paused_duration_micros bigint NOT NULL DEFAULT 0 CHECK (paused_duration_micros >= 0),
     ADD COLUMN paused_ask_id uuid,
     ADD COLUMN paused_state text CHECK (paused_state IN ('running','source-facts-missing')),
     ADD CONSTRAINT casework_review_clock_pause_check
