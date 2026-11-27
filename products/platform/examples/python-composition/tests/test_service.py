@@ -633,7 +633,7 @@ class ProposalHintTests(unittest.TestCase):
             "unknown-subject-member",
             "version",
             "unknown-field",
-            "header",
+            "event-type",
         ):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as root:
                 inbox = Inbox(Path(root) / "inbox.sqlite")
@@ -662,7 +662,7 @@ class ProposalHintTests(unittest.TestCase):
                 self.assertEqual(
                     str(refused.exception),
                     "hook signature or expected envelope was refused"
-                    if change == "header"
+                    if change in {"event-type", "mixed-subject", "unknown-subject-member"}
                     else "the authenticated native Proposal envelope was refused",
                 )
                 self.assertEqual(inbox.pending(), 0)
