@@ -43,9 +43,17 @@ fn operational_log_level(
 #[tokio::main]
 async fn main() -> ExitCode {
     let matches = command().get_matches();
-    let path = matches
-        .get_one::<PathBuf>("runtime-config")
-        .expect("clap requires --runtime-config");
+    let given = matches.get_one::<PathBuf>("runtime-config");
+    let verify_only = matches
+        .subcommand_matches("gateway")
+        .and_then(|gateway| gateway.subcommand_matches("envoy"))
+        .is_some_and(|envoy| envoy.contains_id("verify-assembled"));
+    // Verifying an assembled file reads no runtime file.
+    let none = PathBuf::new();
+    let Some(path) = given.or(verify_only.then_some(&none)) else {
+        eprintln!("registry-session: --runtime-config is required");
+        return ExitCode::from(2);
+    };
 
     // The offline check writes its own report and reads no log setting.
     if let Some(("check", arguments)) = matches.subcommand() {

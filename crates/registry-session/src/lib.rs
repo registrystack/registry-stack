@@ -39,8 +39,7 @@ pub fn command() -> Command {
             Arg::new("runtime-config")
                 .long("runtime-config")
                 .value_name("FILE")
-                .help("Runtime configuration file")
-                .required(true)
+                .help("Runtime configuration file (every command but `gateway envoy --verify-assembled`)")
                 .value_parser(value_parser!(PathBuf)),
         )
         .subcommand(
@@ -99,7 +98,7 @@ pub fn command() -> Command {
                             ArgGroup::new("mode")
                                 .args(["out", "check", "verify-assembled"])
                                 .required(true)
-                                .multiple(false),
+                                                .multiple(false),
                         )
                         .arg(
                             Arg::new("out")
@@ -124,4 +123,48 @@ pub fn command() -> Command {
                         ),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parses(arguments: &[&str]) -> bool {
+        let mut all = vec!["registry-session"];
+        all.extend_from_slice(arguments);
+        command().try_get_matches_from(all).is_ok()
+    }
+
+    #[test]
+    fn the_command_is_well_formed() {
+        command().debug_assert();
+    }
+
+    #[test]
+    fn a_gateway_mode_is_exactly_one_of_out_check_and_verify_assembled() {
+        let envoy = ["--runtime-config", "/r.yaml", "gateway", "envoy"];
+        let with = |extra: &[&str]| parses(&[&envoy[..], extra].concat());
+        assert!(with(&["--out", "/d"]));
+        assert!(with(&["--check", "/d"]));
+        assert!(with(&["--verify-assembled", "/e.yaml"]));
+        assert!(!with(&[]));
+        assert!(!with(&["--out", "/d", "--check", "/d"]));
+        assert!(!with(&["--out", "/d", "--verify-assembled", "/e.yaml"]));
+        assert!(!with(&["--check", "/d", "--verify-assembled", "/e.yaml"]));
+        assert!(!with(&[
+            "--out",
+            "/d",
+            "--check",
+            "/d",
+            "--verify-assembled",
+            "/e.yaml"
+        ]));
+        // Verifying an assembled file reads no runtime file.
+        assert!(parses(&[
+            "gateway",
+            "envoy",
+            "--verify-assembled",
+            "/e.yaml"
+        ]));
+    }
 }

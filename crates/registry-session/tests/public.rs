@@ -637,3 +637,23 @@ async fn the_per_person_limit_applies_to_sign_in() {
     // Another person is not affected.
     harness.sign_in("/apply/", "citizen-b").await;
 }
+
+#[tokio::test]
+async fn every_public_path_the_gateway_routes_is_served_and_its_headers_agree() {
+    let harness = Harness::start().await;
+    for path in registry_session::gateway::PUBLIC_PATHS {
+        let page = harness.get(path, None).await;
+        assert_ne!(page.status, StatusCode::NOT_FOUND, "{path}");
+    }
+    assert_eq!(
+        registry_session::gateway::AUTHORIZATION_HEADER,
+        axum::http::header::AUTHORIZATION.as_str()
+    );
+    let citizen = harness.sign_in("/apply/", "citizen-a").await;
+    let allowed = harness
+        .check("GET", "/api/registry/records", Some(&citizen.cookie))
+        .await;
+    assert!(allowed
+        .header(registry_session::gateway::AUTHORIZATION_HEADER)
+        .is_some());
+}
