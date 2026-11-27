@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Verified access-token ownership and exact deployment policy matching.
 use crate::{store::Actor, CoordinatorError, Result};
-use registry_platform_authcommon::FailedCheck;
+use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_config::{
     JwksSource, OidcClientsConfig, OidcIssuerConfig, SecretProvidersConfig,
 };
@@ -317,7 +317,8 @@ impl AccessConfig {
                     .map_err(|_| refused())?;
                 Arc::new(JwksFetcher::new_static(
                     parse_static_jwks(value.expose_secret()).map_err(|error| match error {
-                        // The text names the key position and member, never key material.
+                        // The text names the rule broken, and the key's position for a rule about
+                        // one key, never key material.
                         OidcError::StaticKeySet(_) => CoordinatorError::new(
                             "access.configuration",
                             error.to_string(),
@@ -394,6 +395,8 @@ pub struct Authenticator {
     verifier: TokenVerifier,
     policies: BTreeMap<String, ClientPolicy>,
     assertion_issuers: bool,
+    /// The claim the deployment reads scopes from, as configured.
+    scope_claim: String,
 }
 pub struct Caller {
     pub actor: Actor,
@@ -468,6 +471,7 @@ impl Authenticator {
         assertion_issuers: bool,
     ) -> Self {
         Self {
+            scope_claim: profile.scope_claim.clone(),
             verifier: TokenVerifier::new(profile, keys),
             policies,
             assertion_issuers,
@@ -527,12 +531,13 @@ impl Authenticator {
             .get(client)
             .filter(|p| p.subjects.iter().any(|s| s == subject))
             .ok_or_else(|| denied(FailedCheck::AccessProfile))?;
-        if !p
+        if let Some(missing) = p
             .required_scopes
             .iter()
-            .all(|s| verified.scopes.contains(s))
+            .find(|s| !verified.scopes.contains(s))
         {
-            return Err(denied(FailedCheck::Scope));
+            return Err(denied(FailedCheck::Scope)
+                .declaring(DeclaredScope::new(&self.scope_claim).with_required_scope(missing)));
         }
         Ok(Caller {
             actor: Actor {

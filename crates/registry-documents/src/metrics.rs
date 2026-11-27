@@ -39,7 +39,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use registry_platform_authcommon::{record_refusal, RefusalNote, RefusalRecorder};
+use registry_platform_authcommon::{record_refusal, DeclaredScope, RefusalNote, RefusalRecorder};
 use registry_platform_metrics::{
     sample_error_class, CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
     CLASS_NO_TIME_LEFT, CLASS_POOL, CONTENT_TYPE as METRICS_CONTENT_TYPE,
@@ -217,6 +217,12 @@ impl Metrics {
         record_refusal!(self.refusals, note);
     }
 
+    /// As [`Self::record_refusal`], and a scope refusal's line also names the
+    /// values the deployment declared for it.
+    pub fn record_refusal_declaring(&self, note: RefusalNote, declared: Option<&DeclaredScope>) {
+        record_refusal!(self.refusals, note, declared = declared);
+    }
+
     /// Record that `worker` just completed a pass.
     pub fn record_worker_success(&self, worker: Worker) {
         self.record_worker_success_at(worker, self.started.elapsed().as_secs());
@@ -376,7 +382,7 @@ pub async fn count_requests(
     let response = next.run(request).await;
     metrics.record_request(&route, &method, response.status());
     if let Some(note) = response.extensions().get::<RefusalNote>() {
-        metrics.record_refusal(*note);
+        metrics.record_refusal_declaring(*note, response.extensions().get::<DeclaredScope>());
     }
     response
 }

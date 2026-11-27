@@ -2390,12 +2390,13 @@ pub(crate) fn positioned(document: &Document, error: CoordinatorError) -> Coordi
             error.code.as_str(),
             "function.value_limit" | "function.json"
         )
-        && error.file.as_deref() != Some(Path::new("workflow.yaml"))
+        && error.file.as_deref().map(std::path::PathBuf::as_path)
+            != Some(Path::new("workflow.yaml"))
     {
         let mut error = error;
         error
             .file
-            .get_or_insert_with(|| Path::new("functions.rhai").into());
+            .get_or_insert_with(|| Box::new(std::path::PathBuf::from("functions.rhai")));
         return CoordinatorError::from_report(error.report());
     }
     let exit = error.exit_code;

@@ -96,7 +96,8 @@ fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
 
 /// `apply` grants to `deployment.runtimeRole` and the service requires its
 /// connection to log in as that role, so a runtime URL naming another user
-/// would provision a role neither of them uses. The diagnostic names the
+/// would provision a role neither of them uses. A URL with no user, or one
+/// that does not parse, gets its own message. The diagnostic names the
 /// configured role, never the URL.
 fn require_runtime_role(runtime_url: &str, expected: &str) -> Result<(), Box<Diagnostic>> {
     let user = runtime_url
@@ -104,15 +105,25 @@ fn require_runtime_role(runtime_url: &str, expected: &str) -> Result<(), Box<Dia
         .parse::<tokio_postgres::Config>()
         .ok()
         .and_then(|config| config.get_user().map(str::to_owned));
-    if user.as_deref() == Some(expected) {
-        return Ok(());
+    match user.as_deref() {
+        Some(user) if user == expected => Ok(()),
+        Some(_) => Err(Box::new(Diagnostic::error(
+            RUNTIME_ROLE_MISMATCH,
+            "/database/runtimeUrlRef",
+            format!(
+                "the runtime database URL does not log in as deployment.runtimeRole ({expected})"
+            ),
+            "Use the runtimeRole as the user of the URL database.runtimeUrlRef names, or change deployment.runtimeRole to the URL's user.",
+        ))),
+        None => Err(Box::new(Diagnostic::error(
+            RUNTIME_ROLE_MISMATCH,
+            "/database/runtimeUrlRef",
+            format!(
+                "the runtime database URL names no user, or is not a PostgreSQL URL, so it cannot log in as deployment.runtimeRole ({expected})"
+            ),
+            "Put the runtimeRole in the URL database.runtimeUrlRef names, as a PostgreSQL URL with a user.",
+        ))),
     }
-    Err(Box::new(Diagnostic::error(
-        RUNTIME_ROLE_MISMATCH,
-        "/database/runtimeUrlRef",
-        format!("the runtime database URL does not log in as deployment.runtimeRole ({expected})"),
-        "Use the runtimeRole as the user of the URL database.runtimeUrlRef names, or change deployment.runtimeRole to the URL's user.",
-    )))
 }
 
 fn secret_text(

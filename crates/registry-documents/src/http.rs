@@ -27,7 +27,7 @@ use registry_documents_core::{
     READY_PATH,
 };
 use registry_platform_authcommon::{
-    parse_bearer_token, BearerParseError, FailedCheck, RefusalNote,
+    parse_bearer_token, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
 };
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
@@ -253,13 +253,16 @@ impl DocumentRoutes {
     /// The verified caller, before anything else of the request is read.
     /// A missing or refused credential is `authentication.refused`; a token
     /// that resolves to no access profile is `profile.not-authorized`.
-    async fn caller(&self, headers: &HeaderMap) -> Result<Caller, ServiceError> {
+    async fn caller(&self, headers: &HeaderMap) -> Result<Caller, Refusal> {
         let token = bearer_token(headers)?;
         let caller = self
             .authenticator
-            .authenticate(token)
+            .authenticate_declaring(token)
             .await
-            .map_err(authentication_refusal)?;
+            .map_err(|refusal| Refusal {
+                error: authentication_refusal(refusal.error),
+                declared: refusal.declared,
+            })?;
         self.service.admit().await?;
         Ok(caller)
     }
@@ -322,8 +325,36 @@ fn identifier(text: &str) -> Result<Uuid, ServiceError> {
     Uuid::parse_str(text).map_err(|_| ServiceError::concealed(FailedCheck::Visibility))
 }
 
-fn answer(result: Result<Response, ServiceError>) -> Response {
-    result.unwrap_or_else(refusal_response)
+/// A failed operation, and the values the deployment declared about it when
+/// it is a scope refusal. The values go to the operator's log line only.
+pub(crate) struct Refusal {
+    error: ServiceError,
+    declared: Option<DeclaredScope>,
+}
+
+impl From<ServiceError> for Refusal {
+    fn from(error: ServiceError) -> Self {
+        Self {
+            error,
+            declared: None,
+        }
+    }
+}
+
+impl From<ProblemCode> for Refusal {
+    fn from(problem: ProblemCode) -> Self {
+        ServiceError::from(problem).into()
+    }
+}
+
+fn answer(result: Result<Response, Refusal>) -> Response {
+    result.unwrap_or_else(|refusal| {
+        let mut response = refusal_response(refusal.error);
+        if let Some(declared) = refusal.declared {
+            response.extensions_mut().insert(declared);
+        }
+        response
+    })
 }
 
 /// The remedy the log line of a scope refusal carries.

@@ -1864,7 +1864,9 @@ pub fn check(definition: &Definition, document: &ScenarioDocument) -> Result<Vec
         .enumerate()
         .map(|(index, scenario)| {
             run(definition, scenario).map_err(|error| {
-                if error.file.as_deref() == Some(Path::new(SCENARIOS_FILE)) {
+                if error.file.as_deref().map(std::path::PathBuf::as_path)
+                    == Some(Path::new(SCENARIOS_FILE))
+                {
                     let pointer = case_pointer(&error, index);
                     error.at(SCENARIOS_FILE, pointer)
                 } else {
@@ -2032,7 +2034,8 @@ fn placed(
     workflow: &Document,
     document: &Document,
 ) -> Vec<Diagnostic> {
-    if refused.file.as_deref() == Some(Path::new("workflow.yaml")) {
+    if refused.file.as_deref().map(std::path::PathBuf::as_path) == Some(Path::new("workflow.yaml"))
+    {
         return authoring::positioned(workflow, refused)
             .report()
             .into_diagnostics();
@@ -2065,7 +2068,9 @@ pub(crate) fn case_pointer(error: &CoordinatorError, index: usize) -> String {
         .field
         .as_deref()
         .filter(|field| {
-            field.starts_with('/') && error.file.as_deref() == Some(Path::new(SCENARIOS_FILE))
+            field.starts_with('/')
+                && error.file.as_deref().map(std::path::PathBuf::as_path)
+                    == Some(Path::new(SCENARIOS_FILE))
         })
         .unwrap_or_default();
     format!("/cases/{index}{within}")

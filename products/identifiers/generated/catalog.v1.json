@@ -5414,7 +5414,7 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "1bb41563fd58ad1544df962d17d94172fe76c027128020095da08b5ba63ae733"
+        "sha256": "9b527f0a859daded79ed7fc6f23e764f8c644b277550fb3a2fa030be127d416b"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
@@ -5450,7 +5450,7 @@
       "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/scenarios.rs",
-        "sha256": "d15a452b05c77a398cf957e0f955fb0d7faa2b478df6ee1780f10606d21366b3"
+        "sha256": "74658bd513eea12df551c2eb2f0edb1255695b5830022a6c414a095340358d9b"
       },
       "artifact": {
         "path": "products/coordinator/generated/scenarios/scenarios.schema.json",
