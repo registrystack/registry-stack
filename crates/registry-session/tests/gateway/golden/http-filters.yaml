@@ -57,7 +57,7 @@
             return
           end
           local kept = {}
-          for pair in string.gmatch(cookie, "[^;]+") do
+          for pair in string.gmatch(cookie, "[^;,]+") do
             local first = string.find(pair, "%S")
             if first ~= nil then
               local name = string.match(pair, "^%s*([^=]*)")

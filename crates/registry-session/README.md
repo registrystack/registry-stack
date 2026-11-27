@@ -54,7 +54,7 @@ waits on the issuer while its token is still valid:
 - at most 32 renewals are in flight at the issuer across the whole service, and a
   call that finds none free uses its unexpired token.
 
-`issuer.timeoutMilliseconds` (default 2000) must be below
+`issuer.attemptTimeoutMilliseconds` (default 2000) must be below
 `gateway.checkTimeoutMilliseconds` (default 3000), so the gateway does not give up
 on a check that is still waiting for the issuer. A timeout after the issuer has
 rotated a refresh token behaves like a lost response: the next renewal presents a
@@ -162,26 +162,70 @@ scheme and host, no default port, no path, no trailing slash. Under
 Splice them in as their header comments say, and check the result with
 `registry-session --runtime-config <file> gateway envoy --verify-assembled <envoy.yaml>`.
 
+`--verify-assembled` is an allow-list. It passes only a file it reads exactly as
+Envoy reads it and whose every path to a request for the public authority it can
+see. Anything else is refused with a finding that names the member and says why;
+it does not try to model the rest of Envoy.
+
+- **Reading.** Anchors, aliases, merge keys and tags are refused (Envoy accepts
+  them, so a shared connection manager written once with an anchor must be written
+  out in full). Every field is written in snake_case: Envoy also reads a field by
+  its lowerCamelCase name, and the check refuses any key with an upper-case letter
+  outside metadata, a JSON body format, runtime values and the names under
+  `typed_per_filter_config`. Booleans are `true` or `false`: a plain `y`, `n`,
+  `yes`, `no`, `on` or `off` is a boolean to Envoy and is refused. Enum values are
+  read in any case, as Envoy reads them.
+- **Static only.** Listeners, routes, virtual hosts and filters are written inline.
+  `dynamic_resources` with `lds_config` or `ads_config`, RDS, scoped routes, VHDS,
+  `config_discovery`, the legacy `per_filter_config` and a `TypedStruct` are
+  refused. Every listener's network filters are HTTP connection managers; any other
+  network filter (a `tcp_proxy`, for one) is refused. A runtime layer that sets a key
+  under `registry-session.`, or a disk or RTDS layer, is refused.
+- **Every connection manager.** A connection manager is public when one of its
+  virtual hosts has a wildcard domain or names the authority's host (in any case,
+  with any port or a trailing dot). Every public manager gets the full check, HTTP/3
+  listeners included. An internal manager must name exact internal domains, none of
+  them the authority's host; it is not checked further.
 - **Filter order.** The three filters (`registry-session.csrf`,
   `registry-session.check`, `registry-session.strip-cookies`) go at the head of the
-  host's HTTP filter chain, ahead of the host's own filters and its router, in that
-  order. Host filters then never see the session cookie on a host route, and on a
-  signed-in route they see the check's `Authorization`, not the browser's.
+  host's HTTP filter chain, ahead of the host's own filters, in that order, and
+  appear once. The router ends the chain. An upgrade (`upgrade_configs`) may not
+  bring its own filter list: upgrades use the main chain.
 - **Local reply.** The generated mapper must be the first mapper of the connection
-  manager's `local_reply_config`. Envoy uses the first mapper that matches.
-- **Routes.** The generated routes go first in the virtual host that serves the
-  public authority, in the generated order. Routes delivered by RDS cannot be
-  verified, so write the route configuration inline.
+  manager's `local_reply_config`. Envoy uses the first mapper that matches. A later
+  mapper may not answer with a 3xx status or add the answer marker.
+- **Routes.** The generated routes go first, as generated and in order, in a
+  virtual host of their own whose only domain is the public authority. Envoy picks
+  that virtual host for the authority in any case, so the routes do not match on
+  `:authority` themselves. Host routes may follow them there, matched by `prefix`,
+  `path` or `path_separated_prefix` only, and not under `/session/` or under a
+  generated prefix (compared in any case). No route outside the generated ones
+  reaches a module or page cluster or the service's own clusters, picks its cluster
+  from a header or plugin, mirrors requests, matches `:authority` with
+  `invert_match`, or switches one of the service's filters, at the route, weighted
+  cluster, virtual host or route configuration level. Every other route removes the
+  answer marker and nothing adds it. Neither the generated virtual host nor the
+  route configuration adds an `authorization` or `cookie` request header.
 - **Authority and ports.** `gateway.authority` is lower case, as a browser sends it.
   When it carries a port, the connection manager must not strip ports before routing
-  (`strip_any_host_port` and `strip_matching_host_port` are refused by the verifier),
-  or no generated route would match.
-- **Host filters.** `gateway.hostFilters` lists the host's own filters. It may not
-  name the service's filters or the router. Every route under `/session/` (the five
-  public paths and the catch-all 404) switches every host filter off, so a host
-  authentication or authorization filter never refuses or alters sign-in, sign-out,
-  who-am-I or the 404. A module route switches them off except those it keeps with
-  `keepHostFilters`.
+  (`strip_any_host_port`, `strip_matching_host_port` and
+  `ignore_port_in_host_matching` are refused), or the generated virtual host would
+  not match. Set `strip_trailing_host_dot: true`, and `strip_matching_host_port: true`
+  when the authority has no port, so the browser's forms of the authority all reach
+  the generated virtual host.
+- **Host filters (deny by default).** `gateway.hostFilters` lists every one of the
+  host's own filters in the chain except the router; a filter in the chain it does
+  not list is refused. It may not name the service's filters or the router. Every
+  generated route switches every listed filter off, except a module or page route
+  that keeps one with `keepHostFilters`. A kept filter runs after the check and sees
+  the person's bearer token in `Authorization`, so keep only filters that neither
+  rewrite the path nor clear the route cache, and never one that reads or changes
+  `authorization` (the check refuses a kept filter that names it). No host filter
+  may name the answer marker. A kept filter cannot answer a CORS preflight on a
+  signed-in route: the check meets it first.
+- **Redirects.** No route in the file redirects, and `require_tls` is `NONE`. A
+  plain-HTTP listener that only redirects to https is refused too: serve that
+  redirect outside this Envoy, or not at all.
 - **No environment.** The generator reads no environment variable: a `${NAME}`
   expression in the gateway members, a module id or prefix, or `publicOrigin` is
   refused, so `--check` gives the same answer everywhere.

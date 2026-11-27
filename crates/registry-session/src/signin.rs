@@ -391,7 +391,7 @@ async fn abandon<G: Grants>(
     }
 }
 
-/// The claims `whoAmI.claims` allows, from the verified ID token's claims.
+/// The claims `me.claims` allows, from the verified ID token's claims.
 fn allowed_claims<G>(app: &App<G>, claims: &Map<String, Value>) -> Map<String, Value> {
     app.config
         .who_am_i
