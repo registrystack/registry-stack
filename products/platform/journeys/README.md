@@ -30,6 +30,10 @@ issuer the run starts and does not start an identity provider.
 | `test_journey_tables.py` | The static check. |
 | `lib.sh` | The shared library every journey script sources: options, binaries, generated secrets and redaction, containers and their cleanup, steps, outcomes and the ratchet comparison. |
 | `test_lib.sh` | The library's self-test. It runs against fake `docker`, `curl` and `cargo` commands, so it starts no container and builds nothing: `bash products/platform/journeys/test_lib.sh`. |
+| `rstack-dev.sh` | The `rstack dev` journey, with a recipe per product for the steps from `start` on. |
+| `own-provider.sh` | The own-provider journey: a stock Keycloak and a stock PostgreSQL started on loopback, then each product from its starter to a first authenticated call. |
+| `keycloak/realm.json` | The realm the own-provider journey imports: per product, one caller client with a service account and one API client for the product's audience. It holds no protocol mappers. |
+| `projects/` | The runtime files the own-provider journey gives the products whose starter has none (Render, Coordinator). |
 
 ## Reading the ratchet table
 

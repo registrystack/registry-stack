@@ -1,0 +1,36 @@
+# The deployment block the own-provider journey adds by hand to the runtime
+# file `coordinatorctl init` writes, which has none: the package it serves, the
+# listener, the reader's own issuer and one caller policy, the audit file and
+# the three keys. The block follows the Coordinator operate page.
+# own-provider.sh replaces each @NAME@ with a value of the run (the package
+# digest `coordinatorctl package` printed, the caller's subject in the
+# reader's provider) before the reader "types" it, and the issuer step then
+# points `issuer` at that provider.
+deployment:
+  databaseId: coordinator-journey
+  runtimeRole: coordinator_runtime
+  packages:
+    - root: @PACKAGE@
+      expectedDigest: @DIGEST@
+  listener:
+    bind: 127.0.0.1:@PORT@
+    tlsTermination: development-loopback
+  authentication:
+    issuer: https://identity.example.test/realms/registry
+    audience: urn:example:coordinator
+    scopeClaim: scope
+    jwksSource:
+      type: discovery
+    policies:
+      coordinator-producer:
+        subjects: [@SUBJECT@]
+        requiredScopes: [coordinator:start]
+        workflows: [@WORKFLOW@]
+        actions: [start, status]
+  auditFile: @WORK@/audit.jsonl
+  auditKeyRef: secret:file/audit-key
+  activeStateKey: 1
+  stateKeys:
+    "1":
+      keyRef: secret:file/state-key-1
+  admissionKeyRef: secret:file/admission-key

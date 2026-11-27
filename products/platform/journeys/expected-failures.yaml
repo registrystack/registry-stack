@@ -57,72 +57,82 @@ expectedFailures:
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (bregctl check accepts the Keycloak issuer with RS256). bregctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: casework
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (caseworkctl check). caseworkctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: messaging
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (messagingctl check). messagingctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: scheduling
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (schedulingctl check). schedulingctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: documents
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (documentsctl check). documentsctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: coordinator
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (coordinatorctl check, with the deployment block written by hand). coordinatorctl provision is refused with coordinator.cli.usage (unrecognized command), so roles, the database and grants are made by hand."
   - journey: own-provider
     product: adapter
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (adapterctl check of the facade-recovery example with the breg-records profile). adapterctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: evidence
-    step: call
-    code: http.401.token-type
-    finding: G3
-    removedBy: M7
-    basis: predicted
-    reason: No database. Evidence accepts at+jwt or application/at+jwt only and Keycloak sends typ JWT.
+    step: issuer
+    code: product.evidence.bundle.invalid-authentication
+    finding: X1
+    removedBy: M1
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "evidencectl check refuses the local target (outer code evidence.target.publication-invalid): the local profile takes only a canonical 127.0.0.1 HTTP origin with a port, and a Keycloak issuer carries the /realms/<realm> path, so any such issuer needs allowInsecureHttp: true. The loopback transport class of M1 (A2) removes the URL-shape rule. Behind it the call is predicted to stop at token-type, because Keycloak sends typ JWT."
   - journey: own-provider
     product: render
     step: call
-    code: http.401.token-type
+    code: product.render.unauthorized
     finding: G3
     removedBy: M7
-    basis: predicted
-    reason: Render fixes the token type at at+jwt and Keycloak sends typ JWT.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "No database. Start, ready and the client-credentials token pass (RS256, audience urn:example:render, scope render:render, client portal). POST /v1/render/letter answers 401 with problem render.unauthorized. Render logs no authentication stage, so the code is the problem code. Inferred cause: the token type fixed at at+jwt (registry-render/src/auth.rs:71 on main) against Keycloak's typ JWT."
+
   - journey: rstack-dev
     product: breg
     step: plan
@@ -280,39 +290,46 @@ expectedFailures:
 unreached:
   - journey: own-provider
     product: discovery
-    step: call
-    basis: predicted
-    reason: Discovery verifies no token. Its last step is one served public call, and whether the steps before it pass is not known until the first run.
+    step: prepare
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Discovery verifies no token and keeps no database, so the reader's own provider and PostgreSQL have nothing to serve it. Its tutorial packages from a publication origin served by products/discovery/tutorial/publication_server.py, which a journey does not run."
   - journey: own-provider
     product: breg-mcp
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: breg-review
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: registry-mcp
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: evidence-oid4vci
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: evidence-oid4vp
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: adapter-job
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: rstack-dev
     product: breg-mcp
     step: init
