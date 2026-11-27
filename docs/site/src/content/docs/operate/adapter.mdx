@@ -37,14 +37,17 @@ Authenticate the checksum bundle as `release/VERIFY.md` at the tag you install d
 install the binaries with the release-pinned installer or as an `rstack` component:
 
 ```sh
-bash adapter-<tag>-install.sh
-adapterctl --version
+tag="vX.Y.Z"
+bash "adapter-${tag:?set tag to the release tag}-install.sh"
+"${ADAPTER_INSTALL_DIR:-$HOME/.local/bin}/adapterctl" --version
 
 rstack install adapter
 rstack adapter check --help
 ```
 
 The installer puts the two binaries in `~/.local/bin`; set `ADAPTER_INSTALL_DIR` to change that.
+The version check runs `adapterctl` by that path, so it works before the directory is on your
+`PATH`.
 `rstack install adapter` installs the same two binaries into an `rstack` generation, and
 `rstack adapter` runs `adapterctl`.
 Neither path needs a Rust toolchain.
