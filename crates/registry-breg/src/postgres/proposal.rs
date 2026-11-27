@@ -320,10 +320,10 @@ impl PostgresRecordMutationService {
             client.execute("UPDATE registry_internal.registry_proposal_application_jobs
                 SET state=CASE WHEN ($6 OR next_attempt_at<=clock_timestamp()) AND attempt_count<maximum_attempts THEN 'queued' ELSE 'blocked' END,
                     claim_token=NULL,last_error_code=CASE WHEN next_attempt_at<=clock_timestamp() THEN 'lease-expired'
-                        WHEN $6 THEN 'dependency-outage' ELSE 'application-refused' END,
+                        WHEN $6 THEN 'dependency-outage' ELSE $7 END,
                     next_attempt_at=transaction_timestamp()+interval '5 seconds',updated_at=transaction_timestamp()
                 WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND job_id=$4 AND claim_token=$5 AND state='applying'",
-                &[&action_id,&id,&i64::from(frozen.version().get()),&job_id,&claim_token,&transient])
+                &[&action_id,&id,&i64::from(frozen.version().get()),&job_id,&claim_token,&transient,&crate::mutation::ApplicationRefusal::for_error(&error).map_or("application-refused", |refusal| refusal.storage_code())])
                 .await.map_err(|_|MutationError::Unavailable)?;
         }
         Ok(true)

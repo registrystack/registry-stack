@@ -5794,6 +5794,7 @@ fn mutation_problem_response(error: MutationError) -> Response {
         MutationError::InvalidRequestAt(location) => invalid_request_at(&location),
         MutationError::AuthorizationRefused(_)
         | MutationError::PreconditionFailed
+        | MutationError::ProposalTargetChanged
         | MutationError::FieldGuardFailed { .. }
         | MutationError::ProposalGuardFailed(_)
         | MutationError::TimerGenerationUnsupported => precondition_failed(),

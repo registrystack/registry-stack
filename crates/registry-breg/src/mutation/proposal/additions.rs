@@ -33,7 +33,7 @@ impl MutationTransaction {
         .filter(|_| permission.writable_attachments.contains(&slot.id));
         let write = match write {
             Some(authority) => link_readable(
-                self.authorize_proposal_document(tx, registry, document, &authority)
+                self.check_proposal_document(tx, registry, document, &authority, false)
                     .await,
             )?
             .then_some(authority),
@@ -63,7 +63,7 @@ impl MutationTransaction {
                     item["links"]["download"] = json!({"method":"GET",
                         "path":format!("/v1/proposals/{}/additions/{}?submissionVersion={}", document.proposal_id, addition.id, addition.submission_version),
                         "accessProfile":current.common.access_profile(),"operation":"download",
-                        "availability":{"available":true,"observedRevision":document.header.workflow_revision}});
+                        "availability":ProposalAvailability::new(document.header.workflow_revision as u64, None)});
                 }
                 items.push(item);
             }
@@ -85,47 +85,41 @@ impl MutationTransaction {
                 None => ProposalReviewProgress::NotRequired,
             };
             let refusal = if document.header.state == "applied" {
-                Some((LinkReason::AlreadyApplied, LinkRecovery::ReceiptOnly))
+                Some(LinkRefusal::AlreadyApplied)
             } else if document.header.state == "rejected" {
-                Some((LinkReason::ReviewRejected, LinkRecovery::ReceiptOnly))
+                Some(LinkRefusal::Rejected)
             } else if document.header.state != "submitted"
                 || document.header.current_proposal_erased
             {
-                Some((LinkReason::StaleRevision, LinkRecovery::ReceiptOnly))
+                Some(LinkRefusal::WrongState)
             } else if metadata.len() > slot.maximum_count as usize {
                 // Retained files remain visible after a lower current limit.
-                Some((LinkReason::LimitReached, LinkRecovery::ReceiptOnly))
+                Some(LinkRefusal::LimitReached)
             } else if document.blocked_reason.as_deref() == Some("application-refused") {
-                Some((LinkReason::InvalidInput, LinkRecovery::CorrectInput))
+                Some(LinkRefusal::ReviseInput)
+            } else if document.blocked_reason.as_deref() == Some("application-rebase") {
+                Some(LinkRefusal::TargetChanged)
             } else if document.blocked_reason.is_some()
                 || document.action_revision != action.definition_revision
             {
-                Some((LinkReason::PackageChanged, LinkRecovery::Rebase))
+                Some(LinkRefusal::PackageChanged)
             } else if !matches!(
                 progress,
                 ProposalReviewProgress::Pending | ProposalReviewProgress::Retrying
             ) {
                 Some(match progress {
-                    ProposalReviewProgress::Rejected => {
-                        (LinkReason::ReviewRejected, LinkRecovery::Revise)
-                    }
-                    ProposalReviewProgress::ChangesRequested => {
-                        (LinkReason::ReviewChangesRequested, LinkRecovery::Revise)
-                    }
-                    _ => (LinkReason::ReviewEnded, LinkRecovery::Revise),
+                    ProposalReviewProgress::Rejected => LinkRefusal::ReviewRejected,
+                    ProposalReviewProgress::ChangesRequested => LinkRefusal::ChangesRequested,
+                    _ => LinkRefusal::ReviewEnded,
                 })
             } else if metadata.len() >= slot.maximum_count as usize {
-                Some((LinkReason::LimitReached, LinkRecovery::ReceiptOnly))
+                Some(LinkRefusal::LimitReached)
             } else {
                 None
             };
-            let mut link = json!({"method":"POST","path":format!("/v1/proposals/{}/additions/{}",document.proposal_id,slot.id),
+            let link = json!({"method":"POST","path":format!("/v1/proposals/{}/additions/{}",document.proposal_id,slot.id),
                 "accessProfile":write.common.access_profile(),"operation":"add","ifMatch":self.proposal_etag(document,&write)?,
-                "availability":{"available":refusal.is_none(),"observedRevision":document.header.workflow_revision}});
-            if let Some((reason, recovery)) = refusal {
-                link["availability"]["reason"] = json!(reason);
-                link["availability"]["recovery"] = json!(recovery);
-            }
+                "availability":ProposalAvailability::new(document.header.workflow_revision as u64, refusal)});
             descriptor["links"]["add"] = link;
         }
         value["additions"] = json!({slot.id.clone():descriptor});

@@ -1587,7 +1587,7 @@ async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals()
 }
 
 #[tokio::test]
-async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_preserves_processing() {
+async fn manual_apply_unique_conflict_and_stale_revision_offer_party_recovery() {
     let mut source = registry_source(false);
     source["recordTypes"]["target"]["constraints"] =
         json!([{"id":"unique-name","type":"unique","fields":["name"]}]);
@@ -1713,7 +1713,7 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_preserve
     assert_eq!(
         blocked_json["links"]["apply"]["availability"],
         json!({"available":false,"observedRevision":blocked.revision(),
-            "reason":"invalid-input","recovery":"correct-input"})
+            "reason":"invalid-input","recovery":"revise"})
     );
     assert!(
         blocked
@@ -1867,20 +1867,28 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_preserve
         )
         .unwrap();
     let stale_submitted = client.execute_proposal(&stale_submit).await.unwrap().value;
-    let entity = &fixture.registry.entities()["target"];
-    let stale_id = uuid::Uuid::parse_str(&stale_record.data.record_identifier).unwrap();
-    fixture
-        .database
-        .admin
-        .execute(
-            &format!(
-                "UPDATE registry_data.\"{}\" SET record_revision=record_revision+1 WHERE record_id=$1",
-                entity.physical_table
-            ),
-            &[&stale_id],
+    let competing = client
+        .start_proposal(&action, &stale_input, &key("stale-competing-start"))
+        .await
+        .unwrap()
+        .value;
+    let competing = client
+        .execute_proposal(
+            &client
+                .prepare_proposal(
+                    &competing,
+                    "submit",
+                    json!({}),
+                    &key("stale-competing-submit"),
+                )
+                .unwrap(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .value;
+    client.execute_proposal(&client.prepare_proposal(&competing, "apply",
+        json!({"submissionVersion":competing.submission_version(),"effectDigest":competing.effect_digest().unwrap()}),
+        &key("stale-competing-apply")).unwrap()).await.unwrap();
     let stale_apply = client
         .prepare_proposal(
             &stale_submitted,
@@ -1900,8 +1908,12 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_preserve
     );
     let stale_current = client.read_proposal(&stale_submitted).await.unwrap().value;
     assert!(stale_current.blocked_reason().is_none());
+    assert_eq!(
+        stale_current.status(),
+        Some(registry_breg_client::BRegProposalStatus::AwaitingParty)
+    );
     assert!(
-        stale_current
+        !stale_current
             .link("apply")
             .unwrap()
             .availability()
@@ -1909,7 +1921,7 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_preserve
             .available
     );
     assert!(
-        !stale_current
+        stale_current
             .link("rebase")
             .unwrap()
             .availability()
@@ -1923,8 +1935,30 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_preserve
             .availability()
             .unwrap()
             .reason,
-        Some(registry_breg_client::BRegAvailabilityReason::ApplicationPending)
+        None
     );
+    let value = serde_json::to_value(&stale_current).unwrap();
+    assert_eq!(value["applicationStatus"]["recovery"], "rebase");
+    assert_eq!(
+        value["links"]["apply"]["availability"]["reason"],
+        "stale-revision"
+    );
+    let rebased = client.execute_proposal(&client.prepare_proposal(&stale_current,"rebase",
+        json!({"input":{"target":stale_record.data.record_identifier,"value":"Rebased"}}),
+        &key("stale-rebase")).unwrap()).await.unwrap().value;
+    let resubmitted = client
+        .execute_proposal(
+            &client
+                .prepare_proposal(&rebased, "submit", json!({}), &key("stale-resubmit"))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let applied = client.execute_proposal(&client.prepare_proposal(&resubmitted,"apply",
+        json!({"submissionVersion":resubmitted.submission_version(),"effectDigest":resubmitted.effect_digest().unwrap()}),
+        &key("stale-reapply")).unwrap()).await.unwrap().value;
+    assert_eq!(applied.state(), BRegProposalState::Applied);
     fixture.finish().await;
 }
 
@@ -1993,6 +2027,104 @@ async fn proposal_list_pages_by_limit_and_refuses_top_naming_limit() {
         problem["detail"].as_str().unwrap().contains("`limit`"),
         "{problem}"
     );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn admitted_apply_write_boundary_conflict_offers_revise() {
+    let caller = |zones: &[&str]| {
+        VerifiedRequestClaims::authenticated_with_actor_kind(
+            "sub",
+            "author",
+            BTreeSet::from(["proposal:manage".into()]),
+            Some("registry-administration".into()),
+            BTreeMap::from([(
+                "jurisdiction".into(),
+                VerifiedClaimValue::direct_string_set(zones.iter().copied()).unwrap(),
+            )]),
+            registry_platform_oidc::ActorKind::Human,
+        )
+        .unwrap()
+    };
+    let mut source = registry_source(false);
+    for grant in ["records", "actions", "proposals"] {
+        let permission = &mut source["accessProfiles"]["clerk"]["permissions"][grant][0];
+        let boundary = if grant == "records" {
+            &mut permission["rowBoundaries"][0]
+        } else {
+            &mut permission["targets"][0]["rowBoundaries"][0]
+        };
+        boundary["operator"] = json!("in");
+    }
+    source["actions"]["correct-name"]["plan"]["effects"][0]["set"] =
+        json!({"jurisdiction":{"fromInput":"value"}});
+    let fixture =
+        client_http::ClientFixture::start(compile(source), caller(&["zone-a", "zone-b"])).await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "zone-b", "boundary-start").await;
+    let submitted = client
+        .execute_proposal(
+            &client
+                .prepare_proposal(&draft, "submit", json!({}), &key("boundary-submit"))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let narrow = client_http::ClientHttp::start(
+        registry_breg::api::router(fixture.service()),
+        caller(&["zone-a"]),
+    )
+    .await;
+    let metadata = narrow
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let current = narrow
+        .client
+        .get_proposal(
+            &metadata.select_proposal_get("clerk").unwrap(),
+            submitted.id(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let refusal = narrow.client.execute_proposal(&narrow.client.prepare_proposal(&current,"apply",
+        json!({"submissionVersion":current.submission_version(),"effectDigest":current.effect_digest().unwrap()}),&key("boundary-apply")).unwrap()).await.unwrap_err();
+    assert_eq!(
+        refusal.problem_code(),
+        Some(BRegProblemCode::WriteOutsideBoundary)
+    );
+    let blocked = narrow.client.read_proposal(&current).await.unwrap().value;
+    assert_eq!(
+        blocked.status(),
+        Some(registry_breg_client::BRegProposalStatus::AwaitingParty)
+    );
+    assert_eq!(
+        serde_json::to_value(&blocked).unwrap()["applicationStatus"]["recovery"],
+        "revise"
+    );
+    let revised = narrow
+        .client
+        .execute_proposal(
+            &narrow
+                .client
+                .prepare_proposal(
+                    &blocked,
+                    "revise",
+                    json!({"input":{"target":blocked.input().unwrap()["target"],"value":"zone-a"}}),
+                    &key("boundary-revise"),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(revised.state(), BRegProposalState::Draft);
+    assert!(revised.application_status().is_none());
+    drop(narrow);
     fixture.finish().await;
 }
 
@@ -3082,11 +3214,11 @@ async fn cancel_closes_the_queued_automatic_application_job() {
 /// which closes the superseded version's blocked job.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revise_preserves_queued_work_and_closes_a_superseded_blocked_application_job() {
-    let fixture = client_http::ClientFixture::start(
-        compile(registry_source(true)),
-        claims("author", "zone-a"),
-    )
-    .await;
+    let mut source = registry_source(true);
+    source["recordTypes"]["target"]["constraints"] =
+        json!([{"id":"unique-name","type":"unique","fields":["name"]}]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
     let client = &fixture.http.client;
     let draft = start(&fixture, "Revised", "revise-job-start").await;
     let submit = client
@@ -3117,7 +3249,30 @@ async fn revise_preserves_queued_work_and_closes_a_superseded_blocked_applicatio
         412
     );
     assert_eq!(job_states().await, [(1, "queued".to_owned())]);
-    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_application_jobs SET state='blocked',last_error_code='application-refused'", &[]).await.unwrap();
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create")
+    };
+    client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Revised","jurisdiction":"zone-a"})))
+                .unwrap(),
+            &key("revise-job-conflict"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    assert!(fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    assert_eq!(job_states().await, [(1, "blocked".to_owned())]);
     let submitted = client.read_proposal(&submitted).await.unwrap().value;
     assert_eq!(
         submitted.status(),

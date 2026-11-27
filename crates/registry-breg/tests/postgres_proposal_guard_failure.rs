@@ -294,6 +294,54 @@ async fn apply_names_a_failed_field_guard_and_keeps_stale_revisions_generic() {
         Some(BRegProblemCode::ActionGuardFailed)
     );
     assert_eq!(refusal.guard_reason(), Some("target-not-open"));
+    let blocked = fixture
+        .http
+        .client
+        .read_proposal(&submitted)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        blocked.status(),
+        Some(registry_breg_client::BRegProposalStatus::AwaitingParty)
+    );
+    assert_eq!(
+        serde_json::to_value(&blocked).unwrap()["applicationStatus"]["recovery"],
+        "rebase"
+    );
+    assert!(
+        blocked
+            .link("rebase")
+            .unwrap()
+            .availability()
+            .unwrap()
+            .available
+    );
+
+    let (_, replacement_id) = draft(&fixture, "open", 10, "guard-replacement").await;
+    let client = &fixture.http.client;
+    let rebased = client
+        .execute_proposal(
+            &client
+                .prepare_proposal(
+                    &blocked,
+                    "rebase",
+                    json!({"input":{"target":replacement_id,"value":"After","minimum":5}}),
+                    &key("guard-rebase"),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let resubmitted = submit(&fixture, &rebased, "guard-resubmit").await.unwrap();
+    let applied = apply(&fixture, &resubmitted, "guard-reapply")
+        .await
+        .unwrap();
+    assert_eq!(
+        applied.state(),
+        registry_breg_client::BRegProposalState::Applied
+    );
 
     // A revision mismatch is concurrency, never a business-state refusal, even
     // while the guard would also fail.

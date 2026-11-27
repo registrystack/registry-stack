@@ -134,6 +134,93 @@ proposal_wire_values!(ProposalLinkRecovery {
     ReceiptOnly => "receipt-only",
 });
 
+/// The reason and recovery pairs that Proposal links may serve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProposalLinkRefusal {
+    PendingReview,
+    ReviewRejected,
+    Rejected,
+    ChangesRequested,
+    ReviewEnded,
+    WrongState,
+    TargetChanged,
+    PackageChanged,
+    DependencyOutage,
+    InvalidInput,
+    ReviseInput,
+    AlreadyApplied,
+    LimitReached,
+    ApplicationPending,
+    AttachmentRequired,
+}
+
+impl ProposalLinkRefusal {
+    pub const ALL: &'static [Self] = &[
+        Self::PendingReview,
+        Self::ReviewRejected,
+        Self::Rejected,
+        Self::ChangesRequested,
+        Self::ReviewEnded,
+        Self::WrongState,
+        Self::TargetChanged,
+        Self::PackageChanged,
+        Self::DependencyOutage,
+        Self::InvalidInput,
+        Self::ReviseInput,
+        Self::AlreadyApplied,
+        Self::LimitReached,
+        Self::ApplicationPending,
+        Self::AttachmentRequired,
+    ];
+
+    pub const fn pair(self) -> (ProposalAvailabilityReason, ProposalLinkRecovery) {
+        use ProposalAvailabilityReason as Reason;
+        use ProposalLinkRecovery as Recovery;
+        match self {
+            Self::PendingReview => (Reason::PendingReview, Recovery::Refresh),
+            Self::ReviewRejected => (Reason::ReviewRejected, Recovery::Revise),
+            Self::Rejected => (Reason::ReviewRejected, Recovery::ReceiptOnly),
+            Self::ChangesRequested => (Reason::ReviewChangesRequested, Recovery::Revise),
+            Self::ReviewEnded => (Reason::ReviewEnded, Recovery::Revise),
+            Self::WrongState => (Reason::StaleRevision, Recovery::ReceiptOnly),
+            Self::TargetChanged => (Reason::StaleRevision, Recovery::Rebase),
+            Self::PackageChanged => (Reason::PackageChanged, Recovery::Rebase),
+            Self::DependencyOutage => (Reason::DependencyOutage, Recovery::Retry),
+            Self::InvalidInput => (Reason::InvalidInput, Recovery::CorrectInput),
+            Self::ReviseInput => (Reason::InvalidInput, Recovery::Revise),
+            Self::AlreadyApplied => (Reason::AlreadyApplied, Recovery::ReceiptOnly),
+            Self::LimitReached => (Reason::LimitReached, Recovery::ReceiptOnly),
+            Self::ApplicationPending => (Reason::ApplicationPending, Recovery::Refresh),
+            Self::AttachmentRequired => (Reason::AttachmentRequired, Recovery::CorrectInput),
+        }
+    }
+}
+
+/// A link's complete availability. Private fields prevent JSON assembly from
+/// bypassing the closed reason and recovery vocabulary.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalAvailability {
+    available: bool,
+    observed_revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<ProposalAvailabilityReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<ProposalLinkRecovery>,
+}
+
+impl ProposalAvailability {
+    pub fn new(observed_revision: u64, refusal: Option<ProposalLinkRefusal>) -> Self {
+        let pair = refusal.map(ProposalLinkRefusal::pair);
+        Self {
+            available: pair.is_none(),
+            observed_revision,
+            reason: pair.map(|pair| pair.0),
+            recovery: pair.map(|pair| pair.1),
+        }
+    }
+}
+
 /// The current applicant-facing stage, derived together with the turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]

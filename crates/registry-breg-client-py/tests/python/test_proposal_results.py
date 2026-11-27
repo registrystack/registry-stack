@@ -41,6 +41,20 @@ def status_document(state):
 
 
 class ProposalResultTests(unittest.TestCase):
+    def test_application_refusals_preserve_rebase_and_revise_recovery(self):
+        for reason, recovery in [('stale-revision', 'rebase'), ('invalid-input', 'revise')]:
+            with self.subTest(recovery=recovery):
+                self.value = status_document('blocked')
+                self.value['applicationStatus'].update(reason='application-refused', recovery=recovery)
+                self.value['links']['apply'] = {
+                    'method': 'POST', 'path': f'/v1/proposals/{ID}/apply',
+                    'accessProfile': 'reader', 'operation': 'apply', 'ifMatch': '"blocked-condition"',
+                    'availability': {'available': False, 'observedRevision': 8, 'reason': reason, 'recovery': recovery},
+                }
+                observed = self.client.get_proposal(self.binding, ID).document
+                self.assertEqual(observed['applicationStatus'], self.value['applicationStatus'])
+                self.assertEqual(observed['links']['apply']['availability'], self.value['links']['apply']['availability'])
+
     def setUp(self):
         self.value = document()
         self.reply_status = 200

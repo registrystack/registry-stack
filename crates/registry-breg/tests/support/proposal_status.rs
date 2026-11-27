@@ -143,7 +143,7 @@ pub(super) async fn raw_command(
         )
         .header("idempotency-key", format!("status-{operation}"))
         .json(&if operation == "rebase" {
-            json!({"input": {}})
+            json!({"input": value["input"]})
         } else {
             json!({})
         })
@@ -228,8 +228,34 @@ async fn approval_refuses(operation: &str) {
         .await
         .unwrap()
         .value;
+    let fresh = reqwest::get(format!(
+        "{}/v1/proposals/{}?accessProfile=clerk",
+        fixture.http.base_url,
+        approved.id()
+    ))
+    .await
+    .unwrap();
+    let etag = fresh.headers()["etag"].to_str().unwrap().to_owned();
+    let served: Value = fresh.json().await.unwrap();
+    assert_eq!(served["links"][operation]["ifMatch"], etag);
+    assert_eq!(
+        served["links"][operation]["availability"],
+        json!({
+            "available":false,"observedRevision":approved.revision(),
+            "reason":"application-pending","recovery":"refresh"
+        })
+    );
+    assert!(served["input"]["target"].is_string());
+    assert!(served["input"]["value"].is_string());
     let response = raw_command(&fixture, &approved, operation).await;
     let status = response.status();
+    let problem: Value = response.json().await.unwrap();
+    assert_eq!(problem["code"], "precondition.failed");
+    assert_eq!(
+        problem["type"],
+        "https://id.registrystack.org/problems/registry-breg/precondition/failed"
+    );
+    assert_eq!(problem["detail"], "The mutation precondition failed.");
     let current = fixture
         .http
         .client
@@ -256,6 +282,149 @@ async fn proposal_status_prevents_revise_from_discarding_an_approval() {
 #[tokio::test]
 async fn proposal_status_prevents_rebase_from_discarding_an_approval() {
     approval_refuses("rebase").await;
+}
+
+#[tokio::test]
+async fn proposal_link_checks_do_not_lock_target_rows() {
+    let mut source = registry_source(false);
+    require_review(&mut source);
+    source["actions"]["correct-name"]["execution"]["proposal"]["additions"] = json!({
+        "id":"other","maximumBytes":32,"maximumCount":2,"contentTypes":["text/plain"],"classification":"restricted"
+    });
+    let grant = &mut source["accessProfiles"]["clerk"]["permissions"]["proposals"][0];
+    grant["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("add"));
+    grant["readableAttachments"] = json!(["support", "other"]);
+    grant["writableAttachments"] = json!(["support", "other"]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    let draft = start(&fixture, "Lock probe", "status-read-lock").await;
+    let value = serde_json::to_value(&draft).unwrap();
+    let target = uuid::Uuid::parse_str(value["input"]["target"].as_str().unwrap()).unwrap();
+    // Hold the target on an independent connection while serving every lifecycle link.
+    fixture.database.admin.batch_execute("BEGIN").await.unwrap();
+    fixture
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT record_id FROM registry_data.\"{}\" WHERE record_id=$1 FOR UPDATE",
+                fixture.registry.entities()["target"].physical_table
+            ),
+            &[&target],
+        )
+        .await
+        .unwrap();
+    let response = reqwest::get(format!(
+        "{}/v1/proposals/{}?accessProfile=clerk",
+        fixture.http.base_url,
+        draft.id()
+    ))
+    .await
+    .unwrap();
+    let status = response.status();
+    let served: Value = response.json().await.unwrap();
+    let command = reqwest::Client::new()
+        .post(format!(
+            "{}/v1/proposals/{}/edit?accessProfile=clerk",
+            fixture.http.base_url,
+            draft.id()
+        ))
+        .header(
+            "if-match",
+            value["links"]["edit"]["ifMatch"].as_str().unwrap(),
+        )
+        .header("idempotency-key", "status-lock-edit")
+        .json(&json!({"input":value["input"]}))
+        .send()
+        .await
+        .unwrap();
+    let command_status = command.status();
+    fixture
+        .database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .unwrap();
+    fixture.finish().await;
+    assert_eq!(
+        status, 200,
+        "link checks must read through another transaction's target lock"
+    );
+    assert!(served["attachments"]["support"]["links"]["upload"].is_object());
+    assert!(served["additions"]["other"]["links"]["add"].is_object());
+    assert_eq!(
+        command_status, 503,
+        "the command must still acquire the target lock"
+    );
+}
+
+async fn concealed_target_is_not_a_recovery_block(deleted: bool) {
+    let (fixture, _) = fixture(false).await;
+    let proposal = submit(
+        &fixture,
+        if deleted {
+            "deleted-target"
+        } else {
+            "hidden-target"
+        },
+    )
+    .await;
+    let value = serde_json::to_value(&proposal).unwrap();
+    let target = uuid::Uuid::parse_str(value["input"]["target"].as_str().unwrap()).unwrap();
+    let entity = &fixture.registry.entities()["target"];
+    // This fixture exposes only name corrections, with no Delete or jurisdiction
+    // mutation. Model an independent writer removing this caller's target access.
+    let statement = if deleted {
+        format!(
+            "UPDATE registry_data.\"{}\" SET record_lifecycle='tombstoned' WHERE record_id=$1",
+            entity.physical_table
+        )
+    } else {
+        format!(
+            "UPDATE registry_data.\"{}\" SET \"{}\"='zone-b' WHERE record_id=$1",
+            entity.physical_table, entity.fields["jurisdiction"].physical_name
+        )
+    };
+    fixture
+        .database
+        .admin
+        .execute(&statement, &[&target])
+        .await
+        .unwrap();
+    let refused = fixture.http.client.execute_proposal(&fixture.http.client.prepare_proposal(&proposal,"apply",
+        json!({"submissionVersion":proposal.submission_version(),"effectDigest":proposal.effect_digest().unwrap()}),
+        &key("concealed-target-apply")).unwrap()).await.unwrap_err();
+    assert_eq!(
+        refused.problem_code(),
+        Some(BRegProblemCode::PreconditionFailed)
+    );
+    let read = reqwest::get(format!(
+        "{}/v1/proposals/{}?accessProfile=clerk",
+        fixture.http.base_url,
+        proposal.id()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(read.status(), 404);
+    let id = uuid::Uuid::parse_str(proposal.id()).unwrap();
+    let row = fixture.database.admin.query_one(
+        "SELECT blocked_reason,workflow_revision FROM registry_internal.registry_proposal_state WHERE proposal_id=$1",&[&id]).await.unwrap();
+    assert_eq!(row.get::<_, Option<String>>(0), None);
+    assert_eq!(row.get::<_, i64>(1), proposal.revision() as i64);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_deleted_target_stays_concealed_without_an_application_block() {
+    concealed_target_is_not_a_recovery_block(true).await;
+}
+
+#[tokio::test]
+async fn a_target_outside_the_current_boundary_stays_concealed_without_an_application_block() {
+    concealed_target_is_not_a_recovery_block(false).await;
 }
 
 #[tokio::test]

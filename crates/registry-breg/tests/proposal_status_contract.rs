@@ -6,6 +6,41 @@
 mod model;
 
 #[test]
+fn proposal_availability_objects_use_a_typed_constructor() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mutation");
+    let mut files = vec![root.join("proposal.rs")];
+    let mut directories = vec![root.join("proposal")];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    for path in files {
+        let source = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !source.contains("[\"availability\"]"),
+            "{}: availability must not be assembled by mutating JSON",
+            path.display()
+        );
+        for line in source
+            .lines()
+            .filter(|line| line.contains("\"availability\":"))
+        {
+            assert!(
+                line.contains("ProposalAvailability::"),
+                "{}: untyped availability: {line}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn every_proposal_error_response_declares_its_problem_body() {
     use registry_breg::{
         compiler::{compile_project, CompileProfile},
@@ -150,5 +185,51 @@ fn every_proposal_availability_reason_is_in_the_served_schema() {
             "served availability schema omits {wire}"
         );
         serde_json::from_value::<registry_breg_client::BRegRecoveryHint>(wire).unwrap();
+    }
+}
+
+#[test]
+fn proposal_availability_pairs_match_the_client_contract() {
+    use registry_breg::lifecycle::{
+        ProposalAvailability, ProposalAvailabilityReason, ProposalLinkRecovery, ProposalLinkRefusal,
+    };
+    use registry_breg_client::BRegProposal;
+    use serde_json::json;
+    let accepts = |reason, recovery| {
+        ["draft", "submitted", "applied", "rejected", "cancelled"].iter().any(|state| {
+            let id = "705cd4a4-526e-41ca-b88b-6ca8f82a87af";
+            let digest = format!("sha256:{}", "a".repeat(64));
+            let mut value = json!({"id":id,"actionId":"correct","actionRevision":digest,
+                "state":state,"submissionVersion":1,"revision":2,"links":{
+                    "self":{"method":"GET","path":format!("/v1/proposals/{id}"),"accessProfile":"writer","operation":"get",
+                        "availability":{"available":false,"observedRevision":2,"reason":reason,"recovery":recovery}}
+                }});
+            if *state == "submitted" { value["effectDigest"] = json!(digest); }
+            BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_ok()
+        })
+    };
+    for reason in ProposalAvailabilityReason::ALL {
+        for recovery in ProposalLinkRecovery::ALL {
+            let declared = ProposalLinkRefusal::ALL
+                .iter()
+                .any(|refusal| refusal.pair() == (*reason, *recovery));
+            assert_eq!(
+                accepts(reason, recovery),
+                declared,
+                "{reason:?}/{recovery:?}"
+            );
+        }
+    }
+    for refusal in ProposalLinkRefusal::ALL {
+        let value = serde_json::to_value(ProposalAvailability::new(2, Some(*refusal))).unwrap();
+        assert_eq!(value["available"], false);
+        assert_eq!(
+            value["reason"],
+            serde_json::to_value(refusal.pair().0).unwrap()
+        );
+        assert_eq!(
+            value["recovery"],
+            serde_json::to_value(refusal.pair().1).unwrap()
+        );
     }
 }

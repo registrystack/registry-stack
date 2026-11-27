@@ -593,7 +593,7 @@ fn eligibility(
 
 /// The refusal for a Proposal whose lifecycle row carries `blocked_reason`.
 fn block_refusal(blocked_reason: &str) -> ReviewRecoveryRefusal {
-    if blocked_reason == "application-refused" {
+    if matches!(blocked_reason, "application-refused" | "application-rebase") {
         ReviewRecoveryRefusal::ApplicationRefused
     } else {
         ReviewRecoveryRefusal::PackageChanged
@@ -676,6 +676,10 @@ mod tests {
 
     #[test]
     fn a_refused_apply_block_is_its_own_refusal_not_a_package_change() {
+        assert_eq!(
+            block_refusal("application-rebase"),
+            ReviewRecoveryRefusal::ApplicationRefused
+        );
         assert_eq!(
             block_refusal("application-refused"),
             ReviewRecoveryRefusal::ApplicationRefused

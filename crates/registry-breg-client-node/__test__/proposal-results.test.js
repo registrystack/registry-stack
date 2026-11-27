@@ -96,6 +96,18 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       }
     });
 
+    await t.test('application refusals preserve Rebase and Revise recovery', async () => {
+      for (const [reason, recovery] of [['stale-revision', 'rebase'], ['invalid-input', 'revise']]) {
+        value = statusDocument('blocked');
+        Object.assign(value.applicationStatus, {reason: 'application-refused', recovery});
+        value.links.apply = {method: 'POST', path: `/v1/proposals/${id}/apply`, accessProfile: 'reader', operation: 'apply', ifMatch: '"blocked-condition"',
+          availability: {available: false, observedRevision: 8, reason, recovery}};
+        const observed = JSON.parse((await client.getProposal(binding, id)).documentJson);
+        assert.deepEqual(observed.applicationStatus, value.applicationStatus);
+        assert.deepEqual(observed.links.apply.availability, value.links.apply.availability);
+      }
+    });
+
     value = document();
     value.application.resultLinks = [];
     assert.deepEqual(JSON.parse((await client.getProposal(binding, id)).documentJson).application.resultLinks, []);

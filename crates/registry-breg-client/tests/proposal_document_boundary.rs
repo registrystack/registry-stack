@@ -401,13 +401,14 @@ async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_rea
             "current":true,"effectDigest":DIGEST,"review":null,"application":application});
         (current, submission)
     };
-    // The only pairs BReg emits: a package change is rebased, a dependency
-    // outage or an expired lease can be retried, and application failures need
-    // corrected input.
+    // Refused applications name the next workflow command. Older receipts
+    // that named corrected input remain readable.
     for (reason, recovery) in [
         ("package-changed", "rebase"),
         ("attempts-exhausted", "correct-input"),
         ("application-refused", "correct-input"),
+        ("application-refused", "rebase"),
+        ("application-refused", "revise"),
         ("dependency-outage", "retry"),
         ("lease-expired", "retry"),
     ] {
@@ -469,10 +470,15 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
         ("review-changes-requested", "revise"),
         ("review-ended", "revise"),
         ("stale-revision", "receipt-only"),
+        ("stale-revision", "rebase"),
         ("package-changed", "rebase"),
         ("dependency-outage", "retry"),
         ("invalid-input", "correct-input"),
+        ("invalid-input", "revise"),
         ("already-applied", "receipt-only"),
+        ("limit-reached", "receipt-only"),
+        ("application-pending", "refresh"),
+        ("attachment-required", "correct-input"),
     ];
     let reads = |state: &str, availability: Value| {
         let mut value = proposal(state);
@@ -490,6 +496,9 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
         "dependency-outage",
         "invalid-input",
         "already-applied",
+        "limit-reached",
+        "application-pending",
+        "attachment-required",
     ] {
         for recovery in [
             "refresh",
@@ -502,6 +511,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
             let state = match (reason, recovery) {
                 ("already-applied", _) => "applied",
                 ("review-rejected", "receipt-only") => "rejected",
+                ("attachment-required", _) => "draft",
                 _ => "submitted",
             };
             let (current, list) = reads(

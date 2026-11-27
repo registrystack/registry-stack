@@ -2382,6 +2382,34 @@ impl std::fmt::Debug for ProposalGuardFailure {
     }
 }
 
+/// Party recovery for a refusal after admission of an exact frozen application.
+#[derive(Clone, Copy)]
+pub(crate) enum ApplicationRefusal {
+    Rebase,
+    Revise,
+}
+
+impl ApplicationRefusal {
+    pub(crate) fn for_error(error: &MutationError) -> Option<Self> {
+        match error {
+            MutationError::ProposalTargetChanged | MutationError::ProposalGuardFailed(_) => {
+                Some(Self::Rebase)
+            }
+            MutationError::ProposalUniqueConflict | MutationError::WriteOutsideBoundary => {
+                Some(Self::Revise)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn storage_code(self) -> &'static str {
+        match self {
+            Self::Rebase => "application-rebase",
+            Self::Revise => "application-refused",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MutationError {
     #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
@@ -2411,6 +2439,10 @@ pub enum MutationError {
     WriteOutsideBoundary,
     #[error("mutation precondition failed")]
     PreconditionFailed,
+    /// An admitted frozen application found a changed target. It keeps the
+    /// ordinary precondition problem, but records Rebase as its recovery.
+    #[error("mutation precondition failed")]
+    ProposalTargetChanged,
     /// Internal cause only. HTTP must retain the generic precondition refusal
     /// unless a fresh, ordinary authorized GET safely confirms the failed guard.
     #[error("mutation precondition failed")]
@@ -2520,6 +2552,7 @@ impl MutationError {
             | Self::InvalidRequestAt(_)
             | Self::InvalidTimerWindow { .. }
             | Self::PreconditionFailed
+            | Self::ProposalTargetChanged
             | Self::ProposalReviewResultMismatch
             | Self::Conflict
             | Self::ProposalUniqueConflict

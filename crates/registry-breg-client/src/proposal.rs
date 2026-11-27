@@ -193,6 +193,7 @@ pub enum BRegProposalApplicationReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegApplicationRecoveryHint {
+    Revise,
     Retry,
     Rebase,
     CorrectInput,
@@ -2173,12 +2174,17 @@ fn valid_application_shape(
         Applied, Applying, AwaitingReview, Blocked, Cancelled, Pending, Rejected,
     };
     let open = matches!(state, AwaitingReview | Pending | Applying | Blocked);
-    let paired = recovery
-        == reason.map(|reason| match reason {
-            DependencyOutage | LeaseExpired => BRegApplicationRecoveryHint::Retry,
-            PackageChanged => BRegApplicationRecoveryHint::Rebase,
-            _ => BRegApplicationRecoveryHint::CorrectInput,
-        });
+    let paired = (reason == Some(BRegProposalApplicationReason::ApplicationRefused)
+        && matches!(
+            recovery,
+            Some(BRegApplicationRecoveryHint::Rebase | BRegApplicationRecoveryHint::Revise)
+        ))
+        || recovery
+            == reason.map(|reason| match reason {
+                DependencyOutage | LeaseExpired => BRegApplicationRecoveryHint::Retry,
+                PackageChanged => BRegApplicationRecoveryHint::Rebase,
+                _ => BRegApplicationRecoveryHint::CorrectInput,
+            });
     let reason = reason.is_some();
     paired
         && (state != Blocked || reason)
@@ -2323,7 +2329,11 @@ fn valid_availability(
                 ) | (Reason::LimitReached, Recovery::ReceiptOnly)
                     | (Reason::PackageChanged, Recovery::Rebase)
                     | (Reason::DependencyOutage, Recovery::Retry)
-                    | (Reason::InvalidInput, Recovery::CorrectInput)
+                    | (Reason::StaleRevision, Recovery::Rebase)
+                    | (
+                        Reason::InvalidInput,
+                        Recovery::Revise | Recovery::CorrectInput
+                    )
                     | (Reason::AttachmentRequired, Recovery::CorrectInput)
             ),
             (false, _, _) => false,
@@ -2485,6 +2495,8 @@ fn unavailable(availability: &BRegAvailability) -> BaseRegistryClientError {
         (Some(Reason::DependencyOutage), Some(Recovery::Retry)) => {
             named!("dependency-outage", "retry")
         }
+        (Some(Reason::StaleRevision), Some(Recovery::Rebase)) => named!("stale-revision", "rebase"),
+        (Some(Reason::InvalidInput), Some(Recovery::Revise)) => named!("invalid-input", "revise"),
         (Some(Reason::InvalidInput), Some(Recovery::CorrectInput)) => {
             named!("invalid-input", "correct-input")
         }

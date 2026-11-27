@@ -1598,7 +1598,7 @@ fn proposal_application_status_schema() -> Value {
         "state":{"enum":["awaiting-review","pending","applying","blocked","applied","cancelled","rejected"]},
         "mode":{"enum":["automatic","manual"]},
         "reason":{"enum":["package-changed","dependency-outage","lease-expired","application-refused","attempts-exhausted"]},
-        "recovery":{"enum":["retry","rebase","correct-input"]},
+        "recovery":{"enum":["retry","rebase","revise","correct-input"]},
         "automaticRetry":{"type":"object","additionalProperties":false,
             "required":["scheduled","attempts","maximumAttempts"],"properties":{
                 "scheduled":{"type":"boolean"},"attempts":{"type":"integer","minimum":0,"maximum":1000},

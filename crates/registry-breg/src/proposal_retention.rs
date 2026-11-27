@@ -990,8 +990,8 @@ pub(crate) async fn mark_incompatible_proposals(
             WHERE s.action_id=$1 AND s.state IN ('draft','submitted')
             FOR UPDATE OF s)
             UPDATE registry_internal.registry_proposal_state s
-            SET blocked_reason=CASE WHEN s.blocked_reason='application-refused'
-                THEN 'application-refused' WHEN c.compatible THEN NULL ELSE 'package-changed' END,
+            SET blocked_reason=CASE WHEN s.blocked_reason IN ('application-refused','application-rebase')
+                THEN s.blocked_reason WHEN c.compatible THEN NULL ELSE 'package-changed' END,
                 updated_at=transaction_timestamp()
             FROM compatibility c
             WHERE s.action_id=c.action_id AND s.proposal_id=c.proposal_id

@@ -55,7 +55,7 @@ pub(crate) async fn install(
              blocked_reason text
                  CONSTRAINT registry_proposal_state_blocked_reason_values
                  CHECK (blocked_reason IS NULL OR blocked_reason IN
-                     ('package-changed','application-refused')),
+                     ('package-changed','application-refused','application-rebase')),
              detail_erased_at timestamptz,
              created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
              updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
@@ -74,6 +74,15 @@ pub(crate) async fn install(
                  ALTER TABLE registry_internal.registry_proposal_state
                      DROP CONSTRAINT registry_proposal_state_blocked_reason_check;
              END IF;
+             IF EXISTS (
+                 SELECT 1 FROM pg_catalog.pg_constraint
+                  WHERE conname = 'registry_proposal_state_blocked_reason_values'
+                    AND conrelid = 'registry_internal.registry_proposal_state'::regclass
+                    AND position('application-rebase' IN pg_get_constraintdef(oid)) = 0
+             ) THEN
+                 ALTER TABLE registry_internal.registry_proposal_state
+                     DROP CONSTRAINT registry_proposal_state_blocked_reason_values;
+             END IF;
              IF NOT EXISTS (
                  SELECT 1 FROM pg_catalog.pg_constraint
                   WHERE conname = 'registry_proposal_state_blocked_reason_values'
@@ -82,7 +91,7 @@ pub(crate) async fn install(
                  ALTER TABLE registry_internal.registry_proposal_state
                      ADD CONSTRAINT registry_proposal_state_blocked_reason_values
                      CHECK (blocked_reason IS NULL OR blocked_reason IN
-                         ('package-changed','application-refused'));
+                         ('package-changed','application-refused','application-rebase'));
              END IF;
          END;
          $proposal_state_blocked_reason$;
@@ -466,17 +475,23 @@ pub(crate) async fn block_manual_application_refusal(
     action_id: &str,
     proposal_id: Uuid,
     previous_revision: i64,
+    refusal: crate::mutation::ApplicationRefusal,
 ) -> Result<(), MutationError> {
     let changed = transaction
         .execute(
             "UPDATE registry_internal.registry_proposal_state
-                SET blocked_reason='application-refused',
+                SET blocked_reason=$4,
                     workflow_revision=workflow_revision+1,
                     updated_at=transaction_timestamp()
               WHERE action_id=$1 AND proposal_id=$2 AND state='submitted'
                 AND blocked_reason IS NULL AND detail_erased_at IS NULL
                 AND workflow_revision=$3",
-            &[&action_id, &proposal_id, &previous_revision],
+            &[
+                &action_id,
+                &proposal_id,
+                &previous_revision,
+                &refusal.storage_code(),
+            ],
         )
         .await
         .map_err(map_store_error)?;
@@ -1348,6 +1363,26 @@ mod tests {
             .expect("legacy constraint count loads")
             .get::<_, i64>(0);
         assert_eq!(legacy_constraints, 0);
+
+        // Upgrade an already named constraint from a package that predates
+        // the persisted Rebase recovery, preserving its existing refusal row.
+        migration.batch_execute(
+            "ALTER TABLE registry_internal.registry_proposal_state
+                 DROP CONSTRAINT registry_proposal_state_blocked_reason_values;
+             ALTER TABLE registry_internal.registry_proposal_state
+                 ADD CONSTRAINT registry_proposal_state_blocked_reason_values
+                 CHECK (blocked_reason IS NULL OR blocked_reason IN ('package-changed','application-refused'))"
+        ).await.unwrap();
+        install_mutation_schema(&migration, &database.runtime_role)
+            .await
+            .unwrap();
+        migration.execute(
+            "UPDATE registry_internal.registry_proposal_state SET blocked_reason='application-rebase' WHERE proposal_id=$1",
+            &[&proposal_id],
+        ).await.expect("the named constraint upgrades without losing the submitted Proposal");
+        install_mutation_schema(&migration, &database.runtime_role)
+            .await
+            .unwrap();
 
         migration_task.abort();
         database.cleanup().await;
