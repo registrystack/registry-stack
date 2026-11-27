@@ -2936,6 +2936,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(
             setup_go_jobs,
             {
+                ("ci.yml", "changes"),
                 ("ci.yml", "release-linux-node-clients"),
                 ("evidence-dev.yml", "build"),
                 ("evidence-dev.yml", "clients"),
