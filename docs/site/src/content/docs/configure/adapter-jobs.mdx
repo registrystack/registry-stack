@@ -484,7 +484,7 @@ The KoboToolbox example adds a webhook trigger with `job.hook.yaml` and `job-run
 Configure the KoboToolbox webhook to send `POST` requests to the public HTTPS URL whose path is `/hooks/kobo-submissions`, using HTTP Basic authentication.
 
 Each source binding has its own Basic credentials through secret references, and finite request-rate and burst bounds.
-Put the exact username and password in the two files referenced by `hookIngress.sources.kobo-submissions`, with the file permissions the platform secret provider requires (mode `0400` or `0600`).
+Put the exact username and password in the two files referenced by `hookIngress.sources.kobo-submissions`, with the file permissions the platform secret provider requires, in the [secret file rule](../../security/hardening-checklist/#secret-files) (for example mode `0400` or `0600` for a file the service user owns).
 Write them without a trailing newline, for example `printf '%s' "$PASSWORD" > hook-password`, because the host refuses a value that ends with a newline.
 The Adapter resolves and captures them at host startup, and `adapter-job check` resolves them too.
 A missing, unsafe or malformed credential is therefore refused with the runtime member and the secret reference named, instead of failing later as a `401`.

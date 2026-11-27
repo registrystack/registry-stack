@@ -510,11 +510,9 @@ fn secret_refusal_fix(error: &SecretError) -> &'static str {
             "declare at least one provider under secretProviders and give file.root an absolute path"
         }
         SecretError::Unavailable => {
-            "create the file under secretProviders.file.root or set the variable; a symlink reads as missing"
+            "create the file under secretProviders.file.root or set the variable"
         }
-        SecretError::UnsafeFile => {
-            "make it a regular file owned by the service user, mode 0600 or 0400, with one hard link"
-        }
+        SecretError::UnsafeFile(check) => check.suggested_action(),
         SecretError::Read => "check that the service user can read the secret file",
         SecretError::InvalidValue => {
             "store a non-empty value with no NUL byte, within the secret size limit"
@@ -2050,10 +2048,10 @@ mod tests {
         }
         assert_ne!(unsafe_file, missing, "the two causes must read differently");
         assert!(unsafe_file.contains("unsafe"), "{unsafe_file}");
-        assert!(unsafe_file.contains("0600 or 0400"), "{unsafe_file}");
-        assert!(unsafe_file.contains("owned by"), "{unsafe_file}");
+        assert!(unsafe_file.contains("0400 or 0600"), "{unsafe_file}");
+        assert!(unsafe_file.contains("runtime user"), "{unsafe_file}");
         assert!(missing.contains("unavailable"), "{missing}");
-        assert!(missing.contains("symlink"), "{missing}");
+        assert!(missing.contains("secretProviders.file.root"), "{missing}");
         assert!(disabled.contains("disabled provider"), "{disabled}");
         assert!(disabled.contains("secretProviders"), "{disabled}");
     }

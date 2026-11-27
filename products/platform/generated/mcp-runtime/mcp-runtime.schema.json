@@ -287,7 +287,7 @@
       "description": "The file secret provider.",
       "properties": {
         "root": {
-          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "description": "Absolute directory holding one file per secret. A name may be a\nrelative link that stays below this directory, through at most 8 links.\nThe file it reaches must be a regular file with one hard link, owned by\nthe runtime user with mode 0400 or 0600, or owned by root with no\naccess beyond group read (0440 or 0640) when the runtime is not root.\nA process that declared development loads a file with looser read or\nmode bits and logs a warning.",
           "pattern": "^/",
           "type": "string"
         }

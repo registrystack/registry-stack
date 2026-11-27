@@ -35,10 +35,8 @@ of the shared audit writer that these products and Registry Render use.
   revoked or malformed active public JWK, and `evidence check --require-runtime-dependencies` on the
   target host refuses a configured signer that does not match it.
 - Supply local-assurance private JWKs, HMAC keys, and source credentials through
-  `secret:file/<name>` references below `secretProviders.file.root`. The file provider accepts only
-  regular, non-symlink files owned by the service identity at mode `0400` or `0600`, and checks
-  owner, mode, link count, no-follow behaviour, and open-file identity. Keep the secret root
-  operator-only.
+  `secret:file/<name>` references below `secretProviders.file.root`. The file provider applies the
+  rule in [Secret files](#secret-files). Keep the secret root operator-only.
 - Prefer the file provider with a secret root dedicated to the deployment. Enable
   `secretProviders.environment: {}` only for a dedicated, curated process environment. Review each
   bundle `secret:env/<NAME>` reference because an enabled environment provider can resolve any
@@ -69,6 +67,56 @@ of the shared audit writer that these products and Registry Render use.
     crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
     crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic. */}
+
+## Secret files
+
+Every `secret:file/<name>` reference resolves under `secretProviders.file.root`. Every runtime
+applies one rule when it opens the file. The check runs on the open file, so a file replaced after
+the check is not read.
+
+The file must meet all of these:
+
+- It is a regular file with one hard link. A directory, device, socket, or pipe is refused.
+- It is reached from the root by downward steps only. The name may be a relative link, such as the
+  chain Kubernetes writes for a mounted Secret, through at most 8 links. A link that is absolute or
+  holds `..` is refused, so is a link that leaves the root. The root itself must not be a link.
+- Others have no access: no read and no write.
+- Its owner and mode are one of two shapes. The runtime user owns it with mode `0400` or `0600`.
+  Or root owns it with no bit outside `0640`, usually `0440` or `0640`, and the runtime is not
+  root. The runtime then reads it through the file's group.
+- No execute, setuid, setgid, or sticky bit is set, and a file the runtime user owns can be read
+  by that user.
+
+A file the runtime user owns with any group access is refused. Group read is accepted only on a
+file root owns. Give that file's group to the runtime user alone, because every member of the group
+can read the secret. On a plain host that is every member of the group in `/etc/group`.
+
+The root directory's own mode is not part of this rule. Registry Evidence separately requires a
+secret root that group and other cannot reach, and `evidence doctor` reports it.
+
+Each refusal names the failed check by a `platform.secret-file.*` code and states the fix. The
+[error reference](../../reference/errors/#secret-file-codes) lists the ten codes.
+
+A process that declares the development posture loads a file whose read or mode bits are too loose
+(`world-readable`, `group-access`, `mode-bits`) and logs one warning per check. Every other
+refusal holds in development. Production refuses all of them.
+
+### Make the files meet the rule
+
+- **Host or systemd.** Create each file as the service user with `install -m 0400`, or as root with
+  `chown root:<service-group>` and `chmod 0440`. Keep the service group to the service user.
+- **Kubernetes.** Mount the Secret with `defaultMode: 0440` and set the pod's
+  `securityContext.fsGroup` to the runtime user's group. The kubelet then presents root-owned files
+  readable through that group, which the rule accepts, including the link chain it writes. A
+  `defaultMode` of `0400` without `fsGroup` leaves a root-owned file the runtime user cannot open,
+  and `0644` is refused as world-readable. `fsGroup` applies to every container in the pod and to
+  the pod's other volumes, so check that nothing else in the pod needs owner-only volumes.
+- **The Helm chart.** The chart stages each secret into a memory volume owned by the runtime user
+  at mode `0400`, which the rule accepts. It does not use `fsGroup`. See the chart's README.
+- **Docker Compose.** A Compose file secret keeps the host file's owner and mode on some hosts, and
+  on others Compose ignores the `uid`, `gid`, and `mode` you declare and presents the file
+  world-readable, which production refuses. Prepare a volume or bind-mounted directory with the
+  owner and mode above instead.
 
 ## Check BReg and Casework authority
 

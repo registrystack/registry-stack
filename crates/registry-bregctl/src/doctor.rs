@@ -996,6 +996,13 @@ mod tests {
                 "/operationalTimeouts",
             ),
             (RuntimeConfigError::Secret, "breg.runtime.secret", ""),
+            (
+                RuntimeConfigError::SecretFile(
+                    registry_platform_config::SecretFileCheck::HardLinked,
+                ),
+                "breg.runtime.secret",
+                "",
+            ),
         ];
 
         for (cause, expected_code, expected_path) in cases {

@@ -38,6 +38,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind};
+use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
 use serde::{Deserialize, Serialize};
 use serde_norway::Value as YamlValue;
 
@@ -306,38 +307,50 @@ fn check_secrets(
         } else if !metadata.is_dir() {
             root_run.refuse(&root, "is not a directory".to_owned());
         } else if metadata.permissions().mode() & 0o077 != 0 {
+            // Evidence's own startup refuses a root group or other can reach,
+            // whatever the secret-file rule accepts below it.
             root_run.refuse(&root, group_or_other(&metadata, 0o700));
         }
     }
 
+    // The runtime's own resolver judges each file, so this check gives the
+    // verdict the runtime would give. A secret file's rule is the shared one,
+    // stated by `SecretFileCheck`.
+    // The runtime requires an absolute root. A relative one in the file is
+    // read from the directory this check runs in, as the other files are.
+    let absolute_root = std::path::absolute(&root).unwrap_or_else(|_| root.clone());
+    let resolver = match SecretResolver::new([SecretProvider::File], &absolute_root) {
+        Ok(resolver) => resolver,
+        Err(error) => {
+            root_run.refuse(&root, describe_secret_refusal(&error));
+            return vec![root_run.finish()];
+        }
+    };
     let mut secret_run = CheckRun::new("secrets", project);
     for name in references {
         let path = root.join(&name);
-        let Some(metadata) = secret_run.stat(&path) else {
-            continue;
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            secret_run.refuse(
-                &path,
-                "is not a regular file reached without traversing a symbolic link".to_owned(),
-            );
-            continue;
+        secret_run.inspected += 1;
+        let verdict = SecretReference::parse(format!("secret:file/{name}"))
+            .and_then(|reference| resolver.inspect_reference(&reference));
+        if let Err(error) = verdict {
+            secret_run.refuse(&path, describe_secret_refusal(&error));
         }
-        // Secrets are the one artifact the runtime pins to an exact mode
-        // rather than to a bound, so report the exact mode back.
-        let mode = metadata.permissions().mode() & 0o7777;
-        if !matches!(mode, 0o400 | 0o600) {
-            secret_run.refuse(
-                &path,
-                format!(
-                    "has mode {mode:04o}; the runtime requires exactly 0400 or 0600 (chmod 400 or 600)"
-                ),
-            );
-        }
-        require_sole_owner(&mut secret_run, &path, &metadata);
     }
 
     vec![root_run.finish(), secret_run.finish()]
+}
+
+/// What a secret file's refusal says: the check, its code, and the fix.
+fn describe_secret_refusal(error: &SecretError) -> String {
+    match error {
+        SecretError::UnsafeFile(check) => format!(
+            "{} ({}); {}",
+            check.message(),
+            check.code(),
+            check.suggested_action()
+        ),
+        other => format!("cannot be resolved: {other}; {}", other.suggested_action()),
+    }
 }
 
 /// The signer this deployment declares, and what settling it needs beyond this

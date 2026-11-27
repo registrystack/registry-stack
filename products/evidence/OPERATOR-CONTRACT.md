@@ -129,7 +129,9 @@ package report lists. The list is the deduplicated union of governed bundle
 references and generated runtime references, including a local signer's
 private-key reference; it never resolves or reports a value. Secret ownership
 and mode requirements remain unchanged: each referenced
-secret is a regular owner-only file accepted by the eventual service identity.
+secret is a regular file that meets the shared secret-file rule: one hard link, owned by the
+eventual service identity (mode 0400 or 0600) or by root (no bit outside 0640), and never
+accessible to others.
 The package and runtime must be non-writable to that identity. The
 runtime is target-specific and remains outside the immutable `bundle/`. Signed assertions continue to carry only a configuration
 revision as `configurationRevision`. That value is scoped to the one requirement

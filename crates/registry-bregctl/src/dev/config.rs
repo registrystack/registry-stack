@@ -735,9 +735,7 @@ fn resolve_secret(
             registry_platform_config::SecretError::Unavailable => {
                 "create the file under secretProviders.file.root, or set the environment variable the reference names"
             }
-            registry_platform_config::SecretError::UnsafeFile => {
-                "make it a regular file you own, with mode 0400 or 0600 and a single link"
-            }
+            registry_platform_config::SecretError::UnsafeFile(check) => check.suggested_action(),
             registry_platform_config::SecretError::InvalidValue => {
                 "store a non-empty value without NUL bytes, at most 64 KiB"
             }

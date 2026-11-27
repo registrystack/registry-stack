@@ -173,7 +173,7 @@ A caller recovering an unknown admission must send the exact original start key,
 
 Create every secret as the user that runs `coordinator` and `coordinatorctl`.
 A `secret:file/NAME` reference reads the file `NAME` directly under the file provider's `root`.
-That file must be a regular file owned by that user, with mode `0400` or `0600` and exactly one link.
+That file must meet the [secret file rule](../../security/hardening-checklist/#secret-files), for example a regular file owned by that user, with mode `0400` or `0600` and exactly one link.
 A `secret:env/NAME` reference reads an environment variable when `secretProviders` declares `environment: {}`.
 
 Coordinator uses three kinds of key, each exactly 32 raw random bytes in its own file:

@@ -4716,7 +4716,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/job-runtime.v1alpha1.schema.json",
-        "sha256": "039e8186453aaa3fc9b1fa0cb230172dfe58f05c7b240bfd03f3e5404ef0338c",
+        "sha256": "de124e0af2f93259704f122d14db4be82304f3470f9e7dbbc0a8afe1b47cf1c9",
         "mediaType": "application/schema+json"
       }
     },
@@ -4896,7 +4896,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "51585af5aeff6da47672cfb2defc6a82b0da0a0fe748b09863e184c588c0f1c5",
+        "sha256": "acb55cefa753d2fe69ca959a9a35b85484dc9815aa3c92304f7ac256ec283233",
         "mediaType": "application/schema+json"
       }
     },
@@ -5004,7 +5004,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
-        "sha256": "5020d8c8d12191760b03bfd268a0f11a8a88b7bc06982063573b7e48c9950fae",
+        "sha256": "cba3b8c3f830e27287b1869408b137cc8dffacf014ccc1875193617648fcc466",
         "mediaType": "application/schema+json"
       }
     },
@@ -5112,7 +5112,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "ee35b984ef1bf88adcd1e34d7940dae7f9d79c1da3dfdd77ee36433569b69e13",
+        "sha256": "bdce3a4a2d2b75c7e7e4eaa69dcf7ed5d9444a18169c4e3ab8d9069a4b8e5fc6",
         "mediaType": "application/schema+json"
       }
     },
@@ -5256,7 +5256,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "abdb67296c19d687187ce2fea55bef59a47d5212ec5bb3925dcbef35778d5fc8",
+        "sha256": "bbb405e5aa3cd0417c128cfe9c83a568f1a9bfbc627723a7421a4760b34f3d99",
         "mediaType": "application/schema+json"
       }
     },
@@ -5292,7 +5292,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "50c12375f8e3410c00d9dbfc9d7460370e0c69a757992975fa5fa96189e06fe7",
+        "sha256": "d33ce6ac211083c7b2f63fdbaecedd99579ced71f69ab4a745c48768a6ca39c4",
         "mediaType": "application/schema+json"
       }
     },
@@ -5400,7 +5400,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "0c6aef414ad9becb38794ad1eb0b00b3c8220b507670e27de6b79da710f9b787",
+        "sha256": "134cc6da382230848063347306870a54367256560872ef00759ec8da1bf60777",
         "mediaType": "application/schema+json"
       }
     },
@@ -5436,7 +5436,7 @@
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "e2c774bceda48bfd6814629e779fee5a9613ac82b3c72ccd4a915d0c4e4dd1ee",
+        "sha256": "3cd8649e2c83f080febf2de58228c0f5fdd341abb2ad531876a8b80cd1631e76",
         "mediaType": "application/schema+json"
       }
     },
@@ -5616,7 +5616,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "4d22626676c3d535dcca2c86c2d0f675b52b8dce81e3040ddee0462e7ed90420",
+        "sha256": "5a8b5deb0d312fe840b8445bac481bac73ad370c5562adbf5c9a94f8efe92557",
         "mediaType": "application/schema+json"
       }
     },
@@ -5648,11 +5648,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "53758ed115099de8f41b2060f7c3eb9442f0bdb8e89c5f1f6b3612702171c7b3"
+        "sha256": "b3797c856289fb46c1706362401392fadb2c41faeda051a41cf0408c3944df4a"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "53758ed115099de8f41b2060f7c3eb9442f0bdb8e89c5f1f6b3612702171c7b3",
+        "sha256": "b3797c856289fb46c1706362401392fadb2c41faeda051a41cf0408c3944df4a",
         "mediaType": "application/yaml"
       }
     },
@@ -5778,7 +5778,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "17c5085d53455e203add38e01b2eed330ec53b03bd0e242126b15ad2a58ffd79",
+        "sha256": "e337df8c818a5fef822c6e1638aff48187923990774f6d59569877e689dd12e5",
         "mediaType": "application/schema+json"
       }
     },
@@ -5796,7 +5796,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json",
-        "sha256": "b6ecde469f66120d97fbfb2840fecd42c564642510bda26b98b26ee7ab13cdfa",
+        "sha256": "b52e6e9fa334860bce9ff5d0d5cad65b5135834d431956ad6628009b5a5ca844",
         "mediaType": "application/schema+json"
       }
     },
@@ -6012,7 +6012,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "a91a90441db07340c50710d3bf2aa1a4d3eaf034af0ff1bda7eaa5ea299e09db",
+        "sha256": "2fa43db649ef28e4c6d4bed81b4b4adf7b9a355cd7a3cfe585d776e4713e637a",
         "mediaType": "application/schema+json"
       }
     },
@@ -6084,7 +6084,7 @@
       },
       "artifact": {
         "path": "crates/registry-cli-api/schema/connections.schema.json",
-        "sha256": "259fec0a491aad88d6055aa0251b6a6baf7d7fdddab1429a04daa73feada8c2e",
+        "sha256": "8885a96cae62ec9a421f6327ec7b9d165991b6d7996763d20d018c3d7d249f39",
         "mediaType": "application/schema+json"
       }
     },
@@ -6156,7 +6156,7 @@
       },
       "artifact": {
         "path": "products/platform/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "9c10f7ac0154005eca148084abf7a0e1980642fbea9e8f2fa30da1c8d5fffa49",
+        "sha256": "aa723586746147ccf31fbedcdc14aa40ab4232783d7196390033f0241a393f95",
         "mediaType": "application/schema+json"
       }
     },
@@ -6192,7 +6192,7 @@
       },
       "artifact": {
         "path": "products/platform/schemas/task-connection.schema.json",
-        "sha256": "aa5644178df3a358a1bf2a8c4db0e8e489dcdb142c68ff1d0286e39501729ddf",
+        "sha256": "aa6f4dded82d3614a2ce83916b0e916c63b12def7678a9eab9eb8aa67e55a7dd",
         "mediaType": "application/schema+json"
       }
     },
@@ -6264,7 +6264,7 @@
       },
       "artifact": {
         "path": "products/render/schemas/runtime.schema.json",
-        "sha256": "dfcd05130394e2dec5b8c9d739b2c8c60b680cb399a94c406125f80a707ae5f1",
+        "sha256": "c34fae9f80a3e3e1ec309794815f9d6d0518e6ce20bb6d2e3d613771554133aa",
         "mediaType": "application/schema+json"
       }
     },
@@ -6372,7 +6372,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "27a6be5ada98978ac33e80e9054540b65c091748e9548744922d08e917ebd739",
+        "sha256": "5636616f2d0a6448cacfb982baf0be675d8019977ad970e3de936d504fbf7a31",
         "mediaType": "application/schema+json"
       }
     },

@@ -180,8 +180,8 @@ Without `--environment`, `check` reads no chain file and says so: the human outp
 `"sealChains": "not-read"`.
 
 `serve` alone also reads the key and the timestamp authority's CA bundle, and reports
-`render.runtime.seal-key-unreadable` (with the secret provider's reason; a key file must be a
-regular file owned by the serving user, with mode 0600 or 0400 and one link),
+`render.runtime.seal-key-unreadable` (with the secret provider's reason; a key file must meet the
+[secret file rule](../../security/hardening-checklist/#secret-files)),
 `render.runtime.seal-key-invalid`, `render.runtime.seal-key-unsupported`,
 `render.runtime.seal-key-mismatch` (the key file, or the Transit key version, is not the key the
 certificate certifies), `render.runtime.seal-transit-unavailable` (the Transit proxy does not

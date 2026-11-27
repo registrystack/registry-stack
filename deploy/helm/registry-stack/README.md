@@ -77,6 +77,11 @@ update.
 No BReg, Casework, or Evidence Pod sets `fsGroup`. Kubelet can otherwise
 recursively change an existing owner-only audit or authority volume root.
 
+Because no Pod sets `fsGroup`, the chart stages each Secret into a memory-backed volume owned by
+the runtime user at mode `0400`, which the runtime's secret-file rule accepts. A deployment without
+owner-only volumes can mount the Secret directly with `defaultMode: 0440` and `fsGroup` instead,
+which the rule also accepts.
+
 ## BReg input contract
 
 Set these references when `breg.enabled` is true:

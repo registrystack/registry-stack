@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A secret file BReg refuses at startup reports the check that failed and
+  its fix under `breg.runtime.secret`, instead of one fixed sentence.
+
 - `bregctl provision` creates the PostgreSQL objects a Registry needs, from the
   two database URLs in its runtime file and an administrator URL read from
   `--admin-url-file` or `--admin-url-env`. It creates or adopts the migration

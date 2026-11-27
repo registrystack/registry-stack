@@ -382,7 +382,7 @@ cross_cutting:
     negative_test: sec-unsigned-envelope-not-jws
   secret_file_identity:
     threat: A group- or world-accessible, symlinked, multi-link, or oversized secret file exposes or substitutes key material.
-    enforcement: File secrets must be regular owner-only files opened without following symlinks, with exact service ownership, exact mode 0400 or 0600, single-hard-link, and size checks before use.
+    enforcement: File secrets must be regular files with one hard link, reached from the file root by relative downward links only, owned by the service identity with mode 0400 or 0600 or by root with no bit outside 0640 read through the service's group, never accessible to others, and size-checked before use.
     negative_test: sec-secret-file-identity
   transport_pinning:
     threat: Workspace dependency feature unification silently changes the TLS backend or introduces transport retries, breaking the per-stage request ceiling and TLS contracts.

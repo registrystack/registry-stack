@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Every runtime reads a secret file under one rule. A relative link that
+  stays below `secretProviders.file.root` is followed, at most eight links
+  deep. A file owned by root with mode `0440` or `0640` loads when the
+  runtime does not run as root. A file the runtime user owns with group
+  access, a world-readable file, a file with an execute, setuid, setgid or
+  sticky bit, a hard-linked file and a link that leaves the root are refused.
+  Each refusal is a `SecretError::UnsafeFile` that names a
+  `platform.secret-file.*` check and its fix. A process that declares the
+  development posture loads a file whose read or mode bits are too loose and
+  warns once per check. `registry-platform-config` exports `SecretFileCheck`
+  and `MAX_SECRET_LINKS`, and `SecretResolver` gains `in_development` and
+  `inspect_reference`.
+
 - BREAKING: `registry-platform-oidc` no longer has the stage-labelled
   authentication log helpers: `AuthenticationStage`,
   `AuthenticationDiagnostics`, `OidcError::authentication_stage`,

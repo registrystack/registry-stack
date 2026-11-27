@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `evidence doctor` judges secret files with the runtime's rule. It no
+  longer demands exactly `0400` or `0600`, and it accepts a link chain that
+  stays inside the secret root. It still requires a secret root that group
+  and other cannot reach, as the runtime does.
+
 - Evidence counts every `401`, `403` and `429` answer by the check that failed
   in `evidence_request_refusals_total{check}` on the private metrics listener,
   and writes one `request refused` log line with the check and the request's

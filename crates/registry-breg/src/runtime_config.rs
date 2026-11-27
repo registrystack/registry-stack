@@ -17,8 +17,8 @@ use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfi
 use registry_platform_config::{
     check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, JwksSource,
     MetricsBindError, OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
-    TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretFileCheck, SecretReference,
+    SecretResolver, TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
 use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -412,6 +412,8 @@ pub enum RuntimeConfigError {
     InvalidWasmExecution,
     #[error("runtime configuration secret resolution failed")]
     Secret,
+    #[error("runtime configuration secret file refused: {} ({})", .0.message(), .0.code())]
+    SecretFile(SecretFileCheck),
 }
 
 /// The config path of the exposure key a wildcard metrics refusal names.
@@ -457,7 +459,7 @@ impl RuntimeConfigError {
             Self::InvalidBounds => "breg.runtime.invalid-bounds",
             Self::PoolBudgetExceeded => "breg.runtime.pool-budget-exceeded",
             Self::InvalidWasmExecution => "breg.runtime.invalid-wasm-execution",
-            Self::Secret => "breg.runtime.secret",
+            Self::Secret | Self::SecretFile(_) => "breg.runtime.secret",
         }
     }
 
@@ -466,7 +468,7 @@ impl RuntimeConfigError {
     fn path(&self) -> &str {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
-            Self::InvalidBinding | Self::Secret => "",
+            Self::InvalidBinding | Self::Secret | Self::SecretFile(_) => "",
             Self::InvalidExternalSource { path, .. } => path,
             Self::InvalidTaskGrantStatus => "/taskGrantStatus",
             Self::InvalidInstanceId => "/identity/instanceId",
@@ -597,6 +599,7 @@ impl RuntimeConfigError {
             Self::Secret => {
                 "Make every secret reference resolve through the declared secret providers."
             }
+            Self::SecretFile(check) => check.suggested_action(),
         }
     }
 
@@ -633,8 +636,11 @@ impl RuntimeConfigError {
 }
 
 impl From<SecretError> for RuntimeConfigError {
-    fn from(_error: SecretError) -> Self {
-        Self::Secret
+    fn from(error: SecretError) -> Self {
+        match error {
+            SecretError::UnsafeFile(check) => Self::SecretFile(check),
+            _ => Self::Secret,
+        }
     }
 }
 
