@@ -22,7 +22,9 @@ use super::{
     RuntimeRevoke, SqlIdentifier,
 };
 
-pub(super) const MANAGED_SCHEMAS: &[&str] = &[
+/// The schemas a package creates its tables, functions and policies in. The
+/// migration role owns them.
+pub const MANAGED_SCHEMAS: &[&str] = &[
     "registry_internal",
     "registry_data",
     "registry_source",

@@ -46,8 +46,9 @@ occupied by the link; choose another unused, non-symbolic-link name under the re
 - **PostgreSQL 17 or newer**, reached over TLS, with two login roles: a migration role that owns
   the schema and applies packages, and a runtime role the serving process uses. A project with a
   `crs84-polygon` field always needs PostGIS 3.5 or newer. A `crs84-point` field needs PostGIS only
-  when an access profile grants bbox queries. Your administrator creates the roles, schemas, and
-  extensions. The product never creates any of them. SQLite is not a target.
+  when an access profile grants bbox queries. `bregctl provision` creates the roles, the database, the
+  schemas, and the extensions from an administrator's credentials. `breg` and `apply` create none
+  of them. SQLite is not a target.
   Ubuntu 24.04 ships PostgreSQL 16 and Debian 12 ships PostgreSQL 15, both too old: install 17
   from the PostgreSQL project's apt repository (PGDG), or run the `postgres:17` image
   (`postgis/postgis` at PostgreSQL 17 when the project requires PostGIS).
@@ -137,81 +138,6 @@ the tag. [Serve the container image](#serve-the-container-image) shows how to ru
 
 {/* Evidence: crates/registry-breg/install.sh; release/docker/Dockerfile.breg;
     release/scripts/release_candidate.py, BREG_RUNTIME_IMAGE_NAMES; release/VERIFY.md. */}
-
-## Provision PostgreSQL
-
-As a PostgreSQL administrator, create the two roles:
-
-```sql
-CREATE ROLE registry_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
-CREATE ROLE registry_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
-```
-
-Two separate roles are the split role mode, which production uses. The serving process then cannot
-write the activation ledger or registry state, and `apply` and startup both refuse a runtime role
-that could, naming the grant, ownership, membership, or trigger to remove. Keep the migration
-credential off the serving host when no activation is in progress.
-
-Create two databases with the same shape: the serving database and the schema-test database. In
-each, as the administrator (this is the serving database, `registry`):
-
-```sql
-CREATE DATABASE registry;
-REVOKE ALL ON DATABASE registry FROM PUBLIC;
-REVOKE CREATE ON DATABASE registry FROM registry_migration, registry_runtime;
-GRANT CONNECT ON DATABASE registry TO registry_migration, registry_runtime;
-\connect registry
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-CREATE SCHEMA registry_internal AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_data AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_source AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_derived AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_context AUTHORIZATION registry_migration;
-REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source,
-  registry_derived, registry_context FROM PUBLIC;
-```
-
-The package creates every table, function, and policy inside those five schemas. A missing
-prerequisite surfaces at `test` or `apply`, never at runtime.
-
-The migration role owns only those five schemas. It must not own the database (for example through
-`CREATE DATABASE registry OWNER registry_migration`) and must not hold `CREATE` on it, because an
-owner holds `CREATE` implicitly. `test` and `apply` check this before changing anything and refuse
-with `migration role has database-level administrative authority`, which is also the refusal for a
-role that is a superuser or has `BYPASSRLS`, `CREATEDB`, or `CREATEROLE`. If a managed PostgreSQL
-service created the database for you, check its owner and its grants first.
-
-For a project with polygon storage or bbox queries, install PostGIS in a schema neither registry
-role owns. If the project grants bbox queries, also add a bounding-box role named after the runtime
-role with the suffix `__spatial_bbox`:
-
-```sql
-CREATE ROLE registry_runtime__spatial_bbox NOLOGIN NOSUPERUSER NOCREATEDB
-  NOCREATEROLE NOINHERIT NOBYPASSRLS;
-GRANT registry_runtime__spatial_bbox TO registry_migration
-  WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;
--- in each database
-CREATE SCHEMA registry_spatial_ext AUTHORIZATION postgres;
-CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext;
-REVOKE CREATE ON DATABASE registry FROM PUBLIC, registry_migration, registry_runtime;
-REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC;
-GRANT USAGE ON SCHEMA registry_spatial_ext
-  TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
-```
-
-A package that stores polygons and grants no bbox queries omits the bbox role, its membership, and
-its name from the final `GRANT USAGE`. Keep the PostGIS schema, extension, and grants to the
-migration and runtime roles.
-
-Size connections, timeouts, and statement statistics once the registry serves; see
-[Set a PostgreSQL baseline](../breg-monitor/#set-a-postgresql-baseline).
-
-{/* Evidence: crates/registry-breg/src/postgres/migration_ledger.rs, RoleMode;
-    crates/registry-breg/src/postgres/roles.rs, verify_migration_role,
-    find_runtime_write_authority and the __spatial_bbox role; crates/registry-breg/src/postgres/schema.rs,
-    refuse_existing_managed_objects(); crates/registry-breg/src/startup.rs, RuntimeWriteAuthority. */}
 
 ## Write the runtime configuration
 
@@ -333,6 +259,128 @@ In a container platform that injects secrets as environment variables, declare
     valid_file_name(); crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
     crates/registry-breg/src/cursor.rs, ROOT_SECRET_MIN_BYTES;
     crates/registry-breg/src/runtime_config.rs, database_connection_config_for(). */}
+
+## Provision PostgreSQL
+
+Your runtime file already names the roles, their passwords, and the database. They are the URLs
+in `database.migrationUrlRef` and `database.runtimeUrlRef`, and the roles under `database.roles`.
+With the secret files in place, run `bregctl provision` once as a PostgreSQL role that can create
+roles and databases. The runtime file's `package.root` must be a readable directory, though
+`provision` reads nothing from it: create an empty one if the package does not exist yet.
+
+```sh
+bregctl provision --runtime-config /etc/breg/runtime.yaml --admin-url-file /etc/breg/admin-url
+```
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE`
+and `CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable
+instead, use `--admin-url-env NAME`. The connection requires TLS and verifies the server
+certificate. Set `database.caBundleRef` in the runtime file to trust a private CA. The command
+never prints the administrator URL or a password.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Installs `btree_gist`.
+- Creates the five schemas the package fills, `registry_internal`, `registry_data`,
+  `registry_source`, `registry_derived`, and `registry_context`, each owned by the migration role
+  and closed to `PUBLIC`.
+
+Run it again at any time. It creates only what is missing. It refuses a role that exists with
+other attributes, and a role whose URL does not open a session, and tells you which.
+
+Two roles are the split role mode, which production uses. The serving process then cannot write
+the activation ledger or registry state, and `apply` and startup both refuse a runtime role that
+could, naming the grant, ownership, membership, or trigger to remove. Keep the migration
+credential off the serving host when no activation is in progress.
+
+The schema-test database that `test` needs has the same shape. Point a copy of the runtime file
+at it, as [Check, test, package](#check-test-package) describes, and run `provision` over that
+copy too.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "registry_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "registry_migration"
+CREATE ROLE "registry_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "registry_runtime"
+CREATE DATABASE "registry" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "registry" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "registry" TO "registry_migration", "registry_runtime";
+ALTER DATABASE "registry" ALLOW_CONNECTIONS true;
+\connect "registry"
+CREATE EXTENSION btree_gist;
+CREATE SCHEMA "registry_internal" AUTHORIZATION "registry_migration"; REVOKE ALL ON SCHEMA "registry_internal" FROM PUBLIC;
+-- the same two statements for registry_data, registry_source, registry_derived, registry_context
+```
+
+The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
+
+The migration role owns only those five schemas. It must not own the database (for example through
+`CREATE DATABASE registry OWNER registry_migration`) and must not hold `CREATE` on it, because an
+owner holds `CREATE` implicitly. `test` and `apply` check this before changing anything and refuse
+with `migration role has database-level administrative authority`, which is also the refusal for a
+role that is a superuser or has `BYPASSRLS`, `CREATEDB`, or `CREATEROLE`. If a managed PostgreSQL
+service created the database for you, check its owner and its grants first.
+
+`provision` grants the runtime role nothing beyond `CONNECT`. `apply` grants it what serving
+needs. The package creates every table, function, and policy inside the five schemas. A missing
+prerequisite surfaces at `test` or `apply`, never at runtime.
+
+### Install PostGIS
+
+For a project with polygon storage or bbox queries, PostGIS lives in a schema neither registry
+role owns, and `CREATE EXTENSION postgis` needs a superuser. Pass the built package, and the
+command adds the PostGIS steps for a package that needs them:
+
+```sh
+bregctl provision --runtime-config /etc/breg/runtime.yaml \
+  --admin-url-file /etc/breg/superuser-url --package /var/lib/breg/build-1/package
+```
+
+Without `--package`, no PostGIS step is planned. As a role that is not a superuser, the command
+stops at that statement with `platform.provision.statement-needs-privilege` at `extension.postgis`.
+Run it with `--print-sql` and give the script to a superuser, or run it with a superuser URL, then
+run `provision` again.
+
+A package exists only after `test`, and `test` needs PostGIS in the schema-test database. For that
+one database, a superuser runs the PostGIS statements by hand once. If the project grants bbox
+queries, the statements also add a bounding-box role named after the runtime role with the suffix
+`__spatial_bbox`:
+
+```sql
+CREATE ROLE registry_runtime__spatial_bbox NOLOGIN NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOINHERIT NOBYPASSRLS;
+GRANT registry_runtime__spatial_bbox TO registry_migration
+  WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;
+-- in each database
+CREATE SCHEMA registry_spatial_ext AUTHORIZATION postgres;
+CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext;
+REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC;
+GRANT USAGE ON SCHEMA registry_spatial_ext
+  TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
+```
+
+A package that stores polygons and grants no bbox queries omits the bbox role, its membership, and
+its name from the final `GRANT USAGE`. Keep the PostGIS schema, extension, and grants to the
+migration and runtime roles.
+
+Size connections, timeouts, and statement statistics once the registry serves; see
+[Set a PostgreSQL baseline](../breg-monitor/#set-a-postgresql-baseline).
+
+{/* Evidence: crates/registry-bregctl/src/provision.rs; crates/registry-platform-provision/src/plan.rs;
+    crates/registry-breg/src/postgres/migration_ledger.rs, RoleMode;
+    crates/registry-breg/src/postgres/roles.rs, verify_migration_role,
+    find_runtime_write_authority and the __spatial_bbox role; crates/registry-breg/src/postgres/schema.rs,
+    refuse_existing_managed_objects(); crates/registry-breg/src/startup.rs, RuntimeWriteAuthority;
+    crates/registry-bregctl/tests/provision_postgres.rs. */}
 
 ## What a token must carry
 

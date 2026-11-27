@@ -36,7 +36,7 @@ pub use baseline::{
 };
 pub use catalog::{
     catalog_drift_objects, managed_schema_fingerprint, verify_catalog_identity_for_catalog,
-    CatalogIdentity, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    CatalogIdentity, ExpectedManagedCatalog, ExpectedRegistryIdentity, MANAGED_SCHEMAS,
 };
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
@@ -226,7 +226,7 @@ pub fn strong_record_etag_for_test(
 pub use roles::{
     provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
-    RuntimeWriteAuthority, SqlIdentifier,
+    RuntimeWriteAuthority, SqlIdentifier, MIN_POSTGIS_MAJOR, MIN_POSTGIS_MINOR,
 };
 pub(crate) use schema::compiled_pattern_field;
 pub use schema::install_compiled_schema;

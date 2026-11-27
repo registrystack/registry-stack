@@ -21,6 +21,11 @@ required-features = ["schema"]
 name = "wasm_test_lifecycle"
 required-features = ["wasm"]
 
+[[test]]
+name = "provision_postgres"
+path = "tests/provision_postgres.rs"
+required-features = ["postgres-test"]
+
 [lints]
 workspace = true
 
@@ -29,6 +34,9 @@ default = ["wasm"]
 # Forwarded so a `wasm`-feature build of the compiler can also run through
 # bregctl; bregctl itself adds no WASM surface of its own.
 wasm = ["registry-breg/wasm"]
+# Builds the PostgreSQL provisioning proof, which needs a TLS server named by
+# `PROVISION_TEST_DATABASE_URL` and `PROVISION_TEST_DATABASE_CA`.
+postgres-test = []
 # Derives the JSON Schemas of the tool files bregctl reads, for the
 # `tool-schema` generator and its drift check.
 schema = [
@@ -58,6 +66,7 @@ registry-platform-config.workspace = true
 registry-platform-yaml.workspace = true
 registry-rstack-dev.workspace = true
 registry-platform-hooks.workspace = true
+registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-httputil.workspace = true
 registry-platform-httpsec = { workspace = true, default-features = false }
 registry-thunderid-tooling = { workspace = true, features = ["session"] }
@@ -88,7 +97,8 @@ url.workspace = true
 
 [dev-dependencies]
 registry-breg.workspace = true
-registry-platform-testing = { workspace = true, features = ["test-utils"] }
+registry-platform-provision = { workspace = true, features = ["test-support"] }
+registry-platform-testing = { workspace = true, features = ["test-utils", "test-authorization-server"] }
 rustls.workspace = true
 tokio-postgres.workspace = true
 tokio-postgres-rustls.workspace = true

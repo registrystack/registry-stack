@@ -12,8 +12,10 @@ use super::catalog::MANAGED_SCHEMAS;
 use super::schema::verify_postgres_version;
 use super::{PostgresKernelError, Result};
 
-const MIN_POSTGIS_MAJOR: u32 = 3;
-const MIN_POSTGIS_MINOR: u32 = 5;
+/// The major version of the oldest PostGIS the runtime accepts.
+pub const MIN_POSTGIS_MAJOR: u32 = 3;
+/// The minor version of the oldest PostGIS the runtime accepts.
+pub const MIN_POSTGIS_MINOR: u32 = 5;
 
 /// A validated PostgreSQL identifier used only for governed provisioning.
 #[derive(Clone, Debug, Eq, PartialEq)]
