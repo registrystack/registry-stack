@@ -18,8 +18,8 @@ use registry_platform_authcommon::{
     RefusalRecorder,
 };
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
-    FrameworkRejection, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers_without_posture,
+    CspBuilder, FrameworkRejection, ProblemBody, TraceContext,
 };
 use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
 use serde_json::error::Category;
@@ -278,7 +278,7 @@ where
         .layer(middleware::from_fn(move |request, next| {
             http_boundary(contract, request, next)
         }))
-        .layer(security_headers(CspBuilder::restrictive()).without_hsts())
+        .layer(security_headers_without_posture(CspBuilder::restrictive()).without_hsts())
 }
 
 /// Counts and logs the refusal a response carries in its extensions. The

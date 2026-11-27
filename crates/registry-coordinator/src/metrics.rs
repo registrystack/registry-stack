@@ -530,7 +530,7 @@ pub fn metrics_router(store: Arc<Store>) -> Router {
     Router::new()
         .route(METRICS_PATH, get(serve_metrics))
         .layer(registry_platform_httpsec::request_body_limit(65_536))
-        .layer(registry_platform_httpsec::security_headers(
+        .layer(registry_platform_httpsec::security_headers_without_posture(
             registry_platform_httpsec::CspBuilder::deny_by_default(),
         ))
         .with_state(MetricsState { store })

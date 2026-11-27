@@ -44,7 +44,7 @@ use jsonwebtoken::Algorithm;
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig};
 use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_httpsec::{security_headers, CspBuilder};
+use registry_platform_httpsec::{security_headers_without_posture, CspBuilder};
 use registry_platform_httputil::client::{PrivateKeyJwt, PrivateKeyJwtConfig};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
@@ -727,7 +727,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     let csp = CspBuilder::deny_by_default()
         .with_style_src(&["'self'"])
         .with_form_action(&["'self'"]);
-    let mut headers = security_headers(csp);
+    let mut headers = security_headers_without_posture(csp);
     if development {
         headers = headers.without_hsts();
     }

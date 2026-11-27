@@ -7952,6 +7952,7 @@ dependencies = [
  "http",
  "registry-platform-authcommon",
  "registry-platform-loopback",
+ "registry-platform-posture",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

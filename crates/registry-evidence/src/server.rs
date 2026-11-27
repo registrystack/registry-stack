@@ -278,7 +278,8 @@ fn response_layers(routes: Router, metrics: Arc<Metrics>) -> Router {
         .layer(from_fn(add_no_store))
         .layer(registry_platform_httpsec::corp_conditional())
         .layer(
-            registry_platform_httpsec::security_headers(CspBuilder::restrictive()).without_hsts(),
+            registry_platform_httpsec::security_headers_without_posture(CspBuilder::restrictive())
+                .without_hsts(),
         )
         // Outermost, so that every response including both fallbacks carries a
         // correlation identifier and produces exactly one operational record.

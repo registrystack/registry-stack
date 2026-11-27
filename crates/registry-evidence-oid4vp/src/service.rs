@@ -26,8 +26,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use registry_platform_authcommon::{DeclaredScope, FailedCheck, RefusalNote, RefusalRecorder};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit, security_headers, CspBuilder,
-    FrameworkRejection, Problem, TraceContext,
+    normalize_framework_rejection, request_body_limit, security_headers_without_posture,
+    CspBuilder, FrameworkRejection, Problem, TraceContext,
 };
 use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
@@ -433,7 +433,9 @@ pub fn build_app(service: Arc<VerifierService>) -> Router {
         .with_state(service)
         .layer(from_fn_with_state(timeout, bound_request_time))
         .layer(from_fn(normalize_rejections))
-        .layer(security_headers(CspBuilder::deny_by_default()))
+        .layer(security_headers_without_posture(
+            CspBuilder::deny_by_default(),
+        ))
         .layer(from_fn(apply_trace_context))
         .layer(from_fn_with_state(refusals, record_refusals))
 }

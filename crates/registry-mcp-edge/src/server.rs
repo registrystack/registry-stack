@@ -12,7 +12,9 @@ use axum::{
     Json, Router,
 };
 use registry_platform_authcommon::{record_refusal, FailedCheck, RefusalNote, RefusalRecorder};
-use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder, Problem};
+use registry_platform_httpsec::{
+    request_body_limit, security_headers_without_posture, CspBuilder, Problem,
+};
 use rmcp::transport::streamable_http_server::{
     session::never::NeverSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
@@ -139,7 +141,7 @@ pub fn router(
         .route(METADATA_PREFIX, get(metadata))
         .route(&metadata_path, get(metadata))
         .with_state(resource_server);
-    let headers = security_headers(CspBuilder::restrictive());
+    let headers = security_headers_without_posture(CspBuilder::restrictive());
     let headers = if options.hsts {
         headers
     } else {

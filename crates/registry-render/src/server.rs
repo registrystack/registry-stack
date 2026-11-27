@@ -32,7 +32,7 @@ use registry_platform_authcommon::{
     RefusalNote, RefusalRecorder, MIN_API_KEY_ENTROPY_BYTES,
 };
 use registry_platform_canonical_json::parse_json_preserving_integers;
-use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder};
+use registry_platform_httpsec::{request_body_limit, security_headers_without_posture, CspBuilder};
 
 use crate::audit::{RenderAudit, RenderAuditEvent};
 use crate::auth::{RENDER_SCOPE, SCOPE_CLAIM, SEAL_SCOPE};
@@ -433,7 +433,7 @@ pub(crate) fn router(service: Arc<Service>) -> Router {
     }
     app.fallback(not_found)
         .with_state(service)
-        .layer(security_headers(CspBuilder::restrictive()))
+        .layer(security_headers_without_posture(CspBuilder::restrictive()))
 }
 
 /// The public application: the router under the request log, the refusal
@@ -733,7 +733,7 @@ pub fn metrics_router(service: Arc<Service>, metrics: Arc<Metrics>) -> Router {
     Router::new()
         .route(METRICS_PATH, get(serve_metrics))
         .with_state(MetricsState { metrics, service })
-        .layer(security_headers(CspBuilder::restrictive()))
+        .layer(security_headers_without_posture(CspBuilder::restrictive()))
 }
 
 async fn serve_metrics(State(state): State<MetricsState>) -> Response {

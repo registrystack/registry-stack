@@ -175,7 +175,7 @@ fn http_edge(router: Router, signed_events: Router, refusals: Arc<RefusalRecorde
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(refusals, record_refusals))
         .layer(middleware::from_fn(http_boundary))
-        .layer(registry_platform_httpsec::security_headers(
+        .layer(registry_platform_httpsec::security_headers_without_posture(
             registry_platform_httpsec::CspBuilder::deny_by_default(),
         ))
 }

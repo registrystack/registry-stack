@@ -67,6 +67,13 @@
   into a CLI report body after the command members. A report built without it
   is unchanged.
 
+- `registry-platform-httpsec`: `security_headers(csp, posture)` takes the
+  declared posture. In development it sets `Registry-Posture: development` on
+  every response, over any value a handler set, and in production it sends no
+  mark. `posture_mark(posture)` sets only the mark, for routers that do not use
+  `security_headers`. Migration: call `security_headers_without_posture(csp)`,
+  which behaves as production, until the runtime adopts the posture.
+
 - `registry-platform-httpsec` implements authcommon's `RefusalTraceId` for
   `TraceId` behind the opt-in `refusal-trace-id` feature, not `server`. A
   service that only serves HTTP no longer links `registry-platform-authcommon`

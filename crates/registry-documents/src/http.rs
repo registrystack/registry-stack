@@ -30,8 +30,8 @@ use registry_platform_authcommon::{
     parse_bearer_token, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
 };
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
-    FrameworkRejection, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers_without_posture,
+    CspBuilder, FrameworkRejection, ProblemBody, TraceContext,
 };
 
 use serde::de::DeserializeOwned;
@@ -66,7 +66,7 @@ fn finish(limited: Router, unlimited: Router) -> Router {
         .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn(http_boundary))
-        .layer(security_headers(CspBuilder::restrictive()).without_hsts())
+        .layer(security_headers_without_posture(CspBuilder::restrictive()).without_hsts())
 }
 
 /// The operator-private router the metrics listener serves: the series, with

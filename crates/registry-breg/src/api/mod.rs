@@ -27,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{middleware, Extension, Json, Router};
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_httpsec::{security_headers, CspBuilder};
+use registry_platform_httpsec::{security_headers_without_posture, CspBuilder};
 use serde_json::{json, Map, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -115,7 +115,7 @@ pub fn router(service: Arc<HttpService>) -> Router {
         .merge(probe_routes(service))
         .layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
-        .layer(security_headers(CspBuilder::restrictive()))
+        .layer(security_headers_without_posture(CspBuilder::restrictive()))
 }
 
 fn route_set(service: Arc<HttpService>) -> Router {
@@ -302,7 +302,7 @@ pub fn authenticated_router(
     };
     app.layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
-        .layer(security_headers(CspBuilder::restrictive()))
+        .layer(security_headers_without_posture(CspBuilder::restrictive()))
 }
 
 async fn review_completion(
