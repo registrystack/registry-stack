@@ -8371,6 +8371,7 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httputil",
+ "registry-platform-provision",
  "registry-platform-yaml",
  "reqwest 0.12.28",
  "rustix 1.1.6",

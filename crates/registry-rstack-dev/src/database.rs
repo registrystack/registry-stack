@@ -9,6 +9,10 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_platform_provision::{
+    plan, sql::quote_identifier, Plan, ProductDatabase, ProvisionTarget, RoleCredential,
+    SchemaLayout, Scope, Spatial,
+};
 use rustls::pki_types::{pem::PemObject as _, CertificateDer};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -437,13 +441,20 @@ impl Database {
 
         let migration_password = random_password()?;
         let runtime_password = random_password()?;
+        let batches = Batches::new(
+            &names,
+            breg,
+            requires_postgis,
+            &migration_password,
+            &runtime_password,
+        )?;
         self.create_role(&names.migration_role, &migration_password)?;
         self.create_role(&names.runtime_role, &runtime_password)?;
-        if requires_postgis {
-            self.create_spatial_bbox_role(&names)?;
+        if let Some(statement) = &batches.bbox_role {
+            self.create_spatial_bbox_role(&spatial_bbox_role(&names), statement)?;
         }
-        self.create_database(&names)?;
-        self.configure_database(&names, breg, requires_postgis)?;
+        self.create_database(&names, &batches)?;
+        self.configure_database(&names, &batches)?;
 
         Ok(DatabaseUrls {
             runtime: self.product_url(&names.database, &names.runtime_role, &runtime_password)?,
@@ -610,7 +621,9 @@ impl Database {
         let verifier = Zeroizing::new(postgres_protocol::password::scram_sha_256(
             password.as_bytes(),
         ));
-        let statement = Zeroizing::new(create_role_sql(role, &verifier));
+        let statement = Zeroizing::new(registry_platform_provision::sql::create_role_sql(
+            role, &verifier,
+        ));
         self.create_owned_role(
             role,
             &statement,
@@ -618,14 +631,8 @@ impl Database {
         )
     }
 
-    fn create_spatial_bbox_role(&mut self, names: &Names) -> Result<()> {
-        let role = spatial_bbox_role(names);
-        let statement = create_nologin_role_sql(&role);
-        self.create_owned_role(
-            &role,
-            &statement,
-            "cannot create the BReg spatial bbox role",
-        )
+    fn create_spatial_bbox_role(&mut self, role: &str, statement: &str) -> Result<()> {
+        self.create_owned_role(role, statement, "cannot create the BReg spatial bbox role")
     }
 
     fn create_owned_role(
@@ -646,13 +653,12 @@ impl Database {
         created.map_err(anyhow::Error::new).context(context)
     }
 
-    fn create_database(&mut self, names: &Names) -> Result<()> {
-        let statement = format!(
-            "CREATE DATABASE {} WITH ALLOW_CONNECTIONS false",
-            quote_identifier(&names.database)
+    fn create_database(&mut self, names: &Names, batches: &Batches) -> Result<()> {
+        let created = self.execute_admin_operation(
+            &batches.create_database,
+            "database creation",
+            OPERATION_TIMEOUT,
         );
-        let created =
-            self.execute_admin_operation(&statement, "database creation", OPERATION_TIMEOUT);
         retain_create_acquisition(
             &mut self.acquisitions,
             Acquisition::Database(names.database.clone()),
@@ -662,13 +668,13 @@ impl Database {
             .map_err(anyhow::Error::new)
             .context("cannot create an isolated PostgreSQL database")?;
 
-        self.execute_admin(&database_access_sql(names))
+        self.execute_admin(&batches.access)
             .context("cannot restrict the PostgreSQL database to this run's roles")
     }
 
-    fn configure_database(&self, names: &Names, breg: bool, requires_postgis: bool) -> Result<()> {
-        let statement = database_setup_sql(names, breg);
-        let postgis = requires_postgis.then(|| postgis_prerequisites_sql(names));
+    fn configure_database(&self, names: &Names, batches: &Batches) -> Result<()> {
+        let statement = &batches.setup;
+        let postgis = &batches.postgis;
 
         let mut target = self.admin_config.clone();
         target.dbname(&names.database).ssl_mode(SslMode::Require);
@@ -681,14 +687,14 @@ impl Database {
                 let connection_task = tokio::spawn(connection);
                 let executed = tokio::time::timeout(OPERATION_TIMEOUT, async {
                     client
-                        .batch_execute(&statement)
+                        .batch_execute(statement)
                         .await
                         .map_err(|error| {
                             OperationFailure::postgres("database configuration", error)
                         })
                         .map_err(anyhow::Error::new)
                         .context("cannot configure the provisioned PostgreSQL database")?;
-                    if let Some(postgis) = &postgis {
+                    if let Some(postgis) = postgis {
                         client
                             .batch_execute(postgis)
                             .await
@@ -829,6 +835,90 @@ impl Names {
     }
 }
 
+/// The statements one database run sends, taken from the shared provisioning
+/// plan and grouped as they are executed: the access statements as one batch
+/// on the administrator session, the setup statements as one batch inside the
+/// new database, and the PostGIS statements as a second batch there. The login
+/// roles are created from their password verifiers, which the plan keeps
+/// private.
+struct Batches {
+    bbox_role: Option<String>,
+    create_database: String,
+    access: String,
+    setup: String,
+    postgis: Option<String>,
+}
+
+impl Batches {
+    fn new(
+        names: &Names,
+        breg: bool,
+        requires_postgis: bool,
+        migration_password: &str,
+        runtime_password: &str,
+    ) -> Result<Self> {
+        let product = ProductDatabase {
+            product: "rstack-dev",
+            layout: if breg {
+                SchemaLayout::Owned(
+                    BREG_SCHEMAS
+                        .iter()
+                        .map(|schema| (*schema).to_owned())
+                        .collect(),
+                )
+            } else {
+                SchemaLayout::PublicForMigration
+            },
+            btree_gist: breg,
+            spatial: requires_postgis.then(|| Spatial {
+                schema: POSTGIS_SCHEMA.to_owned(),
+                bbox_role: spatial_bbox_role(names),
+                minimum_postgis: MIN_POSTGIS,
+            }),
+        };
+        let target = ProvisionTarget {
+            database: names.database.clone(),
+            migration: RoleCredential::new(&names.migration_role, migration_password),
+            runtime: RoleCredential::new(&names.runtime_role, runtime_password),
+        };
+        let plan = plan(&product, &target).context("cannot plan the PostgreSQL provisioning")?;
+        Self::from_plan(&plan)
+    }
+
+    fn from_plan(plan: &Plan) -> Result<Self> {
+        let printable = |wanted: &dyn Fn(&str, Scope) -> bool| {
+            plan.statements()
+                .iter()
+                .filter(|statement| wanted(statement.step, statement.scope))
+                .map(|statement| statement.printable.clone())
+                .collect::<Vec<_>>()
+        };
+        let one = |step: &str| {
+            let mut found = printable(&|candidate, _| candidate == step);
+            match (found.pop(), found.is_empty()) {
+                (Some(statement), true) => Ok(statement),
+                _ => Err(anyhow!(
+                    "the provisioning plan has no single {step} statement"
+                )),
+            }
+        };
+        let postgis = printable(&|step, _| step == "extension.postgis");
+        Ok(Self {
+            bbox_role: printable(&|step, _| step == "role.spatial-bbox").pop(),
+            create_database: one("database.create")?,
+            access: printable(&|step, _| {
+                step.starts_with("database.") && step != "database.create"
+            })
+            .join("; "),
+            setup: printable(&|step, scope| {
+                scope == Scope::Database && step != "extension.postgis"
+            })
+            .join("; "),
+            postgis: postgis.into_iter().next(),
+        })
+    }
+}
+
 fn spatial_bbox_role(names: &Names) -> String {
     spatial_bbox_role_for(&names.runtime_role)
 }
@@ -853,23 +943,6 @@ fn spatial_bbox_role_for(runtime_role: &str) -> String {
 /// The schema BReg's generated spatial SQL reads PostGIS from.
 const POSTGIS_SCHEMA: &str = "registry_spatial_ext";
 
-/// Administrator-run PostGIS setup for one spatial run: the extension in its
-/// own schema, usable by both run roles, and the bbox role the migration role
-/// may SET. The bbox role itself is created earlier in provisioning.
-fn postgis_prerequisites_sql(names: &Names) -> String {
-    let migration = quote_identifier(&names.migration_role);
-    let runtime = quote_identifier(&names.runtime_role);
-    let bbox = quote_identifier(&spatial_bbox_role(names));
-    format!(
-        "CREATE SCHEMA IF NOT EXISTS {POSTGIS_SCHEMA};\n\
-         REVOKE ALL ON SCHEMA {POSTGIS_SCHEMA} FROM PUBLIC;\n\
-         CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA {POSTGIS_SCHEMA};\n\
-         GRANT USAGE ON SCHEMA {POSTGIS_SCHEMA} TO {migration}, {runtime};\n\
-         GRANT {bbox} TO {migration} WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;\n\
-         GRANT USAGE ON SCHEMA {POSTGIS_SCHEMA} TO {bbox};"
-    )
-}
-
 fn validate_run_id(run_id: &str) -> Result<()> {
     if run_id.len() == 32
         && run_id
@@ -887,56 +960,6 @@ fn validate_label(label: &str) -> Result<()> {
         Ok(())
     } else {
         bail!("the database label must be breg, breg_test, casework, or messaging")
-    }
-}
-
-fn database_access_sql(names: &Names) -> String {
-    format!(
-        "REVOKE ALL ON DATABASE {database} FROM PUBLIC; \
-         GRANT CONNECT ON DATABASE {database} TO {migration}, {runtime}; \
-         ALTER DATABASE {database} ALLOW_CONNECTIONS true",
-        database = quote_identifier(&names.database),
-        migration = quote_identifier(&names.migration_role),
-        runtime = quote_identifier(&names.runtime_role),
-    )
-}
-
-fn create_role_sql(role: &str, verifier: &str) -> String {
-    format!(
-        "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD {}",
-        quote_identifier(role),
-        quote_literal(verifier)
-    )
-}
-
-fn create_nologin_role_sql(role: &str) -> String {
-    format!(
-        "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS",
-        quote_identifier(role)
-    )
-}
-
-fn database_setup_sql(names: &Names, breg: bool) -> String {
-    if breg {
-        let schemas = BREG_SCHEMAS
-            .iter()
-            .map(|schema| {
-                format!(
-                    "CREATE SCHEMA {schema} AUTHORIZATION {owner}; \
-                     REVOKE ALL ON SCHEMA {schema} FROM PUBLIC",
-                    schema = quote_identifier(schema),
-                    owner = quote_identifier(&names.migration_role),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        format!("CREATE EXTENSION btree_gist; {schemas}")
-    } else {
-        format!(
-            "REVOKE CREATE ON SCHEMA public FROM PUBLIC; \
-             GRANT USAGE, CREATE ON SCHEMA public TO {}",
-            quote_identifier(&names.migration_role)
-        )
     }
 }
 
@@ -1061,17 +1084,10 @@ pub(super) fn random_password() -> Result<Zeroizing<String>> {
     Ok(Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref())))
 }
 
-fn quote_identifier(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
-}
-
-fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_provision::sql::quote_literal;
     use std::{future::pending, time::Instant};
 
     const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
@@ -1559,42 +1575,6 @@ mod tests {
     }
 
     #[test]
-    fn database_access_is_closed_to_public_before_connections_are_enabled() {
-        let names = Names::new(RUN_ID, "casework");
-        let sql = database_access_sql(&names);
-        let revoke = sql.find("REVOKE ALL ON DATABASE").unwrap();
-        let grant = sql.find("GRANT CONNECT ON DATABASE").unwrap();
-        let enable = sql.find("ALLOW_CONNECTIONS true").unwrap();
-        assert!(revoke < grant && grant < enable, "{sql}");
-        assert!(sql.contains(&quote_identifier(&names.migration_role)));
-        assert!(sql.contains(&quote_identifier(&names.runtime_role)));
-    }
-
-    #[test]
-    fn breg_setup_installs_extension_and_all_owned_schemas() {
-        let names = Names::new(RUN_ID, "breg");
-        let sql = database_setup_sql(&names, true);
-        assert!(sql.starts_with("CREATE EXTENSION btree_gist;"), "{sql}");
-        for schema in BREG_SCHEMAS {
-            assert!(
-                sql.contains(&format!(
-                    "CREATE SCHEMA {} AUTHORIZATION {}",
-                    quote_identifier(schema),
-                    quote_identifier(&names.migration_role)
-                )),
-                "{sql}"
-            );
-            assert!(
-                sql.contains(&format!(
-                    "REVOKE ALL ON SCHEMA {} FROM PUBLIC",
-                    quote_identifier(schema)
-                )),
-                "{sql}"
-            );
-        }
-    }
-
-    #[test]
     fn spatial_breg_uses_the_governed_bbox_role_for_its_runtime() {
         for label in ["breg_test", "breg"] {
             let names = Names::new(RUN_ID, label);
@@ -1602,7 +1582,9 @@ mod tests {
             assert_eq!(spatial_bbox_role(&names), expected);
             assert!(expected.starts_with("breg_bbox_"));
             assert!(expected.len() <= 63);
-            let statement = create_nologin_role_sql(&expected);
+            let batches =
+                Batches::new(&names, true, true, "migration-secret", "runtime-secret").unwrap();
+            let statement = batches.bbox_role.unwrap();
             assert_eq!(
                 statement,
                 format!(
@@ -1660,10 +1642,100 @@ mod tests {
         assert!(run_object_names(RUN_ID, "other", false).is_err());
     }
 
+    /// The statements `rstack dev` issued before it used the shared plan,
+    /// written out as text. The shared plan must keep rendering exactly this
+    /// for the same input.
+    #[test]
+    fn shared_plan_renders_the_statements_rstack_dev_has_always_issued() {
+        for (label, breg, postgis) in [
+            ("breg", true, false),
+            ("breg", true, true),
+            ("casework", false, false),
+            ("messaging", false, false),
+        ] {
+            let names = Names::new(RUN_ID, label);
+            let batches =
+                Batches::new(&names, breg, postgis, "migration-secret", "runtime-secret").unwrap();
+            let (database, migration, runtime) = (
+                quote_identifier(&names.database),
+                quote_identifier(&names.migration_role),
+                quote_identifier(&names.runtime_role),
+            );
+            assert_eq!(
+                batches.create_database,
+                format!("CREATE DATABASE {database} WITH ALLOW_CONNECTIONS false"),
+                "{label}"
+            );
+            assert_eq!(
+                batches.access,
+                format!(
+                    "REVOKE ALL ON DATABASE {database} FROM PUBLIC; \
+                     GRANT CONNECT ON DATABASE {database} TO {migration}, {runtime}; \
+                     ALTER DATABASE {database} ALLOW_CONNECTIONS true"
+                ),
+                "{label}"
+            );
+            let expected_setup = if breg {
+                let schemas = BREG_SCHEMAS
+                    .iter()
+                    .map(|schema| {
+                        format!(
+                            "CREATE SCHEMA \"{schema}\" AUTHORIZATION {migration}; \
+                             REVOKE ALL ON SCHEMA \"{schema}\" FROM PUBLIC"
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!("CREATE EXTENSION btree_gist; {schemas}")
+            } else {
+                format!(
+                    "REVOKE CREATE ON SCHEMA public FROM PUBLIC; \
+                     GRANT USAGE, CREATE ON SCHEMA public TO {migration}"
+                )
+            };
+            assert_eq!(batches.setup, expected_setup, "{label}");
+            if postgis {
+                let bbox_role = spatial_bbox_role(&names);
+                let bbox = quote_identifier(&bbox_role);
+                assert_eq!(
+                    batches.bbox_role.as_deref(),
+                    Some(
+                        format!(
+                            "CREATE ROLE {bbox} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE \
+                             NOINHERIT NOBYPASSRLS"
+                        )
+                        .as_str()
+                    )
+                );
+                assert_eq!(
+                    batches.postgis.as_deref(),
+                    Some(
+                        format!(
+                            "CREATE SCHEMA IF NOT EXISTS registry_spatial_ext;\n\
+                             REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC;\n\
+                             CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext;\n\
+                             GRANT USAGE ON SCHEMA registry_spatial_ext TO {migration}, {runtime};\n\
+                             GRANT {bbox} TO {migration} WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;\n\
+                             GRANT USAGE ON SCHEMA registry_spatial_ext TO {bbox};"
+                        )
+                        .as_str()
+                    )
+                );
+            } else {
+                assert!(
+                    batches.bbox_role.is_none() && batches.postgis.is_none(),
+                    "{label}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn casework_setup_gives_only_migration_role_public_schema_creation() {
         let names = Names::new(RUN_ID, "casework");
-        let sql = database_setup_sql(&names, false);
+        let sql = Batches::new(&names, false, false, "migration-secret", "runtime-secret")
+            .unwrap()
+            .setup;
         assert!(
             sql.starts_with("REVOKE CREATE ON SCHEMA public FROM PUBLIC;"),
             "{sql}"
@@ -1678,7 +1750,9 @@ mod tests {
     #[test]
     fn messaging_setup_gives_only_migration_role_public_schema_creation() {
         let names = Names::new(RUN_ID, "messaging");
-        let sql = database_setup_sql(&names, false);
+        let sql = Batches::new(&names, false, false, "migration-secret", "runtime-secret")
+            .unwrap()
+            .setup;
         assert!(
             sql.starts_with("REVOKE CREATE ON SCHEMA public FROM PUBLIC;"),
             "{sql}"
@@ -1701,7 +1775,7 @@ mod tests {
     fn role_statement_carries_a_postgresql_scram_verifier_not_cleartext() {
         let password = random_password().unwrap();
         let verifier = postgres_protocol::password::scram_sha_256(password.as_bytes());
-        let sql = create_role_sql("rstack_role", &verifier);
+        let sql = registry_platform_provision::sql::create_role_sql("rstack_role", &verifier);
         let expected = format!(
             "CREATE ROLE \"rstack_role\" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{verifier}'"
         );
@@ -1724,6 +1798,7 @@ mod tests {
 #[cfg(all(test, feature = "postgres-test"))]
 mod postgres_tests {
     use super::*;
+    use registry_platform_provision::sql::quote_literal;
     use std::{sync::mpsc, thread};
 
     struct Server {
