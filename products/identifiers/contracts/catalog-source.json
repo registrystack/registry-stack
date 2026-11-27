@@ -139,6 +139,24 @@
       "reason": "The check tests append the expected problem suffix to this template prefix. Each complete session problem type is exported by ProblemKind::ALL and registered in the catalog."
     },
     {
+      "path": "crates/registry-session/README.md",
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/",
+      "classification": "identifier-prefix",
+      "reason": "This prose names the prefix under which the session's problem types live, not an emitted type URI. Each complete session problem type is exported by ProblemKind::ALL and registered in the catalog."
+    },
+    {
+      "path": "docs/site/src/content/docs/configure/session.mdx",
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/",
+      "classification": "identifier-prefix",
+      "reason": "This prose names the prefix under which the session's problem types live, not an emitted type URI. Each complete session problem type is exported by ProblemKind::ALL and registered in the catalog."
+    },
+    {
+      "path": "products/platform/CHANGELOG.md",
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/",
+      "classification": "identifier-prefix",
+      "reason": "This prose names the prefix under which the session's problem types live, not an emitted type URI. Each complete session problem type is exported by ProblemKind::ALL and registered in the catalog."
+    },
+    {
       "glob": "products/breg/generated/minimal/generated/action-contracts.schema.json",
       "classification": "generated-copy",
       "reason": "A second emitted copy of the Base Registry Engine Action contract export schema; the catalog reproduces it from the facility project's copy."
