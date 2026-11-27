@@ -540,9 +540,12 @@ impl PostgresStore {
         transaction
             .execute(
                 "UPDATE casework_review_tasks
-                 SET ask_marker=CASE WHEN EXISTS (
-                     SELECT 1 FROM casework_review_asks a WHERE a.task_id=$1 AND a.state='open'
-                 ) THEN 'waiting' ELSE 'answered' END,revision=revision+1,updated_at=$2
+                 SET ask_marker=(
+                     SELECT CASE a.state WHEN 'open' THEN 'waiting'
+                         WHEN 'expired' THEN 'expired' ELSE 'answered' END
+                     FROM casework_review_asks a WHERE a.task_id=$1
+                     ORDER BY a.asked_at DESC,a.ask_id DESC LIMIT 1
+                 ),revision=revision+1,updated_at=$2
                  WHERE task_id=$1 AND state IN ('open','claimed')",
                 &[&task_id, &now],
             )
