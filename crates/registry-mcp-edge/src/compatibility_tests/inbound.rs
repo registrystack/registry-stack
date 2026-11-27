@@ -560,6 +560,10 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
     let router = Router::new()
         .route("/mcp", post(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(server, require_caller));
+    // A test on another thread can register the refusal line's callsite
+    // while no scoped subscriber exists, which caches it as never enabled.
+    // Rebuild the cache so this thread's subscriber is asked again.
+    tracing::callsite::rebuild_interest_cache();
     assert_eq!(
         call(&router, Some(&token)).await.status(),
         StatusCode::SERVICE_UNAVAILABLE
