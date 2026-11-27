@@ -2,7 +2,7 @@
   "act-claim-is-not-an-object": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -16,7 +16,7 @@
   "actor-is-not-the-trusted-actor": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -30,7 +30,7 @@
   "actor-kind-is-not-a-string": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -44,7 +44,7 @@
   "actor-without-a-matched-client": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -58,7 +58,7 @@
   "basic-scheme": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -72,7 +72,7 @@
   "double-space-separator": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -86,7 +86,7 @@
   "expired-token": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -100,7 +100,7 @@
   "extractor-without-authentication-context": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -114,7 +114,7 @@
   "key-source-unreachable": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -128,7 +128,7 @@
   "missing-actor-kind": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -142,7 +142,7 @@
   "no-authorization-header": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -156,7 +156,7 @@
   "principal-claim-is-an-object": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -170,7 +170,7 @@
   "repeated-authorization-header": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -282,7 +282,7 @@
   "tampered-signature": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -296,7 +296,7 @@
   "task-grant-bound-to-another-client": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -310,7 +310,7 @@
   "task-grant-bound-to-another-resource": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -324,7 +324,7 @@
   "task-grant-claims-malformed": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -338,7 +338,7 @@
   "task-grant-expired": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -352,7 +352,7 @@
   "task-grant-token-issued-for-too-long": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -366,7 +366,7 @@
   "task-grant-token-issued-in-the-future": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -380,7 +380,7 @@
   "token-not-compact": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -394,7 +394,7 @@
   "token-type-is-not-admitted": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -408,7 +408,7 @@
   "unknown-key-id": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -422,7 +422,7 @@
   "wrong-audience": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
@@ -436,7 +436,7 @@
   "wrong-issuer": {
     "body": {
       "code": "authentication.refused",
-      "detail": "The bearer credential is missing or refused.",
+      "detail": "The bearer token or delivery signature was not accepted.",
       "status": 401,
       "title": "Unauthorized",
       "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"

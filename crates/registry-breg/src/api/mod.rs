@@ -5862,7 +5862,7 @@ fn problem_with_detail(code: ProblemCode, detail: &'static str) -> Response {
 /// A refusal of authority, with the check it failed. The check reaches the
 /// operator's counter and log line through the response extensions and never
 /// the caller's body.
-fn refusal_problem(code: ProblemCode, check: FailedCheck) -> Response {
+pub(crate) fn refusal_problem(code: ProblemCode, check: FailedCheck) -> Response {
     crate::correlation::note_refusal(build_problem(code, code.description()), check)
 }
 

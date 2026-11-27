@@ -1943,13 +1943,7 @@ fn action_problem_responses(
                 detail: "The request is invalid.",
             }],
         ),
-        (
-            "401",
-            vec![ProblemExample {
-                code: "authentication.refused",
-                detail: "The bearer credential is missing or refused.",
-            }],
-        ),
+        ("401", vec![AUTHENTICATION_REFUSAL_EXAMPLE]),
         (
             "404",
             vec![ProblemExample {
@@ -4285,6 +4279,14 @@ struct ProblemExample {
     detail: &'static str,
 }
 
+const AUTHENTICATION_REFUSAL_EXAMPLE: ProblemExample = {
+    let code = crate::problem::ProblemCode::AuthenticationRefused;
+    ProblemExample {
+        code: code.code(),
+        detail: code.description(),
+    }
+};
+
 const FILTER_REQUIRED: ProblemExample = ProblemExample {
     code: crate::problem::ProblemCode::QueryFilterRequired.code(),
     detail: crate::problem::ProblemCode::QueryFilterRequired.description(),
@@ -4352,13 +4354,7 @@ fn problem_responses(
                 detail: "The request is invalid.",
             }],
         ),
-        (
-            "401",
-            vec![ProblemExample {
-                code: "authentication.refused",
-                detail: "The bearer credential is missing or refused.",
-            }],
-        ),
+        ("401", vec![AUTHENTICATION_REFUSAL_EXAMPLE]),
         (
             "404",
             vec![ProblemExample {

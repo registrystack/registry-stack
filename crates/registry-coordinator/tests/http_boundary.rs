@@ -113,7 +113,7 @@ async fn breg_malformed_success_and_product_refusals_remain_permanent() {
             ResponseTemplate::new(401)
                 .insert_header("traceparent", TRACE)
                 .insert_header("cache-control", "no-store")
-                .set_body_raw(json!({"type":"https://id.registrystack.org/problems/registry-breg/authentication/refused", "title":"Unauthorized", "status":401, "detail":"The bearer credential is missing or refused.", "code":"authentication.refused", "traceId":"4bf92f3577b34da6a3ce929d0e0e4736"}).to_string(), "application/problem+json"),
+                .set_body_raw(json!({"type":"https://id.registrystack.org/problems/registry-breg/authentication/refused", "title":"Unauthorized", "status":401, "detail":"The bearer token or delivery signature was not accepted.", "code":"authentication.refused", "traceId":"4bf92f3577b34da6a3ce929d0e0e4736"}).to_string(), "application/problem+json"),
 
             "product-forbidden",
         ),

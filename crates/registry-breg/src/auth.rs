@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::AUTHORIZATION;
-use axum::http::{Request, StatusCode};
+use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use registry_platform_authcommon::{
@@ -1022,15 +1022,7 @@ fn grant_context_check(error: GrantContextError) -> FailedCheck {
 /// The 401 for a missing or refused credential. The answer is the same for
 /// every check, so a caller learns nothing about which one failed.
 pub(crate) fn authentication_refused(check: FailedCheck) -> Response {
-    crate::correlation::note_refusal(
-        crate::correlation::problem_response(
-            StatusCode::UNAUTHORIZED,
-            "Unauthorized",
-            "The bearer credential is missing or refused.",
-            "authentication.refused",
-        ),
-        check,
-    )
+    crate::api::refusal_problem(crate::problem::ProblemCode::AuthenticationRefused, check)
 }
 
 #[cfg(test)]
@@ -1143,10 +1135,9 @@ mod tests {
         ));
     }
 
-    /// Every 401 the service answers carries the failed check. The two
-    /// constructors that note one are the only non-test sites that build a 401
-    /// or name `ProblemCode::AuthenticationRefused`, so a new site cannot
-    /// answer 401 without a check unless it is added to this list on purpose.
+    /// Every 401 the service answers carries the failed check. Only the two
+    /// runtime constructors and the generated OpenAPI example can name the
+    /// refusal. Adding another call site requires updating this list.
     #[test]
     fn only_the_noting_constructors_build_a_401() {
         fn visit(root: &std::path::Path, dir: &std::path::Path, found: &mut Vec<String>) {
@@ -1195,8 +1186,9 @@ mod tests {
         assert_eq!(
             found,
             [
+                "ProblemCode::AuthenticationRefused in artifacts.rs",
+                "ProblemCode::AuthenticationRefused in auth.rs",
                 "ProblemCode::AuthenticationRefused in mod.rs",
-                "StatusCode::UNAUTHORIZED in auth.rs",
             ]
         );
     }
