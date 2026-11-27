@@ -30,28 +30,31 @@ checkout root for the commands that run beside it.
 
 ## Install the binaries
 
-Releases from v0.38.0 publish Linux amd64 assets `discovery-<tag>-linux-amd64` and
-`discoveryctl-<tag>-linux-amd64`, with `<tag>` from the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest). Authenticate
-them through the release's `SHA256SUMS` as the
-[verification guide](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
-describes, then install them under their plain names:
+Each release publishes `discovery` and `discoveryctl` for Linux amd64, Linux arm64, and macOS
+arm64, with an installer. Choose a tag, normally the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), and
+authenticate the assets with the
+[verification guide](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
+Linux assets are executables named `<binary>-<tag>-linux-<arch>`. macOS assets are `.tar.gz`
+bundles that carry the executable, its AWS-LC-FIPS libraries, and notices.
+Install the pair from one tag with the release-pinned installer:
 
 ```sh test-skip="installs release assets; the runner serves the binaries under test"
-tag="${TAG:?set TAG to the published release tag}"
-mkdir -p ~/.local/bin
-for binary in discovery discoveryctl; do
-  install -m 0755 "${binary}-${tag}-linux-amd64" "$HOME/.local/bin/${binary}"
-done
+bash discovery-<tag>-install.sh
+discovery --version
+discoveryctl --version
 ```
 
-On another platform, build them from a checkout as the tutorial does. The release also publishes
-the image `ghcr.io/registrystack/discovery:<tag>`; deploy it by the digest the release manifest
-records, not by the tag. It runs `discovery` as a nonroot user and reads
-`/etc/registry-discovery/runtime.yaml`. Mount that file and the package directory read-only;
-Discovery writes nothing.
+The installer puts both binaries in `~/.local/bin`. Set `DISCOVERY_INSTALL_DIR` to change that.
+Neither path needs a Rust toolchain.
 
-{/* Evidence: release/scripts/release_roster.py, DISCOVERYCTL_FIRST_RELEASE;
+The release also publishes the image `ghcr.io/registrystack/discovery:<tag>` for linux/amd64.
+Deploy it by the digest the release manifest records, not by the tag. It runs `discovery` as a
+nonroot user and reads `/etc/registry-discovery/runtime.yaml`. Mount that file and the package
+directory read-only. Discovery writes nothing.
+
+{/* Evidence: release/scripts/release_roster.py, ADDITIONAL_PLATFORM_BUILDS and ADDITIONAL_INSTALLERS;
+    crates/registry-discovery/install.sh, DISCOVERY_INSTALL_DIR;
     release/docker/Dockerfile.discovery, ENTRYPOINT, CMD, and "writes nothing"; release/VERIFY.md. */}
 
 ## Approve HTTPS origins
