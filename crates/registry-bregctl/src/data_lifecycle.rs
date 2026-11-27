@@ -32,7 +32,7 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::client::{
     build_client, OutboundOptions, ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers};
+use registry_platform_httputil::{read_bounded, validate_response_headers_without_peer_policy};
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, Report,
     RetiredApiVersion,
@@ -1166,7 +1166,7 @@ async fn dispatch_http(
         .await
         .map_err(|_| ())?;
     let status = response.status().as_u16();
-    validate_response_headers(response.headers()).map_err(|_| ())?;
+    validate_response_headers_without_peer_policy(response.headers()).map_err(|_| ())?;
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)

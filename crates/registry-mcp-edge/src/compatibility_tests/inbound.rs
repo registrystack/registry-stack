@@ -117,7 +117,7 @@ fn resource_server_for(
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         authorization.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     Arc::new(
         ResourceServer::new(
@@ -190,7 +190,7 @@ async fn the_authored_resource_is_the_exact_audience_and_metadata_identifier() {
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         auth.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let verifier = token_verifier(&options, fetcher);
 
@@ -540,7 +540,7 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
                 Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     closed,
                     JwksFetcherConfig::defaults(),
-                    FetchUrlPolicy::dev(),
+                    FetchUrlPolicy::https_or_loopback(),
                 )),
             ),
             hasher(),
@@ -650,7 +650,7 @@ async fn a_token_that_already_names_an_actor_is_refused() {
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         auth.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let server = ResourceServer::new(
         &options,

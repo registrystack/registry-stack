@@ -968,7 +968,7 @@ mod tests {
             Arc::new(JwksFetcher::new_with_fetch_url_policy(
                 format!("{}/jwks.json", issuer_keys.uri()),
                 JwksFetcherConfig::defaults(),
-                FetchUrlPolicy::dev(),
+                FetchUrlPolicy::https_or_loopback(),
             )),
         );
         assert!(

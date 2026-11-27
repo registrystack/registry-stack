@@ -11,7 +11,8 @@ use registry_platform_config::{
     ObjectStorageConfig, ProtectedSecret, SecretReference, SecretResolver,
 };
 use registry_platform_httputil::{
-    read_bounded, validate_response_headers, BoundedReadError, OutboundClientBuilder,
+    read_bounded, validate_response_headers_without_peer_policy, BoundedReadError,
+    OutboundClientBuilder,
 };
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -405,7 +406,8 @@ impl S3ObjectStore {
             .send()
             .await
             .map_err(|_| ObjectStoreError::Unavailable)?;
-        validate_response_headers(response.headers()).map_err(|_| ObjectStoreError::Unavailable)?;
+        validate_response_headers_without_peer_policy(response.headers())
+            .map_err(|_| ObjectStoreError::Unavailable)?;
         Ok(response)
     }
 

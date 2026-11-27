@@ -377,7 +377,7 @@ impl HttpProviderSettings {
         let resolved = self.resolve_authentication(package, connection.development, secrets)?;
         let origin_id = destination_origin_id(provider_id)?;
         let profile = if connection.development {
-            DestinationProfile::LoopbackDevelopmentHttp
+            DestinationProfile::LoopbackHttp
         } else {
             DestinationProfile::ProductionHttps
         };
@@ -649,7 +649,7 @@ fn freeze_oauth(
     trust_bundle_pem: Option<&[u8]>,
 ) -> Result<OAuth2, HttpProviderError> {
     let profile = if oauth.development {
-        DestinationProfile::LoopbackDevelopmentHttp
+        DestinationProfile::LoopbackHttp
     } else {
         DestinationProfile::ProductionHttps
     };

@@ -188,7 +188,7 @@ impl PilotHarness {
                 request_timeout: Duration::from_secs(5),
                 outage_tolerance: Duration::ZERO,
             },
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
         let prepared = prepare_with_connection_and_key_source_for_test(
             &config_path,

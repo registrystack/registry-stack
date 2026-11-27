@@ -341,7 +341,7 @@ mod tests {
             registry_platform_httputil::destination::EventDestinationPolicy::new(
                 "coordinator-test",
                 "http://127.0.0.1:9/",
-                registry_platform_httputil::destination::DestinationProfile::LoopbackDevelopmentHttp,
+                registry_platform_httputil::destination::DestinationProfile::LoopbackHttp,
                 &[],
             )
             .expect("the inert destination policy freezes"),

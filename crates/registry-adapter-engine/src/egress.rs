@@ -2137,7 +2137,7 @@ pub(crate) fn destination_profile(parsed_base: &url::Url) -> DestinationProfile 
     }
     match parsed_base.scheme() {
         "https" => DestinationProfile::ProductionHttps,
-        _ if denotes_loopback(parsed_base) => DestinationProfile::LoopbackDevelopmentHttp,
+        _ if denotes_loopback(parsed_base) => DestinationProfile::LoopbackHttp,
         _ => DestinationProfile::PrivateServiceHttp,
     }
 }
@@ -2161,7 +2161,7 @@ pub(crate) fn denotes_loopback(origin: &url::Url) -> bool {
 /// is admitted only under the feature that enables it.
 pub(crate) fn profile_admits_token_endpoints(profile: DestinationProfile) -> bool {
     match profile {
-        DestinationProfile::ProductionHttps | DestinationProfile::LoopbackDevelopmentHttp => true,
+        DestinationProfile::ProductionHttps | DestinationProfile::LoopbackHttp => true,
         #[cfg(feature = "postgres-test")]
         DestinationProfile::PinnedLoopbackHttpsTest => true,
         _ => false,
@@ -3700,11 +3700,11 @@ mod tests {
         );
         assert_eq!(
             destination_profile(&loopback),
-            DestinationProfile::LoopbackDevelopmentHttp
+            DestinationProfile::LoopbackHttp
         );
         assert_eq!(
             destination_profile(&localhost),
-            DestinationProfile::LoopbackDevelopmentHttp
+            DestinationProfile::LoopbackHttp
         );
         assert_eq!(
             destination_profile(&private),
@@ -3722,7 +3722,7 @@ mod tests {
             let origin = url::Url::parse(spelled).expect("parsed");
             assert_eq!(
                 destination_profile(&origin),
-                DestinationProfile::LoopbackDevelopmentHttp,
+                DestinationProfile::LoopbackHttp,
                 "{spelled}"
             );
         }
@@ -3769,7 +3769,7 @@ mod tests {
             DestinationProfile::ProductionHttps
         ));
         assert!(profile_admits_token_endpoints(
-            DestinationProfile::LoopbackDevelopmentHttp
+            DestinationProfile::LoopbackHttp
         ));
         assert!(!profile_admits_token_endpoints(
             DestinationProfile::PrivateServiceHttp

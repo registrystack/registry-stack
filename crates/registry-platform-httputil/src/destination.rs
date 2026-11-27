@@ -267,9 +267,11 @@ pub enum DestinationProfile {
     ProductionHttps,
     /// Plain HTTP for one signed service hop confined to private addresses.
     PrivateServiceHttp,
-    /// Plain HTTP to an explicitly configured loopback host for development.
-    LoopbackDevelopmentHttp,
-    /// Plain HTTP to one exact, explicitly allowed private IP for local development.
+    /// Plain HTTP to an explicit loopback host: a loopback address literal or the
+    /// exact name `localhost`. Valid in every posture.
+    LoopbackHttp,
+    /// Test-only plain HTTP to one exact, explicitly allowed private IP.
+    #[cfg(any(test, feature = "test-support"))]
     LocalPrivateDevelopmentHttp,
     /// Test-only HTTPS profile that remains confined to loopback addresses.
     #[cfg(any(test, feature = "test-support"))]
@@ -515,7 +517,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             DestinationProfile::PrivateServiceHttp if origin.scheme() != "http" => {
                 return Err(DestinationPolicyError::PrivateServiceRequiresHttp);
             }
-            DestinationProfile::LoopbackDevelopmentHttp => {
+            DestinationProfile::LoopbackHttp => {
                 if origin.scheme() != "http" {
                     return Err(DestinationPolicyError::DevelopmentRequiresHttp);
                 }
@@ -523,6 +525,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                     return Err(DestinationPolicyError::DevelopmentRequiresLoopbackHost);
                 }
             }
+            #[cfg(any(test, feature = "test-support"))]
             DestinationProfile::LocalPrivateDevelopmentHttp => {
                 if origin.scheme() != "http" {
                     return Err(DestinationPolicyError::LocalPrivateDevelopmentRequiresHttp);
@@ -943,13 +946,14 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                     Err(DestinationSendError::PrivateAddressNotAllowed)
                 }
             }
-            DestinationProfile::LoopbackDevelopmentHttp => {
+            DestinationProfile::LoopbackHttp => {
                 if is_loopback(ip) {
                     Ok(())
                 } else {
                     Err(DestinationSendError::DevelopmentAddressDenied)
                 }
             }
+            #[cfg(any(test, feature = "test-support"))]
             DestinationProfile::LocalPrivateDevelopmentHttp => {
                 if is_cloud_metadata_ip(ip) {
                     return Err(DestinationSendError::CloudMetadataDenied);
@@ -4664,13 +4668,18 @@ fn is_valid_header_value(value: &[u8]) -> bool {
 }
 
 fn validate_response_headers(headers: &HeaderMap) -> Result<(), DestinationSendError> {
-    match crate::validate_response_headers(headers) {
+    // The delivering process's peer policy is not threaded to destinations yet, so
+    // this check keeps to the bounds and accepts every peer posture.
+    match crate::validate_response_headers(headers, crate::PeerPolicy::AcceptDevelopmentPeer) {
         Ok(()) => Ok(()),
-        Err(crate::ResponseHeaderBoundError::TooManyFields) => {
+        Err(crate::ResponseHeaderError::TooManyFields) => {
             Err(DestinationSendError::TooManyResponseHeaders)
         }
-        Err(crate::ResponseHeaderBoundError::HeadersTooLarge) => {
+        Err(crate::ResponseHeaderError::HeadersTooLarge) => {
             Err(DestinationSendError::ResponseHeaderBytesExceeded)
+        }
+        Err(crate::ResponseHeaderError::DevelopmentPeer) => {
+            unreachable!("a policy that accepts development peers never refuses one")
         }
     }
 }
@@ -4695,6 +4704,7 @@ fn origin_uses_localhost_namespace(origin: &Url) -> bool {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn origin_explicit_private_ip(origin: &Url) -> Option<IpAddr> {
     match origin.host() {
         Some(::url::Host::Ipv4(ip)) => Some(IpAddr::V4(ip)),
@@ -4703,6 +4713,7 @@ fn origin_explicit_private_ip(origin: &Url) -> Option<IpAddr> {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn private_cidr_is_exact_host(cidr: IpNet, address: IpAddr) -> bool {
     match (cidr, address) {
         (IpNet::V4(cidr), IpAddr::V4(address)) => {
@@ -5239,7 +5250,7 @@ mod tests {
         let policy = DataDestinationPolicy::new(
             "private-data",
             "http://127.0.0.1:9443/",
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("loopback policy")
@@ -5567,19 +5578,14 @@ mod tests {
             "http://[::1]:8080/",
             "http://[::ffff:127.0.0.1]:8080/",
         ] {
-            DataDestinationPolicy::new(
-                "dev-data",
-                raw,
-                DestinationProfile::LoopbackDevelopmentHttp,
-                &[],
-            )
-            .unwrap_or_else(|error| panic!("{raw} should validate: {error}"));
+            DataDestinationPolicy::new("dev-data", raw, DestinationProfile::LoopbackHttp, &[])
+                .unwrap_or_else(|error| panic!("{raw} should validate: {error}"));
         }
         assert_eq!(
             DataDestinationPolicy::new(
                 "dev-data",
                 "http://service.test:8080/",
-                DestinationProfile::LoopbackDevelopmentHttp,
+                DestinationProfile::LoopbackHttp,
                 &[],
             )
             .unwrap_err(),
@@ -5690,7 +5696,7 @@ mod tests {
         assert!(error.to_string().contains("private CIDR"), "{error}");
         for profile in [
             DestinationProfile::ProductionHttps,
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
         ] {
             let origin = match profile {
                 DestinationProfile::ProductionHttps => "https://registry.example/",
@@ -7036,7 +7042,7 @@ mod tests {
         let strict = DataDestinationPolicy::new(
             "strict-data",
             &origin,
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("legacy constructor remains valid");
@@ -7060,7 +7066,7 @@ mod tests {
         let ipv4_only = DataDestinationPolicy::new_with_dns_family(
             "ipv4-data",
             &origin,
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
             DestinationDnsFamily::Ipv4Only,
         )
@@ -7123,7 +7129,7 @@ mod tests {
         let policy = DataDestinationPolicy::new(
             "dev-data",
             &format!("http://localhost:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("development policy validates");
@@ -7198,7 +7204,7 @@ mod tests {
         let policy = CredentialDestinationPolicy::new(
             "dev-oauth",
             &format!("http://localhost:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("development credential policy validates");
@@ -7275,7 +7281,7 @@ mod tests {
         let policy = CredentialDestinationPolicy::new(
             "dev-oauth-basic",
             &format!("http://localhost:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("development credential policy validates");
@@ -7697,7 +7703,7 @@ mod tests {
         let policy = EventDestinationPolicy::new(
             "dev-events",
             &format!("http://localhost:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("development event policy");
@@ -7801,7 +7807,7 @@ mod tests {
         let policy = EventDestinationPolicy::new(
             "dev-event-bounds",
             &format!("http://localhost:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("development event policy");
@@ -8384,7 +8390,7 @@ mod tests {
         DataDestinationPolicy::new(
             "message-provider",
             &format!("http://127.0.0.1:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("loopback send policy validates")

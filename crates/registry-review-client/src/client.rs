@@ -6,7 +6,7 @@ use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers,
+    read_bounded, url::append_path_segments, validate_response_headers_without_peer_policy,
 };
 use registry_review_protocol::{
     review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
@@ -732,7 +732,7 @@ impl ReviewClient {
             .map_err(|error| ReviewClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers(response.headers())
+        validate_response_headers_without_peer_policy(response.headers())
             .map_err(|_| protocol(response.status(), ReviewProtocolFailure::HeaderBounds, None))?;
         Ok(response)
     }

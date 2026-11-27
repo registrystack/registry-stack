@@ -32,40 +32,81 @@ pub const MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES: usize = 1024 * 1024;
 /// Maximum certificates accepted in one outbound client's pinned CA bundle.
 pub const MAXIMUM_TRUSTED_ROOT_CERTIFICATES: usize = 32;
 
-/// Value-free reason a response's headers exceeded the shared client bounds.
+/// Whether a runtime refuses a response whose peer declares the development posture.
+///
+/// There is no default: every client construction site chooses. A production runtime
+/// passes [`PeerPolicy::RefuseDevelopmentPeer`], a development runtime passes
+/// [`PeerPolicy::AcceptDevelopmentPeer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerPolicy {
+    /// Refuse a response that declares the development posture.
+    RefuseDevelopmentPeer,
+    /// Accept a response whatever posture it declares.
+    AcceptDevelopmentPeer,
+}
+
+/// Value-free reason a response's headers were refused by the shared client checks.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum ResponseHeaderBoundError {
+pub enum ResponseHeaderError {
     #[error("the response carries too many header fields")]
     TooManyFields,
     #[error("the response headers exceed the configured maximum")]
     HeadersTooLarge,
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
 }
 
-/// Enforce strict field-count and aggregate-byte bounds before inspecting response headers.
-pub fn validate_response_headers(headers: &HeaderMap) -> Result<(), ResponseHeaderBoundError> {
+/// Enforce strict field-count and aggregate-byte bounds before inspecting response headers,
+/// then refuse a development-marked peer when `peer` says to.
+///
+/// The peer's posture field is the exact value `development`. An absent field,
+/// `production`, or any other value passes.
+pub fn validate_response_headers(
+    headers: &HeaderMap,
+    peer: PeerPolicy,
+) -> Result<(), ResponseHeaderError> {
     let mut count = 0usize;
     let mut total = 0usize;
     for (name, value) in headers {
         count = count
             .checked_add(1)
-            .ok_or(ResponseHeaderBoundError::TooManyFields)?;
+            .ok_or(ResponseHeaderError::TooManyFields)?;
         if count > MAXIMUM_RESPONSE_HEADER_FIELDS {
-            return Err(ResponseHeaderBoundError::TooManyFields);
+            return Err(ResponseHeaderError::TooManyFields);
         }
         let field_bytes = name
             .as_str()
             .len()
             .checked_add(value.as_bytes().len())
-            .ok_or(ResponseHeaderBoundError::HeadersTooLarge)?;
+            .ok_or(ResponseHeaderError::HeadersTooLarge)?;
         total = total
             .checked_add(field_bytes)
-            .ok_or(ResponseHeaderBoundError::HeadersTooLarge)?;
+            .ok_or(ResponseHeaderError::HeadersTooLarge)?;
         if total > MAXIMUM_RESPONSE_HEADER_BYTES {
-            return Err(ResponseHeaderBoundError::HeadersTooLarge);
+            return Err(ResponseHeaderError::HeadersTooLarge);
         }
     }
+    if peer == PeerPolicy::RefuseDevelopmentPeer
+        && headers
+            .get_all(registry_platform_posture::POSTURE_HEADER)
+            .iter()
+            .any(|value| value.as_bytes() == registry_platform_posture::DEVELOPMENT.as_bytes())
+    {
+        return Err(ResponseHeaderError::DevelopmentPeer);
+    }
     Ok(())
+}
+
+/// [`validate_response_headers`] with [`PeerPolicy::RefuseDevelopmentPeer`], for call
+/// sites that have not yet received their runtime's policy. Removed once every client
+/// takes a required [`PeerPolicy`].
+pub fn validate_response_headers_without_peer_policy(
+    headers: &HeaderMap,
+) -> Result<(), ResponseHeaderError> {
+    validate_response_headers(headers, PeerPolicy::RefuseDevelopmentPeer)
 }
 
 /// Parse exactly one RFC 9110 delta-seconds `Retry-After` field within a caller bound.
@@ -408,11 +449,10 @@ impl FetchUrlPolicy {
         }
     }
 
-    /// Development preset: HTTP and HTTPS are allowed, but plain HTTP only
-    /// for loopback hosts. Non-loopback private ranges and cloud metadata
-    /// endpoints stay denied.
+    /// HTTPS, or plain HTTP to a loopback host. Valid in every posture.
+    /// Non-loopback private ranges and cloud metadata endpoints stay denied.
     #[must_use]
-    pub fn dev() -> Self {
+    pub fn https_or_loopback() -> Self {
         Self {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: true,
@@ -984,7 +1024,7 @@ mod tests {
     async fn a_pinned_get_trusts_a_private_ca_only_when_it_is_named() {
         let (addr, authority, _) = serve_under_private_ca().await;
         let url = reqwest::Url::parse(&format!("https://{addr}/keys")).expect("target URL");
-        let validated = FetchUrlPolicy::dev()
+        let validated = FetchUrlPolicy::https_or_loopback()
             .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("loopback HTTPS target");
 
@@ -1034,7 +1074,7 @@ mod tests {
         std::env::set_var("SSL_CERT_FILE", &bundle);
 
         let url = reqwest::Url::parse(&format!("https://{addr}/keys")).expect("target URL");
-        let response = FetchUrlPolicy::dev()
+        let response = FetchUrlPolicy::https_or_loopback()
             .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("loopback HTTPS target")
             .immediate_get_with_timeout(Duration::from_secs(5))
@@ -1173,7 +1213,7 @@ mod tests {
     #[test]
     fn an_ipv4_mapped_loopback_literal_is_loopback_for_a_dev_fetch_only() {
         let url = reqwest::Url::parse("http://[::ffff:127.0.0.1]:8080/jwks").expect("url parses");
-        FetchUrlPolicy::dev()
+        FetchUrlPolicy::https_or_loopback()
             .validate(&url)
             .expect("a mapped loopback literal is loopback");
         assert!(FetchUrlPolicy::strict().validate(&url).is_err());
@@ -1218,7 +1258,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let url = reqwest::Url::parse(&format!("{base}/target")).expect("target URL");
-        let response = FetchUrlPolicy::dev()
+        let response = FetchUrlPolicy::https_or_loopback()
             .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("development loopback target")
             .immediate_get()
@@ -1628,7 +1668,7 @@ mod tests {
             "https://[fd00:ec2::254]/latest/meta-data/",
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
-            let err = FetchUrlPolicy::dev()
+            let err = FetchUrlPolicy::https_or_loopback()
                 .validate(&url)
                 .expect_err("metadata target rejected");
             assert!(
@@ -1648,9 +1688,11 @@ mod tests {
             "http://[::ffff:127.0.0.1]/jwks",
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
-            FetchUrlPolicy::dev()
+            FetchUrlPolicy::https_or_loopback()
                 .validate(&url)
-                .unwrap_or_else(|err| panic!("dev policy should accept {raw}: {err}"));
+                .unwrap_or_else(|err| {
+                    panic!("https-or-loopback policy should accept {raw}: {err}")
+                });
         }
 
         for raw in [
@@ -1663,8 +1705,8 @@ mod tests {
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
             assert!(
-                FetchUrlPolicy::dev().validate(&url).is_err(),
-                "dev policy must reject {raw}"
+                FetchUrlPolicy::https_or_loopback().validate(&url).is_err(),
+                "https-or-loopback policy must reject {raw}"
             );
         }
     }
@@ -1678,8 +1720,8 @@ mod tests {
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
             assert!(
-                FetchUrlPolicy::dev().validate(&url).is_err(),
-                "dev policy must reject {raw}"
+                FetchUrlPolicy::https_or_loopback().validate(&url).is_err(),
+                "https-or-loopback policy must reject {raw}"
             );
         }
     }
@@ -1721,8 +1763,8 @@ mod tests {
             too_many.append("x-test", HeaderValue::from_str(&index.to_string()).unwrap());
         }
         assert_eq!(
-            validate_response_headers(&too_many),
-            Err(ResponseHeaderBoundError::TooManyFields)
+            validate_response_headers(&too_many, PeerPolicy::AcceptDevelopmentPeer),
+            Err(ResponseHeaderError::TooManyFields)
         );
 
         let mut too_large = HeaderMap::new();
@@ -1730,9 +1772,74 @@ mod tests {
             "x-canary",
             HeaderValue::from_bytes(&vec![b'a'; MAXIMUM_RESPONSE_HEADER_BYTES]).unwrap(),
         );
-        let error = validate_response_headers(&too_large).unwrap_err();
-        assert_eq!(error, ResponseHeaderBoundError::HeadersTooLarge);
+        let error =
+            validate_response_headers(&too_large, PeerPolicy::AcceptDevelopmentPeer).unwrap_err();
+        assert_eq!(error, ResponseHeaderError::HeadersTooLarge);
         assert!(!error.to_string().contains("canary"));
+    }
+
+    #[test]
+    fn peer_policy_table_covers_four_field_states_under_both_policies() {
+        let header_with = |value: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(
+                    registry_platform_posture::POSTURE_HEADER,
+                    HeaderValue::from_str(value).unwrap(),
+                );
+            }
+            headers
+        };
+        let cases: [(Option<&str>, bool); 5] = [
+            (None, false),
+            (Some("production"), false),
+            (Some("development"), true),
+            (Some("Development"), false),
+            (Some("staging"), false),
+        ];
+        for (value, is_development) in cases {
+            let headers = header_with(value);
+            assert_eq!(
+                validate_response_headers(&headers, PeerPolicy::RefuseDevelopmentPeer),
+                if is_development {
+                    Err(ResponseHeaderError::DevelopmentPeer)
+                } else {
+                    Ok(())
+                },
+                "refuse, {value:?}"
+            );
+            assert_eq!(
+                validate_response_headers(&headers, PeerPolicy::AcceptDevelopmentPeer),
+                Ok(()),
+                "accept, {value:?}"
+            );
+            assert_eq!(
+                validate_response_headers_without_peer_policy(&headers),
+                validate_response_headers(&headers, PeerPolicy::RefuseDevelopmentPeer),
+                "transitional entry point behaves as production, {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounds_are_checked_before_the_peer_posture_under_either_policy() {
+        let mut too_many = HeaderMap::new();
+        for index in 0..=MAXIMUM_RESPONSE_HEADER_FIELDS {
+            too_many.append("x-test", HeaderValue::from_str(&index.to_string()).unwrap());
+        }
+        too_many.insert(
+            registry_platform_posture::POSTURE_HEADER,
+            HeaderValue::from_static("development"),
+        );
+        for policy in [
+            PeerPolicy::RefuseDevelopmentPeer,
+            PeerPolicy::AcceptDevelopmentPeer,
+        ] {
+            assert_eq!(
+                validate_response_headers(&too_many, policy),
+                Err(ResponseHeaderError::TooManyFields)
+            );
+        }
     }
 
     proptest! {

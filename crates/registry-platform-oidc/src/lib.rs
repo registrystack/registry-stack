@@ -2480,7 +2480,7 @@ mod tests {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
         TokenVerifier::new(
             TokenVerifierConfig {
@@ -3573,7 +3573,7 @@ mod tests {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
         let verifier = TokenVerifier::new(
             TokenVerifierConfig::access_token_profile(
@@ -4216,7 +4216,7 @@ mod tests {
             OidcError::FetchUrl(FetchUrlError::SchemeDenied { .. })
         ));
 
-        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::https_or_loopback())
             .await
             .expect("dev policy accepts loopback override");
         assert_eq!(document.issuer, cfg.issuer);
@@ -4240,7 +4240,7 @@ mod tests {
             OidcError::FetchUrl(FetchUrlError::SchemeDenied { .. })
         ));
 
-        let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+        let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::https_or_loopback())
             .await
             .expect_err("dev policy rejects returned private jwks_uri");
         assert!(matches!(
@@ -4260,17 +4260,22 @@ mod tests {
             max_doc_bytes: DEFAULT_DOC_BYTES,
         };
 
-        let document = fetch_discovery_at_with_policy(&cfg, &transport, &FetchUrlPolicy::dev())
-            .await
-            .expect("distinct discovery transport accepts exact issuer metadata");
+        let document =
+            fetch_discovery_at_with_policy(&cfg, &transport, &FetchUrlPolicy::https_or_loopback())
+                .await
+                .expect("distinct discovery transport accepts exact issuer metadata");
         assert_eq!(document.issuer, canonical_issuer);
         assert_eq!(document.jwks_uri, jwks_uri);
 
         let (mismatched_transport, _) =
             serve_discovery_document("https://other-issuer.example").await;
         assert!(matches!(
-            fetch_discovery_at_with_policy(&cfg, &mismatched_transport, &FetchUrlPolicy::dev())
-                .await,
+            fetch_discovery_at_with_policy(
+                &cfg,
+                &mismatched_transport,
+                &FetchUrlPolicy::https_or_loopback()
+            )
+            .await,
             Err(OidcError::IssuerMismatch { .. })
         ));
     }
@@ -4287,7 +4292,7 @@ mod tests {
             fetch_discovery_at_with_policy(
                 &cfg,
                 "http://127.0.0.1/metadata",
-                &FetchUrlPolicy::dev()
+                &FetchUrlPolicy::https_or_loopback()
             )
             .await,
             Err(OidcError::ConflictingEndpointConfiguration)
@@ -4303,7 +4308,7 @@ mod tests {
             fetch_discovery_at_with_policy(
                 &empty_issuer,
                 "http://127.0.0.1/metadata",
-                &FetchUrlPolicy::dev()
+                &FetchUrlPolicy::https_or_loopback()
             )
             .await,
             Err(OidcError::MissingIssuer)
@@ -4316,7 +4321,8 @@ mod tests {
             max_doc_bytes: DEFAULT_DOC_BYTES,
         };
         assert!(matches!(
-            fetch_discovery_at_with_policy(&cfg, "not a URL", &FetchUrlPolicy::dev()).await,
+            fetch_discovery_at_with_policy(&cfg, "not a URL", &FetchUrlPolicy::https_or_loopback())
+                .await,
             Err(OidcError::InvalidUrl)
         ));
     }
@@ -4372,7 +4378,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         // A readiness probe repeated every few seconds must not become an
@@ -4393,7 +4399,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             "http://127.0.0.1:1/jwks".to_owned(),
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         let error = fetcher
@@ -4413,7 +4419,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         let error = fetcher
@@ -4452,8 +4458,11 @@ mod tests {
         let mut config = jwks_test_config();
         config.cache_ttl = Duration::from_millis(50);
         config.outage_tolerance = Duration::from_secs(3600);
-        let fetcher =
-            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            config,
+            FetchUrlPolicy::https_or_loopback(),
+        );
 
         fetcher
             .key_for_kid("held-kid")
@@ -4504,8 +4513,11 @@ mod tests {
         let mut config = jwks_test_config();
         config.cache_ttl = Duration::from_millis(20);
         config.outage_tolerance = Duration::from_millis(30);
-        let fetcher =
-            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            config,
+            FetchUrlPolicy::https_or_loopback(),
+        );
 
         fetcher
             .key_for_kid("expiring-kid")
@@ -4534,7 +4546,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         fetcher
@@ -4559,7 +4571,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         fetcher
@@ -4591,7 +4603,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         fetcher
@@ -4623,7 +4635,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         let overlong_kid = "x".repeat(DEFAULT_MAX_KID_BYTES + 1);
@@ -4671,7 +4683,7 @@ mod tests {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
 
         let mut tasks = Vec::new();
@@ -4701,7 +4713,7 @@ mod tests {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             config,
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
 
         fetcher
@@ -4736,7 +4748,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         fetcher
@@ -4761,8 +4773,11 @@ mod tests {
         let mut config = jwks_test_config();
         config.refresh_cooldown = Duration::from_millis(50);
         config.negative_cache_ttl = Duration::from_secs(3600);
-        let fetcher =
-            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            config,
+            FetchUrlPolicy::https_or_loopback(),
+        );
 
         fetcher
             .key_for_kid("old-kid")
@@ -4798,7 +4813,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             "http://10.0.0.1/jwks".to_string(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         let err = fetcher
@@ -4822,7 +4837,7 @@ mod tests {
                 discovery_timeout: Duration::from_secs(1),
                 max_doc_bytes: DEFAULT_DOC_BYTES,
             };
-            let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+            let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::https_or_loopback())
                 .await
                 .expect_err("empty issuer with override must be rejected");
             assert!(
@@ -4842,7 +4857,7 @@ mod tests {
             discovery_timeout: Duration::from_secs(1),
             max_doc_bytes: DEFAULT_DOC_BYTES,
         };
-        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::https_or_loopback())
             .await
             .expect("non-empty issuer with override succeeds under dev policy");
         assert_eq!(document.issuer, "https://issuer.example");

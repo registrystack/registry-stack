@@ -708,7 +708,7 @@ pub fn reminder_transport(
     // the transport pins the same rule into the frozen policy.
     let profile = match scheme.as_str() {
         "https" => DestinationProfile::ProductionHttps,
-        "http" => DestinationProfile::LoopbackDevelopmentHttp,
+        "http" => DestinationProfile::LoopbackHttp,
         _ => return Err("the destination URL scheme is not http(s)".to_owned()),
     };
     let policy = FixedDestinationPolicy::new("scheduling-reminders", &origin, profile, &[])

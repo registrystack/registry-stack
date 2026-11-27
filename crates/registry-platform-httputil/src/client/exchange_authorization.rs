@@ -323,7 +323,7 @@ impl ExchangeAssertionSource for RemoteAssertionSource {
                 kind: send_failure_kind(&error),
             })?;
         let status = response.status().as_u16();
-        if crate::validate_response_headers(response.headers()).is_err() {
+        if crate::validate_response_headers_without_peer_policy(response.headers()).is_err() {
             return Err(TokenError::Protocol { status });
         }
         if status != 200 {
@@ -1374,7 +1374,7 @@ mod tests {
         )
         .unwrap();
         provider.bearer_token().await.unwrap();
-        let provider = provider.with_fetch_url_policy(crate::FetchUrlPolicy::dev());
+        let provider = provider.with_fetch_url_policy(crate::FetchUrlPolicy::https_or_loopback());
         provider.bearer_token().await.unwrap();
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }

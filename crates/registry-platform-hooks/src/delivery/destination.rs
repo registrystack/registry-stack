@@ -307,7 +307,7 @@ pub fn url_destination_address(
     let profile = match parsed.scheme() {
         "https" => DestinationProfile::ProductionHttps,
         "http" if parsed.host_str().and_then(loopback_host).is_some() => {
-            DestinationProfile::LoopbackDevelopmentHttp
+            DestinationProfile::LoopbackHttp
         }
         _ => return Err(UrlDestinationError::InvalidBinding),
     };
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(address.profile, DestinationProfile::ProductionHttps);
         let address = url_destination_address("http://127.0.0.1:9000/in").expect("loopback");
         assert_eq!(address.request_target, "/in");
-        assert_eq!(address.profile, DestinationProfile::LoopbackDevelopmentHttp);
+        assert_eq!(address.profile, DestinationProfile::LoopbackHttp);
         for refused in [
             "http://hooks.example/in",
             "https://user@hooks.example/in",
@@ -485,7 +485,7 @@ mod tests {
             let address = url_destination_address(admitted).expect(admitted);
             assert_eq!(
                 address.profile,
-                DestinationProfile::LoopbackDevelopmentHttp,
+                DestinationProfile::LoopbackHttp,
                 "{admitted}"
             );
         }

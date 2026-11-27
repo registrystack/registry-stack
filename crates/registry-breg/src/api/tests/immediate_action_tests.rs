@@ -135,7 +135,7 @@ async fn task_granted_invoke_uses_exact_action_scope_and_frozen_subjects() {
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
     )
@@ -329,7 +329,7 @@ async fn proposal_task_scopes_and_standing_agent_draft_and_context_permissions_a
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
     )
@@ -677,7 +677,7 @@ async fn signed_task_token_cannot_discover_or_invoke_an_ordinary_immediate_actio
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned())),
     )
@@ -1132,7 +1132,7 @@ async fn human_identity_is_the_principal_claim_and_a_human_token_without_it_is_r
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned())),
     )
@@ -1188,7 +1188,7 @@ async fn delegated_token_is_refused_at_immediate_action_admission() {
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned()))
             .with_contextual_claims(
@@ -1708,7 +1708,7 @@ async fn task_record_reads_intersect_profile_with_composed_proposal_scope() {
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
     )
@@ -1849,7 +1849,7 @@ impl BoundGrantFixture {
             Arc::new(JwksFetcher::new_with_fetch_url_policy(
                 idp.jwks_uri(),
                 JwksFetcherConfig::defaults(),
-                FetchUrlPolicy::dev(),
+                FetchUrlPolicy::https_or_loopback(),
             )),
             AuthorityClaimConfig::new("registry_principal", Some("request_purpose".into())),
         )

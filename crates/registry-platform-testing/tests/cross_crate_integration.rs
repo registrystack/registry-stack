@@ -127,7 +127,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 16 * 1024,
         },
-        &FetchUrlPolicy::dev(),
+        &FetchUrlPolicy::https_or_loopback(),
     )
     .await
     .expect("discovery fetch succeeds");
@@ -141,7 +141,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
             request_timeout: Duration::from_secs(5),
             outage_tolerance: Duration::from_secs(900),
         },
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let mut verifier_config = oidc_verifier_config(idp.issuer(), vec!["registry-api".to_string()]);
     verifier_config.allowed_clients = vec!["client-a".to_string()];

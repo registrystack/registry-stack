@@ -17,7 +17,8 @@ use registry_platform_httputil::client::{
     MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers, BoundedReadError,
+    read_bounded, url::append_path_segments, validate_response_headers_without_peer_policy,
+    BoundedReadError,
 };
 use registry_platform_yaml::Digest;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
@@ -285,7 +286,7 @@ impl DocumentsClient {
                     kind: send_failure_kind(&error),
                 })?;
         let status = response.status();
-        validate_response_headers(response.headers())
+        validate_response_headers_without_peer_policy(response.headers())
             .map_err(|_| protocol(status, DocumentsProtocolFailure::HeaderBounds, None))?;
         if status != StatusCode::OK {
             return Err(problem_or_status(response).await);
@@ -696,7 +697,7 @@ impl DocumentsClient {
             .map_err(|error| DocumentsClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers(response.headers()).map_err(|_| {
+        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
             protocol(
                 response.status(),
                 DocumentsProtocolFailure::HeaderBounds,

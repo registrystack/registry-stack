@@ -12632,7 +12632,7 @@ fn fetching_authenticator(jwks_uri: &str) -> Authenticator {
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri.to_owned(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
     ));
     Authenticator::new(

@@ -245,7 +245,7 @@ async fn activate_direct<'a>(
         .with_fetch_url_policy(if token_endpoint.is_https() {
             FetchUrlPolicy::strict()
         } else {
-            FetchUrlPolicy::dev()
+            FetchUrlPolicy::https_or_loopback()
         });
     if let Some(profile) = token_tls_trust_profile {
         let roots = registry_adapter_engine::auth::capture_ca_bundle(core, profile.as_str())
@@ -418,7 +418,7 @@ fn activate_signed<'a>(
     let profile = if base_url.is_https() {
         DestinationProfile::ProductionHttps
     } else {
-        DestinationProfile::LoopbackDevelopmentHttp
+        DestinationProfile::LoopbackHttp
     };
     let private_cidrs = core
         .allowed_private_cidrs

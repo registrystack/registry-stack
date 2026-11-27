@@ -1256,7 +1256,8 @@ async fn response_bytes(
     } else {
         "application/problem+json"
     };
-    if registry_platform_httputil::validate_response_headers(response.headers()).is_err()
+    if registry_platform_httputil::validate_response_headers_without_peer_policy(response.headers())
+        .is_err()
         || response
             .headers()
             .get("content-type")

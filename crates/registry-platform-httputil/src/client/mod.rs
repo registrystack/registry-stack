@@ -20,8 +20,8 @@ pub use exchange_authorization::{
 };
 pub use exchange_config::exchange_authorization_from_json;
 pub use outbound::{
-    base_url_without_userinfo, build_client, read_failure_kind, send_failure_kind,
-    transport_protects_the_credential, OutboundOptions,
+    base_url_without_userinfo, build_client, is_loopback_host, read_failure_kind,
+    send_failure_kind, transport_protects_the_credential, OutboundOptions,
 };
 pub use private_key_jwt::{
     valid_resource_uri, valid_scope_token, validate_requested_scopes, PrivateKeyJwt,

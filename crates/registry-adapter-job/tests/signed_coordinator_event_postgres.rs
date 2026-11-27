@@ -250,7 +250,7 @@ async fn a_lost_signed_event_answer_recovers_one_run_through_the_job_store() {
         EventDestinationPolicy::new(
             "adapter-coordinator-events",
             &format!("http://127.0.0.1:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("the loopback event policy freezes"),
@@ -343,7 +343,7 @@ async fn pending_job_version_drift_stops_before_wire_and_restore_recovers() {
                 EventDestinationPolicy::new(
                     "adapter-coordinator-body-drift",
                     &format!("http://127.0.0.1:{}/", address.port()),
-                    DestinationProfile::LoopbackDevelopmentHttp,
+                    DestinationProfile::LoopbackHttp,
                     &[],
                 )
                 .expect("the event policy freezes"),
@@ -475,7 +475,7 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
                 EventDestinationPolicy::new(
                     "adapter-coordinator-submicrosecond",
                     &format!("http://127.0.0.1:{}/", address.port()),
-                    DestinationProfile::LoopbackDevelopmentHttp,
+                    DestinationProfile::LoopbackHttp,
                     &[],
                 )
                 .expect("the event policy freezes"),
@@ -678,7 +678,7 @@ async fn coordinator_item_and_deployment_failures_never_fall_back() {
                 EventDestinationPolicy::new(
                     "adapter-coordinator-problems",
                     &format!("http://127.0.0.1:{}/", address.port()),
-                    DestinationProfile::LoopbackDevelopmentHttp,
+                    DestinationProfile::LoopbackHttp,
                     &[],
                 )
                 .expect("the problem event policy freezes"),
@@ -847,7 +847,7 @@ async fn scripted_destination(
                 EventDestinationPolicy::new(
                     "adapter-coordinator-refused-retry",
                     &format!("http://127.0.0.1:{}/", address.port()),
-                    DestinationProfile::LoopbackDevelopmentHttp,
+                    DestinationProfile::LoopbackHttp,
                     &[],
                 )
                 .expect("the event policy freezes"),
@@ -1487,7 +1487,7 @@ fn revision_destination(base_url: &str, revised: &str) -> SignedCoordinatorEvent
                 EventDestinationPolicy::new(
                     REVISION_BINDING,
                     base_url,
-                    DestinationProfile::LoopbackDevelopmentHttp,
+                    DestinationProfile::LoopbackHttp,
                     &[],
                 )
                 .expect("the event policy freezes"),

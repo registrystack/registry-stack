@@ -22,7 +22,9 @@ use registry_platform_crypto::transit_rsa_no_oid::{
     TransitRsaNoOidKeyConfig, TransitRsaNoOidSigner, TransitRsaNoOidVerifier,
 };
 use registry_platform_httputil::client::BearerToken;
-use registry_platform_httputil::{read_bounded, validate_response_headers, ServiceBaseUrl};
+use registry_platform_httputil::{
+    read_bounded, validate_response_headers_without_peer_policy, ServiceBaseUrl,
+};
 use serde::Serialize;
 use serde_json::Value;
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, time::Duration};
@@ -322,7 +324,8 @@ impl HttpG2pProvider {
             .send()
             .await
             .map_err(|_| G2pProviderError::Unavailable)?;
-        validate_response_headers(response.headers()).map_err(|_| G2pProviderError::Unavailable)?;
+        validate_response_headers_without_peer_policy(response.headers())
+            .map_err(|_| G2pProviderError::Unavailable)?;
         let status = response.status().as_u16();
         let body = read_bounded(response, 131_072)
             .await
@@ -417,7 +420,7 @@ impl G2pProviderPort for HttpG2pProvider {
                 .execute(prepared)
                 .await
                 .map_err(|_| G2pProviderError::OutcomeUnknown)?;
-            validate_response_headers(response.headers())
+            validate_response_headers_without_peer_policy(response.headers())
                 .map_err(|_| G2pProviderError::OutcomeUnknown)?;
             let status = response.status().as_u16();
             let signature = match &response_trust {

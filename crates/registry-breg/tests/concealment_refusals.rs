@@ -186,7 +186,7 @@ fn key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
     Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ))
 }
 

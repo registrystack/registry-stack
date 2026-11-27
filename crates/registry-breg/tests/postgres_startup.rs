@@ -2965,7 +2965,7 @@ async fn mock_idp_key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 16 * 1024,
         },
-        &FetchUrlPolicy::dev(),
+        &FetchUrlPolicy::https_or_loopback(),
     )
     .await
     .expect("MockIdp discovery fetch succeeds");
@@ -2979,7 +2979,7 @@ async fn mock_idp_key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
             request_timeout: Duration::from_secs(5),
             outage_tolerance: Duration::ZERO,
         },
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ))
 }
 

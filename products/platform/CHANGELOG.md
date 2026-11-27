@@ -155,6 +155,24 @@
   `[127.0.0.1]` are never loopback. Sites that use it accept more literal
   spellings than before, for example `127.0.0.2` and `[::ffff:127.0.0.1]`.
 
+- BREAKING (Rust API): `registry-platform-httputil` can refuse a response
+  from a peer that declares the development posture.
+  `validate_response_headers` takes a `PeerPolicy`: under
+  `RefuseDevelopmentPeer` a response whose `Registry-Posture` field is exactly
+  `development` is refused with `ResponseHeaderError::DevelopmentPeer`, and
+  `AcceptDevelopmentPeer` checks only the header bounds.
+  `ResponseHeaderBoundError` is now `ResponseHeaderError`. `is_loopback_host`
+  is the one host rule for plain http: a loopback address literal or the
+  exact name `localhost`, valid in every posture.
+  `FetchUrlPolicy::dev` is now `FetchUrlPolicy::https_or_loopback`,
+  `DestinationProfile::LoopbackDevelopmentHttp` is now
+  `DestinationProfile::LoopbackHttp`, and
+  `DestinationProfile::LocalPrivateDevelopmentHttp` exists only in test builds
+  and under the `test-support` feature. Migration: a client with no runtime
+  policy yet calls `validate_response_headers_without_peer_policy`, which
+  behaves as production and refuses a development peer, and the two renamed
+  names change at their call sites.
+
 - `registry-thunderid-tooling` reads development identity files and task
   connections with the same loopback rule. A development issuer or local app
   origin may be any `127.0.0.0/8` address, `[::1]` or the IPv4-mapped form,

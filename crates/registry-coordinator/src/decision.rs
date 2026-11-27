@@ -315,7 +315,7 @@ impl DecisionConnection {
         timeout: Duration,
     ) -> std::result::Result<reqwest::RequestBuilder, CallOutcome> {
         let policy = if self.endpoint.scheme() == "http" {
-            FetchUrlPolicy::dev()
+            FetchUrlPolicy::https_or_loopback()
         } else {
             FetchUrlPolicy {
                 allowed_schemes: vec!["https".into()],

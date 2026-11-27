@@ -872,7 +872,7 @@ fn destination_profile(base: &Url) -> DestinationProfile {
     }
     match parsed.scheme() {
         "https" => DestinationProfile::ProductionHttps,
-        _ if denotes_loopback(base) => DestinationProfile::LoopbackDevelopmentHttp,
+        _ if denotes_loopback(base) => DestinationProfile::LoopbackHttp,
         _ => DestinationProfile::PrivateServiceHttp,
     }
 }

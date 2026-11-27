@@ -3,7 +3,7 @@
 use crate::{GrantBounds, GrantClaims};
 use registry_platform_httputil::{
     client::{build_client, OutboundOptions, PrivateKeyJwt, ServiceBaseUrl, TokenProvider},
-    read_bounded, validate_response_headers,
+    read_bounded, validate_response_headers_without_peer_policy,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -236,7 +236,7 @@ impl TaskGrantStatusClient {
                 .send()
                 .await
                 .map_err(|_| TaskGrantError::Unavailable)?;
-            validate_response_headers(response.headers())
+            validate_response_headers_without_peer_policy(response.headers())
                 .map_err(|_| TaskGrantError::Unavailable)?;
             // A concealed or absent grant is a refusal. Rejected status-service
             // credentials do not establish inactive authority and remain unavailable.

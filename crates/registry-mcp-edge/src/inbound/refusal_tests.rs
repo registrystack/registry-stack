@@ -130,7 +130,7 @@ pub(super) fn application(
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         jwks_uri,
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let profile =
         AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![8; 32])).expect("profile");

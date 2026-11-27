@@ -106,7 +106,7 @@ fn config_error() -> CoordinatorError {
 // reject metadata addresses. Cleartext remains numeric loopback only.
 fn configured_endpoint_policy(endpoint: &Url) -> FetchUrlPolicy {
     if endpoint.scheme() == "http" {
-        FetchUrlPolicy::dev()
+        FetchUrlPolicy::https_or_loopback()
     } else {
         FetchUrlPolicy {
             allowed_schemes: vec!["https".into()],

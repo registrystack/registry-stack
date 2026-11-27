@@ -14,7 +14,7 @@ use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers};
+use registry_platform_httputil::{read_bounded, validate_response_headers_without_peer_policy};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -257,7 +257,7 @@ impl DiscoveryClient {
             .send()
             .await
             .map_err(|error| DiscoveryClientError::transport(send_failure_kind(&error)))?;
-        validate_response_headers(response.headers())
+        validate_response_headers_without_peer_policy(response.headers())
             .map_err(|_| DiscoveryClientError::Protocol)?;
         let status = response.status();
         if status.is_success() && status != StatusCode::OK {
