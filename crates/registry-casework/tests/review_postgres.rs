@@ -14008,6 +14008,83 @@ async fn c2_fix_recompute_preserves_the_pause() {
     );
 }
 
+#[tokio::test]
+async fn c2_fix_old_answer_preserves_the_newest_expired_asks_marker() {
+    let fixture = fixture().await;
+    let service = timed_asks_service(&fixture, true);
+    let (request_id, task, create) =
+        claimed_for_asks(&fixture, &service, "expired-marker-round").await;
+    let mut asks = Vec::new();
+    for (index, text) in ["First?", "Second?"].into_iter().enumerate() {
+        let current = service
+            .review_task(&fixture.reviewer_a, task, None, "")
+            .await
+            .unwrap();
+        let asked = service
+            .ask_applicant(
+                &fixture.reviewer_a,
+                task,
+                ask_request(text),
+                None,
+                "",
+                current.revision,
+                &format!("ask-{index}"),
+            )
+            .await
+            .unwrap();
+        let due = now_micros() - TimeDelta::minutes(2 - index as i64);
+        fixture
+            .database
+            .execute(
+                "UPDATE casework_review_asks SET asked_at=$2,due_at=$3 WHERE ask_id=$1",
+                &[&asked.ask.ask_id, &(due - TimeDelta::hours(1)), &due],
+            )
+            .await
+            .unwrap();
+        assert_eq!(service.process_due_review_clocks(100).await.unwrap(), 1);
+        asks.push((asked.ask.ask_id, due));
+    }
+    service
+        .answer_review_ask(
+            &fixture.producer,
+            request_id,
+            asks[0].0,
+            ReviewAskAnswer {
+                subject: create.subject.clone(),
+                answered_at: asks[0].1,
+            },
+            "answer-old",
+        )
+        .await
+        .unwrap();
+    assert_eq!(ask_marker(&fixture, task).await.as_deref(), Some("expired"));
+    assert_eq!(
+        service
+            .review_task(&fixture.reviewer_a, task, None, "")
+            .await
+            .unwrap()
+            .marker,
+        Some(ReviewTaskMarker::Expired)
+    );
+    service
+        .answer_review_ask(
+            &fixture.producer,
+            request_id,
+            asks[1].0,
+            ReviewAskAnswer {
+                subject: create.subject,
+                answered_at: asks[1].1,
+            },
+            "answer-newest",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ask_marker(&fixture, task).await.as_deref(),
+        Some("answered")
+    );
+}
+
 async fn c2_later_round_fallback(lifecycle: &str) {
     let fixture = fixture().await;
     let service = c2_resumption_service(&fixture);
