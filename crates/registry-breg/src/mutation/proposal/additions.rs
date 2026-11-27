@@ -31,6 +31,14 @@ impl MutationTransaction {
             Some(document.proposal_id),
         )
         .filter(|_| permission.writable_attachments.contains(&slot.id));
+        let write = match write {
+            Some(authority) => link_readable(
+                self.authorize_proposal_document(tx, registry, document, &authority)
+                    .await,
+            )?
+            .then_some(authority),
+            None => None,
+        };
         if !readable && write.is_none() {
             return Ok(());
         }
@@ -77,35 +85,37 @@ impl MutationTransaction {
                 None => ProposalReviewProgress::NotRequired,
             };
             let refusal = if document.header.state == "applied" {
-                Some(("already-applied", "receipt-only"))
+                Some((LinkReason::AlreadyApplied, LinkRecovery::ReceiptOnly))
             } else if document.header.state == "rejected" {
-                Some(("review-rejected", "receipt-only"))
+                Some((LinkReason::ReviewRejected, LinkRecovery::ReceiptOnly))
             } else if document.header.state != "submitted"
                 || document.header.current_proposal_erased
             {
-                Some(("stale-revision", "receipt-only"))
+                Some((LinkReason::StaleRevision, LinkRecovery::ReceiptOnly))
             } else if metadata.len() > slot.maximum_count as usize {
                 // Retained files remain visible after a lower current limit.
-                Some(("limit-reached", "receipt-only"))
+                Some((LinkReason::LimitReached, LinkRecovery::ReceiptOnly))
             } else if document.blocked_reason.as_deref() == Some("application-refused") {
-                Some(("invalid-input", "correct-input"))
+                Some((LinkReason::InvalidInput, LinkRecovery::CorrectInput))
             } else if document.blocked_reason.is_some()
                 || document.action_revision != action.definition_revision
             {
-                Some(("package-changed", "rebase"))
+                Some((LinkReason::PackageChanged, LinkRecovery::Rebase))
             } else if !matches!(
                 progress,
                 ProposalReviewProgress::Pending | ProposalReviewProgress::Retrying
             ) {
                 Some(match progress {
-                    ProposalReviewProgress::Rejected => ("review-rejected", "revise"),
-                    ProposalReviewProgress::ChangesRequested => {
-                        ("review-changes-requested", "revise")
+                    ProposalReviewProgress::Rejected => {
+                        (LinkReason::ReviewRejected, LinkRecovery::Revise)
                     }
-                    _ => ("review-ended", "revise"),
+                    ProposalReviewProgress::ChangesRequested => {
+                        (LinkReason::ReviewChangesRequested, LinkRecovery::Revise)
+                    }
+                    _ => (LinkReason::ReviewEnded, LinkRecovery::Revise),
                 })
             } else if metadata.len() >= slot.maximum_count as usize {
-                Some(("limit-reached", "receipt-only"))
+                Some((LinkReason::LimitReached, LinkRecovery::ReceiptOnly))
             } else {
                 None
             };

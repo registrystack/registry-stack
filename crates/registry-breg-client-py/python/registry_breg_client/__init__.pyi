@@ -773,6 +773,7 @@ class PrivateKeyJwt:
     def bearer_token(self) -> str: ...
 
 BRegProposalTransition = Literal['edit', 'submit', 'revise', 'rebase', 'retry', 'cancel', 'apply']
+BRegProposalStatus = Literal['draft', 'awaiting-party', 'in-review', 'approved', 'processing', 'applied', 'rejected', 'cancelled']
 class BRegProposal:
     @property
     def response_etag(self) -> str | None:

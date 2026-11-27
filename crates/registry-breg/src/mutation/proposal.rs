@@ -6,8 +6,9 @@ mod additions;
 mod context_projection;
 use crate::api::proposals::ProposalMutationInput;
 use crate::lifecycle::{
-    proposal_turn as evaluate_proposal_turn, ProposalApplicationProgress, ProposalReviewProgress,
-    ProposalTurn, ProposalTurnContext,
+    proposal_status_and_turn, ProposalApplicationProgress,
+    ProposalAvailabilityReason as LinkReason, ProposalLinkRecovery as LinkRecovery,
+    ProposalReviewProgress, ProposalStatus, ProposalTurn, ProposalTurnContext,
 };
 use crate::model::{
     CompiledActionExecution, CompiledProposalReview, ProposalOperation, ProposalOwnership,
@@ -1325,6 +1326,20 @@ impl MutationTransaction {
                 // blocked reason or revision change could look recoverable.
                 if workflow.state() == crate::proposal_workflow::ProposalState::Rejected {
                     return Err(MutationError::ProposalRejected);
+                }
+                if workflow.state() == ProposalState::Submitted
+                    && matches!(
+                        operation,
+                        ProposalOperation::Revise | ProposalOperation::Rebase
+                    )
+                    && !matches!(
+                        current_status_and_turn(tx, document, workflow.current_proposal())
+                            .await?
+                            .0,
+                        ProposalStatus::AwaitingParty | ProposalStatus::InReview
+                    )
+                {
+                    return Err(MutationError::PreconditionFailed);
                 }
                 if !matches!(
                     operation,
@@ -3499,15 +3514,21 @@ impl MutationTransaction {
                     proposal_application_status(tx, document, proposal).await?;
             }
         }
-        value["turn"] = json!(
-            current_turn(
-                tx,
-                document,
-                workflow
-                    .as_ref()
-                    .and_then(|workflow| workflow.current_proposal())
-            )
-            .await?
+        let (status, turn) = current_status_and_turn(
+            tx,
+            document,
+            workflow
+                .as_ref()
+                .and_then(|workflow| workflow.current_proposal()),
+        )
+        .await?;
+        value["turn"] = json!(turn.as_str());
+        if claims.is_some() {
+            value["status"] = json!(status);
+        }
+        let can_change_submission = matches!(
+            status,
+            ProposalStatus::AwaitingParty | ProposalStatus::InReview
         );
         if let Some(application) = workflow
             .as_ref()
@@ -3661,10 +3682,10 @@ impl MutationTransaction {
                 continue;
             }
             if operation != ProposalOperation::Get
-                && self
-                    .authorize_proposal_document(tx, registry, document, &authority)
-                    .await
-                    .is_err()
+                && !link_readable(
+                    self.authorize_proposal_document(tx, registry, document, &authority)
+                        .await,
+                )?
             {
                 continue;
             }
@@ -3680,11 +3701,13 @@ impl MutationTransaction {
                 }
                 ProposalOperation::Revise => {
                     document.header.state == "submitted"
+                        && can_change_submission
                         && document.blocked_reason.is_none()
                         && document.action_revision == action.definition_revision
                 }
                 ProposalOperation::Rebase => {
-                    matches!(document.header.state.as_str(), "draft" | "submitted")
+                    document.header.state == "draft"
+                        || document.header.state == "submitted" && can_change_submission
                 }
                 ProposalOperation::Retry => {
                     document.header.state == "submitted"
@@ -3756,11 +3779,11 @@ impl MutationTransaction {
             }
             if !available {
                 if document.header.state == "applied" {
-                    link["availability"]["reason"] = json!("already-applied");
-                    link["availability"]["recovery"] = json!("receipt-only");
+                    link["availability"]["reason"] = json!(LinkReason::AlreadyApplied);
+                    link["availability"]["recovery"] = json!(LinkRecovery::ReceiptOnly);
                 } else if document.header.state == "rejected" {
-                    link["availability"]["reason"] = json!("review-rejected");
-                    link["availability"]["recovery"] = json!("receipt-only");
+                    link["availability"]["reason"] = json!(LinkReason::ReviewRejected);
+                    link["availability"]["recovery"] = json!(LinkRecovery::ReceiptOnly);
                 } else if match operation {
                     ProposalOperation::Edit | ProposalOperation::Submit => {
                         document.header.state != "draft"
@@ -3773,18 +3796,27 @@ impl MutationTransaction {
                     }
                     _ => false,
                 } {
-                    link["availability"]["reason"] = json!("stale-revision");
-                    link["availability"]["recovery"] = json!("receipt-only");
+                    link["availability"]["reason"] = json!(LinkReason::StaleRevision);
+                    link["availability"]["recovery"] = json!(LinkRecovery::ReceiptOnly);
+                } else if matches!(
+                    operation,
+                    ProposalOperation::Revise | ProposalOperation::Rebase
+                ) && matches!(
+                    status,
+                    ProposalStatus::Approved | ProposalStatus::Processing
+                ) {
+                    link["availability"]["reason"] = json!(LinkReason::ApplicationPending);
+                    link["availability"]["recovery"] = json!(LinkRecovery::Refresh);
                 } else if operation == ProposalOperation::Revise
                     && document.action_revision != action.definition_revision
                 {
-                    link["availability"]["reason"] = json!("package-changed");
-                    link["availability"]["recovery"] = json!("rebase");
+                    link["availability"]["reason"] = json!(LinkReason::PackageChanged);
+                    link["availability"]["recovery"] = json!(LinkRecovery::Rebase);
                 } else if let Some(blocked_reason) = document.blocked_reason.as_deref() {
                     let (reason, recovery) = if blocked_reason == "application-refused" {
-                        ("invalid-input", "correct-input")
+                        (LinkReason::InvalidInput, LinkRecovery::CorrectInput)
                     } else {
-                        ("package-changed", "rebase")
+                        (LinkReason::PackageChanged, LinkRecovery::Rebase)
                     };
                     link["availability"]["reason"] = json!(reason);
                     link["availability"]["recovery"] = json!(recovery);
@@ -3792,19 +3824,19 @@ impl MutationTransaction {
                     // A review that has ended leaves nothing to retry: the
                     // same review outcome Apply reports names Revise.
                     let (reason, recovery) = review_refusal
-                        .filter(|(_, recovery)| *recovery == "revise")
-                        .unwrap_or(("invalid-input", "correct-input"));
+                        .filter(|(_, recovery)| *recovery == LinkRecovery::Revise)
+                        .unwrap_or((LinkReason::InvalidInput, LinkRecovery::CorrectInput));
                     link["availability"]["reason"] = json!(reason);
                     link["availability"]["recovery"] = json!(recovery);
                 } else if !review_available {
-                    link["availability"]["reason"] = json!("dependency-outage");
-                    link["availability"]["recovery"] = json!("retry");
+                    link["availability"]["reason"] = json!(LinkReason::DependencyOutage);
+                    link["availability"]["recovery"] = json!(LinkRecovery::Retry);
                 } else if let Some((reason, recovery)) = review_refusal {
                     link["availability"]["reason"] = json!(reason);
                     link["availability"]["recovery"] = json!(recovery);
                 } else {
-                    link["availability"]["reason"] = json!("pending-review");
-                    link["availability"]["recovery"] = json!("refresh");
+                    link["availability"]["reason"] = json!(LinkReason::PendingReview);
+                    link["availability"]["recovery"] = json!(LinkRecovery::Refresh);
                 }
             }
             value["links"][name] = link;
@@ -3827,6 +3859,14 @@ impl MutationTransaction {
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit),
                 Some(document.proposal_id),
             );
+            let write = match write {
+                Some(authority) => link_readable(
+                    self.authorize_proposal_document(tx, registry, document, &authority)
+                        .await,
+                )?
+                .then_some(authority),
+                None => None,
+            };
             let metadata = if read.is_some() && !permission.readable_attachments.is_empty() {
                 crate::attachment_store::metadata(
                     tx,
@@ -4169,16 +4209,18 @@ fn proposal_action<'a>(
 impl ProposalReviewProgress {
     /// The Apply availability a review that has not approved this
     /// submission gives. `None` for an approval or no review.
-    fn apply_refusal(self) -> Option<(&'static str, &'static str)> {
+    fn apply_refusal(self) -> Option<(LinkReason, LinkRecovery)> {
         match self {
             Self::NotRequired | Self::Approved => None,
-            Self::Pending => Some(("pending-review", "refresh")),
+            Self::Pending => Some((LinkReason::PendingReview, LinkRecovery::Refresh)),
             // Retry resumes the delivery or lookup that failed.
-            Self::Retrying => Some(("dependency-outage", "retry")),
-            Self::Rejected => Some(("review-rejected", "revise")),
-            Self::ChangesRequested => Some(("review-changes-requested", "revise")),
+            Self::Retrying => Some((LinkReason::DependencyOutage, LinkRecovery::Retry)),
+            Self::Rejected => Some((LinkReason::ReviewRejected, LinkRecovery::Revise)),
+            Self::ChangesRequested => {
+                Some((LinkReason::ReviewChangesRequested, LinkRecovery::Revise))
+            }
             Self::Failed | Self::ApprovalExpired | Self::Answered | Self::Ended => {
-                Some(("review-ended", "revise"))
+                Some((LinkReason::ReviewEnded, LinkRecovery::Revise))
             }
         }
     }
@@ -4247,23 +4289,38 @@ pub(crate) async fn current_turn(
     document: &ProposalDocument,
     frozen: Option<&crate::proposal_workflow::ProposalSnapshot>,
 ) -> Result<&'static str, MutationError> {
-    let blocked = document.blocked_reason.is_some();
-    if document.header.state != "submitted" {
-        return Ok(proposal_turn(
-            &document.header.state,
-            blocked,
-            ProposalReviewProgress::NotRequired,
-            &Value::Null,
-        ));
-    }
-    let frozen = frozen.ok_or(MutationError::PreconditionFailed)?;
-    let review = review_progress(tx, document, frozen).await?;
-    let application = proposal_application_status(tx, document, frozen).await?;
-    Ok(proposal_turn(
-        &document.header.state,
-        blocked,
-        review,
-        &application,
+    let (state, context) = current_turn_context(tx, document, frozen).await?;
+    Ok(crate::lifecycle::proposal_turn(state, context).as_str())
+}
+
+async fn current_status_and_turn(
+    tx: &Transaction<'_>,
+    document: &ProposalDocument,
+    frozen: Option<&crate::proposal_workflow::ProposalSnapshot>,
+) -> Result<(ProposalStatus, ProposalTurn), MutationError> {
+    let (state, context) = current_turn_context(tx, document, frozen).await?;
+    Ok(proposal_status_and_turn(state, context))
+}
+
+async fn current_turn_context(
+    tx: &Transaction<'_>,
+    document: &ProposalDocument,
+    frozen: Option<&crate::proposal_workflow::ProposalSnapshot>,
+) -> Result<(ProposalState, ProposalTurnContext), MutationError> {
+    let state = ProposalState::from_storage(&document.header.state)
+        .map_err(|_| MutationError::Unavailable)?;
+    let (review, application) = if state == ProposalState::Submitted {
+        let frozen = frozen.ok_or(MutationError::PreconditionFailed)?;
+        (
+            review_progress(tx, document, frozen).await?,
+            proposal_application_status(tx, document, frozen).await?,
+        )
+    } else {
+        (ProposalReviewProgress::NotRequired, Value::Null)
+    };
+    Ok((
+        state,
+        proposal_turn_context(document.blocked_reason.is_some(), review, &application),
     ))
 }
 
@@ -4271,6 +4328,7 @@ pub(crate) async fn current_turn(
 /// who reviews or applies it, or nobody. Derived from the lifecycle state,
 /// the current submission's review progress and its application status;
 /// nothing stores it.
+#[cfg(test)]
 pub(crate) fn proposal_turn(
     state: &str,
     blocked: bool,
@@ -4280,6 +4338,15 @@ pub(crate) fn proposal_turn(
     let Ok(state) = ProposalState::from_storage(state) else {
         return ProposalTurn::Nobody.as_str();
     };
+    crate::lifecycle::proposal_turn(state, proposal_turn_context(blocked, review, application))
+        .as_str()
+}
+
+fn proposal_turn_context(
+    blocked: bool,
+    review: ProposalReviewProgress,
+    application: &Value,
+) -> ProposalTurnContext {
     let application = if application["mode"] == "manual" {
         ProposalApplicationProgress::Manual
     } else {
@@ -4292,15 +4359,12 @@ pub(crate) fn proposal_turn(
             _ => ProposalApplicationProgress::Other,
         }
     };
-    evaluate_proposal_turn(
-        state,
-        ProposalTurnContext {
-            submission_blocked: blocked,
-            review,
-            application,
-        },
-    )
-    .as_str()
+    ProposalTurnContext {
+        submission_blocked: blocked,
+        review,
+        ask_open: false,
+        application,
+    }
 }
 
 /// The audit marker of a response that served a decision's public reason: a

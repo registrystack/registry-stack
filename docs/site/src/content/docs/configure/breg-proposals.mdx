@@ -363,10 +363,27 @@ Every Proposal document and lifecycle event carries a derived `turn`:
 - `official`: a reviewer or applier acts next. Review in progress or being retried, an approved or review-free manual submission awaiting Apply, and an automatic application blocked on a dependency outage are an official's turn.
 - `nobody`: no one needs to act. The Proposal is `applied`, `cancelled` or `rejected`, or its automatic application is queued or running.
 
-`turn` is derived from the lifecycle state, the current submission's review progress and its application status when the Proposal is read; nothing stores it.
+Proposal Get, list items and command responses also serve a derived `status` whenever the caller has claims, including for a draft:
+
+- `draft`: not yet submitted.
+- `awaiting-party`: submitted and the party must act next, for example after a send-back, an ended review or a package or application block.
+- `in-review`: with the review provider, with no open ask.
+- `approved`: approved by review, with the change not yet in force.
+- `processing`: submitted under an Action with no review, with the change not yet in force.
+- `applied`: the change is in force.
+- `rejected`: refused by review.
+- `cancelled`: cancelled without applying the change.
+
+`status` and `turn` come from one pure rule over the lifecycle state, the current submission's review progress and its application status. Nothing stores either value.
+Lifecycle events carry `turn` but do not carry `status`. An older retained command receipt can replay without `status`.
+`bregctl explain lifecycle` lists each state's possible statuses and turns with their conditions in its `v1alpha9` explanation format.
 It says whose move the work waits on, not who is authorised to make it: the links still decide what the current caller may do.
 List Proposals by turn with `GET /v1/proposals?turn=party` (or `official`, `nobody`).
+There is no `status` query filter.
 A page may hold fewer than `limit` items, so keep paging while `nextCursor` is present.
+
+{/* Evidence: crates/registry-breg/src/lifecycle.rs proposal_status_and_turn_follow_the_exhaustive_lifecycle_table;
+    crates/registry-breg/tests/support/proposal_status.rs proposal_status_is_served_on_draft_review_approval_and_application. */}
 
 Every Proposal document carries `createdAt`, the UTC time its draft was started (RFC 3339, microsecond precision).
 It does not change when the Proposal is submitted, revised or applied, so it orders attempts on the same target chronologically; the list itself is ordered by Proposal id, not by time.
@@ -445,11 +462,13 @@ A command receipt stored before this release replays without `decision` and `inp
 A later package that narrows the grant's `readableInputs` makes an earlier key conflict instead of replaying an input a Get now withholds.
 Each response that serves a public reason, a read, a command or a replay, records a fixed `proposal-review-public-reason` marker in its audit entry, never the text.
 
-Revise after an approved, not yet applied, manual submission discards the approval.
-The approval binds the earlier version only, and the revised version needs its own Review before it can be applied.
-Apply first if the approved change must take effect.
+Revise and Rebase of a submitted Proposal are available only at `awaiting-party` or `in-review`, subject to their other authority and package checks.
+At `approved` or `processing`, both links are unavailable with `application-pending` and recovery `refresh`, and both commands answer 412.
+Apply or Cancel the current submission. An expired approval or another recovery that returns the turn to the party permits a later draft again.
+Rebase of a draft is unchanged. A revised or rebased version needs its own Review when the Action requires one.
 
-Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's queued, applying or blocked automatic application job in the same transaction.
+Cancel closes the Proposal's queued, applying or blocked automatic application job in the same transaction.
+An allowed Revise or Rebase also closes the old submission's job. Queued or running work at `approved` or `processing` cannot be revised or rebased.
 The job reads `cancelled`; it never applies a superseded version.
 
 {/* Evidence: crates/registry-breg/tests/postgres_proposal.rs proposal-review-public-reason;

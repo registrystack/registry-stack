@@ -10251,7 +10251,7 @@ const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegEventsExplanation",
 };
 const LIFECYCLE_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8",
+    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha9",
     kind: "BRegLifecycleExplanation",
 };
 

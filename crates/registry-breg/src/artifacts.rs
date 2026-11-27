@@ -1518,6 +1518,7 @@ pub fn proposal_schema() -> Value {
         "createdAt":{"type":"string","format":"date-time"},
         "submissionVersion":{"type":"integer","minimum":0},"revision":{"type":"integer","minimum":1},
         "state":{"enum":["draft","submitted","applied","cancelled","rejected"]},
+        "status":{"enum":crate::lifecycle::ProposalStatus::ALL.map(crate::lifecycle::ProposalStatus::as_str)},
         "title":{"type":"string","maxLength":1024},
         "input":{"type":"object"},
         "application":proposal_application_schema(),
@@ -1546,11 +1547,7 @@ pub(crate) fn proposal_schema_with_additions(enabled: bool) -> Value {
 }
 
 pub(crate) fn append_proposal_additions_schema(schema: &mut Value) {
-    let mut availability = availability_schema();
-    availability["properties"]["reason"]["enum"]
-        .as_array_mut()
-        .expect("reason enum")
-        .push(json!("limit-reached"));
+    let availability = availability_schema();
     let link = |method: &str, operation: &str| {
         json!({"type":"object","additionalProperties":false,
         "required":["method","path","accessProfile","operation"],"properties":{
@@ -1644,8 +1641,8 @@ fn proposal_attachment_schema() -> Value {
 pub fn availability_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["available","observedRevision"],
         "properties":{"available":{"type":"boolean"},"observedRevision":{"type":"integer","minimum":1},
-            "reason":{"enum":["pending-review","review-rejected","review-changes-requested","review-ended","stale-revision","package-changed","dependency-outage","invalid-input","already-applied"]},
-            "recovery":{"enum":["refresh","revise","retry","rebase","correct-input","receipt-only"]}},
+            "reason":{"enum":crate::lifecycle::ProposalAvailabilityReason::ALL.iter().map(|reason| reason.as_str()).collect::<Vec<_>>()},
+            "recovery":{"enum":crate::lifecycle::ProposalLinkRecovery::ALL.iter().map(|recovery| recovery.as_str()).collect::<Vec<_>>()}},
         "if":{"properties":{"available":{"const":false}}},"then":{"required":["reason","recovery"]}})
 }
 

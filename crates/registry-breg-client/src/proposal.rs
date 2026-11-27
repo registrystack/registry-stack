@@ -42,6 +42,7 @@ pub enum BRegAvailabilityReason {
     InvalidInput,
     AlreadyApplied,
     LimitReached,
+    ApplicationPending,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +75,27 @@ pub enum BRegProposalTurn {
     Party,
     Official,
     Nobody,
+}
+
+/// The server's current display status, paired with its turn rule.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalStatus {
+    Draft,
+    AwaitingParty,
+    InReview,
+    Approved,
+    Processing,
+    Applied,
+    Rejected,
+    Cancelled,
+}
+
+fn present_proposal_status<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BRegProposalStatus>, D::Error> {
+    BRegProposalStatus::deserialize(deserializer).map(Some)
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -582,6 +604,12 @@ pub struct BRegProposal {
     application_status: Option<BRegProposalApplicationStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn: Option<BRegProposalTurn>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_proposal_status"
+    )]
+    status: Option<BRegProposalStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     decision: Option<BRegProposalDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -647,6 +675,32 @@ impl BRegProposal {
                 .is_some_and(|decision| !valid_decision(decision))
         {
             return Err(refusal());
+        }
+        if let Some(status) = self.status {
+            use BRegProposalStatus as Status;
+            let valid_state = match status {
+                Status::Draft => self.state == BRegProposalState::Draft,
+                Status::Applied => self.state == BRegProposalState::Applied,
+                Status::Rejected => self.state == BRegProposalState::Rejected,
+                Status::Cancelled => self.state == BRegProposalState::Cancelled,
+                Status::AwaitingParty
+                | Status::InReview
+                | Status::Approved
+                | Status::Processing => self.state == BRegProposalState::Submitted,
+            };
+            let valid_turn = self.turn.is_none_or(|turn| match status {
+                Status::Draft | Status::AwaitingParty => turn == BRegProposalTurn::Party,
+                Status::InReview => turn == BRegProposalTurn::Official,
+                Status::Approved | Status::Processing => {
+                    matches!(turn, BRegProposalTurn::Official | BRegProposalTurn::Nobody)
+                }
+                Status::Applied | Status::Rejected | Status::Cancelled => {
+                    turn == BRegProposalTurn::Nobody
+                }
+            });
+            if !valid_state || !valid_turn {
+                return Err(refusal());
+            }
         }
         if self.application_status.as_ref().is_some_and(|status| {
             self.effect_digest.is_none()
@@ -845,6 +899,9 @@ impl BRegProposal {
     /// before the turn was served carries none.
     pub const fn turn(&self) -> Option<BRegProposalTurn> {
         self.turn
+    }
+    pub const fn status(&self) -> Option<BRegProposalStatus> {
+        self.status
     }
     /// The current submission's review decision. Reads serve it, and a
     /// command response does when the caller's profile holds Get on the
@@ -2250,20 +2307,19 @@ fn valid_availability(
             (true, reason, recovery) => reason.is_none() && recovery.is_none(),
             (false, Some(reason), Some(recovery)) => matches!(
                 (reason, recovery),
-                (Reason::PendingReview, Recovery::Refresh)
-                    | (
-                        Reason::ReviewRejected,
-                        Recovery::ReceiptOnly | Recovery::Revise
-                    )
-                    | (
-                        Reason::ReviewChangesRequested | Reason::ReviewEnded,
-                        Recovery::Revise
-                    )
-                    | (
-                        Reason::StaleRevision | Reason::AlreadyApplied,
-                        Recovery::ReceiptOnly
-                    )
-                    | (Reason::LimitReached, Recovery::ReceiptOnly)
+                (
+                    Reason::PendingReview | Reason::ApplicationPending,
+                    Recovery::Refresh
+                ) | (
+                    Reason::ReviewRejected,
+                    Recovery::ReceiptOnly | Recovery::Revise
+                ) | (
+                    Reason::ReviewChangesRequested | Reason::ReviewEnded,
+                    Recovery::Revise
+                ) | (
+                    Reason::StaleRevision | Reason::AlreadyApplied,
+                    Recovery::ReceiptOnly
+                ) | (Reason::LimitReached, Recovery::ReceiptOnly)
                     | (Reason::PackageChanged, Recovery::Rebase)
                     | (Reason::DependencyOutage, Recovery::Retry)
                     | (Reason::InvalidInput, Recovery::CorrectInput)
@@ -2273,6 +2329,7 @@ fn valid_availability(
         && (availability.available
             || match (availability.reason, availability.recovery) {
                 (Some(Reason::AlreadyApplied), _) => state == State::Applied,
+                (Some(Reason::ApplicationPending), _) => state == State::Submitted,
                 (Some(Reason::ReviewRejected), Some(Recovery::ReceiptOnly)) => {
                     state == State::Rejected
                 }

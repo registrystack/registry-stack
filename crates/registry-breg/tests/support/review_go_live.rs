@@ -1697,6 +1697,18 @@ async fn activation_statement_counts(extra_pending: usize) -> Vec<(String, i64)>
     let accepted = retained_binding(&fixture, versioned).await;
     accept(&fixture, versioned, &accepted).await;
     reconcile(&fixture, &accepted).await;
+    // A correction recovery permits a new version while preserving the old
+    // application's history for the activation statement-count assertions.
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_application_jobs
+         SET state='blocked',last_error_code='application-refused' WHERE proposal_id=$1",
+            &[&versioned],
+        )
+        .await
+        .unwrap();
     let proposal = fixture
         .http
         .client

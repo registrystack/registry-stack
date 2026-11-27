@@ -10,6 +10,9 @@ mod postgres_harness;
 #[path = "support/proposal_additions.rs"]
 mod proposal_additions;
 
+#[path = "support/proposal_status.rs"]
+mod proposal_status;
+
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
@@ -291,8 +294,8 @@ async fn required_inputs_are_completed_at_submit_and_supplied_draft_values_stay_
     let mut source = registry_source(false);
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
-    let fixture =
-        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    proposal_status::require_review(&mut source);
+    let fixture = proposal_status::pending_review_fixture(compile(source)).await;
     let client = &fixture.http.client;
     let metadata = client.registry_contract(Some("clerk")).await.unwrap();
     let action = metadata
@@ -1581,7 +1584,7 @@ async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals()
 }
 
 #[tokio::test]
-async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_stays_rebasable() {
+async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_preserves_processing() {
     let mut source = registry_source(false);
     source["recordTypes"]["target"]["constraints"] =
         json!([{"id":"unique-name","type":"unique","fields":["name"]}]);
@@ -1903,12 +1906,21 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_stays_re
             .available
     );
     assert!(
-        stale_current
+        !stale_current
             .link("rebase")
             .unwrap()
             .availability()
             .unwrap()
             .available
+    );
+    assert_eq!(
+        stale_current
+            .link("rebase")
+            .unwrap()
+            .availability()
+            .unwrap()
+            .reason,
+        Some(registry_breg_client::BRegAvailabilityReason::ApplicationPending)
     );
     fixture.finish().await;
 }
@@ -3063,10 +3075,10 @@ async fn cancel_closes_the_queued_automatic_application_job() {
     fixture.finish().await;
 }
 
-/// Revise closes the superseded version's queued automatic application job,
-/// which the worker could otherwise never claim again.
+/// Processing preserves its queued job. A correction recovery permits Revise,
+/// which closes the superseded version's blocked job.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revise_closes_the_superseded_versions_queued_automatic_application_job() {
+async fn revise_preserves_queued_work_and_closes_a_superseded_blocked_application_job() {
     let fixture = client_http::ClientFixture::start(
         compile(registry_source(true)),
         claims("author", "zone-a"),
@@ -3095,6 +3107,19 @@ async fn revise_closes_the_superseded_versions_queued_automatic_application_job(
             .collect::<Vec<_>>()
     };
     assert_eq!(job_states().await, [(1, "queued".to_owned())]);
+    assert_eq!(
+        proposal_status::raw_command(&fixture, &submitted, "revise")
+            .await
+            .status(),
+        412
+    );
+    assert_eq!(job_states().await, [(1, "queued".to_owned())]);
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_application_jobs SET state='blocked',last_error_code='application-refused'", &[]).await.unwrap();
+    let submitted = client.read_proposal(&submitted).await.unwrap().value;
+    assert_eq!(
+        submitted.status(),
+        Some(registry_breg_client::BRegProposalStatus::AwaitingParty)
+    );
     let revise = client
         .prepare_proposal(&submitted, "revise", json!({}), &key("revise-job-revise"))
         .unwrap();
@@ -5754,8 +5779,8 @@ async fn prepared_lifecycle_recovery_uses_current_authority_and_the_original_exa
     let mut source = registry_source(false);
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
-    let fixture =
-        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    proposal_status::require_review(&mut source);
+    let fixture = proposal_status::pending_review_fixture(compile(source)).await;
     let client = &fixture.http.client;
     let draft = start(&fixture, "Recover lifecycle", "recover-start").await;
     let current = client.read_proposal(&draft).await.unwrap().value;
@@ -7730,20 +7755,20 @@ async fn compatible_legacy_review_closure_survives_status_apply_successors_and_r
     );
     assert_eq!(
         availability.reason,
-        Some(registry_breg_client::BRegAvailabilityReason::PackageChanged)
+        Some(registry_breg_client::BRegAvailabilityReason::ApplicationPending)
     );
     assert_eq!(
         availability.recovery,
-        Some(registry_breg_client::BRegRecoveryHint::Rebase)
+        Some(registry_breg_client::BRegRecoveryHint::Refresh)
     );
     assert!(
-        current
+        !current
             .link("rebase")
             .unwrap()
             .availability()
             .unwrap()
             .available,
-        "explicit Rebase remains available with current Start authority"
+        "approved work preserves its original reviewed submission despite current Start authority"
     );
     let response = reqwest::Client::new()
         .post(format!(
@@ -8685,6 +8710,7 @@ fn writable_inputs_source() -> Value {
 
 fn nullable_writable_inputs_registry() -> registry_breg::CompiledRegistry {
     let mut source = writable_inputs_source();
+    proposal_status::require_review(&mut source);
     source["functions"] = json!({"nullable-note-plan": {"runtime":"rhai", "source":"plans/nullable-note.rhai",
         "entrypoint":"plan", "abi":"registry.action-plan/v1"
     }});
@@ -8757,11 +8783,8 @@ async fn assert_input_write_refused(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn writable_inputs_treat_explicit_null_as_a_write() {
-    let fixture = client_http::ClientFixture::start(
-        nullable_writable_inputs_registry(),
-        claims("author", "zone-a"),
-    )
-    .await;
+    let fixture =
+        proposal_status::pending_review_fixture(nullable_writable_inputs_registry()).await;
     let client = &fixture.http.client;
     let metadata = client.registry_contract(Some("clerk")).await.unwrap();
     let BRegDirectWrite::Create(create) = metadata
@@ -8983,11 +9006,9 @@ async fn writable_inputs_treat_explicit_null_as_a_write() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn writable_inputs_bound_start_edit_revise_and_rebase_to_the_named_inputs() {
-    let fixture = client_http::ClientFixture::start(
-        compile(writable_inputs_source()),
-        claims("author", "zone-a"),
-    )
-    .await;
+    let mut source = writable_inputs_source();
+    proposal_status::require_review(&mut source);
+    let fixture = proposal_status::pending_review_fixture(compile(source)).await;
     let client = &fixture.http.client;
     let metadata = client.registry_contract(Some("clerk")).await.unwrap();
     let BRegDirectWrite::Create(create) = metadata

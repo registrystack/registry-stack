@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha8.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha9.schema.json",
   "title": "LifecycleExplanation",
   "description": "The native engine-owned Proposal lifecycle, pinned independently of project source.",
   "type": "object",
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8"
+      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha9"
     },
     "kind": {
       "const": "BRegLifecycleExplanation"
@@ -75,6 +75,14 @@
               "id": "explicit-contract-rebase"
             },
             {
+              "description": "Revise and Rebase of a submitted Proposal require awaiting-party or in-review status from the shared status and turn rule. Approval and review-free processing preserve the current submission until Apply or Cancel, unless a recovery returns the turn to the party. Rebase of a draft is unchanged.",
+              "events": [
+                "revise",
+                "rebase"
+              ],
+              "id": "submission-status"
+            },
+            {
               "description": "Application revalidates the frozen Action revision, submission version, effect digest, current caller or restricted executor authority, and any required current approval and Evidence. Manual and automatic execution use the same application boundary.",
               "events": [
                 "apply"
@@ -104,6 +112,12 @@
               "incomingTransitions": 4,
               "initial": true,
               "outgoingTransitions": 4,
+              "statuses": [
+                {
+                  "condition": "Always while the Proposal is in this state.",
+                  "status": "draft"
+                }
+              ],
               "terminal": false,
               "turns": [
                 {
@@ -118,14 +132,32 @@
               "incomingTransitions": 2,
               "initial": false,
               "outgoingTransitions": 6,
+              "statuses": [
+                {
+                  "condition": "The submission package is blocked; Review is pending or retrying with an open ask; Review ended without a usable approval; or, after approval or when Review is not required, application is not manual and is blocked without recovery retry.",
+                  "status": "awaiting-party"
+                },
+                {
+                  "condition": "The submission package is not blocked, Review is pending or retrying, and no ask is open.",
+                  "status": "in-review"
+                },
+                {
+                  "condition": "Review is approved and neither the submission package nor application needs action by the party.",
+                  "status": "approved"
+                },
+                {
+                  "condition": "Review is not required and neither the submission package nor application needs action by the party.",
+                  "status": "processing"
+                }
+              ],
               "terminal": false,
               "turns": [
                 {
-                  "condition": "The submission package is blocked; Review ended without a usable approval; or, after approval or when Review is not required, application is not manual and is blocked without recovery retry.",
+                  "condition": "The submission package is blocked; Review is pending or retrying with an open ask; Review ended without a usable approval; or, after approval or when Review is not required, application is not manual and is blocked without recovery retry.",
                   "turn": "party"
                 },
                 {
-                  "condition": "The submission package is not blocked, and either Review is pending or being retried, or, after approval or when Review is not required, application is manual or is blocked with recovery retry.",
+                  "condition": "The submission package is not blocked, and either Review is pending or being retried without an open ask, or, after approval or when Review is not required, application is manual or is blocked with recovery retry.",
                   "turn": "official"
                 },
                 {
@@ -140,6 +172,12 @@
               "incomingTransitions": 2,
               "initial": false,
               "outgoingTransitions": 0,
+              "statuses": [
+                {
+                  "condition": "Always while the Proposal is in this state.",
+                  "status": "cancelled"
+                }
+              ],
               "terminal": true,
               "turns": [
                 {
@@ -154,6 +192,12 @@
               "incomingTransitions": 1,
               "initial": false,
               "outgoingTransitions": 0,
+              "statuses": [
+                {
+                  "condition": "Always while the Proposal is in this state.",
+                  "status": "applied"
+                }
+              ],
               "terminal": true,
               "turns": [
                 {
@@ -168,6 +212,12 @@
               "incomingTransitions": 1,
               "initial": false,
               "outgoingTransitions": 0,
+              "statuses": [
+                {
+                  "condition": "Always while the Proposal is in this state.",
+                  "status": "rejected"
+                }
+              ],
               "terminal": true,
               "turns": [
                 {
@@ -183,74 +233,74 @@
               "event": "edit",
               "from": "draft",
               "guard": "The Proposal is draft; replace validated Action input and advance its lifecycle revision.",
-              "to": "draft",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "draft"
             },
             {
               "event": "submit",
               "from": "draft",
               "guard": "The Proposal is draft and this submission version has not been frozen; accept the prepared plan and freeze its digest.",
-              "to": "submitted",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "submitted"
             },
             {
               "event": "rebase",
               "from": "draft",
               "guard": "The Proposal is draft; explicitly bind the active Action definition and preserve the current submission version.",
-              "to": "draft",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "draft"
             },
             {
               "event": "cancel",
               "from": "draft",
               "guard": "The Proposal is draft or submitted; cancel without applying its effects.",
-              "to": "cancelled",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "cancelled"
             },
             {
               "event": "revise",
               "from": "submitted",
               "guard": "The Proposal is submitted; open a new draft submission version without modifying the frozen prior submission.",
-              "to": "draft",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "draft"
             },
             {
               "event": "rebase",
               "from": "submitted",
               "guard": "The Proposal is submitted; open a new draft version explicitly bound to the active Action definition.",
-              "to": "draft",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "draft"
             },
             {
               "event": "retry",
               "from": "submitted",
               "guard": "The Proposal remains submitted; schedule another eligible review or application attempt without changing the frozen plan.",
-              "to": "submitted",
               "recoveryReasons": [
                 "dependency-outage",
                 "lease-expired"
-              ]
+              ],
+              "to": "submitted"
             },
             {
               "event": "cancel",
               "from": "submitted",
               "guard": "The Proposal is draft or submitted; cancel without applying its effects.",
-              "to": "cancelled",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "cancelled"
             },
             {
               "event": "apply",
               "from": "submitted",
               "guard": "The submission version, displayed digest, frozen Action contract, authorized targets, commit guards, and required approval match the application attempt.",
-              "to": "applied",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "applied"
             },
             {
               "event": "reject",
               "from": "submitted",
               "guard": "The configured review authority returned a rejected result for the exact current submission. A rejection is terminal; a changes-requested result leaves the Proposal submitted and revisable.",
-              "to": "rejected",
-              "recoveryReasons": []
+              "recoveryReasons": [],
+              "to": "rejected"
             }
           ]
         }

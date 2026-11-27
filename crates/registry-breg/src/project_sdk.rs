@@ -480,7 +480,7 @@ fn schema_type(schema: &Value, python: bool) -> String {
 }
 
 const TYPESCRIPT_CONTRACT: &str = r#"
-export type EngineReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'package-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied' | 'limit-reached';
+export type EngineReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'package-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied' | 'limit-reached' | 'application-pending';
 export type RecoveryHint = 'refresh' | 'revise' | 'retry' | 'rebase' | 'correct-input' | 'receipt-only';
 export type Availability<R extends string = EngineReason> =
   | { readonly available: true; readonly observedRevision: number }
@@ -578,7 +578,7 @@ export class ProjectClient {
 }
 "#;
 const PYTHON_CONTRACT: &str = r#"
-EngineReason = Literal['pending-review', 'review-rejected', 'review-changes-requested', 'review-ended', 'stale-revision', 'package-changed', 'dependency-outage', 'invalid-input', 'already-applied', 'limit-reached']
+EngineReason = Literal['pending-review', 'review-rejected', 'review-changes-requested', 'review-ended', 'stale-revision', 'package-changed', 'dependency-outage', 'invalid-input', 'already-applied', 'limit-reached', 'application-pending']
 RecoveryHint = Literal['refresh', 'revise', 'retry', 'rebase', 'correct-input', 'receipt-only']
 class Availability(TypedDict):
     available: bool

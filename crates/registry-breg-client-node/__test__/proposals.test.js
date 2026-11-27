@@ -28,6 +28,45 @@ const proposal = {id, actionId: 'correct', actionRevision: revision, submissionV
   submit: {method: 'POST', path: `/v1/proposals/${id}/submit`, accessProfile: 'author', operation: 'submit', ifMatch: '"draft-condition"'},
 }};
 
+test('Proposal status is a closed served value and application-pending requires refresh', async () => {
+  let document = proposal;
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.setHeader('cache-control', 'no-store');
+    response.setHeader('vary', 'authorization, accept');
+    response.setHeader('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01');
+    response.end(JSON.stringify(request.url.includes('/registry') ? metadata : document));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/`});
+    const binding = (await client.registryContract('author')).selectProposalGet('author');
+    for (const [status, state, turn] of [
+      ['draft', 'draft', 'party'], ['awaiting-party', 'submitted', 'party'],
+      ['in-review', 'submitted', 'official'], ['approved', 'submitted', 'official'],
+      ['processing', 'submitted', 'nobody'], ['applied', 'applied', 'nobody'],
+      ['rejected', 'rejected', 'nobody'], ['cancelled', 'cancelled', 'nobody'],
+    ]) {
+      document = {...proposal, state, status, turn, links: {self: proposal.links.self}};
+      if (state === 'submitted') document.effectDigest = revision;
+      assert.equal(JSON.parse((await client.getProposal(binding, id)).documentJson).status, status);
+    }
+    document = {...proposal, state: 'submitted', status: 'approved', turn: 'official', effectDigest: revision, links: {
+      self: proposal.links.self, revise: {method: 'POST', path: `/v1/proposals/${id}/revise`, accessProfile: 'author', operation: 'revise',
+        ifMatch: '"condition"', availability: {available: false, observedRevision: 1, reason: 'application-pending', recovery: 'refresh'}},
+    }};
+    assert.equal(JSON.parse((await client.getProposal(binding, id)).documentJson).links.revise.availability.reason, 'application-pending');
+    document.links.revise.availability.recovery = 'retry';
+    await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+    for (const status of ['unknown', null, false, 1]) {
+      document = {...proposal, status};
+      await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request');
+    }
+    document = proposal;
+    assert.equal(JSON.parse((await client.getProposal(binding, id)).documentJson).status, undefined);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
 test('proposal object methods preserve exact bodies and refuse JSON strings before I/O', async () => {
   const requests = [];
   const server = http.createServer(async (request, response) => {

@@ -25,7 +25,7 @@ pub mod breg {
         BRegProposalPage, BRegProposalQuery, BRegProposalResultReference,
         BRegProposalReviewBinding, BRegProposalReviewContext, BRegProposalReviewDocument,
         BRegProposalReviewHandoff, BRegProposalReviewHandoffReason, BRegProposalReviewHandoffState,
-        BRegProposalReviewResult, BRegProposalReviewSubject, BRegProposalState,
+        BRegProposalReviewResult, BRegProposalReviewSubject, BRegProposalState, BRegProposalStatus,
         BRegProposalSubmission, BRegProposalSubmissionApplication, BRegProposalTurn,
         BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
         BRegRecoveryHint, BRegRequestError, BRegResponseMetadata, BRegVerifiedHookDelivery,

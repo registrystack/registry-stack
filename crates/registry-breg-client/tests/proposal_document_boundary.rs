@@ -130,6 +130,45 @@ fn proposal(state: &str) -> Value {
     value
 }
 
+#[test]
+fn proposal_status_is_closed_and_old_receipts_remain_readable() {
+    for (status, state, turn) in [
+        ("draft", "draft", "party"),
+        ("awaiting-party", "submitted", "party"),
+        ("in-review", "submitted", "official"),
+        ("approved", "submitted", "official"),
+        ("processing", "submitted", "nobody"),
+        ("applied", "applied", "nobody"),
+        ("rejected", "rejected", "nobody"),
+        ("cancelled", "cancelled", "nobody"),
+    ] {
+        let mut value = proposal(state);
+        value["status"] = json!(status);
+        value["turn"] = json!(turn);
+        BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap())
+            .expect("known status decodes");
+    }
+    let mut value = proposal("submitted");
+    for status in [json!("unknown"), json!(null), json!(true), json!(42)] {
+        value["status"] = status;
+        assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+    value.as_object_mut().unwrap().remove("status");
+    BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).expect("stored older receipt");
+}
+
+#[test]
+fn proposal_application_pending_is_a_refresh_only_link_reason() {
+    let mut value = proposal("submitted");
+    value["links"]["revise"] = json!({"method":"POST","path":format!("/v1/proposals/{ID}/revise"),
+        "accessProfile":"writer","operation":"revise","ifMatch":"\"condition\"",
+        "availability":{"available":false,"observedRevision":2,"reason":"application-pending","recovery":"refresh"}});
+    BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap())
+        .expect("application-pending decodes");
+    value["links"]["revise"]["availability"]["recovery"] = json!("retry");
+    assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+}
+
 fn review(context: bool) -> Value {
     let mut value = json!({"id":ID,"actionId":"correct","actionRevision":DIGEST,
         "submissionVersion":1,"revision":2,"effectDigest":DIGEST,

@@ -1052,7 +1052,7 @@ export declare class BaseRegistryClient {
 }
 
 export type BRegProposalTransition = 'edit' | 'submit' | 'revise' | 'rebase' | 'retry' | 'cancel' | 'apply'
-export type BRegAvailabilityReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'package-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied' | 'limit-reached'
+export type BRegAvailabilityReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'package-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied' | 'limit-reached' | 'application-pending'
 export type BRegRecoveryHint = 'refresh' | 'revise' | 'retry' | 'rebase' | 'correct-input' | 'receipt-only'
 export type BRegAvailability =
   | { readonly available: true; readonly observedRevision: number }
@@ -1101,6 +1101,7 @@ export interface BRegProposalReviewDocument {
 }
 /** Who is expected to act next, derived by BReg. */
 export type BRegProposalTurn = 'party' | 'official' | 'nobody'
+export type BRegProposalStatus = 'draft' | 'awaiting-party' | 'in-review' | 'approved' | 'processing' | 'applied' | 'rejected' | 'cancelled'
 /** The review decision on one submission. The public reason is the only reviewer text BReg serves. */
 export interface BRegProposalDecision { readonly status: 'approved' | 'rejected' | 'changes-requested' | 'answered'; readonly decidedAt: string; readonly publicReason?: string }
 /** Why the review authority refused to take a submission. BReg names only these codes and never the authority's own text. */
@@ -1112,7 +1113,7 @@ export interface BRegProposalSubmission {
   readonly decision?: BRegProposalDecision
   readonly handoffRefusal?: BRegProposalHandoffRefusal
 }
-export interface BRegProposalDocument { readonly id: string; readonly actionId: string; readonly actionRevision: string; readonly submissionVersion: number; readonly revision: number; readonly state: 'draft' | 'submitted' | 'cancelled' | 'applied' | 'rejected'; readonly createdAt?: string; readonly turn?: BRegProposalTurn; readonly decision?: BRegProposalDecision; readonly handoffRefusal?: BRegProposalHandoffRefusal; readonly title?: string; readonly input?: JsonObject; readonly blockedReason?: 'package-changed'; readonly effectDigest?: string; readonly application?: BRegProposalApplication; readonly applicationStatus?: BRegProposalApplicationStatus; readonly links: Readonly<Partial<Record<BRegProposalTransition | 'self' | 'reviewContext' | 'reviewStatus', BRegProposalLink>>>; readonly attachments?: Readonly<Record<string, BRegProposalAttachment>>; readonly additions?: Readonly<Record<string, BRegProposalAdditionSlot>> }
+export interface BRegProposalDocument { readonly id: string; readonly actionId: string; readonly actionRevision: string; readonly submissionVersion: number; readonly revision: number; readonly state: 'draft' | 'submitted' | 'cancelled' | 'applied' | 'rejected'; readonly createdAt?: string; readonly turn?: BRegProposalTurn; readonly status?: BRegProposalStatus; readonly decision?: BRegProposalDecision; readonly handoffRefusal?: BRegProposalHandoffRefusal; readonly title?: string; readonly input?: JsonObject; readonly blockedReason?: 'package-changed'; readonly effectDigest?: string; readonly application?: BRegProposalApplication; readonly applicationStatus?: BRegProposalApplicationStatus; readonly links: Readonly<Partial<Record<BRegProposalTransition | 'self' | 'reviewContext' | 'reviewStatus', BRegProposalLink>>>; readonly attachments?: Readonly<Record<string, BRegProposalAttachment>>; readonly additions?: Readonly<Record<string, BRegProposalAdditionSlot>> }
 export declare class BRegProposal { private constructor(); private readonly __opaque: void; readonly responseEtag: string | null; readonly identifier: string; readonly actionIdentifier: string; readonly documentJson: string; readonly inputJson?: string | null }
 export declare class BRegProposalGetBinding { private constructor(); private readonly __opaque: void }
 export declare class BRegProposalReviewBinding { private constructor(); private readonly __opaque: void }

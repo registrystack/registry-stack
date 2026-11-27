@@ -51,6 +51,14 @@
   refused. To migrate, write the store's or verifier's own IPv4 or native
   IPv6 address, or a name that answers one.
 
+- BREAKING: Proposal documents serve the closed display `status` from the same rule as
+  `turn`. Revise and Rebase preserve approved and processing submissions:
+  their unavailable links name `application-pending` with recovery `refresh`,
+  and the commands answer 412. Draft Rebase and party recovery remain available.
+  `bregctl explain lifecycle` advances to `v1alpha9`, listing status conditions
+  alongside turns. Update BReg clients to accept the additional Proposal member
+  and availability reason. Proposal link checks propagate unexpected failures.
+
 - Proposal hooks without a `transitions` filter also receive `added`
   (`proposal.added`). Existing receivers must accept that event or configure
   an explicit transition filter.

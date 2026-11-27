@@ -23,6 +23,7 @@ pub struct LifecycleDescription {
 pub struct LifecycleState {
     pub id: &'static str,
     pub turns: Vec<LifecycleTurn>,
+    pub statuses: Vec<LifecycleStatus>,
     pub initial: bool,
     pub terminal: bool,
     pub unreachable: bool,
@@ -37,6 +38,14 @@ pub struct LifecycleState {
 #[serde(rename_all = "camelCase")]
 pub struct LifecycleTurn {
     pub turn: &'static str,
+    pub condition: &'static str,
+}
+
+/// One served status and the condition under which the shared rule selects it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleStatus {
+    pub status: &'static str,
     pub condition: &'static str,
 }
 
@@ -81,7 +90,87 @@ pub(crate) enum ProposalApplicationProgress {
 pub(crate) struct ProposalTurnContext {
     pub(crate) submission_blocked: bool,
     pub(crate) review: ProposalReviewProgress,
+    pub(crate) ask_open: bool,
     pub(crate) application: ProposalApplicationProgress,
+}
+
+// Each vocabulary is declared once: runtime values and served schemas use it.
+macro_rules! proposal_wire_values {
+    ($name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+        pub enum $name {
+            $(#[serde(rename = $wire)] $variant),+
+        }
+        impl $name {
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+            pub const fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $wire),+ }
+            }
+        }
+    };
+}
+
+proposal_wire_values!(ProposalAvailabilityReason {
+    PendingReview => "pending-review",
+    ReviewRejected => "review-rejected",
+    ReviewChangesRequested => "review-changes-requested",
+    ReviewEnded => "review-ended",
+    StaleRevision => "stale-revision",
+    PackageChanged => "package-changed",
+    DependencyOutage => "dependency-outage",
+    InvalidInput => "invalid-input",
+    AlreadyApplied => "already-applied",
+    LimitReached => "limit-reached",
+    ApplicationPending => "application-pending",
+});
+
+proposal_wire_values!(ProposalLinkRecovery {
+    Refresh => "refresh",
+    Revise => "revise",
+    Retry => "retry",
+    Rebase => "rebase",
+    CorrectInput => "correct-input",
+    ReceiptOnly => "receipt-only",
+});
+
+/// The current applicant-facing stage, derived together with the turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ProposalStatus {
+    Draft,
+    AwaitingParty,
+    InReview,
+    Approved,
+    Processing,
+    Applied,
+    Rejected,
+    Cancelled,
+}
+
+impl ProposalStatus {
+    pub(crate) const ALL: [Self; 8] = [
+        Self::Draft,
+        Self::AwaitingParty,
+        Self::InReview,
+        Self::Approved,
+        Self::Processing,
+        Self::Applied,
+        Self::Rejected,
+        Self::Cancelled,
+    ];
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::AwaitingParty => "awaiting-party",
+            Self::InReview => "in-review",
+            Self::Approved => "approved",
+            Self::Processing => "processing",
+            Self::Applied => "applied",
+            Self::Rejected => "rejected",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,10 +203,10 @@ impl TurnCondition {
         match self {
             Self::Always => "Always while the Proposal is in this state.",
             Self::SubmittedParty => {
-                "The submission package is blocked; Review ended without a usable approval; or, after approval or when Review is not required, application is not manual and is blocked without recovery retry."
+                "The submission package is blocked; Review is pending or retrying with an open ask; Review ended without a usable approval; or, after approval or when Review is not required, application is not manual and is blocked without recovery retry."
             }
             Self::SubmittedOfficial => {
-                "The submission package is not blocked, and either Review is pending or being retried, or, after approval or when Review is not required, application is manual or is blocked with recovery retry."
+                "The submission package is not blocked, and either Review is pending or being retried without an open ask, or, after approval or when Review is not required, application is manual or is blocked with recovery retry."
             }
             Self::SubmittedNobody => {
                 "The submission package is not blocked, Review is approved or not required, and application is neither manual nor blocked, including queued, running, or unreported application status."
@@ -143,7 +232,11 @@ fn submitted_turn(context: ProposalTurnContext) -> ProposalTurn {
     }
     match context.review {
         ProposalReviewProgress::Pending | ProposalReviewProgress::Retrying => {
-            ProposalTurn::Official
+            if context.ask_open {
+                ProposalTurn::Party
+            } else {
+                ProposalTurn::Official
+            }
         }
         ProposalReviewProgress::Failed
         | ProposalReviewProgress::ApprovalExpired
@@ -217,11 +310,88 @@ fn proposal_turn_rules(state: ProposalState) -> &'static [TurnRule] {
 /// new Proposal state cannot compile without an explicit turn rule.
 #[cfg(any(test, feature = "runtime"))]
 pub(crate) fn proposal_turn(state: ProposalState, context: ProposalTurnContext) -> ProposalTurn {
-    proposal_turn_rules(state)
+    proposal_status_and_turn(state, context).1
+}
+
+/// One rule owns both answers, including blocked submissions and open asks.
+#[cfg(any(test, feature = "runtime"))]
+pub(crate) fn proposal_status_and_turn(
+    state: ProposalState,
+    context: ProposalTurnContext,
+) -> (ProposalStatus, ProposalTurn) {
+    let turn = proposal_turn_rules(state)
         .iter()
         .find(|rule| rule.condition.matches(context))
         .expect("every Proposal state and context has a turn")
-        .turn
+        .turn;
+    let status = proposal_status_rules(state)
+        .iter()
+        .find(|(_, condition)| condition.matches(context, turn))
+        .expect("every Proposal state and context has a status")
+        .0;
+    (status, turn)
+}
+
+#[derive(Clone, Copy)]
+enum StatusCondition {
+    Always,
+    Party,
+    ReviewPending,
+    ReviewApproved,
+    ReviewNotRequired,
+}
+
+impl StatusCondition {
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Always => "Always while the Proposal is in this state.",
+            Self::Party => TurnCondition::SubmittedParty.description(),
+            Self::ReviewPending => "The submission package is not blocked, Review is pending or retrying, and no ask is open.",
+            Self::ReviewApproved => "Review is approved and neither the submission package nor application needs action by the party.",
+            Self::ReviewNotRequired => "Review is not required and neither the submission package nor application needs action by the party.",
+        }
+    }
+
+    #[cfg(any(test, feature = "runtime"))]
+    fn matches(self, context: ProposalTurnContext, turn: ProposalTurn) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Party => turn == ProposalTurn::Party,
+            Self::ReviewPending => matches!(
+                context.review,
+                ProposalReviewProgress::Pending | ProposalReviewProgress::Retrying
+            ),
+            Self::ReviewApproved => context.review == ProposalReviewProgress::Approved,
+            Self::ReviewNotRequired => context.review == ProposalReviewProgress::NotRequired,
+        }
+    }
+}
+
+fn proposal_status_rules(state: ProposalState) -> &'static [(ProposalStatus, StatusCondition)] {
+    use ProposalStatus as Status;
+    use StatusCondition as Condition;
+    match state {
+        ProposalState::Draft => &[(Status::Draft, Condition::Always)],
+        ProposalState::Cancelled => &[(Status::Cancelled, Condition::Always)],
+        ProposalState::Applied => &[(Status::Applied, Condition::Always)],
+        ProposalState::Rejected => &[(Status::Rejected, Condition::Always)],
+        ProposalState::Submitted => &[
+            (Status::AwaitingParty, Condition::Party),
+            (Status::InReview, Condition::ReviewPending),
+            (Status::Approved, Condition::ReviewApproved),
+            (Status::Processing, Condition::ReviewNotRequired),
+        ],
+    }
+}
+
+fn lifecycle_statuses(state: ProposalState) -> Vec<LifecycleStatus> {
+    proposal_status_rules(state)
+        .iter()
+        .map(|&(status, condition)| LifecycleStatus {
+            status: status.as_str(),
+            condition: condition.description(),
+        })
+        .collect()
 }
 
 fn lifecycle_turns(state: ProposalState) -> Vec<LifecycleTurn> {
@@ -280,6 +450,7 @@ fn build_lifecycle(
             LifecycleState {
                 id: state_id,
                 turns: lifecycle_turns(state),
+                statuses: lifecycle_statuses(state),
                 initial,
                 terminal: outgoing_transitions == 0,
                 unreachable: incoming_transitions == 0 && !initial,
@@ -328,6 +499,11 @@ fn proposal_enforcement() -> Vec<EnforcementLayer> {
             id: "explicit-contract-rebase",
             events: &["rebase"],
             description: "Rebase explicitly selects the active Action definition and requires both the current Rebase grant and active Start authority. An incompatible activation never silently changes a frozen submission.",
+        },
+        EnforcementLayer {
+            id: "submission-status",
+            events: &["revise", "rebase"],
+            description: "Revise and Rebase of a submitted Proposal require awaiting-party or in-review status from the shared status and turn rule. Approval and review-free processing preserve the current submission until Apply or Cancel, unless a recovery returns the turn to the party. Rebase of a draft is unchanged.",
         },
         EnforcementLayer {
             id: "application-authorization",
@@ -445,6 +621,109 @@ mod tests {
     };
 
     #[test]
+    fn proposal_status_and_turn_follow_the_exhaustive_lifecycle_table() {
+        use ProposalApplicationProgress as A;
+        use ProposalReviewProgress as R;
+        use ProposalState as S;
+        let mut rows = [0usize; 23];
+        for state in [
+            S::Draft,
+            S::Cancelled,
+            S::Applied,
+            S::Rejected,
+            S::Submitted,
+        ] {
+            for blocked in [false, true] {
+                for review in [
+                    R::NotRequired,
+                    R::Pending,
+                    R::Retrying,
+                    R::Failed,
+                    R::Approved,
+                    R::ApprovalExpired,
+                    R::Rejected,
+                    R::ChangesRequested,
+                    R::Answered,
+                    R::Ended,
+                ] {
+                    for ask_open in [false, true] {
+                        for application in [A::Manual, A::BlockedRetry, A::BlockedOther, A::Other] {
+                            let expected = match state {
+                                S::Draft => (0, "draft", "party"),
+                                S::Cancelled => (1, "cancelled", "nobody"),
+                                S::Applied => (2, "applied", "nobody"),
+                                S::Rejected => (3, "rejected", "nobody"),
+                                S::Submitted if blocked => (4, "awaiting-party", "party"),
+                                S::Submitted => match review {
+                                    R::Pending if ask_open => (5, "awaiting-party", "party"),
+                                    R::Retrying if ask_open => (6, "awaiting-party", "party"),
+                                    R::Pending => (7, "in-review", "official"),
+                                    R::Retrying => (8, "in-review", "official"),
+                                    R::Failed => (9, "awaiting-party", "party"),
+                                    R::ApprovalExpired => (10, "awaiting-party", "party"),
+                                    R::Rejected => (11, "awaiting-party", "party"),
+                                    R::ChangesRequested => (12, "awaiting-party", "party"),
+                                    R::Answered => (13, "awaiting-party", "party"),
+                                    R::Ended => (14, "awaiting-party", "party"),
+                                    R::Approved => match application {
+                                        A::Manual => (15, "approved", "official"),
+                                        A::BlockedRetry => (16, "approved", "official"),
+                                        A::BlockedOther => (17, "awaiting-party", "party"),
+                                        A::Other => (18, "approved", "nobody"),
+                                    },
+                                    R::NotRequired => match application {
+                                        A::Manual => (19, "processing", "official"),
+                                        A::BlockedRetry => (20, "processing", "official"),
+                                        A::BlockedOther => (21, "awaiting-party", "party"),
+                                        A::Other => (22, "processing", "nobody"),
+                                    },
+                                },
+                            };
+                            let context = ProposalTurnContext {
+                                submission_blocked: blocked,
+                                review,
+                                ask_open,
+                                application,
+                            };
+                            let (status, turn) = proposal_status_and_turn(state, context);
+                            rows[expected.0] += 1;
+                            assert_eq!(
+                                (status.as_str(), turn.as_str()),
+                                (expected.1, expected.2),
+                                "{state:?} {context:?}"
+                            );
+                            assert_eq!(proposal_turn(state, context), turn);
+                            assert_eq!(
+                                turn.as_str() == "party",
+                                matches!(status.as_str(), "draft" | "awaiting-party")
+                            );
+                            for terminal in ["applied", "rejected", "cancelled"] {
+                                assert_eq!(
+                                    status.as_str() == terminal,
+                                    proposal_state_id(state) == terminal
+                                );
+                            }
+                            if status.as_str() == "approved" {
+                                assert_eq!(review, R::Approved);
+                            }
+                            if status.as_str() == "in-review" {
+                                assert_eq!(turn.as_str(), "official");
+                            }
+                            if matches!(status.as_str(), "approved" | "processing") {
+                                assert!(matches!(turn.as_str(), "official" | "nobody"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            rows.into_iter().all(|count| count > 0),
+            "all 23 rows are exercised"
+        );
+    }
+
+    #[test]
     fn retry_names_the_runtime_recovery_reasons() {
         let lifecycle = proposal_lifecycle();
         let retry = lifecycle
@@ -491,6 +770,7 @@ mod tests {
             ProposalTurnContext {
                 submission_blocked,
                 review,
+                ask_open: false,
                 application,
             },
         )
