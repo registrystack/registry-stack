@@ -472,14 +472,27 @@ impl fmt::Debug for JwksFetcher {
 /// A symmetric key, a private-key member or an unnamed key is refused here,
 /// at startup, rather than when a token first selects it. The rule on members
 /// is [`public_jwks_document`]. An OKP key passes that rule and is refused
-/// here with [`StaticJwksError::OctetKeyPair`], which names its position.
+/// here with [`StaticJwksError::OctetKeyPair`], which names its position, `kid`
+/// and `crv`. A key with a member of the wrong shape is refused with
+/// [`StaticJwksError::KeyShape`], which names its position.
 pub fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, OidcError> {
     let document = public_jwks_document(bytes)?;
-    let okp = document["keys"]
-        .as_array()
-        .and_then(|keys| keys.iter().position(|key| key["kty"] == "OKP"));
-    if let Some(key) = okp {
-        return Err(StaticJwksError::OctetKeyPair { key }.into());
+    let keys = document["keys"].as_array().into_iter().flatten();
+    for (key, member) in keys.enumerate() {
+        if member["kty"] == "OKP" {
+            let label = |name: &str| member[name].as_str().map(str::to_owned);
+            return Err(StaticJwksError::OctetKeyPair {
+                key,
+                kid: label("kid"),
+                crv: label("crv"),
+            }
+            .into());
+        }
+        // Parsing each key alone names the one a member of the wrong shape
+        // broke, which the whole-set parse below cannot.
+        if serde_json::from_value::<Jwk>(member.clone()).is_err() {
+            return Err(StaticJwksError::KeyShape { key }.into());
+        }
     }
     let jwks: JwkSet = serde_json::from_value(document).map_err(|_| OidcError::Parse)?;
     let all_asymmetric = jwks.keys.iter().all(|key| {
@@ -4923,13 +4936,60 @@ mod tests {
         assert!(
             matches!(
                 error,
-                OidcError::StaticKeySet(StaticJwksError::OctetKeyPair { key: 1 })
+                OidcError::StaticKeySet(StaticJwksError::OctetKeyPair { key: 1, .. })
+            ),
+            "{error:?}"
+        );
+        let text = error.to_string();
+        assert!(
+            text.contains(r#"key 1 (kid "two", crv "Ed25519") is an OKP key"#),
+            "{text}"
+        );
+        assert!(text.contains("use an RSA or EC key"), "{text}");
+        assert!(error.is_key_source_unavailable());
+    }
+
+    #[test]
+    fn an_okp_key_without_a_crv_is_named_by_kid_alone() {
+        let text = parse_static_jwks(br#"{"keys":[{"kty":"OKP","kid":"only","x":"AA"}]}"#)
+            .expect_err("an OKP key is refused")
+            .to_string();
+        assert!(
+            text.contains(r#"key 0 (kid "only") is an OKP key"#),
+            "{text}"
+        );
+        assert!(!text.contains("crv"), "{text}");
+    }
+
+    #[test]
+    fn an_okp_key_names_are_bounded_and_quoted() {
+        let long = "k".repeat(500);
+        let document =
+            format!(r#"{{"keys":[{{"kty":"OKP","kid":"{long}","crv":"a\nb","x":"AA"}}]}}"#);
+        let text = parse_static_jwks(document.as_bytes())
+            .expect_err("an OKP key is refused")
+            .to_string();
+        assert!(!text.contains(&long), "{text}");
+        assert!(text.contains(r#"crv "a\nb""#), "{text}");
+        assert!(text.len() < 400, "{}", text.len());
+    }
+
+    #[test]
+    fn a_key_of_the_wrong_shape_is_named_by_position() {
+        let error = parse_static_jwks(
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"two","n":5,"e":"AQAB"}]}"#,
+        )
+        .expect_err("a key with a numeric modulus is refused");
+        assert!(
+            matches!(
+                error,
+                OidcError::StaticKeySet(StaticJwksError::KeyShape { key: 1 })
             ),
             "{error:?}"
         );
         let text = error.to_string();
         assert!(text.contains("key 1 "), "{text}");
-        assert!(text.contains("use an RSA or EC key"), "{text}");
+        assert!(!text.contains("two"), "{text}");
         assert!(error.is_key_source_unavailable());
     }
 }

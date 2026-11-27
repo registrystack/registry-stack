@@ -46,7 +46,7 @@ const EXPECTATIONS_FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[],
 };
-const PRIVATE_JWK_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "k"];
+const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
 const SIGNING_ALGORITHMS: [&str; 5] = ["RS256", "ES256", "EdDSA", "HS256", "HS512"];
 
 /// Why a corpus file did not load, validate, sign or run.
@@ -1234,4 +1234,21 @@ fn finish(mut report: RowReport, observed: Option<Outcome>) -> RowReport {
         report.observed = Some(observed);
     }
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn the_private_member_list_is_the_platform_list() {
+        assert_eq!(
+            super::PRIVATE_JWK_MEMBERS
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            registry_platform_crypto::PRIVATE_JWK_MEMBERS
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
+    }
 }

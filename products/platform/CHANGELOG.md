@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `registry-platform-httpsec` implements authcommon's `RefusalTraceId` for
+  `TraceId` behind the opt-in `refusal-trace-id` feature, not `server`. A
+  service that only serves HTTP no longer links `registry-platform-authcommon`
+  and the crypto stack. A service that passes its trace id to `record_refusal!`
+  enables the feature.
+
 - A `test-support` feature in `registry-platform-provision` gives the product
   provision tests one verified-TLS superuser session, so they run against a
   TLS-only PostgreSQL server. It is enabled only by dev-dependencies.
@@ -17,8 +23,11 @@
   follows the strict JSON rule: an integer that a 64-bit floating-point
   number cannot hold exactly is refused as `StaticJwksError::NotJson`.
   `parse_static_jwks` refuses an OKP key with
-  `StaticJwksError::OctetKeyPair`, which names the key position and says to
-  use an RSA or EC key.
+  `StaticJwksError::OctetKeyPair`, which names the key position and its
+  `kid` and `crv` when it has them, and says to use an RSA or EC key. A key
+  with a member of the wrong shape is refused with
+  `StaticJwksError::KeyShape`, which names the key position.
+  `StaticJwksError` is no longer `Copy`.
 
 - One definition of loopback, the std-only `registry-platform-loopback` crate
   (re-exported as `registry_platform_httpsec::loopback` and

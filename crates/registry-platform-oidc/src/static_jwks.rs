@@ -5,7 +5,9 @@
 //! apart from the strict JSON rule that applies to the whole document: no
 //! repeated member name, and no integer a binary64 number cannot hold
 //! exactly. A refusal names the position of the key and the rule it broke,
-//! never a `kid` or a member value.
+//! never a member value. The one refusal that also names a key's `kid` and
+//! `crv` is [`StaticJwksError::OctetKeyPair`], for a key the verifier would
+//! otherwise load: both are public labels, quoted and bounded.
 
 use std::collections::BTreeSet;
 
@@ -13,7 +15,7 @@ use registry_platform_crypto::{parse_json_strict, PRIVATE_JWK_MEMBERS};
 use serde_json::Value;
 
 /// Why a static key set was refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum StaticJwksError {
     #[error("the document is not JSON, repeats a member name, or holds an integer that a 64-bit floating-point number cannot represent exactly")]
@@ -36,8 +38,37 @@ pub enum StaticJwksError {
     MissingKeyId { key: usize },
     #[error("key {key} repeats the \"kid\" of an earlier key; give every key its own \"kid\"")]
     RepeatedKeyId { key: usize },
-    #[error("key {key} is an OKP key (\"kty\": \"OKP\"), which the token verifier does not load; use an RSA or EC key")]
-    OctetKeyPair { key: usize },
+    #[error("key {key}{} is an OKP key (\"kty\": \"OKP\"), which the token verifier does not load; use an RSA or EC key", okp_labels(.kid, .crv))]
+    OctetKeyPair {
+        key: usize,
+        kid: Option<String>,
+        crv: Option<String>,
+    },
+    #[error(
+        "key {key} is not a valid JSON Web Key: a member it needs is missing or has the wrong type"
+    )]
+    KeyShape { key: usize },
+}
+
+/// The longest `kid` or `crv` an OKP refusal repeats.
+const MAX_LABEL_CHARS: usize = 64;
+
+/// ` (kid "...", crv "...")` for the labels a key has, quoted and cut to
+/// [`MAX_LABEL_CHARS`], or nothing when it has neither.
+fn okp_labels(kid: &Option<String>, crv: &Option<String>) -> String {
+    let labels: Vec<String> = [("kid", kid), ("crv", crv)]
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let value = value.as_deref()?;
+            let bounded: String = value.chars().take(MAX_LABEL_CHARS).collect();
+            Some(format!("{name} {bounded:?}"))
+        })
+        .collect();
+    if labels.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", labels.join(", "))
+    }
 }
 
 /// Check that `bytes` is a JSON Web Key Set that holds public keys only.

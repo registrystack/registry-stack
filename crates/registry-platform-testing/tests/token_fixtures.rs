@@ -15,7 +15,17 @@ use serde_json::{json, Value};
 
 const ISSUER: &str = "https://issuer.example.test/realms/journey";
 const AUDIENCE: &str = "https://api.example.test";
-const PRIVATE_JWK_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "k"];
+const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+
+#[test]
+fn the_private_member_list_is_the_platform_list() {
+    assert_eq!(
+        PRIVATE_JWK_MEMBERS.into_iter().collect::<BTreeSet<_>>(),
+        registry_platform_crypto::PRIVATE_JWK_MEMBERS
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    );
+}
 
 fn corpus() -> TokenCorpus {
     TokenCorpus::load().expect("the corpus loads and validates")

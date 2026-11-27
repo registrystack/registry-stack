@@ -105,7 +105,9 @@ fn parse_traceparent(value: &str) -> Option<TraceContext> {
 
 // The request trace id is the one value `record_refusal!` takes from a request:
 // it is a validated W3C trace id, so it carries no other caller text.
+#[cfg(feature = "refusal-trace-id")]
 impl registry_platform_authcommon::__refusal_trace_id_seal::Sealed for TraceId {}
+#[cfg(feature = "refusal-trace-id")]
 impl registry_platform_authcommon::RefusalTraceId for TraceId {}
 
 fn fresh_span_id() -> String {
@@ -809,6 +811,7 @@ mod tests {
         assert!(TraceId::parse("not-a-trace").is_err());
     }
 
+    #[cfg(feature = "refusal-trace-id")]
     #[test]
     fn the_request_trace_id_is_the_one_a_refusal_line_takes() {
         use registry_platform_authcommon::{

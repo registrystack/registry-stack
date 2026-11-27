@@ -12,17 +12,19 @@ workspace = true
 
 [features]
 default = ["server"]
-# `server` also implements authcommon's `RefusalTraceId` for `TraceId`, so a
-# service passes its request trace id to `record_refusal!`.
 server = [
     "dep:axum",
-    "dep:registry-platform-authcommon",
     "dep:tokio",
     "dep:tower",
     "dep:tower-http",
     "dep:ulid",
     "dep:url",
 ]
+
+# Implements authcommon's `RefusalTraceId` for `TraceId`, so a service passes
+# its request trace id to `record_refusal!`. Opt-in because authcommon reaches
+# the crypto stack, which a service that only serves HTTP does not carry.
+refusal-trace-id = ["server", "dep:registry-platform-authcommon"]
 
 [[test]]
 name = "integration"

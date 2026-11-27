@@ -4271,6 +4271,31 @@ on:
             steps[0]["run"],
         )
 
+    def test_platform_shard_runs_the_feature_gated_refusal_trace_id_test(self) -> None:
+        # No platform crate enables refusal-trace-id, so the shard's own run
+        # compiles httpsec without the impl and skips its test; this step runs it.
+        self.assertIn("registry-platform-httpsec", SHARDS["platform"])
+        manifest = Path("crates/registry-platform-httpsec/Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('refusal-trace-id = ["server", "dep:registry-platform-authcommon"]', manifest)
+        steps = [
+            step
+            for step in self.workflow_jobs["rust-tests"]["steps"]
+            if step.get("name") == "Test the refusal trace id implementation"
+        ]
+        self.assertEqual(1, len(steps))
+        self.assertEqual(
+            "matrix.name == 'platform' && "
+            "contains(matrix.packages, 'registry-platform-httpsec')",
+            steps[0]["if"],
+        )
+        self.assertEqual(
+            "cargo test --locked -p registry-platform-httpsec "
+            "--features refusal-trace-id --lib",
+            steps[0]["run"],
+        )
+
     def test_provisioning_changes_select_the_tls_postgres_lane(self) -> None:
         # The suite runs in the contracts-journeys lane, which review keeps.
         self.assertIn(PROVISION_POSTGRES_LANE, BREG_CONTRACTS_LANES[:2])

@@ -22,8 +22,9 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
   422 framework bodies in the service's own problem vocabulary through a
   caller-supplied mapping from `FrameworkRejection`.
 - `TraceId` and `TraceContext`, the shared strict W3C `traceparent` transport
-  primitives for Registry service responses. With the `server` feature,
-  `TraceId` implements `registry_platform_authcommon::RefusalTraceId`, so a
+  primitives for Registry service responses. With the `refusal-trace-id`
+  feature, which pulls in `registry-platform-authcommon` and so the crypto
+  stack, `TraceId` implements `registry_platform_authcommon::RefusalTraceId`, so a
   service passes its request trace id to `record_refusal!`.
 - `loopback`, a re-export of `registry-platform-loopback`, the one definition
   of loopback for outbound destinations and loopback origins:
