@@ -115,6 +115,18 @@ class ReleaseRosterTest(TestCase):
             self.assertFalse(release_roster.documents_in_release((0, 43, 99)))
             self.assertTrue(release_roster.documents_in_release((0, 44, 0)))
 
+    def test_session_service_is_held_out_of_every_release(self) -> None:
+        self.assertIsNone(release_roster.SESSION_FIRST_RELEASE)
+        for version in ((0, 48, 0), (0, 49, 0), (1, 0, 0)):
+            self.assertFalse(release_roster.session_in_release(version))
+            self.assertNotIn(
+                ("registry-session", "registry-session"),
+                release_roster.additional_platform_builds(version),
+            )
+        with mock.patch.object(release_roster, "SESSION_FIRST_RELEASE", (0, 49, 0)):
+            self.assertFalse(release_roster.session_in_release((0, 48, 99)))
+            self.assertTrue(release_roster.session_in_release((0, 49, 0)))
+
     def test_coordinator_binary_release_does_not_release_its_image(self):
         self.assertFalse(release_roster.coordinator_binaries_in_release((0, 43, 99)))
         self.assertTrue(release_roster.coordinator_binaries_in_release((0, 44, 0)))

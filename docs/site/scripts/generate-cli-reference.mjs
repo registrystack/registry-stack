@@ -46,6 +46,7 @@ export const expectedBinaries = [
   'messagingctl',
   'registry-mcp',
   'registry-render',
+  'registry-session',
   'rstack',
   'scheduling',
   'schedulingctl',

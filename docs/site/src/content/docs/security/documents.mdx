@@ -14,9 +14,9 @@ standards_referenced: []
 This page states what the Document Store guarantees, what it does not, and what you must do for the
 guarantees to hold.
 The enforced invariants, with threats, enforcement points and test names, are rows
-`DOCUMENTS-SEC-01` to `DOCUMENTS-SEC-54` in the
-[security invariant matrix](https://github.com/registrystack/registry-stack/blob/v0.46.0/products/documents/contracts/security-invariant-matrix.yaml);
-this page does not repeat them.
+`DOCUMENTS-SEC-01` to `DOCUMENTS-SEC-56` in the
+[security invariant matrix](https://github.com/registrystack/registry-stack/blob/main/products/documents/contracts/security-invariant-matrix.yaml).
+This page does not repeat them.
 Configuration is in the [Document Store configuration reference](../../reference/documents-configuration/),
 and the restore drill is in
 [Deploy and operate the Document Store](../../operate/documents/#restore-from-a-backup).
@@ -96,7 +96,7 @@ Findings name the member and rule, never the value.
 {/* Evidence: products/documents/contracts/security-invariant-matrix.yaml DOCUMENTS-SEC-01,
     DOCUMENTS-SEC-03, DOCUMENTS-SEC-04, DOCUMENTS-SEC-05, DOCUMENTS-SEC-06, DOCUMENTS-SEC-08,
     DOCUMENTS-SEC-10, DOCUMENTS-SEC-11, DOCUMENTS-SEC-21, DOCUMENTS-SEC-24, DOCUMENTS-SEC-26,
-    DOCUMENTS-SEC-32, DOCUMENTS-SEC-34, DOCUMENTS-SEC-48;
+    DOCUMENTS-SEC-32, DOCUMENTS-SEC-34, DOCUMENTS-SEC-48, DOCUMENTS-SEC-56;
     crates/registry-documents/src/http.rs ready, readiness_router, refusal_response;
     crates/registry-documents/src/metrics.rs, Metrics, count_requests,
     the_refusal_counter_lists_every_check_from_zero_and_counts_by_check;

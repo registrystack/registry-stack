@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `bregctl generate identity-facts` refuses runtime configuration with
+  assertion issuers, which hosted identity generation cannot configure into
+  the registry yet. Generate facts from the runtime file the server runs.
+
 - BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The
   POST carries `webhook-id`, `webhook-timestamp` and `webhook-signature`, an
   HMAC-SHA-256 over the id, the timestamp and the exact body. It no longer

@@ -1017,6 +1017,8 @@ export default defineConfig({
             { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
             { label: 'Connect an OIDC issuer', slug: 'operate/advanced/connect-an-oidc-issuer' },
             { label: 'Generate ThunderID configuration', slug: 'operate/advanced/generate-identity-configuration' },
+            { label: 'Configure the session service', slug: 'configure/session' },
+            { label: 'Session service security model', slug: 'security/session' },
             { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
             { label: 'Back up and restore', slug: 'operate/advanced/back-up-and-restore' },
             { label: 'Upgrade and retire', slug: 'operate/advanced/upgrade-and-retire' },

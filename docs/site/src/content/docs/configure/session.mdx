@@ -1,0 +1,349 @@
+---
+title: Configure the session service
+description: "Keep a person's tokens on the server and configure an Envoy gateway to check each call."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-27"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+If you operate pages behind an Envoy gateway, use `registry-session` to hold signed-in people's tokens on the server.
+The gateway attaches the person's own token when a page calls a product.
+The service checks each call and never proxies it.
+
+{/* Evidence: crates/registry-session/src/lib.rs command;
+    crates/registry-session/src/check.rs Checker, Decision. */}
+
+## Before you start
+
+You need an identity provider and the products your pages call.
+The service is a relying party, not an identity provider or token issuer.
+It uses authorisation-code sign-in with PKCE and obtains one token set per distinct audience.
+The provider must return JWT access tokens with a readable audience, a lifetime and refresh tokens.
+
+Build `registry-session` from the workspace source with `cargo build --locked -p registry-session`.
+It is held out of numbered releases.
+Use `registry-session --help` for its command tree.
+
+{/* Evidence: crates/registry-session/src/signin.rs authorization_location, complete;
+    crates/registry-session/src/issuer.rs audience_accepted, redeem;
+    crates/registry-session/Cargo.toml;
+    release/scripts/release_roster.py SESSION_FIRST_RELEASE. */}
+
+Run one replica.
+Sessions live only in memory, so a restart requires people to sign in again.
+Put TLS in front of the public listener.
+Make the check listener reachable only by the gateway: its answers can carry bearer tokens.
+
+{/* Evidence: crates/registry-session/src/store.rs Store;
+    crates/registry-session/src/check.rs Decision;
+    crates/registry-session/README.md. */}
+
+## 1. Write the runtime file
+
+Save this synthetic example as an absolute path such as `/etc/registry-session/runtime.yaml`.
+Replace its issuer endpoints, client id, scopes and upstream clusters with your deployment's values.
+The example assumes [Base Registry Engine (BReg)](../../start/breg-quickstart/) uses the person audience.
+
+```yaml
+apiVersion: id.registrystack.org/formats/platform/session-runtime/v1alpha1
+kind: PlatformSessionRuntimeConfig
+listener:
+  bind: 127.0.0.1:8120
+  tlsTermination: operator-controlled-upstream
+checkListener: 127.0.0.1:8121
+publicOrigin: https://app.example.org
+secretProviders:
+  file:
+    root: /run/secrets/registry-session
+issuer:
+  id: https://id.example.org
+  authorization: https://id.example.org/oauth2/authorize
+  endSession: https://id.example.org/oauth2/logout
+  token: https://id.example.org/oauth2/token
+  revocation: https://id.example.org/oauth2/revoke
+  jwks: https://id.example.org/oauth2/jwks
+  attemptTimeoutMilliseconds: 2000
+personAudience: https://api.example.org/person
+gateway:
+  service:
+    host: session.example.org
+    publicPort: 8120
+    checkPort: 8121
+  checkTimeoutMilliseconds: 3000
+  hostFilters: [envoy.filters.http.cors]
+modules:
+  - id: breg
+    prefix: /api/registry/
+    audience: person
+    upstream:
+      cluster: registry
+      prefixRewrite: /
+pages:
+  - prefix: /apply/
+    signIn: citizen
+    upstream:
+      cluster: pages
+signIns:
+  citizen:
+    clientId: citizen-pages
+    clientSecretRef: secret:file/citizen-client-secret
+    scopes: [registry:read]
+session:
+  idleLifetimeSeconds: 1800
+me:
+  claims: [sub, name]
+audit:
+  hashKeyRef: secret:file/audit-key
+  path: /var/lib/registry-session/audit.jsonl
+```
+
+{/* Evidence: crates/registry-session/src/config.rs RuntimeConfig, IssuerConfig,
+    SessionConfig, SignInConfig, ModuleConfig, PageConfig, GatewayConfig, WhoAmIConfig;
+    products/platform/generated/session-runtime/session-runtime.schema.json. */}
+
+`listener.bind` serves the public session routes behind your gateway.
+`checkListener` serves the gateway check and must use a different address.
+Both inherit the listener's TLS-termination and network-exposure settings.
+Use addresses that your gateway can reach.
+The loopback listener addresses in this example require `session.example.org` to resolve to that same host from the gateway.
+
+`publicOrigin` is the browser's origin: lower-case scheme and host, without a path, trailing slash or default port.
+`issuer.id` is the issuer identifier compared exactly.
+Every endpoint is explicit, without discovery.
+Keep `issuer.attemptTimeoutMilliseconds` below `gateway.checkTimeoutMilliseconds`.
+
+{/* Evidence: crates/registry-session/src/config.rs RuntimeConfig, IssuerConfig,
+    gateway_findings;
+    crates/registry-session/src/runtime.rs Service. */}
+
+Each module names a path prefix and its token audience.
+`audience: person` selects `personAudience`.
+Use the member product's name as its `id`, such as `breg` or `documents`.
+A page selects a sign-in kind through `signIn`.
+A module's optional `signIns` restricts which kinds reach that route.
+Products still decide what the person may read or change.
+
+{/* Evidence: crates/registry-session/src/config.rs ModuleConfig, PageConfig, admits;
+    crates/registry-session/src/offline.rs receipt_findings;
+    crates/registry-session/README.md. */}
+
+Store the client secret and audit hash key in the files their references name.
+Declare the file provider root and keep the files accessible only to the service account.
+Startup resolves the references and opens the audit destination before listening.
+`me.claims` selects the verified identity claims returned by `GET /session/me`.
+That route returns no token and does not renew one.
+
+{/* Evidence: crates/registry-session/src/runtime.rs build_with_clock;
+    crates/registry-session/src/public.rs me;
+    crates/registry-session/src/signin.rs allowed_claims;
+    crates/registry-platform-config/src/secrets.rs. */}
+
+## 2. Declare the identity application
+
+In your identity deployment file, declare the same `personAudience` and a session application for each sign-in kind.
+For the runtime example, the relevant excerpt is:
+
+```yaml
+personAudience: https://api.example.org/person
+sessionApps:
+  - id: citizen-pages
+    clientSecretRef: secret:env/CITIZEN_CLIENT_SECRET
+    origin: https://app.example.org
+    redirectUris: [https://app.example.org/session/callback]
+    postLogoutRedirectUris: [https://app.example.org/session/signed-out]
+    products: [breg]
+    tokenAttributes: [registry_actor_kind]
+    grants:
+      - product: breg
+        accessProfiles: [case-read]
+```
+
+Use the access-profile names and required claims from your products' identity facts.
+The product must admit the session application's client id.
+Provision the same client secret for the identity application and the service's secret reference.
+The generator configures authorisation-code and refresh-token grants for session applications.
+
+{/* Evidence: crates/registry-thunderid-tooling/src/identity_deployment.rs SessionApp;
+    crates/registry-thunderid-tooling/src/identity_generate.rs session_apps;
+    crates/registry-thunderid-tooling/src/render.rs;
+    crates/registry-thunderid-tooling/README.md. */}
+
+Only `breg` and `documents` can share the hosted generator's person audience.
+Each member's runtime must already declare that audience.
+The generator refuses overlapping member scope names and requires reachable interactive profiles to have a scope of their own.
+Other products keep separate audiences.
+The `personAudience` member in an `rstack dev` plan supports BReg membership only.
+
+{/* Evidence: crates/registry-thunderid-tooling/src/identity_facts.rs PERSON_AUDIENCE_PRODUCTS,
+    check_person_member;
+    crates/registry-thunderid-tooling/src/identity_generate.rs profile-without-own-scope;
+    crates/registry-rstack-dev/src/plan.rs person_audience, breg_may_be_a_person_audience_member. */}
+
+Generate the identity configuration through [Generate ThunderID configuration](../../operate/advanced/generate-identity-configuration/).
+When including the Document Store, `rstack identity generate thunderid` accepts `--documents-runtime-config FILE`.
+It drives `documentsctl generate identity-facts` against that runtime and its package.
+`RSTACK_DOCUMENTSCTL_BIN` selects an explicit tool binary.
+
+Then check the session file against the generated receipt:
+
+```bash
+registry-session --runtime-config /etc/registry-session/runtime.yaml check \
+  --identity-receipt /etc/registry-session/identity-out/identity-receipt.json
+```
+
+The command exits 0 when accepted.
+It reads no secret and opens no socket.
+On a finding, correct the named member and rerun it.
+If a value uses an environment expression, add `--environment` with that variable set before comparing the receipt.
+
+{/* Evidence: crates/registry-rstack/src/identity.rs;
+    crates/registry-documentsctl/src/identity_facts.rs generate;
+    crates/registry-session/src/offline.rs run, receipt_diagnostics, receipt_findings;
+    crates/registry-session/src/lib.rs command. */}
+
+## 3. Generate and splice the gateway fragments
+
+Generate into a directory you reserve for these files.
+The command writes or replaces the four fragments there:
+
+```bash
+registry-session --runtime-config /etc/registry-session/runtime.yaml gateway envoy \
+  --out /etc/registry-session/envoy-fragments
+```
+
+Splice the fragments into your static Envoy configuration:
+
+1. Put `http-filters.yaml` at the head of each public HTTP connection manager's filter chain.
+   Keep the generated order, ahead of your host filters, with the router last.
+2. Put `routes.yaml` first in a virtual host whose only domain is `app.example.org`.
+   Define the `registry` and `pages` upstream clusters that the runtime names.
+3. Add `clusters.yaml` to the host's cluster list.
+4. Put the mapper from `local-reply.yaml` first in the connection manager's `local_reply_config.mappers`.
+
+Remove `registry-session-answer` from responses on every host route outside the generated routes.
+Set `strip_trailing_host_dot: true`.
+For this example's authority without a port, also set `strip_matching_host_port: true`.
+
+{/* Evidence: crates/registry-session/src/gateway.rs generate, http_filters, routes, clusters, local_reply;
+    crates/registry-session/src/gateway/verify.rs verify_assembled, verify_manager, verify_routes;
+    crates/registry-session/README.md. */}
+
+`gateway.hostFilters` must name every host HTTP filter except the router.
+Each module or page can retain named filters through `upstream.keepHostFilters`.
+Every other host filter is switched off on generated routes.
+A kept filter runs after the session check and sees the person's bearer token on a module call.
+Keep only filters that preserve the path, route cache and authorization header.
+All host filters are switched off on every `/session/` route, including its reserved catch-all.
+
+{/* Evidence: crates/registry-session/src/gateway.rs routes;
+    crates/registry-session/src/gateway/verify.rs verify_chain;
+    crates/registry-session/README.md. */}
+
+Verify the result before deploying:
+
+```bash
+registry-session --runtime-config /etc/registry-session/runtime.yaml gateway envoy \
+  --check /etc/registry-session/envoy-fragments
+registry-session --runtime-config /etc/registry-session/runtime.yaml gateway envoy \
+  --verify-assembled /etc/envoy/envoy.yaml
+```
+
+Both commands exit 0 when accepted.
+A refusal names the differing file or rejected gateway member.
+Regenerate and splice again when the runtime changes, then repeat both checks.
+The assembled verifier supports inline static listeners, routes and filters.
+It refuses dynamic route delivery, hidden filter configuration and redirects.
+An HTTP-to-HTTPS redirect must run outside this Envoy.
+
+{/* Evidence: crates/registry-session/src/gateway.rs run_envoy;
+    crates/registry-session/src/gateway/verify.rs verify_assembled, unseen_members, redirects_in;
+    crates/registry-session/src/main.rs. */}
+
+## 4. Check the running service
+
+Start the service with `registry-session --runtime-config /etc/registry-session/runtime.yaml`.
+The operational log reports when both listeners are listening.
+Visit `https://app.example.org/apply/` through the gateway and complete sign-in.
+A request without the page's required session redirects to `/session/sign-in`.
+A successful sign-in returns to the allowed local page.
+`GET /session/me` returns the sign-in kind and selected claims.
+
+{/* Evidence: crates/registry-session/src/main.rs run_serve;
+    crates/registry-session/src/check.rs decide_route;
+    crates/registry-session/src/signin.rs return_target, open_session;
+    crates/registry-session/tests/public.rs a_citizen_signs_in_in_one_hop. */}
+
+The browser holds the opaque `__Host-registry-session` cookie.
+The gateway strips cookies before forwarding signed-in module calls and attaches the person's token.
+Page upstreams receive neither cookies nor a bearer.
+For a write, your page sends `Registry-Client: page`.
+The request must also carry an `Origin` matching `publicOrigin` and, when present, `Sec-Fetch-Site: same-origin`.
+
+{/* Evidence: crates/registry-session/src/config.rs SESSION_COOKIE;
+    crates/registry-session/src/public.rs cookie;
+    crates/registry-session/src/check.rs same_origin_page_call, Decision;
+    crates/registry-session/src/gateway.rs routes. */}
+
+A module call without a live session answers 401 `session.expired`.
+A rejected route or origin answers 403 `session.refused`.
+An unavailable check answers 503 `session.unavailable`, including the gateway's local reply when the check cannot be reached.
+A page must recognise a session problem by both `registry-session-answer: 1` and its `type` URI.
+The URI starts with `https://id.registrystack.org/problems/registry-platform/session/` and ends with the problem suffix.
+A product answer with the same status is still a product answer.
+
+{/* Evidence: crates/registry-session/src/check.rs Decision;
+    crates/registry-session/src/gateway.rs local_reply, marker_removal_lines;
+    crates/registry-session/src/wire.rs ProblemKind, ANSWER_MARKER_HEADER. */}
+
+An invalid return path answers 400 `session.return-refused`.
+Rate limiting answers 429 `session.rate-limited`.
+A full store answers 503 `session.busy`.
+The public listener also has `session.not-found` (404), `session.method-not-allowed` (405) and `session.internal` (500).
+The gateway's reserved `/session/` catch-all is an unmarked 404.
+Follow the named failure, rather than treating every refusal as expired sign-in.
+
+{/* Evidence: crates/registry-session/src/wire.rs ProblemKind;
+    crates/registry-session/src/public.rs rate_limited, not_found, method_not_allowed;
+    crates/registry-session/src/signin.rs start;
+    crates/registry-session/src/gateway.rs routes. */}
+
+Sign out through a top-level form post:
+
+```html
+<form method="post" action="/session/sign-out">
+  <button type="submit">Sign out</button>
+</form>
+```
+
+The service ends its session and redirects the browser to the declared end-session endpoint.
+The provider ends its own session only if it honours that request.
+A sign-out sent with `fetch` cannot perform the required top-level navigation.
+
+{/* Evidence: crates/registry-session/src/public.rs sign_out, end_session_location;
+    crates/registry-session/README.md. */}
+
+## Move a module to its own audience
+
+In the session runtime, replace that module's `audience: person` with its own absolute audience URI.
+Keep the product's audience and generated identity configuration in agreement, then rerun the receipt and gateway checks.
+The route and cookie remain the same.
+When that creates another distinct audience, sign-in gains one more top-level hop.
+The hop can be silent while the provider's browser session remains active.
+The service does not force silence with `prompt=none`.
+
+{/* Evidence: crates/registry-session/tests/public.rs
+    moving_one_module_to_its_own_audience_adds_a_hop_and_changes_nothing_else,
+    the_authorization_request_carries_the_flow_the_service_promises;
+    crates/registry-session/src/gateway.rs moving_a_module_to_its_own_audience_changes_no_route;
+    crates/registry-session/src/signin.rs next_hop. */}
+
+## Next
+
+- [Session service security model](../../security/session/)
+- [Generate ThunderID configuration](../../operate/advanced/generate-identity-configuration/)
+- [Connect an OIDC issuer](../../operate/advanced/connect-an-oidc-issuer/)

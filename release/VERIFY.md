@@ -284,6 +284,8 @@ Registry Adapter binaries join in `v0.46.0`, as set by
 `ADAPTER_IMAGE_FIRST_RELEASE` is unset.
 The Registry Document Store is held out of every release while
 `DOCUMENTS_FIRST_RELEASE` is `None`, and no release roster names it.
+The session service is held out while `SESSION_FIRST_RELEASE` is `None`.
+No release script builds, stages or publishes `registry-session` yet.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
 `RENDER_FIRST_RELEASE`, `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`, and
 the three Coordinator release constants in `release/scripts/release_roster.py`

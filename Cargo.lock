@@ -6695,6 +6695,7 @@ dependencies = [
  "registry-rstack",
  "registry-scheduling",
  "registry-schedulingctl",
+ "registry-session",
  "serde",
  "serde_json",
 ]

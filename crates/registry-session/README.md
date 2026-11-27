@@ -5,6 +5,87 @@ service. It keeps their tokens on the server and gives the browser one opaque
 cookie. The gateway asks the service, on every call to a signed-in route, which
 bearer token to attach. The service checks. It never proxies.
 
+This is not an identity provider or a token issuer. It uses the configured
+identity provider's authorization-code and refresh-token flows. Sessions and
+pending sign-ins live only in memory, in one replica. A restart loses them.
+The binary is source-build only while `SESSION_FIRST_RELEASE` in
+`release/scripts/release_roster.py` is unset.
+
+## Configuration and commands
+
+`registry-session --runtime-config /absolute/path/session-runtime.yaml`
+starts two listeners. `listener.bind` serves the browser-facing
+`/session/sign-in`, `/session/callback`, `/session/sign-out`,
+`/session/signed-out` and `/session/me` routes behind the gateway.
+`checkListener` serves the gateway's per-call check under `/check/`, plus
+`/healthz` and `/readyz`. Keep that second listener private to the gateway.
+The process stops both listeners on SIGINT or SIGTERM and lets requests in
+flight finish.
+
+The runtime file is a closed YAML document with
+`apiVersion: id.registrystack.org/formats/platform/session-runtime/v1alpha1`
+and `kind: PlatformSessionRuntimeConfig`. Its JSON Schema is
+[`session-runtime.schema.json`](../../products/platform/generated/session-runtime/session-runtime.schema.json).
+[Configure the session service](../../docs/site/src/content/docs/configure/session.mdx)
+walks through a synthetic deployment, its identity applications and gateway.
+Secrets are `secret:file/...` or `secret:env/...` references under declared
+`secretProviders`, never inline values. Startup resolves them and opens the
+audit destination before listening.
+
+`registry-session --runtime-config /absolute/path/session-runtime.yaml check`
+checks the same runtime model offline. It reads no secret, calls no provider,
+opens no socket and writes no audit file. `--format json` writes a
+`PlatformSessionCtlReport`. It exits 0 when accepted, 1 when refused (or on
+a warning with `--deny-warnings`), 2 for usage errors and 3 for unreadable
+input. Without `--environment`, environment expressions are checked only
+for syntax and position. `--identity-receipt /absolute/path/identity-receipt.json`
+also checks the person audience, member product ids and each sign-in's
+derived audience set against the identity generator's receipt.
+
+`registry-session --runtime-config /absolute/path/session-runtime.yaml gateway envoy --out /absolute/path/fragments`
+writes the four Envoy fragments. `--check /absolute/path/fragments` compares
+them byte for byte. `--verify-assembled /absolute/path/envoy.yaml` checks the
+assembled static gateway configuration against the runtime file.
+Regenerate, splice and verify after every runtime change.
+
+The production session cookie is `__Host-registry-session`: an opaque
+256-bit identifier with `Secure`, `HttpOnly`, `SameSite=Lax` and `Path=/`,
+without `Domain`. The temporary sign-in cookie is
+`__Host-registry-signin`. Under `development-loopback` the names become
+`registry-session` and `registry-signin`, without `Secure`.
+
+## Answers a page can recognise
+
+A module call without a live session gets 401 `session.expired`.
+A refused route or origin gets 403 `session.refused`.
+An unavailable check gets 503 `session.unavailable`.
+A page request without the required kind of session redirects to sign-in.
+
+Problem `type` URIs start with
+`https://id.registrystack.org/problems/registry-platform/session/`.
+The remaining problem suffixes are `return-refused` (400),
+`rate-limited` (429), `busy` (503), `not-found` (404),
+`method-not-allowed` (405) and `internal` (500).
+Each problem carries its matching `session.*` code.
+A page recognises a session problem by both its type URI and
+`registry-session-answer: 1`. The gateway removes that marker from product
+responses. The gateway's reserved `/session/` catch-all answers an unmarked
+404.
+
+## Build and test
+
+Run from the workspace root:
+
+```sh
+cargo build --locked -p registry-session
+cargo test --locked -p registry-session --all-features
+cargo clippy --locked -p registry-session --all-targets --all-features -- -D warnings
+```
+
+The tests exercise the public and check listeners over loopback HTTP with a
+test issuer, token renewal and revocation, offline checks and deterministic
+gateway generation and verification.
+
 ## Operator obligations and trade-offs
 
 ### The check listener must be reachable only by the gateway
@@ -42,8 +123,9 @@ sign-ins at the gateway.
 ### Renewal and an unreachable issuer
 
 A call to a module is renewed when the access token has less than the smaller of
-`session.renewBeforeSeconds` and half its issued lifetime left. A check never
-waits on the issuer while its token is still valid:
+`session.renewBeforeSeconds` and half its issued lifetime left. The check
+that starts a renewal waits for that attempt. Other checks keep serving with
+an unexpired token:
 
 - if another check is already renewing the session, the call is allowed with the
   unexpired token at once,
@@ -67,9 +149,9 @@ No request waits on the issuer to end a session or a sign-in. Whatever drops a
 refresh token hands it to a bounded background queue (1024 entries) that revokes it
 at the issuer:
 
-- a sign-out removes the session, writes the audit record, clears the cookie and
-  redirects to the issuer's end-session endpoint at once, then queues the
-  revocations. It never waits for a renewal in flight. A renewal that finishes
+- a sign-out removes the session and queues its revocations, writes the audit
+  record, clears the cookie and redirects to the issuer's end-session endpoint.
+  It never waits for a renewal in flight. A renewal that finishes
   after the session is gone revokes the token it rotated,
 - absolute expiry, idle expiry, eviction and a refused renewal,
 - a session a new sign-in pushes out (three at once per person), and the session a

@@ -148,6 +148,8 @@ release without deprecation:
   Engine, Casework, an external HTTP service, or the evaluation host, and are promised
 
 Registry Document Store is held out of the 1.0 release.
+The session service is source-build only while `SESSION_FIRST_RELEASE` is unset.
+No release script builds, stages or publishes `registry-session` yet.
 
 Before `v1.0.0`, one breaking release moves the promised products' version strings from
 `v1alpha1` to stable versions, so a `v1alpha1` version string that a 1.x release reads or writes
@@ -162,7 +164,8 @@ experimental surface.
     products/breg/contracts/definition-of-done.yaml, BREG-V1-ACTION-EVIDENCE-TRIAL;
     products/discovery/README.md, the published registry-discovery-v1alpha1 profile resources;
     crates/registry-discovery-profile/src/lib.rs, PROFILE_ID;
-    release/scripts/release_roster.py, RENDER_CLIENT_FIRST_RELEASE and DOCUMENTS_FIRST_RELEASE;
+    release/scripts/release_roster.py, RENDER_CLIENT_FIRST_RELEASE, DOCUMENTS_FIRST_RELEASE,
+    SESSION_FIRST_RELEASE;
     crates/registry-stack-client/src/lib.rs, record, auth and render;
     products/coordinator/generated/operations/catalog.json, the product of each operation. */}
 

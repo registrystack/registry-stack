@@ -98,6 +98,27 @@ test('renders the committed catalogue while keeping the job host unreviewed and 
   assert.doesNotMatch(pages.get('index.mdx'), /\(\.\/adapter-job\/\)/u);
 });
 
+test('keeps the session service unreviewed and source-build-only', async () => {
+  const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+  const docsRoot = fileURLToPath(new URL('../', import.meta.url));
+  const catalog = validateCatalog(await loadCatalog(repoRoot));
+  assert.ok(catalog.binaries.some((binary) => binary.name === 'registry-session'));
+  const metadata = YAML.parse(await readFile(join(docsRoot, 'src/data/cli-reference.yaml'), 'utf8'));
+  assert.ok(metadata.unreviewed_binaries.includes('registry-session'));
+  assert.ok(metadata.source_build_only_binaries.includes('registry-session'));
+  const pages = renderCatalog(catalog, metadata);
+  for (const name of [
+    'registry-session.mdx',
+    'registry-session/check.mdx',
+    'registry-session/gateway/envoy.mdx',
+  ]) {
+    assert.match(pages.get(name), /status: draft\ndraft: true/u);
+    assert.match(pages.get(name), /last_reviewed: "unreviewed"/u);
+    assert.match(pages.get(name), /It has no numbered-release asset/u);
+  }
+  assert.doesNotMatch(pages.get('index.mdx'), /\(\.\/registry-session\/\)/u);
+});
+
 test('renders one linked page for every nested public command', () => {
   const pages = renderCatalog(fixtureCatalog(), fixtureReviewMetadata());
   assert.ok(pages.has('index.mdx'));

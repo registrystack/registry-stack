@@ -1,0 +1,204 @@
+---
+title: Session service security model
+description: "Trust boundaries, operator obligations and accepted residuals for the server-held browser session service."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-27"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+If you operate `registry-session`, its guarantees depend on the gateway, the declared issuer and a private check listener.
+[Configure the session service](../../configure/session/) owns the runtime and gateway procedure.
+
+{/* Evidence: crates/registry-session/src/runtime.rs Service;
+    crates/registry-session/README.md. */}
+
+## Scope and trust boundaries
+
+- The browser holds an opaque session cookie after sign-in.
+  Access and refresh tokens stay in the service.
+  The production cookie is host-only, `Secure`, `HttpOnly` and `SameSite=Lax`.
+- The service holds sessions and pending sign-ins in bounded memory.
+  It runs as one replica and issues no tokens.
+- The gateway asks for a check on every call to a signed-in route.
+  For a module call, the gateway attaches the person's token for that module's audience.
+  It strips cookies before forwarding the call.
+  A page upstream receives neither cookies nor bearer tokens.
+- The check listener trusts the gateway's request headers and has no authentication of its own.
+  Anyone reaching it with a valid session cookie can obtain a bearer token.
+  Only the gateway may reach it.
+- The issuer identifies the person and issues their tokens.
+  The service verifies the ID token and requires the same subject across sign-in hops.
+  It checks the access token's audience from the declared token endpoint's response.
+  Products retain their own token verification and authorisation.
+- A same-origin page script can make calls using the person's session.
+  `HttpOnly` prevents reading the cookie from script, not using the signed-in browser.
+
+{/* Evidence: crates/registry-session/src/store.rs Store, PendingSignIn, Session;
+    crates/registry-session/src/public.rs cookie;
+    crates/registry-session/src/check.rs Checker, Decision, same_origin_page_call;
+    crates/registry-session/src/gateway.rs routes;
+    crates/registry-session/src/issuer.rs redeem, audience_check;
+    crates/registry-session/src/signin.rs complete;
+    crates/registry-session/README.md. */}
+
+The service requests authorization codes with PKCE, state, nonce and an explicit resource.
+A callback consumes its pending sign-in once.
+Every audience hop must complete before the service opens a session.
+Writes to modules need the page header and an exact same-origin request.
+A module's `signIns` list routes kinds of sessions, but grants no product permission.
+
+{/* Evidence: crates/registry-session/src/signin.rs authorization_location, complete, open_session;
+    crates/registry-session/src/check.rs same_origin_page_call;
+    crates/registry-session/tests/public.rs every_callback_refusal_consumes_the_flow;
+    crates/registry-session/README.md. */}
+
+## Operator obligations
+
+1. Protect client-secret and audit-key files.
+   Give the service only the secret-provider roots it needs.
+   Keep secret values out of the runtime file.
+2. Run one replica.
+   A second replica has a different session store and cannot accept the first replica's cookies.
+3. Keep the check listener unreachable from browsers and every caller except the gateway.
+   A private bind alone does not establish that restriction.
+4. Regenerate the gateway fragments after every runtime change.
+   Splice them and verify the assembled static configuration before deploying it.
+5. Terminate TLS in front of the public listener.
+   Reserve `development-loopback` and its non-Secure cookies for local development.
+6. Name every host HTTP filter in `gateway.hostFilters`.
+   Retain a filter on a module or page only through `upstream.keepHostFilters`.
+   A retained filter must preserve the path, route cache and authorization header.
+7. Limit sign-in requests per client address at the gateway.
+   The service's global sign-in bucket does not distinguish source addresses.
+8. Use a top-level form post for sign-out.
+   Treat local session termination and the provider's browser session as separate outcomes.
+
+{/* Evidence: crates/registry-session/src/runtime.rs build_with_clock;
+    crates/registry-session/src/config.rs RuntimeConfig, SESSION_COOKIE, DEVELOPMENT_SESSION_COOKIE;
+    crates/registry-session/src/gateway/verify.rs verify_assembled, verify_chain;
+    crates/registry-session/src/public.rs sign_out;
+    crates/registry-session/README.md. */}
+
+## Accepted residuals
+
+### SESSION-RES-01: a restart loses sessions
+
+- Condition: the process restarts.
+- Consequence: signed-in sessions and pending sign-ins disappear.
+  Existing cookies no longer resolve, so people must sign in again.
+- Mitigation: plan restarts as sign-in interruptions.
+
+{/* Evidence: crates/registry-session/src/store.rs Store;
+    crates/registry-session/src/runtime.rs build_with_clock. */}
+
+### SESSION-RES-02: one replica owns the session
+
+- Condition: requests for one browser reach different replicas.
+- Consequence: each replica has its own in-memory store.
+  A cookie opened on one does not establish a session on another.
+- Mitigation: run one replica.
+
+{/* Evidence: crates/registry-session/src/store.rs Store;
+    crates/registry-session/src/runtime.rs build_with_clock. */}
+
+### SESSION-RES-03: restart loses the ability to revoke held refresh tokens
+
+- Condition: the process stops while it holds sessions or queued revocations.
+- Consequence: the service loses those refresh tokens without revoking them.
+  They can remain live at the issuer until their own expiry.
+  Their continued validity does not restore the lost local session.
+- Mitigation: bound refresh-token lifetime at the issuer.
+
+{/* Evidence: crates/registry-session/src/store.rs Session;
+    crates/registry-session/src/revoker.rs Revoker;
+    crates/registry-session/README.md. */}
+
+### SESSION-RES-04: provider sign-out depends on the provider
+
+- Condition: a person signs out of a live local session.
+- Consequence: the service removes that session and redirects to the declared end-session endpoint.
+  The provider's session ends only if the provider honours the request.
+  The service sends a client id and post-logout return URI, without an ID-token hint.
+- Mitigation: verify your provider's end-session behaviour with the deployed client configuration.
+
+{/* Evidence: crates/registry-session/src/public.rs sign_out, end_session_location;
+    crates/registry-session/tests/public.rs sign_out_revokes_every_token_and_ends_the_session. */}
+
+### SESSION-RES-05: fetch sign-out cannot navigate the provider's session away
+
+- Condition: a page sends sign-out with `fetch`.
+- Consequence: the local session ends, but following the redirect as a fetch is not a top-level browser visit.
+  It cannot end the provider's session through that navigation.
+  A later sign-in may use the provider session still open in that browser.
+- Mitigation: pages use a top-level form post to `/session/sign-out`.
+
+{/* Evidence: crates/registry-session/src/public.rs sign_out;
+    crates/registry-session/README.md. */}
+
+### SESSION-RES-06: declared issuer endpoints are trusted
+
+- Condition: the operator declares the issuer, token, revocation and signing-key endpoints.
+- Consequence: the service trusts those destinations and sends client credentials or tokens where the configuration directs.
+  The access-token audience check reads the payload returned by that token endpoint, without verifying its signature.
+- Mitigation: declare only intended issuer endpoints and protect the runtime file and TLS path.
+
+{/* Evidence: crates/registry-session/src/config.rs IssuerConfig;
+    crates/registry-session/src/issuer.rs HttpIssuer, audience_check;
+    crates/registry-session/README.md. */}
+
+### SESSION-RES-07: page scripts can act through the signed-in browser
+
+- Condition: a script runs on the page's origin while the person is signed in.
+- Consequence: the script can send module calls as that person without reading a token or the HttpOnly cookie.
+  The origin and page-header checks do not distinguish trusted page code from another script on that origin.
+- Mitigation: control scripts served from that origin and keep product permissions limited to the person's intended actions.
+
+{/* Evidence: crates/registry-session/src/check.rs same_origin_page_call;
+    crates/registry-session/src/public.rs cookie. */}
+
+### SESSION-RES-08: session routes bypass host filters
+
+- Condition: the gateway serves any generated `/session/` route.
+- Consequence: every declared host HTTP filter is switched off there, including on the reserved catch-all.
+  A host filter cannot enforce additional policy on these routes.
+  The generated session CSRF filter still protects the public session routes.
+- Mitigation: account for this boundary when exposing the public listener through the gateway.
+
+{/* Evidence: crates/registry-session/src/gateway.rs routes, csrf_on;
+    crates/registry-session/src/gateway.rs public_routes_keep_their_cookies_and_skip_the_check. */}
+
+### SESSION-RES-09: queued revocation can fail
+
+- Condition: the bounded revocation queue fills or the issuer does not confirm a revocation.
+- Consequence: the local session stays ended, but a refresh token can remain live at the issuer.
+  The failure or dropped queue entry is logged and counted.
+  The queue is not durable.
+- Mitigation: monitor the fixed revocation-failure log messages and bound token lifetime at the issuer.
+
+{/* Evidence: crates/registry-session/src/revoker.rs QUEUE_CAPACITY, EndedSessions, Revoker;
+    crates/registry-session/src/public.rs sign_out. */}
+
+### SESSION-RES-10: a page check does not consult the issuer
+
+- Condition: the issuer revokes a session while the local session remains within its idle and absolute lifetimes.
+- Consequence: page routes still pass their session-kind check.
+  A module renewal that the issuer refuses ends the local session.
+- Mitigation: choose local lifetimes that bound this interval.
+
+{/* Evidence: crates/registry-session/src/check.rs decide_route, renew;
+    crates/registry-session/README.md. */}
+
+## Report a vulnerability
+
+Use [Report a vulnerability](../report-a-vulnerability/) for suspected vulnerabilities.
+
+## Next
+
+- [Configure the session service](../../configure/session/)
+- [Security](../)
+- [Report a vulnerability](../report-a-vulnerability/)

@@ -51,6 +51,7 @@ SHARDS = {
         "registry-platform-text",
         "registry-platform-x509",
         "registry-platform-yaml",
+        "registry-session",
     ),
     "mcp": (
         "registry-mcp",
@@ -240,6 +241,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
         "registry-breg",
         "registry-breg-mcp",
         "registry-breg-review",
+        "registry-session",
         "registry-casework",
         "registry-discovery",
         "registry-evidence",
@@ -259,6 +261,7 @@ CONFIG_CHECK_PACKAGES = frozenset(
         "registry-adapterctl",
         "registry-breg-mcp",
         "registry-breg-review",
+        "registry-session",
         "registry-bregctl",
         "registry-caseworkctl",
         "registry-discoveryctl",

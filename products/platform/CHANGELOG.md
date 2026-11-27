@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+- Add `registry-session`, a source-build-only supporting service beside an
+  Envoy gateway. It holds a person's access and refresh tokens on the server,
+  gives the browser an opaque HttpOnly cookie and answers the gateway's
+  per-call check. Sessions live in memory in one replica. It is neither an
+  identity provider nor a token issuer, and an unset `SESSION_FIRST_RELEASE`
+  keeps it out of release builds and publication.
+- The session service reads `PlatformSessionRuntimeConfig` at
+  `id.registrystack.org/formats/platform/session-runtime/v1alpha1`, with
+  separate public and check listeners. `check --identity-receipt` compares
+  its person audience, member product ids and sign-in audiences with the
+  identity generator's receipt, and reports `platform.session-check.receipt-malformed`
+  for a non-string receipt entry. The runtime uses
+  `issuer.attemptTimeoutMilliseconds`, `session.idleLifetimeSeconds`,
+  `me.claims` and `rateLimits.perPerson`. The global sign-in bucket
+  defaults to 900 requests a minute, burst 300.
+- `registry-session gateway envoy` writes deterministic filter, route,
+  cluster and local-reply fragments. `--check` compares them and
+  `--verify-assembled` checks an assembled static Envoy configuration.
+  `gateway.hostFilters` names every host filter except the router.
+  `upstream.keepHostFilters` retains selected filters after the session
+  check on module or page routes. Every other host filter is switched off
+  there, and all are switched off under `/session/`. Reserved service
+  filter names are refused with `platform.session-runtime.reserved-host-filter`.
+- Session problems use `session.*` codes and type URIs under
+  `https://id.registrystack.org/problems/registry-platform/session/`.
+  `registry-session-answer: 1` distinguishes those answers from product
+  responses. Sign-out ends the local session, queues refresh-token revocation
+  and sends a top-level browser navigation to the declared end-session
+  endpoint. Provider session termination depends on the provider.
+- `registry-platform-httputil` adds `ClientSecretClient` and
+  `ClientSecretConfig` for confidential authorization-code, refresh and
+  revocation requests with `client_secret_post`. It returns
+  `IssuedTokens` and `IssuedTokenParts` with a redacted, zeroizing
+  `RefreshToken`. Each call is one bounded request, and the caller owns
+  token storage and renewal.
+- The identity deployment accepts `sessionApps`, with product lists and
+  post-logout return URIs. Generated applications use authorization-code and
+  refresh-token grants with PKCE. The receipt records each application's
+  distinct audiences, with the person audience first and the rest sorted.
+- The hosted identity generator accepts `personAudience` for `breg` and
+  `documents`. Member products must admit explicit client lists and use
+  disjoint scope names. Non-BReg members cannot state exchange profiles or
+  institutional-grant assertion issuers. The receipt records the shared
+  audience and its member products.
+- BREAKING: every access profile reachable by a browser or session
+  application must require a scope no other profile of that product requires.
+  The refusal is `identity.deployment.profile-without-own-scope`.
+  Standard scope names are refused on every audience with
+  `identity.facts.standard-scope-name`.
+- Identity machine clients declare `side: registry` or `side: host`.
+  Only a registry-side machine client may receive an exchange profile.
+  An omitted side counts as host, and interactive applications cannot
+  receive exchange profiles.
+- `rstack dev` plans accept `personAudience`. BReg joins by declaring
+  the same audience, including when it checks task grants. Casework,
+  Messaging and Evidence keep separate audiences. Declaring the plan
+  member alone does not change a product's runtime.
+- `rstack identity generate thunderid --documents-runtime-config FILE`
+  includes the Document Store's identity facts from its runtime and package.
+  `RSTACK_DOCUMENTSCTL_BIN` selects an explicit `documentsctl` binary.
+
 - Every URL hook delivery is signed with Standard Webhooks. The signature is
   `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body
   bytes, joined by periods, with HMAC-SHA-256. `webhook-id` is the envelope

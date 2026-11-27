@@ -2374,7 +2374,7 @@ jobs:
           -p registry-documentsctl -p registry-adapterctl
           -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
           -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci -p registry-mcp
-          -p registry-evidence-oid4vp
+          -p registry-evidence-oid4vp -p registry-session
 
       # The launcher is built alone, as the release builds it, so feature
       # unification with the product tools cannot hide a missing feature or

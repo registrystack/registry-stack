@@ -1,10 +1,18 @@
 # Platform guidance
 
-This guide covers `registry-platform-*` crates and `products/platform`.
+This guide covers `registry-platform-*` crates, `registry-session` and `products/platform`.
 Platform owns shared primitives. Each consuming product owns its complete
 authorization, configuration, disclosure, durable state, and audit-release
 contract. Reuse a primitive when its semantics fit; do not move product policy
 into the platform just to remove superficially similar code.
+
+Platform owns the session service's runtime file, in-memory sessions,
+browser sign-in and sign-out, private per-call gateway check and Envoy
+fragments. `registry-session` depends on `registry-platform-*` workspace
+crates only. No product crate depends on it. It issues no tokens and owns no
+product authorisation. Keep its check listener private to the gateway and
+run one replica. `SESSION_FIRST_RELEASE` in `release/scripts/release_roster.py`
+holds it out of releases while unset.
 
 Platform also owns [the configuration conventions](CONFIG-CONVENTIONS.md),
 the rules every product's configuration formats follow, and the shared reader
@@ -98,3 +106,11 @@ runtime that reads `runtime.yaml` through `RuntimeConfigLoader`. Coverage and fu
 [fuzz/README.md](fuzz/README.md). Run the affected gate locally when changing it
 or when CI cannot supply the required proof; routine edits do not require a
 new full-workspace assurance exercise.
+
+## Generated outputs
+
+Reproduce generated contracts with their owning generator.
+
+| Path | Generator |
+| --- | --- |
+| `products/platform/generated/session-runtime/` | `cargo run --locked -p registry-session --features schema --example session-runtime-schema -- --output products/platform/generated/session-runtime` |

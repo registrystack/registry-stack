@@ -14,10 +14,18 @@ authentication helpers, OIDC verification, audit writing, browser-facing HTTP
 security, SD-JWT VC support, crypto primitives, bounded SQLite reads, and
 integration-test fixtures.
 
+Platform also owns the [session service](../../crates/registry-session/README.md),
+`registry-session`. It holds a person's tokens on the server and answers an
+Envoy gateway's per-call check. It uses only platform workspace dependencies,
+and no product crate depends on it. Sessions live in memory in one replica.
+The check listener is private to the gateway. The service stays source-build
+only while `SESSION_FIRST_RELEASE` is unset.
+
 ## Crates
 
 | Crate | Purpose |
 | --- | --- |
+| [`registry-session`](../../crates/registry-session/README.md) | Browser session service with server-held person tokens, a private gateway check and generated Envoy fragments. |
 | [`registry-platform-activation`](../../crates/registry-platform-activation/README.md) | Shared PostgreSQL activation ledger, database identity binding, startup package checks, and runtime-role boundary enforcement. |
 | [`registry-platform-audit`](../../crates/registry-platform-audit/README.md) | Shared JSON Lines audit writer, durable file acceptance, rotation, and keyed reference helpers. |
 | [`registry-platform-authcommon`](../../crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
@@ -94,6 +102,12 @@ cargo test -p registry-platform-oidc
 ```
 
 ## Repository Files
+
+Generated session contracts are owned by Platform:
+
+| Path | Generator |
+| --- | --- |
+| [`generated/session-runtime/`](generated/session-runtime/session-runtime.schema.json) | `cargo run --locked -p registry-session --features schema --example session-runtime-schema -- --output products/platform/generated/session-runtime` |
 
 - [`CHANGELOG.md`](CHANGELOG.md) records release-level changes.
 - The root [`deny.toml`](../../deny.toml) defines dependency, license,

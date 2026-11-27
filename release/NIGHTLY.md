@@ -59,7 +59,9 @@ to v2.4 and v2.5 respectively, from the base version that
 version; `nightly.json`, the asset name, and its checksum authenticate the exact
 nightly source. No profile
 carries the Registry Document Store, which stays held out while
-`DOCUMENTS_FIRST_RELEASE` is `None`. An incompatible inventory requires a
+`DOCUMENTS_FIRST_RELEASE` is `None`. The session service is also held out
+while `SESSION_FIRST_RELEASE` is `None`. No release script builds
+`registry-session` yet. An incompatible inventory requires a
 new schema and profile. The reader still accepts frozen
 `registry-stack.nightly.v1` manifests, including historical v0.39.0 nightlies
 that carried Relay, so an existing channel head can be reconciled and advanced

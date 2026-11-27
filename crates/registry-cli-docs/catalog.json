@@ -15954,6 +15954,95 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "generate",
+          "invocation": "documentsctl generate",
+          "about": "Write files derived from a deployment's configuration",
+          "long_about": null,
+          "usage": "documentsctl generate [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "identity-facts",
+              "invocation": "documentsctl generate identity-facts",
+              "about": "Write the identity facts this runtime states about its issuer",
+              "long_about": null,
+              "usage": "documentsctl generate identity-facts [OPTIONS] --runtime-config <FILE> --output <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file: its authentication.oidc block and the package it names state the facts",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <FILE>",
+                  "description": "New YAML file to create. Existing files are never overwritten",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     },
@@ -24865,6 +24954,212 @@
       ]
     },
     {
+      "name": "registry-session",
+      "invocation": "registry-session",
+      "about": "Serve the session service beside a gateway, or check its runtime file",
+      "long_about": null,
+      "usage": "registry-session [OPTIONS] [COMMAND]",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--runtime-config <FILE>",
+          "description": "Runtime configuration file",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "registry-session check",
+          "about": "Check the runtime file offline, reading no secret and opening no socket",
+          "long_about": "Check the runtime file offline, reading no secret and opening no socket. The check reads the runtime file as the service does, with no secret material, network call, audit file, or listener. It does not prove that a secret the file names resolves or that the audit directory can be opened: the service proves both when it starts.",
+          "usage": "registry-session check [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Exit 1 when a warning is reported",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--environment",
+              "description": "Fill `${NAME}` expressions in the runtime file from the process environment and check the values they produce. Without it, each expression is checked by syntax and position only",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--identity-receipt <FILE>",
+              "description": "Also check the runtime file against the identity generator's receipt: the person audience and each kind of sign-in's audiences must match, and a module on the person audience must carry a member product's name as its id. `${NAME}` expressions are not resolved unless --environment is given",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "gateway",
+          "invocation": "registry-session gateway",
+          "about": "Generate gateway configuration from the runtime file",
+          "long_about": null,
+          "usage": "registry-session gateway <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "envoy",
+              "invocation": "registry-session gateway envoy",
+              "about": "Write or compare the Envoy configuration fragments",
+              "long_about": null,
+              "usage": "registry-session gateway envoy <--out <DIR>|--check <DIR>|--verify-assembled <FILE>>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--out <DIR>",
+                  "description": "Write the fragments into this directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--check <DIR>",
+                  "description": "Compare the fragments with the ones in this directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--verify-assembled <FILE>",
+                  "description": "Verify an assembled Envoy configuration file against the fragments the runtime file generates",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "required-exactly-one",
+                  "when": null,
+                  "arguments": [
+                    "--out <DIR>",
+                    "--check <DIR>",
+                    "--verify-assembled <FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--check <DIR>",
+                    "--out <DIR>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--check <DIR>",
+                    "--verify-assembled <FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--out <DIR>",
+                    "--verify-assembled <FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "rstack",
       "invocation": "rstack",
       "about": "Registry Stack command and component manager",
@@ -25715,6 +26010,15 @@
                     {
                       "display": "--casework-runtime-config <FILE>",
                       "description": "Casework runtime configuration file",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--documents-runtime-config <FILE>",
+                      "description": "Document Store runtime configuration file",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],

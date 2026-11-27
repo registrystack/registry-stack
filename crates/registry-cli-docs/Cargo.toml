@@ -40,5 +40,6 @@ registry-documents.workspace = true
 registry-documentsctl.workspace = true
 registry-manifest-cli.workspace = true
 registry-rstack.workspace = true
+registry-session = { path = "../registry-session" }
 serde.workspace = true
 serde_json.workspace = true

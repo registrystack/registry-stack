@@ -38,6 +38,7 @@ pub fn catalog() -> Catalog {
         command_reference(registry_breg_review::command(), None, None),
         breg_reference(),
         command_reference(registry_render::command(), None, None),
+        command_reference(registry_session::command(), None, None),
     ];
     binaries.sort_by(|left, right| left.name.cmp(&right.name));
     Catalog {
@@ -181,6 +182,7 @@ mod tests {
                 "messagingctl",
                 "registry-mcp",
                 "registry-render",
+                "registry-session",
                 "rstack",
                 "scheduling",
                 "schedulingctl",

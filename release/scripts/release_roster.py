@@ -66,6 +66,11 @@ first ships the Registry Document Store binaries, ``documents`` and
 script builds, stages, or publishes them yet, so the product stays held until
 it is releasable.
 
+``SESSION_FIRST_RELEASE`` is the single place that decides which release
+first ships the ``registry-session`` binary and any image or security evidence
+of its own. No release script builds, stages, or publishes it yet, so the
+service stays held until it is releasable.
+
 ``PYTHON_311_ABI_FIRST_RELEASE`` is the single place that decides which
 release first builds the Python client wheels against the Python 3.11 stable
 ABI, which names them ``cp311-abi3``. Releases before v0.41.0 were built
@@ -102,6 +107,8 @@ RENDER_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = None
 COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 DOCUMENTS_FIRST_RELEASE: tuple[int, int, int] | None = None
+
+SESSION_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_BINARY_FIRST_RELEASE: tuple[int, int, int] = (0, 44, 0)
 
@@ -272,6 +279,15 @@ def documents_in_release(version: tuple[int, int, int]) -> bool:
     The constant is read at call time so tests can patch it.
     """
     first_release = DOCUMENTS_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
+def session_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release at ``version`` ships the session service.
+
+    The constant is read at call time so tests can patch it.
+    """
+    first_release = SESSION_FIRST_RELEASE
     return first_release is not None and tuple(version) >= first_release
 
 

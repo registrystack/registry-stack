@@ -113,6 +113,7 @@ not products of their own.
 | `crates/registry-evidence-authoring` | The authoring form: the single implementation of the model an adopter writes and the checks it must satisfy, shared by adopter tooling |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
+| `crates/registry-session` | Platform-owned browser session service and `registry-session` binary: server-held person tokens and the gateway's per-call check, held out of releases |
 | `crates/registry-platform-sqlite` | Shared bounded read-only SQLite security boundary used by Evidence |
 | `crates/registry-platform-x509` | Pure X.509 path validation outside TLS, against configured anchors only |
 | `crates/registry-platform-text` | Pure, versioned Unicode text normalisation pipelines; products own their named profiles |
@@ -153,7 +154,7 @@ Before editing an area, read its owning guide:
   `products/discovery/AGENTS.md`
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
 - `registry-mcp`, `registry-mcp-edge`: `products/platform/AGENTS.md` and each crate README; apply the provider product guide when changing its semantics
-- `registry-platform-*`: `products/platform/AGENTS.md`
+- `registry-platform-*`, `registry-session`: `products/platform/AGENTS.md`
 - `registry-cli-report`: `products/platform/AGENTS.md` and the crate README
 - product clients, their language bindings, `registry-record`, and
   `registry-stack-client*`: `crates/CLIENTS.md` plus the owning product guide
@@ -355,6 +356,14 @@ and the facade serves trusted machine clients only, because an admitted
 client with a matching scope sees every record the deployment's configured
 source access reaches (record-level authorization is planned, not built). Its audit
 journal records no values.
+
+**Platform** also owns `registry-session`, a supporting service beside an
+Envoy gateway. It holds a person's tokens in memory and answers the gateway's
+per-call check. It issues no token and adds no product authority. Among
+workspace crates it depends on `registry-platform-*` only, and no product
+crate depends on it. It runs as one replica, with a check listener private to
+the gateway. It is held out of releases while `SESSION_FIRST_RELEASE` in
+`release/scripts/release_roster.py` is unset.
 
 The adopter demo is maintained separately in
 [`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab).
