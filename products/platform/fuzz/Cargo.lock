@@ -1867,6 +1867,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-loopback",
+ "registry-platform-posture",
  "reqwest",
  "rustls-native-certs",
  "serde",

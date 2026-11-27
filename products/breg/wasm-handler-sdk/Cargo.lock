@@ -3078,6 +3078,7 @@ version = "0.49.0"
 dependencies = [
  "http",
  "registry-platform-loopback",
+ "registry-platform-posture",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3099,6 +3100,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-loopback",
+ "registry-platform-posture",
  "reqwest",
  "rustls-native-certs",
  "serde",
