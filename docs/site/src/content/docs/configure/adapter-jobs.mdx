@@ -348,11 +348,12 @@ A metadata mismatch or operation refusal never selects another operation or dest
 
 {/* Evidence: crates/registry-adapter-connectors/src/coordinator_event.rs a_signed_event_signs_id_timestamp_and_the_exact_body */}
 {/* Evidence: crates/registry-adapter-connectors/src/coordinator_event.rs a_rotating_trigger_sends_the_current_signature_first */}
-{/* Evidence: crates/registry-adapter-job/src/runtime_destination.rs resolve_trigger_keys */}
+{/* Evidence: crates/registry-adapter-job/src/runtime_destination.rs resolve_destination_keys */}
 
 The job sends one event per item as a canonical JSON `HookEnvelope` in a Standard Webhooks POST to `/v1/events/{workflow}/{trigger}`.
 The request carries `accept: application/json`, `content-type: application/json`, `webhook-id`, `webhook-timestamp`, and `webhook-signature`.
 The signature covers the envelope ID, the send time in Unix seconds, and the exact body bytes.
+The receiver accepts a `webhook-timestamp` up to 300 seconds before or after its own clock.
 It admits one Run of a reviewed workflow through `workflow.eventTriggers`.
 Admission and Run commit together, and a repeat of the same event recovers the same Run.
 The workflow maps, resolves the target, calls one typed operation such as `breg.submit-proposal/v1`, and follows the outcome with `wait-for`.
@@ -373,7 +374,8 @@ Its trigger must be distinct from the registration trigger. Without a revised re
 Set `hmacSha256KeyRef` on the runtime destination for the registration trigger.
 When the job declares a revised receiver, set `revisedReceiver.hmacSha256KeyRef` on the runtime destination for that trigger. Omit the runtime block when the job has no revised receiver.
 
-Generate a separate key file for each trigger. Set `umask 077` in your shell before running `openssl rand -hex 32 | tr -d '\n' > key` to create a private file.
+Generate a separate key file for each trigger with `(umask 077; openssl rand -hex 32 | tr -d '\n' > key)`.
+Use distinct current and previous key bytes across all destinations and triggers in the runtime file.
 Each key must contain 32 to 64 exact bytes. Supply the same key file to the Coordinator trigger that receives the event.
 To rotate a trigger's key, set its `hmacSha256KeyRef` to the new key and set `previousHmacSha256KeyRef` in the same block to the old key.
 The job sends two `v1,<base64>` signature entries, separated by a space, with the current key first.

@@ -71,10 +71,7 @@ fn verify_event(headers: &HeaderMap, body: &[u8], key: &[u8]) -> HookEnvelope {
             body,
             keys: &delivery_keys(key),
         },
-        DeliveryFreshness::Within {
-            now: SystemTime::now(),
-            skew: Duration::from_secs(300),
-        },
+        DeliveryFreshness::default_at(SystemTime::now()),
     )
     .expect("the job sent a valid platform signature")
     .envelope

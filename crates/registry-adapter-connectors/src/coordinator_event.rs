@@ -214,7 +214,9 @@ impl CoordinatorEventConnector {
     }
 
     /// Sign and send one canonical envelope. A retry reuses `event.id` and
-    /// body, while delivery time and signature are fresh transport fields.
+    /// body, while send time and signature are fresh transport fields.
+    /// Generation and delivery attempt are checked for the caller's
+    /// positive-counter invariant only.
     pub async fn admit(
         &self,
         receiver: &CoordinatorEventReceiver,
@@ -367,9 +369,6 @@ fn classify_problem(status: u16, code: Option<&str>) -> CoordinatorEventOutcome 
         },
         (503, Some("audit.response-unavailable")) => CoordinatorEventOutcome::Stop {
             code: "audit.response-unavailable",
-        },
-        (503, Some("event.source-unavailable")) => CoordinatorEventOutcome::Stop {
-            code: "event.source-unavailable",
         },
         (503, Some("service.unavailable")) => CoordinatorEventOutcome::Stop {
             code: "service.unavailable",
@@ -773,7 +772,6 @@ mod tests {
             (413, "request.body-too-large"),
             (500, "runtime.failure"),
             (503, "audit.response-unavailable"),
-            (503, "event.source-unavailable"),
             (503, "service.unavailable"),
         ];
         let answers = item_refusals
@@ -808,6 +806,7 @@ mod tests {
         let fixture = FixtureReceiver::start(vec![
             Answer::problem(409, "event.invalid"),
             Answer::problem(409, "future.problem"),
+            Answer::problem(503, "future.problem"),
             Answer {
                 status: StatusCode::BAD_REQUEST,
                 content_type: "application/json",
@@ -817,7 +816,7 @@ mod tests {
         ])
         .await;
         let (connector, receiver) = connector(&fixture);
-        for _ in 0..3 {
+        for _ in 0..4 {
             assert_eq!(
                 connector
                     .admit(&receiver, event(json!({"item": true})), 1, 1)

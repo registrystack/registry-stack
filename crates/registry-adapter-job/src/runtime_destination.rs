@@ -20,9 +20,9 @@ use registry_adapter_engine::job::JobProgram;
 use registry_adapter_engine::job_sources::JobRuntimeConfig;
 use registry_platform_config::{SecretReference as DeliveryKeyReference, SecretResolver};
 #[cfg(feature = "signed-coordinator-event")]
-use registry_platform_crypto::delivery_signature::{
-    distinct_delivery_keys, DeliveryKey, DeliveryKeys,
-};
+use registry_platform_crypto::delivery_signature::DeliveryKeys;
+#[cfg(any(feature = "direct-breg", feature = "signed-coordinator-event"))]
+use registry_platform_crypto::delivery_signature::{distinct_delivery_keys, DeliveryKey};
 #[cfg(feature = "signed-coordinator-event")]
 use registry_platform_yaml::ExternalId;
 use registry_platform_yaml::{BoundedU64, LocalId, SecretReference, Url};
@@ -87,7 +87,7 @@ enum RuntimeDestinationBinding {
     },
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "signed-coordinator-event"), allow(dead_code))]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RevisedReceiverBinding {
@@ -106,6 +106,8 @@ pub async fn activate_destination<'a>(
 ) -> Result<Box<dyn DestinationSeam + 'a>, String> {
     require_compiled_destination(&program.job.destination).map_err(not_compiled_message)?;
     let bindings = load_runtime_bindings(runtime)?;
+    #[cfg(any(feature = "direct-breg", feature = "signed-coordinator-event"))]
+    let keys = resolve_destination_keys(resolver, &bindings)?;
     match &program.job.destination {
         JobDestination::DirectBreg { binding, .. } => {
             let configured = bindings
@@ -113,6 +115,7 @@ pub async fn activate_destination<'a>(
                 .ok_or_else(|| missing_binding(binding))?;
             #[cfg(feature = "direct-breg")]
             {
+                drop(keys);
                 activate_direct(program, configured, &runtime.core, resolver).await
             }
             #[cfg(not(feature = "direct-breg"))]
@@ -127,7 +130,7 @@ pub async fn activate_destination<'a>(
                 .ok_or_else(|| missing_binding(binding))?;
             #[cfg(feature = "signed-coordinator-event")]
             {
-                activate_signed(program, configured, &runtime.core, resolver)
+                activate_signed(program, configured, &runtime.core, resolver, keys)
             }
             #[cfg(not(feature = "signed-coordinator-event"))]
             {
@@ -209,9 +212,6 @@ fn parse_runtime_bindings(
             {
                 continue;
             }
-            let Ok(id) = LocalId::new(id.as_str()) else {
-                continue;
-            };
             for (path, entry) in [
                 (format!("destinations.{id}"), Some(binding)),
                 (
@@ -449,89 +449,96 @@ fn direct_breg_proposal_get_refusal(action: &str, profile: &str) -> String {
     )
 }
 
-#[cfg(feature = "signed-coordinator-event")]
-fn resolve_signed_keys(
+#[cfg(any(feature = "direct-breg", feature = "signed-coordinator-event"))]
+fn resolve_delivery_key(
     resolver: &SecretResolver,
     path: &str,
-    current: &DeliveryKeyReference,
-    previous: Option<&DeliveryKeyReference>,
-) -> Result<DeliveryKeys, String> {
-    let resolve = |member: &str, reference: &DeliveryKeyReference| {
-        let secret = resolver
-            .resolve_binary_reference(reference)
-            .map_err(|_| format!("the delivery key at `{path}.{member}` could not be resolved"))?;
-        let bytes = secret.expose_secret();
-        DeliveryKey::new(bytes).map_err(|error| {
-            let newline = if bytes.ends_with(b"\n") {
-                ", ending in a newline"
-            } else {
-                ""
-            };
+    reference: &DeliveryKeyReference,
+) -> Result<DeliveryKey, String> {
+    let secret = resolver
+        .resolve_binary_reference(reference)
+        .map_err(|error| {
             format!(
-                "invalid delivery key at `{path}.{member}` ({} bytes{newline}): {error}",
-                bytes.len()
+                "could not resolve {path}: {error}. {}",
+                error.suggested_action()
             )
-        })
-    };
-    let current = resolve("hmacSha256KeyRef", current)?;
-    let previous = previous
-        .map(|reference| resolve("previousHmacSha256KeyRef", reference))
-        .transpose()?;
-    DeliveryKeys::new(current, previous).map_err(|error| {
-        format!("invalid delivery key at `{path}.previousHmacSha256KeyRef`: {error}; supply a key distinct from `{path}.hmacSha256KeyRef`")
+        })?;
+    let bytes = secret.expose_secret();
+    DeliveryKey::new(bytes).map_err(|error| {
+        let newline = if bytes.ends_with(b"\n") {
+            ", ending in a newline"
+        } else {
+            ""
+        };
+        format!(
+            "invalid delivery key at `{path}` ({} bytes{newline}): {error}",
+            bytes.len()
+        )
     })
 }
 
-#[cfg(feature = "signed-coordinator-event")]
-fn resolve_trigger_keys(
+#[cfg(any(feature = "direct-breg", feature = "signed-coordinator-event"))]
+fn resolve_destination_keys(
     resolver: &SecretResolver,
-    binding: &LocalId,
-    current: &DeliveryKeyReference,
-    previous: Option<&DeliveryKeyReference>,
-    authored_revised: bool,
-    configured_revised: Option<&RevisedReceiverBinding>,
-) -> Result<(DeliveryKeys, Option<DeliveryKeys>), String> {
-    let primary_path = format!("destinations.{binding}");
-    let revised_path = format!("{primary_path}.revisedReceiver");
-    check_revised_receiver(binding, authored_revised, configured_revised.is_some())?;
-    let primary = resolve_signed_keys(resolver, &primary_path, current, previous)?;
-    let revised = configured_revised
-        .map(|receiver| {
-            resolve_signed_keys(
-                resolver,
-                &revised_path,
+    bindings: &BTreeMap<LocalId, RuntimeDestinationBinding>,
+) -> Result<BTreeMap<String, DeliveryKey>, String> {
+    let mut keys = BTreeMap::new();
+    for (id, binding) in bindings {
+        let RuntimeDestinationBinding::SignedCoordinatorEvent {
+            hmac_sha256_key_ref,
+            previous_hmac_sha256_key_ref,
+            revised_receiver,
+            ..
+        } = binding
+        else {
+            continue;
+        };
+        let path = format!("destinations.{id}");
+        let primary = (
+            path.clone(),
+            hmac_sha256_key_ref,
+            previous_hmac_sha256_key_ref,
+        );
+        let revised = revised_receiver.as_ref().map(|receiver| {
+            (
+                format!("{path}.revisedReceiver"),
                 &receiver.hmac_sha256_key_ref,
-                receiver.previous_hmac_sha256_key_ref.as_ref(),
+                &receiver.previous_hmac_sha256_key_ref,
             )
-        })
-        .transpose()?;
-    if let Some(revised) = &revised {
-        let labelled_keys = [
-            (
-                format!("{primary_path}.hmacSha256KeyRef"),
-                Some(primary.current()),
-            ),
-            (
-                format!("{primary_path}.previousHmacSha256KeyRef"),
-                primary.previous(),
-            ),
-            (
-                format!("{revised_path}.hmacSha256KeyRef"),
-                Some(revised.current()),
-            ),
-            (
-                format!("{revised_path}.previousHmacSha256KeyRef"),
-                revised.previous(),
-            ),
-        ];
-        distinct_delivery_keys(
-            labelled_keys
-                .iter()
-                .filter_map(|(path, key)| key.map(|key| (path.as_str(), key))),
-        )
-        .map_err(|error| error.to_string())?;
+        });
+        for (path, current, previous) in std::iter::once(primary).chain(revised) {
+            for (member, reference) in [
+                ("hmacSha256KeyRef", Some(current)),
+                ("previousHmacSha256KeyRef", previous.as_ref()),
+            ] {
+                if let Some(reference) = reference {
+                    let path = format!("{path}.{member}");
+                    let key = resolve_delivery_key(resolver, &path, reference)?;
+                    keys.insert(path, key);
+                }
+            }
+        }
     }
-    Ok((primary, revised))
+    distinct_delivery_keys(keys.iter().map(|(path, key)| (path.as_str(), key))).map_err(|error| {
+        let (first, second) = (error.first(), error.second());
+        if second
+            .strip_suffix(".previousHmacSha256KeyRef")
+            .is_some_and(|receiver| first.strip_suffix(".hmacSha256KeyRef") == Some(receiver))
+        {
+            return format!("{second} holds the same bytes as {first}. To rotate, write 32 new random bytes to the secret {first} references and keep the old bytes behind {second}.");
+        }
+        format!("{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there.")
+    })?;
+    Ok(keys)
+}
+
+#[cfg(feature = "signed-coordinator-event")]
+fn take_receiver_keys(keys: &mut BTreeMap<String, DeliveryKey>, path: &str) -> DeliveryKeys {
+    let current = keys
+        .remove(&format!("{path}.hmacSha256KeyRef"))
+        .expect("the inventory resolved the configured current key");
+    let previous = keys.remove(&format!("{path}.previousHmacSha256KeyRef"));
+    DeliveryKeys::new(current, previous).expect("the inventory validated distinct key bytes")
 }
 
 #[cfg(feature = "signed-coordinator-event")]
@@ -540,6 +547,7 @@ fn activate_signed<'a>(
     configured: &RuntimeDestinationBinding,
     core: &AdapterEndpointBindings,
     resolver: &SecretResolver,
+    mut keys: BTreeMap<String, DeliveryKey>,
 ) -> Result<Box<dyn DestinationSeam + 'a>, String> {
     use registry_adapter_connectors::coordinator_event::{
         CoordinatorEventConnector, CoordinatorEventReceiver,
@@ -560,23 +568,25 @@ fn activate_signed<'a>(
     };
     let RuntimeDestinationBinding::SignedCoordinatorEvent {
         base_url,
-        hmac_sha256_key_ref,
-        previous_hmac_sha256_key_ref,
         revised_receiver: configured_revised,
         attempt_timeout_milliseconds,
         tls_trust_profile,
+        ..
     } = configured
     else {
         return Err("the runtime destination kind does not match the job destination".to_string());
     };
-    let (primary_keys, revised_keys) = resolve_trigger_keys(
-        resolver,
+    check_revised_receiver(
         binding,
-        hmac_sha256_key_ref,
-        previous_hmac_sha256_key_ref.as_ref(),
         revised_receiver.is_some(),
-        configured_revised.as_ref(),
+        configured_revised.is_some(),
     )?;
+    let path = format!("destinations.{binding}");
+    let primary_keys = take_receiver_keys(&mut keys, &path);
+    let revised_keys = configured_revised
+        .as_ref()
+        .map(|_| take_receiver_keys(&mut keys, &format!("{path}.revisedReceiver")));
+    drop(keys);
     let profile = if base_url.is_https() {
         DestinationProfile::ProductionHttps
     } else {
@@ -904,33 +914,129 @@ mod tests {
             "signingKeyRef": "secret:file/old-key",
             "attemptTimeoutMilliseconds": 1000
         });
-        let message = parse_runtime_bindings(&serde_json::json!({"coordinator-main": value}))
-            .expect_err("the retired member is refused")
-            .to_string();
-        assert!(message.contains("hmacSha256KeyRef"), "{message}");
+        for id in ["coordinator-main", "INVALID"] {
+            let message = parse_runtime_bindings(&serde_json::json!({(id): value}))
+                .expect_err("the retired member is refused");
+            assert_eq!(
+                message,
+                format!("replace `destinations.{id}.signingKeyRef` with `destinations.{id}.hmacSha256KeyRef`")
+            );
+        }
+    }
+
+    #[cfg(feature = "signed-coordinator-event")]
+    #[test]
+    fn key_resolution_reports_missing_and_empty_files() {
+        use registry_platform_config::{SecretError, SecretProvider};
+        let directory = tempfile::tempdir().unwrap();
+        let empty = directory.path().join("empty-key");
+        std::fs::write(&empty, []).unwrap();
+        std::fs::set_permissions(empty, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let resolver = SecretResolver::new([SecretProvider::File], directory.path()).unwrap();
+        let path = "destinations.coordinator-main";
+        for (name, error) in [
+            ("missing-key", SecretError::Unavailable),
+            ("empty-key", SecretError::InvalidValue),
+        ] {
+            let reference =
+                serde_json::from_value(serde_json::json!(format!("secret:file/{name}"))).unwrap();
+            assert_eq!(
+                resolve_delivery_key(&resolver, &format!("{path}.hmacSha256KeyRef"), &reference)
+                    .err()
+                    .unwrap(),
+                format!(
+                    "could not resolve {path}.hmacSha256KeyRef: {error}. {}",
+                    error.suggested_action()
+                )
+            );
+        }
+    }
+
+    #[cfg(feature = "signed-coordinator-event")]
+    #[tokio::test]
+    async fn duplicate_keys_refuse_every_job_using_the_runtime() {
+        let adapter = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/adapter");
+        let example = adapter.join("examples/kobotoolbox-job");
+        let runtime_path = example.join("job-runtime.coordinator.example.yaml");
+        let mut runtime = JobRuntimeConfig::load(&runtime_path).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for (name, value) in [
+            ("active", 1),
+            ("previous", 2),
+            ("revised", 3),
+            ("duplicate", 2),
+            ("second-revised", 4),
+            ("kobo-token", b'x'),
+        ] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, [value; 32]).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let resolver = Arc::new(
+            SecretResolver::new(
+                [registry_platform_config::SecretProvider::File],
+                directory.path(),
+            )
+            .unwrap(),
+        );
+        runtime.core.endpoints = serde_json::from_value(serde_json::json!([{
+            "endpoint": "kobo-api",
+            "baseUrl": "https://kobo.example.invalid/api/v2/assets/aFixtureUid0000000000000000000001/data",
+            "credential": {"type": "static-authorization", "tokenRef": "secret:file/kobo-token"},
+        }]))
+        .unwrap();
+        let mut program = registry_adapter_engine::job::compile_job_with_runtime(
+            &adapter.join("packs/kobotoolbox/pack.yaml"),
+            &example.join("job.coordinator.yaml"),
+            &runtime,
+            Arc::clone(&resolver),
+            &example.join("profile.yaml"),
+            &example.join("project.yaml"),
+        )
+        .expect("compile the signed job example");
+        let destination = |key, previous| {
+            serde_json::json!({
+                "type": "signed-coordinator-event",
+                "baseUrl": "http://127.0.0.1:41001",
+                "hmacSha256KeyRef": format!("secret:file/{key}"),
+                "previousHmacSha256KeyRef": previous,
+                "revisedReceiver": {"hmacSha256KeyRef": "secret:file/revised"},
+                "attemptTimeoutMilliseconds": 1000,
+            })
+        };
+        let mut second = destination("duplicate", None);
+        second["revisedReceiver"]["hmacSha256KeyRef"] =
+            serde_json::json!("secret:file/second-revised");
+        runtime.destinations = Some(serde_json::json!({
+            "coordinator-first": destination("active", Some("secret:file/previous")),
+            "coordinator-second": second,
+        }));
+        let expected = "destinations.coordinator-first.previousHmacSha256KeyRef and destinations.coordinator-second.hmacSha256KeyRef resolve to the same key bytes. Give destinations.coordinator-second.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there.";
+        for id in ["coordinator-first", "coordinator-second"] {
+            let JobDestination::SignedCoordinatorEvent { binding, .. } =
+                &mut program.job.destination
+            else {
+                panic!("the example selects a signed destination");
+            };
+            *binding = LocalId::new(id).unwrap();
+            assert_eq!(
+                activate_destination(&program, &runtime, &resolver)
+                    .await
+                    .err()
+                    .as_deref(),
+                Some(expected)
+            );
+        }
     }
 
     #[cfg(feature = "signed-coordinator-event")]
     #[test]
     fn revised_receiver_configuration_matches_the_authored_job() {
-        let resolver =
-            SecretResolver::new([registry_platform_config::SecretProvider::Environment], "")
-                .unwrap();
         let binding = LocalId::new("coordinator-main").unwrap();
-        let reference =
-            serde_json::from_value(serde_json::json!("secret:env/TEST_EVENT_KEY")).unwrap();
-        let revised = RevisedReceiverBinding {
-            hmac_sha256_key_ref: reference,
-            previous_hmac_sha256_key_ref: None,
-        };
-        let current = &revised.hmac_sha256_key_ref;
-        let missing =
-            resolve_trigger_keys(&resolver, &binding, current, None, true, None).unwrap_err();
+        let missing = check_revised_receiver(&binding, true, false).unwrap_err();
         assert!(missing
             .contains("add `destinations.coordinator-main.revisedReceiver.hmacSha256KeyRef`"));
-        let unexpected =
-            resolve_trigger_keys(&resolver, &binding, current, None, false, Some(&revised))
-                .unwrap_err();
+        let unexpected = check_revised_receiver(&binding, false, true).unwrap_err();
         assert!(unexpected.contains("remove `destinations.coordinator-main.revisedReceiver`"));
     }
 
@@ -944,7 +1050,6 @@ mod tests {
         )
         .unwrap();
         let path = "destinations.coordinator-main";
-        let binding = LocalId::new("coordinator-main").unwrap();
         let reference = |name: &str, bytes: &[u8]| {
             let file = directory.path().join(name);
             std::fs::write(&file, bytes).unwrap();
@@ -955,15 +1060,23 @@ mod tests {
             .unwrap()
         };
         let binary = reference("binary", &[0; 32]);
-        assert!(resolve_signed_keys(&resolver, path, &binary, None).is_ok());
-        let renamed = reference("same-bytes", &[0; 32]);
-        let revised = RevisedReceiverBinding {
-            hmac_sha256_key_ref: renamed,
-            previous_hmac_sha256_key_ref: None,
-        };
-        let message =
-            resolve_trigger_keys(&resolver, &binding, &binary, None, true, Some(&revised))
-                .unwrap_err();
+        assert!(
+            resolve_delivery_key(&resolver, &format!("{path}.hmacSha256KeyRef"), &binary).is_ok()
+        );
+        let bindings = parse_runtime_bindings(&serde_json::json!({
+            "coordinator-main": {
+                "type": "signed-coordinator-event",
+                "baseUrl": "http://127.0.0.1:41001",
+                "hmacSha256KeyRef": "secret:file/binary",
+                "revisedReceiver": {"hmacSha256KeyRef": "secret:file/same-bytes"},
+                "attemptTimeoutMilliseconds": 1000
+            }
+        }))
+        .unwrap();
+        reference("same-bytes", &[0; 32]);
+        let message = resolve_destination_keys(&resolver, &bindings)
+            .err()
+            .unwrap();
         assert!(message.contains("destinations.coordinator-main.hmacSha256KeyRef"));
         assert!(message.contains("destinations.coordinator-main.revisedReceiver.hmacSha256KeyRef"));
 
@@ -971,15 +1084,69 @@ mod tests {
         with_newline.push(b'\n');
         let revised_path = "destinations.coordinator-main.revisedReceiver";
         let too_long = reference("newline", &with_newline);
-        let message = resolve_signed_keys(&resolver, revised_path, &too_long, None).unwrap_err();
+        let message = resolve_delivery_key(
+            &resolver,
+            &format!("{revised_path}.hmacSha256KeyRef"),
+            &too_long,
+        )
+        .err()
+        .unwrap();
         assert!(message.contains("destinations.coordinator-main.revisedReceiver.hmacSha256KeyRef"));
         assert!(message.contains("65 bytes") && message.contains("newline"));
         let secret_text = reference("secret-text", b"whsec_synthetic-canary-not-key-bytes");
-        let message =
-            resolve_signed_keys(&resolver, path, &binary, Some(&secret_text)).unwrap_err();
+        let message = resolve_delivery_key(
+            &resolver,
+            &format!("{path}.previousHmacSha256KeyRef"),
+            &secret_text,
+        )
+        .err()
+        .unwrap();
         assert!(message.contains("destinations.coordinator-main.previousHmacSha256KeyRef"));
         assert!(message.contains("whsec_") && message.contains("bytes"));
         assert!(!message.contains("synthetic-canary"));
+    }
+
+    #[cfg(feature = "signed-coordinator-event")]
+    #[test]
+    fn a_previous_key_equal_to_its_current_key_explains_rotation() {
+        let directory = tempfile::tempdir().unwrap();
+        let resolver = SecretResolver::new(
+            [registry_platform_config::SecretProvider::File],
+            directory.path(),
+        )
+        .unwrap();
+        for (name, value) in [("primary", 1), ("revised", 2)] {
+            let file = directory.path().join(name);
+            std::fs::write(&file, [value; 32]).unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        for receiver in ["primary", "revised"] {
+            let mut destination = serde_json::json!({
+                "type": "signed-coordinator-event",
+                "baseUrl": "http://127.0.0.1:41001",
+                "hmacSha256KeyRef": "secret:file/primary",
+                "revisedReceiver": {"hmacSha256KeyRef": "secret:file/revised"},
+                "attemptTimeoutMilliseconds": 1000
+            });
+            let mut path = "destinations.coordinator-main".to_owned();
+            let binding = if receiver == "primary" {
+                &mut destination
+            } else {
+                path.push_str(".revisedReceiver");
+                &mut destination["revisedReceiver"]
+            };
+            binding["previousHmacSha256KeyRef"] =
+                serde_json::json!(format!("secret:file/{receiver}"));
+            let bindings =
+                parse_runtime_bindings(&serde_json::json!({"coordinator-main": destination}))
+                    .unwrap();
+            let previous = format!("{path}.previousHmacSha256KeyRef");
+            let current = format!("{path}.hmacSha256KeyRef");
+            assert_eq!(
+                resolve_destination_keys(&resolver, &bindings).unwrap_err(),
+                format!("{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}.")
+            );
+        }
     }
 
     /// A direct BReg binding states its client assertion audience, the
