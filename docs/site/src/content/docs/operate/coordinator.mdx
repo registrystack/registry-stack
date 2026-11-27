@@ -261,12 +261,16 @@ Secret values never appear in a diagnostic or a log.
 Use PostgreSQL 17 or newer; `apply` and startup refuse an older server.
 `provision` creates what the two database URLs in your runtime file name: the migration role, the runtime role, and the database, and it lets only those two roles connect.
 It takes the role names, the database name, and the passwords from `database.migrationUrlRef` and `database.runtimeUrlRef`, so you write each of them once, except that when the runtime file has a `deployment` block, the user of the runtime URL must be `deployment.runtimeRole`: `provision` refuses a different user before it connects, with `coordinator.runtime-config.runtime-role-mismatch`.
+Without a `deployment` block, `provision` creates the role the runtime URL names, and `apply` then refuses the missing block.
 
 Run it as a PostgreSQL administrator that can create roles and databases (`CREATEROLE` and `CREATEDB`).
 It needs no superuser.
 Put the administrator URL in a file or an environment variable, never on the command line.
 The connection always uses verified TLS: it trusts the certificate authority behind `database.caBundleRef` when the runtime file names one, and the system roots otherwise.
 The URL's `sslmode` must be `require`, `verify-ca`, or `verify-full`.
+The administrator URL must name the same host and port as the two product URLs, or `provision` refuses it as `platform.provision.target-mismatch`.
+It must also name a database other than the product database, such as `postgres`, or `provision` refuses it as `platform.provision.target-invalid`.
+Where the administrator may connect only to the product database, `provision` cannot run: add `--print-sql` and give the script to the person who administers the server.
 
 ```sh
 coordinatorctl provision --runtime-config /etc/registry-coordinator/runtime.yaml \
@@ -282,6 +286,10 @@ To review the statements first, or to run them yourself with `psql`, add `--prin
 It connects to nothing and prints a script with a `\password` line after each role instead of a password:
 
 ```sql
+-- provision script, product coordinator. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
 SET createrole_self_grant = 'set,inherit';
 CREATE ROLE "coordinator_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
 \password "coordinator_migration"

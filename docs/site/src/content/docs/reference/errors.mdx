@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-evidence
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -113,15 +113,17 @@ These products differ:
 - Casework and Scheduling answer 200 with the shared body `{"status":"ready"}`, and `/health` with `{"status":"ok"}`.
 - Coordinator answers 200 with `{"ready":true,"status":"ready"}` and 503 with `{"ready":false}`.
 - Scheduling also serves `/readyz`, a bodyless probe on the same readiness test, under its deployment health contract.
-- Messaging and Documents answer without a body.
+- Messaging and Documents answer 200 without a body, and 503 with a `service.unavailable` problem body and a `Retry-After` header.
 
 {/* Evidence: crates/registry-breg/src/problem.rs RuntimeNotReady;
     crates/registry-evidence-oid4vci/src/service.rs not_ready;
     crates/registry-platform-httputil/src/probe.rs READY_BODY;
     crates/registry-casework/src/http.rs ready;
     crates/registry-coordinator/src/http.rs ready;
-    crates/registry-scheduling/src/http.rs ready, readyz. */}
-{/* TODO[evidence]: the generic `{"status":"not-ready"}` body and the bodyless Messaging and Documents readiness answers have no single code anchor. */}
+    crates/registry-scheduling/src/http.rs ready, readyz;
+    crates/registry-messaging/src/http.rs ready;
+    crates/registry-documents/src/http.rs ready. */}
+{/* TODO[evidence]: the generic `{"status":"not-ready"}` body has no single code anchor. */}
 
 ## Idempotency and retries
 

@@ -18,10 +18,12 @@ name.
   `psql`. The script holds no password and no password verifier: each login
   role is followed by a `\password` line, a statement that needs a superuser
   is marked, and the script stops at the first error. A role or database name
-  with a control character or a backslash, a database name with `=`, the
-  role names `public`, `none` and `pg_*`, and the databases `postgres`,
-  `template0` and `template1` are refused when the plan is built, so no name
-  can start a `psql` meta-command or reach another database.
+  with a control character, a backslash or a bidirectional formatting
+  character, a database name with `=` or one that starts with `postgresql://`
+  or `postgres://`, the role names `public`, `none` and `pg_*`, and the
+  databases `postgres`, `template0` and `template1` are refused when the plan
+  is built, so no name can start a `psql` meta-command or reach another
+  database.
 - `verify_server_version` refuses a server below the shared PostgreSQL floor,
   `registry_platform_activation::MINIMUM_SERVER_VERSION_NUM`.
 - `sql` holds the statement builders and the identifier and literal quoting.
@@ -33,10 +35,13 @@ name.
   `verify-full`). In `Mode::Converge` the server version is checked before the
   first statement, and an existing role, database, schema or extension in
   another shape is refused and never altered: a role with other attributes,
-  role-level settings or a membership the plan did not grant, a template
-  database, a PostGIS installed outside the plan's schema or without the bbox
-  membership. `execute_recording` keeps the outcomes of the statements that
-  ran before a failure.
+  a default for `role`, `search_path` or `session_authorization`, or a
+  membership the plan did not grant, a template database, a PostGIS installed
+  outside the plan's schema or without the bbox membership.
+  `execute_recording` keeps the outcomes of the statements that ran before a
+  failure. A session that cannot open in the new database after the
+  server-scope statements ran is reported as `database-connect-failed`, with
+  those statements listed.
 
 Passwords enter only through `RoleCredential`, whose `Debug` prints the name.
 The executable text of a role statement carries a SCRAM-SHA-256 verifier
@@ -53,6 +58,7 @@ formats or logs a secret.
 - `schema` renders the report's JSON Schema from its Rust type.
 - `test-support` adds `test_support`, a verified-TLS superuser session and the
   two `PROVISION_TEST_DATABASE_*` variables, for the provision tests of the
-  products that use this crate. Only their dev-dependencies enable it.
+  products that use this crate, and `Mode::Fresh`, which skips the probes.
+  Only their dev-dependencies enable it.
 - `postgres-test` runs `tests/postgres.rs` against a disposable server. Its
   header names the three variables it needs.

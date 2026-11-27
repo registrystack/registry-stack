@@ -28,7 +28,9 @@
   `--admin-url-file` or `--admin-url-env` over verified TLS, or prints the SQL
   with `--print-sql` and connects to nothing. Run it again at any time: it
   creates only what is missing and refuses a role that exists with different
-  attributes. It loads the whole runtime file and verifies the package first.
+  attributes. It also grants the runtime role USAGE on the `public` schema,
+  and running it again restores that grant. It loads the whole runtime file
+  and verifies the package first.
 
 - `GET /health` answers `{"status":"ok"}` and `GET /ready` answers
   `{"status":"ready"}` as `application/json`, in place of an empty 200. Both

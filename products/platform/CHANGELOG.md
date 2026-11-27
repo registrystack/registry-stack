@@ -80,14 +80,23 @@
   product's schema layout and the optional `btree_gist` and PostGIS
   extensions. It can run as an administrator over verified TLS, converging by
   object, or print a `psql` script that holds no password and stops at the
-  first error. It refuses an existing role with other attributes, role-level
-  settings or a membership it did not grant, a template database, a PostGIS
-  installed outside its schema or without the bbox membership, a role name
-  that is `public`, `none` or starts with `pg_`, a name with a control
-  character or backslash, and the `postgres`, `template0` and `template1`
-  databases. It grants the runtime role `USAGE` on `public` directly, so
+  first error. It refuses an existing role with other attributes or a
+  membership it did not grant, a `role`, `search_path` or
+  `session_authorization` default for a product role, in every database or
+  the product's (`platform.provision.role-settings-differ`), a template
+  database, a PostGIS installed outside its schema or without the bbox
+  membership, a role name that is `public`, `none` or starts with `pg_`, a
+  name with a control character, a backslash or a bidirectional formatting
+  character, a database name that starts with `postgresql://` or
+  `postgres://`, and the `postgres`, `template0` and `template1` databases.
+  Other role settings, such as `statement_timeout` or `jit`, are accepted on
+  a rerun. It grants the runtime role `USAGE` on `public` directly, so
   running `provision` again restores it. A run that stops part-way reports
-  the statements that ran. `registry-platform-activation` exports
+  the statements that ran, in text output as well, and the report's
+  `executed` is true whenever a statement ran. A session that cannot open in
+  the new database is `platform.provision.database-connect-failed`, and a
+  connection limit reached by a product login is an operational failure
+  (exit 3). `registry-platform-activation` exports
   `MINIMUM_SERVER_VERSION_NUM`, the PostgreSQL 17 floor the plan and the
   activation ledger share. `rstack dev` provisions its databases from the
   same plan.

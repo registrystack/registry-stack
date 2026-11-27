@@ -20,8 +20,7 @@
   runtime roles and the database from the runtime file's two database URLs, as
   a non-superuser administrator over verified TLS, or prints the script with
   `--print-sql`. It also grants the runtime role USAGE on the `public` schema,
-  and running it again restores that grant. The operate page no longer gives
-  hand SQL.
+  and running it again restores that grant.
 - A plain `http` provider base URL and an SMTP relay in development use the
   same loopback rule: `127.0.0.0/8`, `::1`, or an IPv4-mapped form of
   `127.0.0.0/8`. The name `localhost` is accepted for a provider base URL as
