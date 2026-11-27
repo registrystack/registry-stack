@@ -15,17 +15,19 @@ pub use error::{
     ReviewProtocolFailure, ReviewValidationError, ReviewValidationReason,
 };
 pub use model::{
-    ReviewAuth, ReviewComplete, ReviewResultObservation, ReviewResultResponse, ReviewResultsQuery,
+    ReviewAskAnswerResponse, ReviewAskResponse, ReviewAuth, ReviewComplete,
+    ReviewResultObservation, ReviewResultResponse, ReviewResultsQuery,
 };
 pub use registry_platform_httputil::client::BearerToken;
 pub use registry_platform_httputil::PeerPolicy;
 pub use registry_review_protocol::{
     submission_digest, ContentDigest, HumanIdentity, PolicyBinding, PolicySelection, ProtocolError,
-    ReviewCancelRequest, ReviewCancelResponse, ReviewCompletion, ReviewCompletionType,
-    ReviewContext, ReviewCreateRequest, ReviewProgressCode, ReviewRequestAccepted,
-    ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedEntry,
-    ReviewResultFeedPage, ReviewResultLookup, ReviewResultStatus, SourceContextBinding,
-    SubjectBinding, SubmissionDigest, REVIEW_PRODUCER_HEADER, REVIEW_PROFILE_HEADER,
-    REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
+    ReviewAsk, ReviewAskAnswer, ReviewAskFeedEntry, ReviewAskFeedPage, ReviewAskState,
+    ReviewAskWant, ReviewCancelRequest, ReviewCancelResponse, ReviewCompletion,
+    ReviewCompletionType, ReviewContext, ReviewCreateRequest, ReviewProgressCode,
+    ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
+    ReviewResultFeedEntry, ReviewResultFeedPage, ReviewResultLookup, ReviewResultStatus,
+    SourceContextBinding, SubjectBinding, SubmissionDigest, REVIEW_PRODUCER_HEADER,
+    REVIEW_PROFILE_HEADER, REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
 };
 pub use uuid::Uuid;

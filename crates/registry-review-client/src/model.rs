@@ -1,5 +1,7 @@
 use registry_platform_httputil::client::BearerToken;
-use registry_review_protocol::{ReviewResult, ReviewResultFeedPage, ReviewResultLookup};
+use registry_review_protocol::{
+    ReviewAsk, ReviewAskFeedPage, ReviewResult, ReviewResultFeedPage, ReviewResultLookup,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -93,6 +95,28 @@ impl ReviewResultResponse {
     }
 }
 
+/// The outcomes of reading one ask. A request or ask the caller may not see
+/// is indistinguishable from one that does not exist.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReviewAskResponse {
+    Available(Box<ReviewComplete<ReviewAsk>>),
+    ConcealedOrUnknown { trace_id: String },
+}
+
+/// The outcomes of reporting an ask as answered.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReviewAskAnswerResponse {
+    Answered(Box<ReviewComplete<ReviewAsk>>),
+    /// The request or ask is concealed from this producer or unknown.
+    ConcealedOrUnknown {
+        trace_id: String,
+    },
+    /// The ask is not open: already answered, expired or closed.
+    NotOpen {
+        trace_id: String,
+    },
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewResultsQuery {
@@ -138,6 +162,30 @@ pub(crate) fn check_result_page(page: &ReviewResultFeedPage) -> Result<(), &'sta
             .is_none_or(|entry| entry.event_id != cursor)
         {
             return Err("the result page cursor does not match its final entry");
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn check_ask_page(page: &ReviewAskFeedPage) -> Result<(), &'static str> {
+    if page.items.len() > MAXIMUM_PAGE_SIZE {
+        return Err("the ask page contains too many entries");
+    }
+    if page
+        .items
+        .iter()
+        .any(|entry| entry.event_id.is_nil() || entry.request_id.is_nil() || entry.ask_id.is_nil())
+    {
+        return Err("the ask page contains a nil correlation identifier");
+    }
+    // As for the result feed, a continuation names the final returned entry.
+    if let Some(cursor) = page.next_cursor {
+        if page
+            .items
+            .last()
+            .is_none_or(|entry| entry.event_id != cursor)
+        {
+            return Err("the ask page cursor does not match its final entry");
         }
     }
     Ok(())

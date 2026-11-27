@@ -10,12 +10,13 @@ use registry_platform_httputil::{
     read_bounded, url::append_path_segments, validate_response_headers, ResponseHeaderError,
 };
 use registry_review_protocol::{
-    review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
-    ReviewCancelResponse, ReviewCreateRequest, ReviewProgressCode, ReviewRequestAccepted,
-    ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedPage,
-    ReviewResultStatus, SubmissionDigest, REVIEW_PRODUCER_HEADER, REVIEW_PROFILE_HEADER,
-    REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH, REVIEW_VALIDATION_PATH_HEADER,
-    REVIEW_VALIDATION_REASON_HEADER,
+    review_ask_answer_path, review_ask_path, review_cancel_path, review_request_path,
+    review_result_path, ReviewAsk, ReviewAskAnswer, ReviewAskFeedPage, ReviewAskState,
+    ReviewCancelRequest, ReviewCancelResponse, ReviewCreateRequest, ReviewProgressCode,
+    ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
+    ReviewResultFeedPage, ReviewResultStatus, SubjectBinding, SubmissionDigest,
+    REVIEW_ASKS_FEED_PATH, REVIEW_PRODUCER_HEADER, REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH,
+    REVIEW_RESULTS_FEED_PATH, REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -23,11 +24,11 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::model::check_result_page;
+use crate::model::{check_ask_page, check_result_page};
 use crate::{
-    ReviewAuth, ReviewClientConfig, ReviewClientError, ReviewComplete, ReviewProblem,
-    ReviewProblemCode, ReviewProtocolFailure, ReviewResultResponse, ReviewResultsQuery,
-    ReviewValidationError, ReviewValidationReason,
+    ReviewAskAnswerResponse, ReviewAskResponse, ReviewAuth, ReviewClientConfig, ReviewClientError,
+    ReviewComplete, ReviewProblem, ReviewProblemCode, ReviewProtocolFailure, ReviewResultResponse,
+    ReviewResultsQuery, ReviewValidationError, ReviewValidationReason,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -189,6 +190,64 @@ struct ReviewResultFeedPageWire {
 
 impl ClientResponse for ReviewResultFeedPage {
     type Wire = ReviewResultFeedPageWire;
+
+    fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error> {
+        validate_wire(wire)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum ReviewAskWantWire {
+    Answer {},
+    Document {},
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewAskWire {
+    ask_id: Uuid,
+    request_id: Uuid,
+    subject: SubjectBindingWire,
+    text: String,
+    wants: Vec<ReviewAskWantWire>,
+    asked_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    due_at: Option<String>,
+    state: ReviewAskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answered_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    closed_at: Option<String>,
+}
+
+impl ClientResponse for ReviewAsk {
+    type Wire = ReviewAskWire;
+
+    fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error> {
+        validate_wire(wire)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewAskFeedEntryWire {
+    event_id: Uuid,
+    request_id: Uuid,
+    ask_id: Uuid,
+    changed_at: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewAskFeedPageWire {
+    items: Vec<ReviewAskFeedEntryWire>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<Uuid>,
+}
+
+impl ClientResponse for ReviewAskFeedPage {
+    type Wire = ReviewAskFeedPageWire;
 
     fn from_wire(wire: Self::Wire) -> Result<Self, serde_json::Error> {
         validate_wire(wire)
@@ -605,6 +664,187 @@ impl ReviewClient {
         Ok(complete)
     }
 
+    /// Pages the provider's ask feed. An entry only announces that an ask
+    /// changed; the caller reads the ask next. A cursor past retention is
+    /// refused by the provider and surfaces as a `Problem` with status 410,
+    /// exactly as it does for the result feed.
+    pub async fn ask_feed(
+        &self,
+        auth: ReviewAuth<'_>,
+        cursor: Option<Uuid>,
+        limit: Option<usize>,
+    ) -> Result<ReviewComplete<ReviewAskFeedPage>, ReviewClientError> {
+        let query = ReviewResultsQuery { cursor, limit };
+        query.check().map_err(ReviewClientError::invalid_request)?;
+        let url = self.url_from_constant(REVIEW_ASKS_FEED_PATH)?;
+        let request = self.authorized(self.http.get(url).query(&query), &auth)?;
+        let complete = self.send_json(request, StatusCode::OK).await?;
+        check_ask_page(&complete.value).map_err(|_| {
+            protocol(
+                StatusCode::OK,
+                ReviewProtocolFailure::Body,
+                Some(complete.trace_id.clone()),
+            )
+        })?;
+        Ok(complete)
+    }
+
+    /// Reads one ask. The response must be the requested ask for the
+    /// subject binding the caller holds.
+    pub async fn ask(
+        &self,
+        auth: ReviewAuth<'_>,
+        request_id: Uuid,
+        ask_id: Uuid,
+        expected_subject: &SubjectBinding,
+    ) -> Result<ReviewAskResponse, ReviewClientError> {
+        check_ask_input(request_id, ask_id, expected_subject)?;
+        let url = self.url_from_constant(&review_ask_path(request_id, ask_id))?;
+        let response = self
+            .send(self.authorized(self.http.get(url), &auth)?)
+            .await?;
+        let status = response.status();
+        let trace_id = response_trace(status, response.headers())?;
+        match status {
+            StatusCode::OK => {
+                let ask = self
+                    .read_ask(
+                        response,
+                        status,
+                        &trace_id,
+                        request_id,
+                        ask_id,
+                        expected_subject,
+                    )
+                    .await?;
+                Ok(ReviewAskResponse::Available(Box::new(ReviewComplete {
+                    value: ask,
+                    trace_id,
+                })))
+            }
+            StatusCode::NOT_FOUND => {
+                self.refusal_status(response, status, &trace_id).await?;
+                Ok(ReviewAskResponse::ConcealedOrUnknown { trace_id })
+            }
+            _ => Err(self.problem_or_status(response, Some(trace_id)).await),
+        }
+    }
+
+    /// Reports that the subject's owner answered an ask. The body carries
+    /// only the subject binding and the answer time. The client performs one
+    /// exchange: 404 is a concealed or unknown ask, 409 an ask that is not
+    /// open, and a success must return the same ask, answered.
+    pub async fn answer_ask(
+        &self,
+        auth: ReviewAuth<'_>,
+        idempotency_key: &str,
+        request_id: Uuid,
+        ask_id: Uuid,
+        answer: &ReviewAskAnswer,
+    ) -> Result<ReviewAskAnswerResponse, ReviewClientError> {
+        check_ask_input(request_id, ask_id, &answer.subject)?;
+        answer
+            .check()
+            .map_err(|_| ReviewClientError::invalid_request("the ask answer is invalid"))?;
+        validate_idempotency_key(idempotency_key)?;
+        let key = HeaderValue::from_str(idempotency_key)
+            .map_err(|_| ReviewClientError::invalid_request("the idempotency key is invalid"))?;
+        let url = self.url_from_constant(&review_ask_answer_path(request_id, ask_id))?;
+        let request = self
+            .authorized(self.http.post(url).json(answer), &auth)?
+            .header(HeaderName::from_static(IDEMPOTENCY_KEY_HEADER), key);
+        let response = self.send(request).await?;
+        let status = response.status();
+        let trace_id = response_trace(status, response.headers())?;
+        match status {
+            StatusCode::OK => {
+                let ask = self
+                    .read_ask(
+                        response,
+                        status,
+                        &trace_id,
+                        request_id,
+                        ask_id,
+                        &answer.subject,
+                    )
+                    .await?;
+                if ask.state != ReviewAskState::Answered {
+                    return Err(protocol(
+                        status,
+                        ReviewProtocolFailure::Body,
+                        Some(trace_id),
+                    ));
+                }
+                Ok(ReviewAskAnswerResponse::Answered(Box::new(
+                    ReviewComplete {
+                        value: ask,
+                        trace_id,
+                    },
+                )))
+            }
+            StatusCode::NOT_FOUND | StatusCode::CONFLICT => {
+                self.refusal_status(response, status, &trace_id).await?;
+                Ok(if status == StatusCode::NOT_FOUND {
+                    ReviewAskAnswerResponse::ConcealedOrUnknown { trace_id }
+                } else {
+                    ReviewAskAnswerResponse::NotOpen { trace_id }
+                })
+            }
+            _ => Err(self.problem_or_status(response, Some(trace_id)).await),
+        }
+    }
+
+    async fn read_ask(
+        &self,
+        response: Response,
+        status: StatusCode,
+        trace_id: &str,
+        request_id: Uuid,
+        ask_id: Uuid,
+        expected_subject: &SubjectBinding,
+    ) -> Result<ReviewAsk, ReviewClientError> {
+        if !exact_media_type(response.headers(), JSON_MEDIA_TYPE) {
+            return Err(protocol(
+                status,
+                ReviewProtocolFailure::MediaType,
+                Some(trace_id.to_owned()),
+            ));
+        }
+        let ask: ReviewAsk = self.read_json(response, status, trace_id).await?;
+        let bound = ask.check().is_ok()
+            && ask.request_id == request_id
+            && ask.ask_id == ask_id
+            && ask.subject == *expected_subject;
+        if !bound {
+            return Err(protocol(
+                status,
+                ReviewProtocolFailure::Body,
+                Some(trace_id.to_owned()),
+            ));
+        }
+        Ok(ask)
+    }
+
+    /// Accepts a defined refusal status as either an empty response or a
+    /// well-formed problem document carrying the same status.
+    async fn refusal_status(
+        &self,
+        response: Response,
+        status: StatusCode,
+        trace_id: &str,
+    ) -> Result<(), ReviewClientError> {
+        if !response.headers().contains_key(CONTENT_TYPE) {
+            return self.require_empty(response, status, trace_id).await;
+        }
+        match self
+            .problem_or_status(response, Some(trace_id.to_owned()))
+            .await
+        {
+            ReviewClientError::Problem { status: seen, .. } if seen == status.as_u16() => Ok(()),
+            error => Err(error),
+        }
+    }
+
     fn authorized(
         &self,
         request: RequestBuilder,
@@ -948,6 +1188,21 @@ fn check_expected_request(expected: &ReviewRequestAccepted) -> Result<(), Review
     expected.policy.check().map_err(|_| {
         ReviewClientError::invalid_request("the accepted review policy binding is invalid")
     })
+}
+
+fn check_ask_input(
+    request_id: Uuid,
+    ask_id: Uuid,
+    subject: &SubjectBinding,
+) -> Result<(), ReviewClientError> {
+    if request_id.is_nil() || ask_id.is_nil() {
+        return Err(ReviewClientError::invalid_request(
+            "the ask identifiers are invalid",
+        ));
+    }
+    subject
+        .check()
+        .map_err(|_| ReviewClientError::invalid_request("the ask subject binding is invalid"))
 }
 
 fn validate_idempotency_key(value: &str) -> Result<(), ReviewClientError> {
