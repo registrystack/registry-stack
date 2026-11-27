@@ -6,6 +6,10 @@ array. Products retain their command payloads, diagnostic contracts, and exit
 decisions. The primitive adds no HTTP, runtime configuration, or authentication
 dependency.
 
+`Report::with_posture` adds a `posture` member with `value` (`development` or
+`production`) and `source` (`flag`, `environment` or `default`) after the
+command members. Without it the body is unchanged.
+
 `status` is `complete`, `domain-refusal`, `usage-error`, or
 `operational-failure`, corresponding to exit codes 0 through 3. A command's
 more specific result, such as `declined`, is an `outcome`. An invalid envelope

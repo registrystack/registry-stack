@@ -163,6 +163,11 @@ impl RuntimeConfigError {
         .in_file(file)
     }
 
+    /// A refusal that carries `diagnostics`, in `file`.
+    pub(crate) fn from_diagnostics(file: &Path, diagnostics: Vec<Diagnostic>) -> Self {
+        Self::from_report(Report::new(diagnostics)).in_file(file)
+    }
+
     fn from_report(report: Report) -> Self {
         let diagnostics = report.into_diagnostics();
         assert!(

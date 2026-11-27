@@ -14,6 +14,25 @@
   position while the reader decodes it: exact for a node, and the holding
   mapping with `exact: false` under `#[serde(flatten)]`.
 
+- `registry-platform-config` adds the development-only gate. A configuration
+  type with values only a development process may use implements
+  `DevelopmentClass`, and the member that holds it is a `Gated`, readable only
+  with the `DevelopmentWitness` the loader issues to a process that declared
+  development. `collect_development_settings` records each such value while it
+  decodes, and `PostureReport` is the one decision: production refuses every
+  recorded setting under its `<owner>.posture.<setting>` code, and development
+  accepts and lists it. `ready_member` gives the `posture` and
+  `developmentSettings` members a runtime adds to `/ready`, and `log_startup`
+  logs the declared posture, the development settings in use and the explicit
+  production settings in use. A check acceptance cannot hide a posture
+  diagnostic: one that names a posture code is refused with
+  `config.check-acceptance-not-acceptable`. No runtime uses the gate yet.
+
+- `registry-cli-report` adds `Report::with_posture`, which writes
+  `posture.value` and `posture.source` (`flag`, `environment` or `default`)
+  into a CLI report body after the command members. A report built without it
+  is unchanged.
+
 - `registry-platform-httpsec` implements authcommon's `RefusalTraceId` for
   `TraceId` behind the opt-in `refusal-trace-id` feature, not `server`. A
   service that only serves HTTP no longer links `registry-platform-authcommon`

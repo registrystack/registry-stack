@@ -3,6 +3,7 @@
 
 use std::io::{self, Write};
 
+use registry_platform_posture::{DeclaredPosture, PostureSource};
 use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::{json, Map, Value};
 
@@ -68,6 +69,7 @@ pub struct Report<'a> {
     version: &'a str,
     status: Status,
     outcome: Option<&'a Value>,
+    posture: Option<DeclaredPosture>,
 }
 
 impl<'a> Report<'a> {
@@ -132,7 +134,20 @@ impl<'a> Report<'a> {
             version,
             status,
             outcome,
+            posture: None,
         })
+    }
+
+    /// Report the declared posture as a `posture` member holding `value` and
+    /// `source`, placed after the command members. A command member named
+    /// `posture` is not written, so the key appears once. Without this call the
+    /// body is unchanged.
+    #[must_use]
+    pub fn with_posture(self, declared: DeclaredPosture) -> Self {
+        Self {
+            posture: Some(declared),
+            ..self
+        }
     }
 }
 
@@ -148,11 +163,16 @@ impl Serialize for Report<'_> {
         }
         map.serialize_entry("version", self.version)?;
         for (key, value) in self.members {
+            let replaced = self.posture.is_some() && key == "posture";
             if !HEAD.contains(&key.as_str())
                 && !matches!(key.as_str(), "version" | "diagnostics" | "outcome")
+                && !replaced
             {
                 map.serialize_entry(key, value)?;
             }
+        }
+        if let Some(declared) = self.posture {
+            map.serialize_entry("posture", &PostureMember(declared))?;
         }
         if let Some(outcome) = self.outcome {
             map.serialize_entry("outcome", outcome)?;
@@ -162,6 +182,26 @@ impl Serialize for Report<'_> {
             None => map.serialize_entry("diagnostics", &[] as &[Value])?,
         }
         map.end()
+    }
+}
+
+/// The `posture` member, written with `value` before `source`.
+struct PostureMember(DeclaredPosture);
+
+impl Serialize for PostureMember {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("value", self.0.posture.as_str())?;
+        map.serialize_entry("source", source_word(self.0.source))?;
+        map.end()
+    }
+}
+
+fn source_word(source: PostureSource) -> &'static str {
+    match source {
+        PostureSource::Flag => "flag",
+        PostureSource::Environment => "environment",
+        PostureSource::Default => "default",
     }
 }
 
