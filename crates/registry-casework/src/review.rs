@@ -1893,7 +1893,7 @@ impl PostgresStore {
         cursor: Option<Uuid>,
         limit: usize,
     ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
-        self.review_tasks_filtered(actor, queue, view, cursor, limit, None)
+        self.review_tasks_filtered(actor, queue, view, cursor, limit, None, None)
             .await
     }
 
@@ -1906,6 +1906,7 @@ impl PostgresStore {
         cursor: Option<Uuid>,
         limit: usize,
         subject: Option<&SubjectBinding>,
+        marker: Option<ReviewTaskMarker>,
     ) -> Result<ReviewTaskPage, ReviewRuntimeError> {
         if limit == 0 || limit > 100 || queue.is_some_and(str::is_empty) {
             return Err(ReviewRuntimeError::Invalid);
@@ -1960,6 +1961,7 @@ impl PostgresStore {
                    AND ($11::uuid IS NULL OR t.request_id=$11)
                    AND ($12::text IS NULL OR (r.subject_source=$12 AND r.subject_type=$13
                         AND r.subject_id=$14 AND r.subject_version=$15 AND r.subject_digest=$16))
+                   AND ($17::text IS NULL OR t.ask_marker=$17)
                  ORDER BY t.created_at,t.task_id LIMIT $7",
                 &[
                     &actor.principal.issuer,
@@ -1978,6 +1980,7 @@ impl PostgresStore {
                     &subject.map(|s|s.id.as_str()),
                     &subject.map(|s|s.version.as_str()),
                     &subject.map(|s|s.digest.as_str()),
+                    &marker.map(ReviewTaskMarker::as_str),
                 ],
             )
             .await?;
@@ -4813,7 +4816,7 @@ impl PostgresStore {
                 &[&task_id, &now],
             )
             .await?;
-        close_open_asks(&transaction, &record, Some(task_id), None, now).await?;
+        close_open_asks(&transaction, &record, Some(task_id), now).await?;
         let actor_ref = actor_reference(&actor.principal);
         let result_digest = result
             .as_ref()
@@ -4881,14 +4884,6 @@ impl PostgresStore {
                         &[&request_id, &i32::from(stage_index), &now],
                     )
                     .await?;
-                close_open_asks(
-                    &transaction,
-                    &record,
-                    None,
-                    Some(i32::from(stage_index)),
-                    now,
-                )
-                .await?;
                 let next_stage = progress.active_stage;
                 let tasks = insert_stage_tasks(
                     &transaction,
@@ -5511,7 +5506,7 @@ async fn settle_review(
             &[&record.request_id, &now],
         )
         .await?;
-    close_open_asks(transaction, record, None, None, now).await?;
+    close_open_asks(transaction, record, None, now).await?;
     let lifecycle = result_status_name(status);
     transaction
         .execute(

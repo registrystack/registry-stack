@@ -236,7 +236,7 @@ Self::RequestUnsupportedMediaType=>{
                 "Send a JSON request body with Content-Type application/json."
             },
 Self::ReviewAskAlreadyOpen=>"Wait for the open ask on this request to be answered or closed before asking again.",
-Self::ReviewAskAnswerTimeInvalid=>"Report the time the applicant's answer was committed: not before the ask was made and not in the future.",
+Self::ReviewAskAnswerTimeInvalid=>"Report the time the applicant's answer was committed: not before the ask was made and no more than five minutes ahead of Casework's clock.",
 Self::ReviewAskNotOffered=>"The active stage of this review policy does not let a reviewer ask the applicant.",
 Self::ReviewAskNotOpen=>"This ask was already answered or closed and cannot be answered again.",
 Self::ReviewAskProducerUnsupported=>"The producer of this request does not read asks, so the reviewer cannot ask the applicant.",
@@ -375,12 +375,6 @@ const MUTATION: &[ProblemCode] = &[
     ProblemCode::IdempotencyExpired,
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::ReviewTaskNotHeld,
-    ProblemCode::ReviewAskAlreadyOpen,
-    ProblemCode::ReviewAskAnswerTimeInvalid,
-    ProblemCode::ReviewAskNotOffered,
-    ProblemCode::ReviewAskNotOpen,
-    ProblemCode::ReviewAskProducerUnsupported,
-    ProblemCode::ReviewAskTaskInactive,
     ProblemCode::ReviewDistinctApproverRequired,
     ProblemCode::ReviewInitiatorExcluded,
     ProblemCode::ReviewInitiatorRequired,
@@ -398,6 +392,44 @@ const MUTATION: &[ProblemCode] = &[
     ProblemCode::AbsenceInvalidPeriod,
     ProblemCode::AbsenceOverlap,
     ProblemCode::AbsenceSelfCover,
+];
+/// What the producer's answer call can refuse with.
+const ASK_ANSWER: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::IdempotencyExpired,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::ReviewAskAnswerTimeInvalid,
+    ProblemCode::ReviewAskNotOpen,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
+];
+/// What the reviewer's ask command can refuse with.
+const ASK_COMMAND: &[ProblemCode] = &[
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::ProfileNotHuman,
+    ProblemCode::OperationNotAuthorized,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestNotFound,
+    ProblemCode::PreconditionRequired,
+    ProblemCode::PreconditionFailed,
+    ProblemCode::IdempotencyExpired,
+    ProblemCode::IdempotencyKeyReused,
+    ProblemCode::ReviewTaskNotHeld,
+    ProblemCode::ReviewAskAlreadyOpen,
+    ProblemCode::ReviewAskNotOffered,
+    ProblemCode::ReviewAskProducerUnsupported,
+    ProblemCode::ReviewAskTaskInactive,
+    ProblemCode::SourceVersionMismatch,
+    ProblemCode::SourceVersionUnavailable,
+    ProblemCode::SourceBadGateway,
+    ProblemCode::SourceProfileRequired,
+    ProblemCode::SourceProfileNotApplicable,
+    ProblemCode::ServiceUnavailable,
+    ProblemCode::RuntimeFailure,
 ];
 pub const OPERATION_CONTRACTS: &[OperationContract] = &[
     OperationContract {
@@ -542,7 +574,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: MUTATION,
+        problems: ASK_ANSWER,
     },
     OperationContract {
         method: "POST",
@@ -551,7 +583,7 @@ pub const OPERATION_CONTRACTS: &[OperationContract] = &[
         extracts_path: true,
         extracts_query: false,
         accepts_json: true,
-        problems: MUTATION,
+        problems: ASK_COMMAND,
     },
     OperationContract {
         method: "POST",

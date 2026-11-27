@@ -2161,7 +2161,7 @@
                 "const": "review.ask-answer-time-invalid"
               },
               "detail": {
-                "const": "Report the time the applicant's answer was committed: not before the ask was made and not in the future."
+                "const": "Report the time the applicant's answer was committed: not before the ask was made and no more than five minutes ahead of Casework's clock."
               },
               "status": {
                 "const": 422
@@ -7969,21 +7969,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -7996,7 +7981,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8091,16 +8076,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -8374,21 +8356,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -8401,7 +8368,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8496,16 +8463,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8781,21 +8745,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -8808,7 +8757,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8903,16 +8852,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -9193,21 +9139,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -9220,7 +9151,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9315,16 +9246,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -9607,21 +9535,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -9634,7 +9547,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9729,16 +9642,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -10021,21 +9931,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -10048,7 +9943,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10143,16 +10038,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -10435,21 +10327,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -10462,7 +10339,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10557,16 +10434,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -10849,21 +10723,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -10876,7 +10735,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10971,16 +10830,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -11251,21 +11107,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -11278,7 +11119,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11373,16 +11214,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -12312,21 +12150,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -12339,7 +12162,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12434,16 +12257,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -13913,21 +13733,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -13940,7 +13745,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14035,16 +13840,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Review-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -14820,21 +14622,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemRequestInvalid"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
                 }
               }
             },
-            "description": "Problem: request.invalid, source-profile.not-applicable, source-profile.required",
+            "description": "Problem: request.invalid",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14871,21 +14663,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotAuthorized"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemProfileNotHuman"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14909,34 +14692,13 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.ask-not-open",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14947,33 +14709,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
                 }
               }
             },
-            "description": "Problem: idempotency.expired, review.result-expired",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "412": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
-                }
-              }
-            },
-            "description": "Problem: precondition.failed",
+            "description": "Problem: idempotency.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15016,31 +14756,16 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemAbsenceCoverCycle"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemAbsenceInvalidPeriod"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemAbsenceOverlap"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemAbsenceSelfCover"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
                       "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: request.unprocessable, review.ask-answer-time-invalid",
             "headers": {
               "Registry-Review-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -15060,21 +14785,6 @@
               }
             }
           },
-          "428": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemPreconditionRequired"
-                }
-              }
-            },
-            "description": "Problem: precondition.required",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -15084,31 +14794,6 @@
               }
             },
             "description": "Problem: runtime.failure",
-            "headers": {
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "502": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15321,21 +15006,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -15348,7 +15018,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15443,16 +15113,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Review-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -16391,21 +16058,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -16418,7 +16070,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16513,16 +16165,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -19694,18 +19343,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -19742,19 +19385,10 @@
                       "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
                     },
                     {
                       "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewSubmissionConflict"
                     },
                     {
                       "$ref": "#/components/schemas/ProblemReviewTaskNotHeld"
@@ -19763,7 +19397,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-producer-unsupported, review.ask-task-inactive, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -19774,18 +19408,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemIdempotencyExpired"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewResultExpired"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemIdempotencyExpired"
                 }
               }
             },
-            "description": "Problem: idempotency.expired, review.result-expired",
+            "description": "Problem: idempotency.expired",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -19841,33 +19468,11 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/ProblemAbsenceCoverCycle"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemAbsenceInvalidPeriod"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemAbsenceOverlap"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemAbsenceSelfCover"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: request.unprocessable",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -20183,21 +19788,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -20210,7 +19800,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -20305,16 +19895,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -20620,21 +20207,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -20647,7 +20219,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -20742,16 +20314,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -21374,21 +20943,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -21401,7 +20955,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -21496,16 +21050,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -21821,21 +21372,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -21848,7 +21384,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -21943,16 +21479,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -22251,21 +21784,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -22278,7 +21796,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -22373,16 +21891,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -22980,21 +22495,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -23007,7 +22507,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -23102,16 +22602,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -23405,21 +22902,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -23432,7 +22914,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -23527,16 +23009,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -24143,21 +23622,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -24170,7 +23634,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -24265,16 +23729,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
@@ -24542,21 +24003,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -24569,7 +24015,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -24664,16 +24110,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -25211,21 +24654,6 @@
                       "$ref": "#/components/schemas/ProblemIdempotencyKeyReused"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskNotOpen"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskProducerUnsupported"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemReviewAskTaskInactive"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewPolicyMismatch"
                     },
                     {
@@ -25238,7 +24666,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-not-open, review.ask-producer-unsupported, review.ask-task-inactive, review.policy-mismatch, review.submission-conflict, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.policy-mismatch, review.submission-conflict, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -25333,16 +24761,13 @@
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     },
                     {
-                      "$ref": "#/components/schemas/ProblemReviewAskAnswerTimeInvalid"
-                    },
-                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.ask-answer-time-invalid, review.initiator-required",
+            "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"

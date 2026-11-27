@@ -911,3 +911,26 @@ fn a_stage_that_asks_needs_every_producer_of_the_policy_to_read_asks() {
     CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
         .expect("a producer that reads asks may submit to a policy that asks");
 }
+
+#[test]
+fn a_producer_that_does_not_read_asks_is_named_once_however_many_policies_ask() {
+    let mut value = project_value();
+    let mut second = value["reviewPolicies"]["notice-review"].clone();
+    second["label"] = json!("notice review copy");
+    value["reviewPolicies"]["notice-review"]["stages"][0]["asks"] = json!({});
+    second["stages"][0]["asks"] = json!({});
+    value["reviewPolicies"]["notice-review-copy"] = second;
+    value["trustedProducers"]["notice-service"]["reviewPolicies"] =
+        json!(["notice-review", "notice-review-copy"]);
+    let Err(ConfigLoadError::Refused(report)) =
+        CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+    else {
+        panic!("the project must be refused");
+    };
+    let named = report
+        .diagnostics()
+        .iter()
+        .filter(|item| item.code == "casework.review-producer.asks-not-read")
+        .count();
+    assert_eq!(named, 1);
+}

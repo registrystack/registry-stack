@@ -27,6 +27,7 @@ impl CaseworkService {
             return Err(ReviewRuntimeError::Invalid);
         }
         query.check().map_err(|_| ReviewRuntimeError::Invalid)?;
+        refuse_delegated_marker_filter(delegated.is_some(), &query)?;
         require_human_reviewer(actor)?;
         if source_profile.is_none() {
             let policies = self
@@ -194,6 +195,7 @@ impl CaseworkService {
                         position,
                         batch_limit,
                         expected_subject.as_ref(),
+                        query.marker,
                     )
                     .await?
             };
@@ -878,4 +880,36 @@ fn staffing_position(task: &ReviewTask) -> Value {
     json!({"revision": task.revision, "deadlineAt": task.deadline_at, "createdAt": task.created_at, "taskId": task.task_id,
         "source": task.subject.source, "type": task.subject.subject_type, "id": task.subject.id,
         "version": task.subject.version, "digest": task.subject.digest.as_str()})
+}
+
+/// Delegated institutional readers see no ask state, so a filter on it is
+/// refused rather than ignored.
+fn refuse_delegated_marker_filter(
+    delegated: bool,
+    query: &ReviewStaffingQuery,
+) -> Result<(), ReviewRuntimeError> {
+    if delegated && query.marker.is_some() {
+        Err(ReviewRuntimeError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_delegated_read_refuses_a_marker_filter_and_an_ordinary_read_accepts_it() {
+        let with_marker = ReviewStaffingQuery {
+            marker: Some(registry_casework_core::ReviewTaskMarker::Waiting),
+            ..Default::default()
+        };
+        assert!(matches!(
+            refuse_delegated_marker_filter(true, &with_marker),
+            Err(ReviewRuntimeError::Invalid)
+        ));
+        assert!(refuse_delegated_marker_filter(false, &with_marker).is_ok());
+        assert!(refuse_delegated_marker_filter(true, &ReviewStaffingQuery::default()).is_ok());
+    }
 }

@@ -13247,3 +13247,342 @@ async fn ask_rows_and_events_leave_with_the_expired_review() {
         assert_eq!(count_for_request(&fixture, table, request_id).await, 0);
     }
 }
+
+#[tokio::test]
+async fn an_ask_event_waits_for_the_producers_feed_lock() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, _) = claimed_for_asks(&fixture, &service, "ask-lock").await;
+    let producer_id = asks_project(true, true).trusted_producers[0].id.clone();
+    // The result feed's per-producer lock, held by another session, as a
+    // settling review holds it until it commits.
+    fixture
+        .database
+        .query_one(
+            "SELECT pg_advisory_lock(hashtextextended($1,0))",
+            &[&producer_id],
+        )
+        .await
+        .expect("take the feed lock");
+    let asking = {
+        let service = service.clone();
+        let reviewer = fixture.reviewer_a.clone();
+        tokio::spawn(async move {
+            service
+                .ask_applicant(&reviewer, task, ask_request("Why?"), None, "", 2, "ask")
+                .await
+        })
+    };
+    tokio::pin!(asking);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(700), &mut asking)
+            .await
+            .is_err(),
+        "an ask event must not take a feed position while another transaction holds the lock"
+    );
+    assert_eq!(ask_changes(&fixture, request_id).await.len(), 0);
+    fixture
+        .database
+        .query_one(
+            "SELECT pg_advisory_unlock(hashtextextended($1,0))",
+            &[&producer_id],
+        )
+        .await
+        .expect("release the feed lock");
+    asking
+        .await
+        .expect("ask task")
+        .expect("the ask completes once the lock is free");
+    assert_eq!(ask_changes(&fixture, request_id).await, ["opened"]);
+}
+
+#[tokio::test]
+async fn the_marker_filter_applies_on_the_reference_and_subject_paths() {
+    use registry_casework_core::ReviewTaskMarker::{Answered, Waiting};
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (_, task, create) = claimed_for_asks(&fixture, &service, "ask-reference").await;
+    let (_, plain_task, _) = claimed_for_asks(&fixture, &service, "ask-reference-plain").await;
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    let list = |query: ReviewStaffingQuery| {
+        let service = &service;
+        let reviewer = &fixture.reviewer_a;
+        async move {
+            service
+                .review_staffing_tasks(reviewer, None, "", query)
+                .await
+                .expect("list tasks")
+                .items
+                .into_iter()
+                .map(|item| item.task_id)
+                .collect::<Vec<_>>()
+        }
+    };
+    let by_reference = |marker| ReviewStaffingQuery {
+        marker,
+        sort: ReviewTaskSort::Reference,
+        ..Default::default()
+    };
+    assert_eq!(list(by_reference(Some(Waiting))).await, [task]);
+    assert!(list(by_reference(Some(Answered))).await.is_empty());
+    assert_eq!(list(by_reference(None)).await.len(), 2);
+    assert!(list(by_reference(None)).await.contains(&plain_task));
+    let by_subject = |marker| ReviewStaffingQuery {
+        marker,
+        subject_source: Some(create.subject.source.clone()),
+        subject_type: Some(create.subject.subject_type.clone()),
+        subject_id: Some(create.subject.id.clone()),
+        subject_version: Some(create.subject.version.clone()),
+        subject_digest: Some(create.subject.digest.clone()),
+        ..Default::default()
+    };
+    assert_eq!(list(by_subject(Some(Waiting))).await, [task]);
+    assert!(list(by_subject(Some(Answered))).await.is_empty());
+}
+
+#[tokio::test]
+async fn an_ask_is_read_and_answered_only_through_its_own_request() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_a, task_a, create_a) = claimed_for_asks(&fixture, &service, "ask-bind-a").await;
+    let (request_b, _, create_b) = claimed_for_asks(&fixture, &service, "ask-bind-b").await;
+    let asked = service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task_a,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask on request A");
+    let ask_id = asked.ask.ask_id;
+    // Request B belongs to the same producer, and its own subject is the one
+    // the producer would bind.
+    assert!(matches!(
+        service
+            .review_ask(&fixture.producer, request_b, ask_id)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    let answer = |subject: &SubjectBinding| registry_casework_core::ReviewAskAnswer {
+        subject: subject.clone(),
+        answered_at: now_micros(),
+    };
+    assert!(matches!(
+        service
+            .answer_review_ask(
+                &fixture.producer,
+                request_b,
+                ask_id,
+                answer(&create_b.subject),
+                "answer-through-b"
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    assert_eq!(ask_states(&fixture, request_a).await, ["open"]);
+    assert_eq!(
+        ask_marker(&fixture, task_a).await.as_deref(),
+        Some("waiting")
+    );
+
+    // A replay under the key that answered it does not outlive the binding.
+    service
+        .answer_review_ask(
+            &fixture.producer,
+            request_a,
+            ask_id,
+            answer(&create_a.subject),
+            "answer-key",
+        )
+        .await
+        .expect("answer through its own request");
+    assert!(matches!(
+        service
+            .answer_review_ask(
+                &fixture.producer,
+                request_b,
+                ask_id,
+                answer(&create_b.subject),
+                "answer-key"
+            )
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    let replay = service
+        .answer_review_ask(
+            &fixture.producer,
+            request_a,
+            ask_id,
+            answer(&create_a.subject),
+            "answer-key",
+        )
+        .await;
+    // The same key and a fresh time is a different body: refused, not replayed.
+    assert!(matches!(
+        replay,
+        Err(ReviewRuntimeError::IdempotencyConflict)
+    ));
+}
+
+#[tokio::test]
+async fn the_answer_time_window_ends_five_minutes_after_the_clock() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, create) = claimed_for_asks(&fixture, &service, "ask-window").await;
+    let asked = service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    let answer = |answered_at| registry_casework_core::ReviewAskAnswer {
+        subject: create.subject.clone(),
+        answered_at,
+    };
+    let try_answer = |answered_at, key: &'static str| {
+        let service = &service;
+        let producer = &fixture.producer;
+        let ask_id = asked.ask.ask_id;
+        let answer = answer(answered_at);
+        async move {
+            service
+                .answer_review_ask(producer, request_id, ask_id, answer, key)
+                .await
+        }
+    };
+    assert!(matches!(
+        try_answer(asked.ask.asked_at - TimeDelta::microseconds(1), "before").await,
+        Err(ReviewRuntimeError::ReviewAskAnswerTimeInvalid)
+    ));
+    assert!(matches!(
+        try_answer(
+            now_micros() + TimeDelta::minutes(5) + TimeDelta::seconds(1),
+            "late"
+        )
+        .await,
+        Err(ReviewRuntimeError::ReviewAskAnswerTimeInvalid)
+    ));
+    try_answer(now_micros() + TimeDelta::minutes(5), "edge")
+        .await
+        .expect("five minutes ahead of the clock is still accepted");
+}
+
+#[tokio::test]
+async fn a_decision_that_only_records_closes_the_deciding_tasks_ask() {
+    let fixture = fixture().await;
+    let mut project = asks_project(true, true);
+    project.review_policies[0].stages[0].required_approvals = 2;
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn registry_casework_core::ReviewContextProvider>>::new(),
+    )
+    .expect("two-approval asks service");
+    let (request_id, task, _) = claimed_for_asks(&fixture, &service, "ask-records").await;
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
+            },
+            None,
+            "",
+            3,
+            "approve",
+        )
+        .await
+        .expect("the first approval is recorded");
+    let lifecycle: String = fixture
+        .database
+        .query_one(
+            "SELECT lifecycle FROM casework_review_requests WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("lifecycle")
+        .get(0);
+    let stage: i32 = fixture
+        .database
+        .query_one(
+            "SELECT active_stage_index FROM casework_review_requests WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("stage")
+        .get(0);
+    assert_eq!((lifecycle.as_str(), stage), ("reviewing", 0));
+    assert_eq!(ask_states(&fixture, request_id).await, ["closed"]);
+    assert_eq!(ask_marker(&fixture, task).await, None);
+}
+
+#[tokio::test]
+async fn superseding_a_request_closes_its_open_ask() {
+    let fixture = fixture().await;
+    let service = asks_service(&fixture, true, true);
+    let (request_id, task, create) = claimed_for_asks(&fixture, &service, "ask-supersede").await;
+    service
+        .ask_applicant(
+            &fixture.reviewer_a,
+            task,
+            ask_request("Why?"),
+            None,
+            "",
+            2,
+            "ask",
+        )
+        .await
+        .expect("ask");
+    // The same subject and policy at a newer version supersedes the review.
+    let _ = create;
+    let mut newer = request("ask-supersede", "ref-ask-supersede");
+    newer.subject.version = "2".to_owned();
+    newer.subject.digest = ContentDigest::for_bytes(b"ask-supersede-v2");
+    let newer = bind_request(&service, newer);
+    service
+        .create_review_request(&fixture.producer, newer, "create-newer")
+        .await
+        .expect("the newer submission supersedes the first");
+    assert_eq!(ask_states(&fixture, request_id).await, ["closed"]);
+    assert_eq!(ask_marker(&fixture, task).await, None);
+    assert_eq!(
+        ask_changes(&fixture, request_id).await,
+        ["opened", "closed"]
+    );
+}

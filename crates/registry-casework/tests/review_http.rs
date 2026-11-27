@@ -7195,7 +7195,11 @@ async fn the_ask_command_and_the_producer_ask_routes_follow_the_contract_over_ht
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let answered: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(answered["state"], "answered");
-    assert_eq!(answered["answeredAt"], answered_at.as_str());
+    // Compare instants: the wire form may spell the same time differently.
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(answered["answeredAt"].as_str().unwrap()).unwrap(),
+        chrono::DateTime::parse_from_rfc3339(&answered_at).unwrap(),
+    );
     // A second answer under another key is the not-open problem.
     let (status, _, body) = http_json(
         &app,
@@ -7214,5 +7218,73 @@ async fn the_ask_command_and_the_producer_ask_routes_follow_the_contract_over_ht
     // The reviewer's task read carries the answered marker.
     let task_json = read_task_json(&app, task, &reviewer).await;
     assert_eq!(task_json["marker"], "answered");
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn delegated_institutional_reads_carry_neither_asks_nor_markers() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) =
+        app_with_project_options(&idp, asks_http_project(&idp), None, true, None, None).await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let mut created_request =
+        review_request_for_subject("ask-delegated", "ask-delegated-ref", &idp.issuer());
+    created_request.context = ReviewContext::Submitted {
+        snapshot: json!({"summary": "Ask delegated"}),
+    };
+    let (_, task_id) = create_task(&app, &database, &idp, &created_request).await;
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    client
+        .claim_review_task(CaseworkAuth::new(&reviewer, "staff"), task_id, 1, "claim")
+        .await
+        .expect("claim");
+    let asked = client
+        .ask_applicant(
+            CaseworkAuth::new(&reviewer, "staff"),
+            task_id,
+            2,
+            "ask",
+            &registry_casework_client::ReviewTaskAskRequest {
+                text: "Send the signed form.".to_owned(),
+                wants: vec![registry_casework_client::ReviewAskWant::Answer {}],
+            },
+        )
+        .await
+        .expect("ask")
+        .value;
+    assert_eq!(
+        asked.task.marker,
+        Some(registry_casework_client::ReviewTaskMarker::Waiting)
+    );
+    // The reviewer sees the ask and the marker.
+    let own = client
+        .review_task_context(CaseworkAuth::new(&reviewer, "staff"), task_id)
+        .await
+        .expect("reviewer context")
+        .value;
+    assert_eq!(own.asks.len(), 1);
+
+    let delegated = delegated_staff_read_token(&idp, "reviewer");
+    let context = client
+        .delegated_review_task_context(
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader"),
+            task_id,
+        )
+        .await
+        .expect("delegated context")
+        .value;
+    assert!(context.asks.is_empty());
+    let list = client
+        .delegated_review_tasks(
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader"),
+            None,
+            25,
+        )
+        .await
+        .expect("delegated list")
+        .value;
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].marker, None);
+    server.abort();
     idp.stop().await;
 }

@@ -1445,6 +1445,7 @@ impl CaseworkProject {
                 }
             }
             let mut exclusion_reported = producer.trusted_initiator_issuer.is_some();
+            let mut asks_reported = producer.reads_asks;
             for (policy_index, policy_id) in producer.review_policies.iter().enumerate() {
                 let Some(policy) = self
                     .review_policies
@@ -1478,7 +1479,7 @@ impl CaseworkProject {
                         ),
                     );
                 }
-                if !producer.reads_asks {
+                if !asks_reported {
                     if let Some(stage_index) =
                         policy.stages.iter().position(|stage| stage.asks.is_some())
                     {
@@ -1494,6 +1495,7 @@ impl CaseworkProject {
                                 "asks is written here",
                             ),
                         );
+                        asks_reported = true;
                     }
                 }
                 if !exclusion_reported {

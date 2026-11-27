@@ -2,6 +2,7 @@
 //! the producer reads it through its ask feed and reports the answer without
 //! carrying its text, and the ask closes with its task or its request.
 use super::*;
+use chrono::SubsecRound;
 use registry_casework_core::{
     ReviewAsk, ReviewAskAnswer, ReviewAskFeedEntry, ReviewAskFeedPage, ReviewAskState,
     ReviewAskWant,
@@ -12,6 +13,14 @@ use registry_casework_core::{ReviewContextAsk, ReviewTaskAskRequest, ReviewTaskA
 /// producer records the time it committed the answer, and the two clocks may
 /// differ a little.
 const ASK_ANSWER_CLOCK_SKEW: TimeDelta = TimeDelta::minutes(5);
+
+/// A time Casework stores and then serves or compares. PostgreSQL keeps
+/// microseconds and the ask protocol carries them, so a time with a finer clock
+/// part is cut before it is stored: otherwise the stored and the served value
+/// differ on a platform whose clock reads nanoseconds.
+fn stored_time(time: DateTime<Utc>) -> DateTime<Utc> {
+    time.trunc_subsecs(6)
+}
 
 const ASK_COLUMNS: &str =
     "ask_id,request_id,task_id,text,wants,state,asked_at,answered_at,closed_at";
@@ -112,7 +121,7 @@ impl PostgresStore {
         expected_revision: i64,
         idempotency_key: &str,
     ) -> Result<ReviewTaskAsked, ReviewRuntimeError> {
-        let now = Utc::now();
+        let now = stored_time(Utc::now());
         let mut audit = self
             .begin_audit(crate::audit::request_record(
                 "review-ask-opened",
@@ -395,7 +404,7 @@ impl PostgresStore {
         answer: ReviewAskAnswer,
         idempotency_key: &str,
     ) -> Result<ReviewAsk, ReviewRuntimeError> {
-        let now = Utc::now();
+        let now = stored_time(Utc::now());
         let mut audit = self
             .begin_audit(crate::audit::request_record(
                 "review-ask-answered",
@@ -407,22 +416,10 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let record = load_request(&transaction, producer, request_id, true).await?;
-        let resource = format!("review-ask:{ask_id}");
+        let resource = format!("review-ask:{request_id}:{ask_id}");
         let request_hash = review_request_hash(&answer)?;
-        if let Some(response) = review_idempotent_response(
-            &transaction,
-            actor,
-            "review.ask.answer",
-            &resource,
-            idempotency_key,
-            &request_hash,
-        )
-        .await?
-        {
-            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
-            audit.commit(transaction).await?;
-            return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
-        }
+        // The retention window, the subject binding and the ask's own request
+        // all hold before a stored response can be returned.
         ensure_ask_retained(&record)?;
         if record.subject != answer.subject {
             return Err(ReviewRuntimeError::NotFound);
@@ -437,6 +434,20 @@ impl PostgresStore {
             )
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
+        if let Some(response) = review_idempotent_response(
+            &transaction,
+            actor,
+            "review.ask.answer",
+            &resource,
+            idempotency_key,
+            &request_hash,
+        )
+        .await?
+        {
+            audit.record_outcome(crate::audit::AuditOutcome::Replayed);
+            audit.commit(transaction).await?;
+            return serde_json::from_value(response).map_err(ReviewRuntimeError::from);
+        }
         let current = ask_from_row(&row, &record)?;
         if current.state != ReviewAskState::Open {
             return Err(ReviewRuntimeError::ReviewAskNotOpen);
@@ -551,24 +562,22 @@ impl PostgresStore {
 }
 
 /// Closes the open ask of a request when the task that holds it is decided or
-/// the request ends. `task_id` limits the close to that task's ask, and
-/// `stage_index` to the asks of a stage the request has left. Every close is
-/// announced on the producer's feed in the same transaction.
+/// the request ends. `task_id` limits the close to that task's ask. Every close
+/// is announced on the producer's feed in the same transaction.
 pub(super) async fn close_open_asks(
     transaction: &impl GenericClient,
     record: &ReviewRequestRecord,
     task_id: Option<Uuid>,
-    stage_index: Option<i32>,
     now: DateTime<Utc>,
 ) -> Result<(), ReviewRuntimeError> {
+    let now = stored_time(now);
     let closed = transaction
         .query(
             "UPDATE casework_review_asks SET state='closed',closed_at=$2
              WHERE request_id=$1 AND state='open'
                AND ($3::uuid IS NULL OR task_id=$3)
-               AND ($4::integer IS NULL OR stage_index=$4)
              RETURNING ask_id",
-            &[&record.request_id, &now, &task_id, &stage_index],
+            &[&record.request_id, &now, &task_id],
         )
         .await?;
     for row in closed {
@@ -584,6 +593,16 @@ async fn insert_ask_event(
     change: &str,
     now: DateTime<Utc>,
 ) -> Result<(), ReviewRuntimeError> {
+    // The result feed's per-producer lock, held to commit: feed positions are
+    // assigned in the order the events commit, so a reader never passes an
+    // event that commits later.
+    transaction
+        .query_one(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+            &[&record.producer_id],
+        )
+        .await?;
+    let now = stored_time(now);
     transaction
         .execute(
             "INSERT INTO casework_review_ask_events(
@@ -658,4 +677,24 @@ fn ask_from_row(row: &Row, record: &ReviewRequestRecord) -> Result<ReviewAsk, Re
     };
     ask.check().map_err(|_| ReviewRuntimeError::Corrupt)?;
     Ok(ask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stored_time;
+    use chrono::{TimeZone, Timelike, Utc};
+
+    #[test]
+    fn a_stored_time_keeps_no_sub_microsecond_part() {
+        // A Linux clock reads nanoseconds. PostgreSQL would round the stored
+        // value, so the served value must be the truncated one.
+        let read = Utc
+            .with_ymd_and_hms(2026, 11, 27, 10, 0, 0)
+            .unwrap()
+            .with_nanosecond(123_456_789)
+            .unwrap();
+        let stored = stored_time(read);
+        assert_eq!(stored.nanosecond(), 123_456_000);
+        assert_eq!(stored_time(stored), stored);
+    }
 }

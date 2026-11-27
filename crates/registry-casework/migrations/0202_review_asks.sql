@@ -47,6 +47,8 @@ CREATE TABLE casework_review_ask_events (
 );
 CREATE INDEX casework_review_ask_feed_idx
     ON casework_review_ask_events(producer_id, feed_position);
+CREATE INDEX casework_review_ask_events_request_idx
+    ON casework_review_ask_events(request_id);
 
 -- A task marker tells reviewers that the task waits for the applicant or that
 -- the applicant answered. It stays with the task through release and

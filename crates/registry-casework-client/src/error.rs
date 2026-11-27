@@ -374,7 +374,7 @@ impl CaseworkProblemCode {
             ),
             Self::ReviewAskAnswerTimeInvalid => (
                 "Review ask answer time invalid",
-                "Report the time the applicant's answer was committed: not before the ask was made and not in the future.",
+                "Report the time the applicant's answer was committed: not before the ask was made and no more than five minutes ahead of Casework's clock.",
             ),
             Self::ReviewAskNotOffered => (
                 "Review ask not offered",
@@ -918,7 +918,7 @@ mod tests {
                 CaseworkProblemCode::ReviewAskAnswerTimeInvalid,
                 422,
                 "Review ask answer time invalid",
-                "Report the time the applicant's answer was committed: not before the ask was made and not in the future.",
+                "Report the time the applicant's answer was committed: not before the ask was made and no more than five minutes ahead of Casework's clock.",
             ),
             (
                 "review.ask-not-offered",
