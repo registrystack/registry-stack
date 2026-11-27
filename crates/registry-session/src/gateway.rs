@@ -585,7 +585,14 @@ fn routes(config: &RuntimeConfig, guarded: &[GuardedRoute<'_>]) -> String {
     }
     for route in guarded {
         out.push_str(&format!("- name: {}\n", quoted(&route.name)));
-        match_lines(&mut out, &format!("prefix: {}", quoted(route.prefix)));
+        // A prefix without a closing `/` holds its own path and the paths
+        // below it at a segment boundary, as `prefix_holds` does.
+        let kind = if route.prefix.ends_with('/') {
+            "prefix"
+        } else {
+            "path_separated_prefix"
+        };
+        match_lines(&mut out, &format!("{kind}: {}", quoted(route.prefix)));
         out.push_str(&format!(
             "  route:\n    cluster: {}\n",
             quoted(route.upstream.cluster.as_str())
@@ -664,16 +671,29 @@ fn clusters(config: &RuntimeConfig) -> String {
     out
 }
 
+/// The response flags Envoy sets on a 503 when it cannot reach an upstream:
+/// connection failure, no healthy host, overflow, remote reset, connection
+/// termination, retries exhausted, no cluster, DNS failure, and local reset.
+const UNREACHABLE_FLAGS: [&str; 9] = ["UF", "UH", "UO", "UR", "UC", "URX", "NC", "DF", "LR"];
+
 fn local_reply() -> String {
-    let unavailable = ProblemKind::Unavailable;
     let mut out = header(
         "local reply configuration, to splice into the host's HTTP connection manager as its \
-         first mapper: the answer when the check itself fails",
+         first mappers, in this order: the answer when the check itself fails, then the answer \
+         when the service's own routes under /session/ cannot reach it",
     );
+    out.push_str("local_reply_config:\n  mappers:\n");
+    unavailable_mapper(&mut out, &["UAEX"], None);
+    unavailable_mapper(&mut out, &UNREACHABLE_FLAGS, Some(SESSION_PREFIX));
+    out
+}
+
+/// A mapper that answers a 503 with one of `flags`, and, when given, a
+/// request path under `path_prefix`, with the marked `unavailable` problem.
+fn unavailable_mapper(out: &mut String, flags: &[&str], path_prefix: Option<&str>) {
+    let unavailable = ProblemKind::Unavailable;
     out.push_str(&format!(
-        "local_reply_config:\n\
-         \x20 mappers:\n\
-         \x20   - filter:\n\
+        "\x20   - filter:\n\
          \x20       and_filter:\n\
          \x20         filters:\n\
          \x20           - status_code_filter:\n\
@@ -683,9 +703,24 @@ fn local_reply() -> String {
          \x20                   default_value: 503\n\
          \x20                   runtime_key: {runtime_key}\n\
          \x20           - response_flag_filter:\n\
-         \x20               flags:\n\
-         \x20                 - UAEX\n\
-         \x20     headers_to_add:\n\
+         \x20               flags:\n",
+        runtime_key = LOCAL_REPLY_RUNTIME_KEY,
+    ));
+    for flag in flags {
+        out.push_str(&format!("                  - {flag}\n"));
+    }
+    if let Some(path_prefix) = path_prefix {
+        out.push_str(&format!(
+            "\x20           - header_filter:\n\
+             \x20               header:\n\
+             \x20                 name: \":path\"\n\
+             \x20                 string_match:\n\
+             \x20                   prefix: {}\n",
+            quoted(path_prefix)
+        ));
+    }
+    out.push_str(&format!(
+        "\x20     headers_to_add:\n\
          \x20       - header:\n\
          \x20           key: {marker}\n\
          \x20           value: {marker_value}\n\
@@ -701,14 +736,12 @@ fn local_reply() -> String {
          \x20         status: 503\n\
          \x20         code: {code}\n\
          \x20       content_type: application/problem+json\n",
-        runtime_key = LOCAL_REPLY_RUNTIME_KEY,
         marker = quoted(ANSWER_MARKER_HEADER),
         marker_value = quoted(ANSWER_MARKER_VALUE),
         problem_type = quoted(&unavailable.type_uri()),
         title = quoted(unavailable.title()),
         code = quoted(&unavailable.code()),
     ));
-    out
 }
 
 fn parse_fragment(file: &GeneratedFile) -> Result<Value, GatewayError> {
@@ -842,6 +875,7 @@ mod tests {
                 "registry-session.me",
                 "registry-session.signed-out",
                 "registry-session.reserved",
+                "module-renew",
                 "module-documents",
                 "module-functions",
                 "module-casework",
@@ -951,7 +985,7 @@ mod tests {
                 assert!(block.contains("\"registry-session.csrf\":"), "{block}");
             }
         }
-        assert_eq!(guarded, 7, "five modules and two pages");
+        assert_eq!(guarded, 8, "six modules and two pages");
     }
 
     #[test]
@@ -1105,7 +1139,77 @@ mod tests {
         assert!(reply.contains("content_type: application/problem+json"));
         assert!(reply.contains("code: \"session.unavailable\""));
         assert!(reply.contains("status: 503"));
-        assert_eq!(reply.matches("- filter:").count(), 1, "one mapper");
+        assert_eq!(reply.matches("- filter:").count(), 2, "two mappers");
+    }
+
+    #[test]
+    fn the_local_reply_marks_an_unreachable_session_route_and_no_other() {
+        let generated = files(&fixture());
+        let reply = parse_fragment(
+            generated
+                .iter()
+                .find(|file| file.name == "local-reply.yaml")
+                .expect("local-reply.yaml"),
+        )
+        .expect("the fragment parses");
+        let mappers = reply
+            .pointer("/local_reply_config/mappers")
+            .and_then(Value::as_array)
+            .expect("mappers");
+        assert_eq!(mappers.len(), 2);
+        let session = &mappers[1];
+        let filters = session
+            .pointer("/filter/and_filter/filters")
+            .and_then(Value::as_array)
+            .expect("an and_filter");
+        assert_eq!(filters.len(), 3, "status, flags and path: {filters:?}");
+        assert_eq!(
+            filters[0].pointer("/status_code_filter/comparison/value/default_value"),
+            Some(&json!(503))
+        );
+        let flags: Vec<&str> = filters[1]
+            .pointer("/response_flag_filter/flags")
+            .and_then(Value::as_array)
+            .expect("flags")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        for flag in ["UF", "UH", "UO", "UR", "UC", "URX", "NC", "DF", "LR"] {
+            assert!(flags.contains(&flag), "{flag} in {flags:?}");
+        }
+        assert!(
+            !flags.contains(&"UAEX"),
+            "the check's failure is mapper 0's"
+        );
+        assert_eq!(
+            filters[2].pointer("/header_filter/header"),
+            Some(&json!({"name": ":path", "string_match": {"prefix": "/session/"}}))
+        );
+        assert_eq!(session["headers_to_add"], mappers[0]["headers_to_add"]);
+        assert_eq!(
+            session["body_format_override"],
+            mappers[0]["body_format_override"]
+        );
+    }
+
+    #[test]
+    fn a_prefix_without_a_slash_is_matched_at_a_segment_boundary() {
+        let generated = files(&fixture());
+        let routes = file(&generated, "routes.yaml");
+        let renew = route_blocks(routes)
+            .into_iter()
+            .find(|block| block.starts_with("- name: \"module-renew\""))
+            .expect("the renew route");
+        assert!(
+            renew.contains("  match:\n    path_separated_prefix: \"/api/functions/renew\"\n"),
+            "{renew}"
+        );
+        assert!(renew.contains("    prefix_rewrite: \"/functions/v1/renew\"\n"));
+        let functions = route_blocks(routes)
+            .into_iter()
+            .find(|block| block.starts_with("- name: \"module-functions\""))
+            .expect("the functions route");
+        assert!(functions.contains("  match:\n    prefix: \"/api/functions/\"\n"));
     }
 
     #[test]
@@ -1116,7 +1220,7 @@ mod tests {
             .iter()
             .all(|file| file.name != "route-config.yaml"));
         let blocks = route_blocks(file(&generated, "routes.yaml"));
-        assert_eq!(blocks.len(), 13);
+        assert_eq!(blocks.len(), 14);
         for (index, block) in blocks.iter().enumerate() {
             let removes =
                 block.contains("response_headers_to_remove:\n    - \"registry-session-answer\"\n");
@@ -1284,7 +1388,7 @@ mod tests {
     fn no_generated_route_redirects() {
         let generated = files(&fixture());
         let routes = sequence(fragment_of(&generated, "routes.yaml"));
-        assert_eq!(routes.len(), 13);
+        assert_eq!(routes.len(), 14);
         assert!(!routes.iter().any(verify::redirects));
     }
 

@@ -97,8 +97,8 @@ struct Expected {
     /// Every generated route in order. The first [`PUBLIC_PATHS`] entries are
     /// the service's public routes.
     routes: Vec<Value>,
-    /// The first local reply mapper.
-    mapper: Value,
+    /// The generated local reply mappers, which come first and in order.
+    mappers: Vec<Value>,
     /// The host's own filters the generated routes switch off.
     host_filters: Vec<String>,
     /// The host filters some generated route keeps on.
@@ -124,9 +124,11 @@ impl Expected {
             Value::Array(items) => items,
             _ => Vec::new(),
         };
-        let mapper = fragment("local-reply.yaml")?
-            .pointer("/local_reply_config/mappers/0")
+        let mappers = fragment("local-reply.yaml")?
+            .pointer("/local_reply_config/mappers")
             .cloned()
+            .map(items)
+            .filter(|mappers| !mappers.is_empty())
             .ok_or_else(|| {
                 GatewayError::Refused(vec!["local-reply.yaml has no mapper".to_owned()])
             })?;
@@ -161,7 +163,7 @@ impl Expected {
                 .ok_or(GatewayError::NoGatewayBlock)?,
             filters: items(fragment("http-filters.yaml")?),
             routes: items(fragment("routes.yaml")?),
-            mapper,
+            mappers,
             host_filters: config
                 .gateway
                 .iter()
@@ -524,10 +526,13 @@ fn configures_own_filter(value: &Value) -> bool {
         .is_some_and(|switches| switches.keys().any(|key| key.starts_with(OWN_PREFIX)))
 }
 
-/// Whether a path matcher's value lies under `prefix`, in any case.
+/// Whether a path matcher's value lies under `prefix`, in any case. A prefix
+/// without a closing `/` holds its own path and the paths below it at a
+/// segment boundary, as the generated `path_separated_prefix` match does.
 fn lies_under(path: &str, prefix: &str) -> bool {
     path.len() >= prefix.len()
         && path.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+        && (prefix.ends_with('/') || matches!(path.as_bytes().get(prefix.len()), None | Some(b'/')))
 }
 
 fn verify_manager(expected: &Expected, manager: &Value, findings: &mut Vec<String>) {
@@ -546,14 +551,22 @@ fn verify_manager(expected: &Expected, manager: &Value, findings: &mut Vec<Strin
         .map_or(&[][..], |mappers| {
             mappers.as_array().map_or(&[][..], Vec::as_slice)
         });
-    if mappers.first() != Some(&expected.mapper) {
+    if mappers.first() != expected.mappers.first() {
         findings.push(
             "the first local reply mapper is not the generated one for a failed check (a mapper \
              ahead of it that matches status 503 would answer instead)"
                 .to_owned(),
         );
     }
-    for (index, mapper) in mappers.iter().enumerate().skip(1) {
+    for (index, want) in expected.mappers.iter().enumerate().skip(1) {
+        if mappers.get(index) != Some(want) {
+            findings.push(format!(
+                "local reply mapper {index} is not the generated one for an unreachable session \
+                 route: the generated mappers come first, as generated and in order"
+            ));
+        }
+    }
+    for (index, mapper) in mappers.iter().enumerate().skip(expected.mappers.len()) {
         if mapper
             .get("status_code")
             .and_then(status_value)
@@ -1379,6 +1392,56 @@ mod tests {
                 }),
             );
         refuses(&document, "first local reply mapper");
+    }
+
+    #[test]
+    fn a_session_mapper_without_its_path_condition_fails() {
+        let mut document = assembled();
+        let mappers = manager(&mut document)["local_reply_config"]["mappers"]
+            .as_array_mut()
+            .expect("mappers");
+        let filters = mappers[1]["filter"]["and_filter"]["filters"]
+            .as_array_mut()
+            .expect("the session mapper's filters");
+        let before = filters.len();
+        filters.retain(|filter| filter.get("header_filter").is_none());
+        assert_eq!(filters.len(), before - 1, "the path condition was there");
+        refuses(&document, "local reply mapper 1");
+    }
+
+    #[test]
+    fn a_missing_session_mapper_fails() {
+        let mut document = assembled();
+        manager(&mut document)["local_reply_config"]["mappers"]
+            .as_array_mut()
+            .expect("mappers")
+            .truncate(1);
+        refuses(&document, "local reply mapper 1");
+    }
+
+    #[test]
+    fn an_exact_path_module_passes_and_host_routes_beside_it_are_judged_by_segment() {
+        assert!(serde_json::to_string(&assembled())
+            .expect("json")
+            .contains("\"path_separated_prefix\":\"/api/functions/renew\""));
+        assert!(lies_under("/api/functions/renew", "/api/functions/renew"));
+        assert!(lies_under("/API/functions/renew/x", "/api/functions/renew"));
+        assert!(!lies_under(
+            "/api/functions/renewal",
+            "/api/functions/renew"
+        ));
+        assert!(lies_under("/api/functions/renewal", "/api/functions/"));
+        assert!(!lies_under("/api/functions", "/api/functions/"));
+        for matcher in [
+            json!({ "path": "/api/functions/renew" }),
+            json!({ "path": "/API/functions/renew" }),
+            json!({ "prefix": "/api/functions/renew/x" }),
+            json!({ "path_separated_prefix": "/api/functions/renew" }),
+        ] {
+            let mut document = assembled();
+            host_routes(&mut document).push(marker_removing_route("late", matcher.clone()));
+            refuses(&document, "matches a path under the generated prefix");
+        }
     }
 
     #[test]

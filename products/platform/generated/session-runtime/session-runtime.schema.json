@@ -331,10 +331,10 @@
           "description": "The module's name in this file, unique among its modules."
         },
         "prefix": {
-          "description": "The path prefix the module owns: it starts and ends with `/`.",
+          "description": "The path prefix the module owns: it starts with `/`. Ending with `/`,\nit holds the paths below it; without, also that exact path.",
           "maxLength": 256,
-          "minLength": 3,
-          "pattern": "^/(?!session/)(?!.*[%\\\\?#])(?:(?!\\.\\.?/)[!-\\.0-~]+/)+$",
+          "minLength": 2,
+          "pattern": "^/(?!session(?:/|$))(?!.*[%\\\\?#])(?:(?!\\.\\.?(?:/|$))[!-\\.0-~]+(?:/|$))+$",
           "type": "string"
         },
         "signIns": {
@@ -362,10 +362,10 @@
       "description": "A page route: pages under the prefix need a session of one kind.",
       "properties": {
         "prefix": {
-          "description": "The path prefix the pages sit under: it starts and ends with `/`.",
+          "description": "The path prefix the pages sit under: it starts with `/`. Ending with\n`/`, it holds the paths below it; without, also that exact path.",
           "maxLength": 256,
-          "minLength": 3,
-          "pattern": "^/(?!session/)(?!.*[%\\\\?#])(?:(?!\\.\\.?/)[!-\\.0-~]+/)+$",
+          "minLength": 2,
+          "pattern": "^/(?!session(?:/|$))(?!.*[%\\\\?#])(?:(?!\\.\\.?(?:/|$))[!-\\.0-~]+(?:/|$))+$",
           "type": "string"
         },
         "signIn": {

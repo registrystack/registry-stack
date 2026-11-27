@@ -48,6 +48,13 @@ modules:
       cluster: functions
       prefixRewrite: /functions/v1/
       timeoutSeconds: 60
+  - id: renew
+    prefix: /api/functions/renew
+    audience: person
+    upstream:
+      cluster: functions
+      prefixRewrite: /functions/v1/renew
+      timeoutSeconds: 60
   - id: casework
     prefix: /api/casework/
     audience: https://casework.example/api

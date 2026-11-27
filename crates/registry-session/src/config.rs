@@ -270,7 +270,8 @@ impl<'de> Deserialize<'de> for ModuleAudience {
 pub struct ModuleConfig {
     /// The module's name in this file, unique among its modules.
     pub id: LocalId,
-    /// The path prefix the module owns: it starts and ends with `/`.
+    /// The path prefix the module owns: it starts with `/`. Ending with `/`,
+    /// it holds the paths below it; without, also that exact path.
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "crate::schema::route_prefix_schema")
@@ -310,7 +311,8 @@ impl ModuleConfig {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PageConfig {
-    /// The path prefix the pages sit under: it starts and ends with `/`.
+    /// The path prefix the pages sit under: it starts with `/`. Ending with
+    /// `/`, it holds the paths below it; without, also that exact path.
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "crate::schema::route_prefix_schema")
@@ -1059,18 +1061,19 @@ impl RuntimeConfig {
     }
 
     /// The route `path` belongs to: the module or page with the longest
-    /// prefix that `path` starts with. `path` carries no query.
+    /// prefix that holds `path` (see [`prefix_holds`]). `path` carries no
+    /// query.
     #[must_use]
     pub fn route(&self, path: &str) -> Option<Route<'_>> {
         let module = self
             .modules
             .iter()
-            .filter(|module| path.starts_with(&module.prefix))
+            .filter(|module| prefix_holds(&module.prefix, path))
             .max_by_key(|module| module.prefix.len());
         let page = self
             .pages
             .iter()
-            .filter(|page| path.starts_with(&page.prefix))
+            .filter(|page| prefix_holds(&page.prefix, path))
             .max_by_key(|page| page.prefix.len());
         match (module, page) {
             (Some(module), Some(page)) if page.prefix.len() > module.prefix.len() => {
@@ -1426,13 +1429,23 @@ fn endpoint_findings(
     }
 }
 
+/// Whether `prefix` holds `path`. A prefix that ends with `/` holds the paths
+/// that start with it. One without holds its own path and the paths below it
+/// at a segment boundary: `/a/b` holds `/a/b` and `/a/b/c`, not `/a/bc`. The
+/// gateway matches the second form with Envoy's `path_separated_prefix`.
+pub(crate) fn prefix_holds(prefix: &str, path: &str) -> bool {
+    match path.strip_prefix(prefix) {
+        Some(rest) => prefix.ends_with('/') || rest.is_empty() || rest.starts_with('/'),
+        None => false,
+    }
+}
+
 /// Whether `prefix` is a path prefix the check can match exactly: it starts
-/// and ends with `/`, holds only visible ASCII, and has no empty segment, dot
-/// segment, percent sign, backslash, query, or fragment.
+/// with `/`, holds only visible ASCII, and has no empty segment, dot segment,
+/// percent sign, backslash, query, or fragment.
 pub(crate) fn clean_prefix(prefix: &str) -> bool {
     prefix.len() <= MAXIMUM_PREFIX_BYTES
         && prefix.starts_with('/')
-        && prefix.ends_with('/')
         && prefix.bytes().all(|byte| byte.is_ascii_graphic())
         && !prefix.contains(['%', '\\', '?', '#'])
         && !prefix.contains("//")
@@ -1463,11 +1476,11 @@ fn route_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
             findings.push(Finding::new(
                 "platform.session-runtime.invalid-prefix",
                 &pointer,
-                "the prefix is not a path that starts and ends with / and holds no empty or dot \
+                "the prefix is not a path that starts with / and holds no empty or dot \
                  segment, percent sign, backslash, query, or fragment",
-                "Write the prefix as an exact path such as /api/registry/.",
+                "Write the prefix as an exact path such as /api/registry/ or /api/renew.",
             ));
-        } else if prefix.starts_with(SESSION_PREFIX) || SESSION_PREFIX.starts_with(prefix) {
+        } else if prefix_holds(prefix, SESSION_PREFIX) || prefix_holds(SESSION_PREFIX, prefix) {
             findings.push(Finding::new(
                 "platform.session-runtime.prefix-under-session",
                 &pointer,
@@ -1476,15 +1489,17 @@ fn route_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
                 "Choose a prefix outside /session/ that does not contain it.",
             ));
         }
-        if seen.contains(&prefix) {
+        // `/a/b` and `/a/b/` both hold `/a/b/c`, so they count as one prefix.
+        let bare = prefix.strip_suffix('/').unwrap_or(prefix);
+        if seen.contains(&bare) {
             findings.push(Finding::new(
                 "platform.session-runtime.duplicate-prefix",
                 &pointer,
-                "another module or page has the same prefix",
+                "another module or page has the same prefix, with or without the closing /",
                 "Give each module and page its own prefix.",
             ));
         }
-        seen.push(prefix);
+        seen.push(bare);
     }
     for (index, module) in config.modules.iter().enumerate() {
         if config.modules[..index]
@@ -2245,8 +2260,10 @@ audit:
     fn a_prefix_must_be_a_clean_path_prefix() {
         for bad in [
             "api/registry/",
-            "/api/registry",
             "/api//registry/",
+            "/api//registry",
+            "/api/..",
+            "/api/.",
             "/api/./registry/",
             "/api/../registry/",
             "/api/%2e/",
@@ -2262,7 +2279,7 @@ audit:
             let text = document().replace("prefix: /apply/", &format!("prefix: '{bad}'"));
             refused(&text, &code("invalid-prefix"), "/pages/0/prefix");
         }
-        for fine in ["/api/.hidden/", "/api/v1.2/"] {
+        for fine in ["/api/.hidden/", "/api/v1.2/", "/api/registry", "/api/v1.2"] {
             let text = document().replace("/api/registry/", fine);
             assert_eq!(findings_of(&text), []);
         }
@@ -2270,7 +2287,7 @@ audit:
 
     #[test]
     fn a_prefix_under_the_session_routes_is_refused() {
-        for bad in ["/session/", "/session/x/", "/"] {
+        for bad in ["/session/", "/session/x/", "/", "/session", "/session/x"] {
             refused(
                 &document().replace("/api/registry/", bad),
                 &code("prefix-under-session"),
@@ -2282,10 +2299,9 @@ audit:
                 "/pages/0/prefix",
             );
         }
-        assert_eq!(
-            findings_of(&document().replace("/apply/", "/sessions/")),
-            []
-        );
+        for fine in ["/sessions/", "/sessions", "/sess"] {
+            assert_eq!(findings_of(&document().replace("/apply/", fine)), []);
+        }
     }
 
     #[test]
@@ -2467,6 +2483,24 @@ audit:
             &document().replace("/staff/", "/apply/"),
             &code("duplicate-prefix"),
             "/pages/1/prefix",
+        );
+    }
+
+    #[test]
+    fn a_prefix_and_the_same_path_with_a_slash_are_refused_as_one_prefix() {
+        refused(
+            &document().replace("/api/documents/", "/api/registry"),
+            &code("duplicate-prefix"),
+            "/modules/1/prefix",
+        );
+        refused(
+            &document().replace("/apply/", "/api/casework"),
+            &code("duplicate-prefix"),
+            "/pages/0/prefix",
+        );
+        assert_eq!(
+            findings_of(&document().replace("/api/documents/", "/api/registry/documents")),
+            []
         );
     }
 
@@ -2675,6 +2709,36 @@ audit:
         assert!(config.route("/api/registry").is_none());
         assert!(config.route("/api/unknown/").is_none());
         assert!(config.route("/session/sign-in").is_none());
+    }
+
+    #[test]
+    fn a_prefix_without_a_slash_holds_its_path_and_the_paths_below_it() {
+        let text = document()
+            .replace("/api/documents/", "/api/functions/renew")
+            .replace("/apply/", "/api/functions/renew/form");
+        let config = load(&text).expect("valid document");
+        let module = |path: &str| match config.route(path) {
+            Some(Route::Module(module)) => module.id.as_str().to_owned(),
+            other => panic!("{path}: {other:?}"),
+        };
+        assert_eq!(module("/api/functions/renew"), "documents");
+        assert_eq!(module("/api/functions/renew/"), "documents");
+        assert_eq!(module("/api/functions/renew/x"), "documents");
+        assert!(matches!(
+            config.route("/api/functions/renew/form"),
+            Some(Route::Page(_))
+        ));
+        assert!(matches!(
+            config.route("/api/functions/renew/form/step"),
+            Some(Route::Page(_))
+        ));
+        assert_eq!(module("/api/functions/renew/formal"), "documents");
+        assert!(config.route("/api/functions/renewal").is_none());
+        assert!(config.route("/api/functions/rene").is_none());
+        assert!(config.route("/api/functions/").is_none());
+        assert_eq!(module("/api/registry/x"), "breg");
+        assert!(config.route("/api/registry").is_none());
+        assert!(config.route("/api/registryx/").is_none());
     }
 
     #[test]

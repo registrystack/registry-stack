@@ -58,7 +58,9 @@ without `Domain`. The temporary sign-in cookie is
 
 A module call without a live session gets 401 `session.expired`.
 A refused route or origin gets 403 `session.refused`.
-An unavailable check gets 503 `session.unavailable`.
+An unavailable check gets 503 `session.unavailable`, and so does a call to one
+of the service's own `/session/` routes when the gateway cannot reach the
+service.
 A page request without the required kind of session redirects to sign-in.
 
 Problem `type` URIs start with
@@ -71,6 +73,20 @@ A page recognises a session problem by both its type URI and
 `registry-session-answer: 1`. The gateway removes that marker from product
 responses. The gateway's reserved `/session/` catch-all answers an unmarked
 404.
+
+The generated `registry-session.csrf` filter answers Envoy's plain 403, with no
+marker and no problem body, to a write whose `Origin` is another site, the
+issuer, or missing. A page in normal use never sends such a request: the
+browser sends the page's own `Origin` on every write. So that refusal means a
+forged or misrouted request, not a session a page should restore, and it stays
+unmarked.
+
+A module or page `prefix` that ends with `/` holds the paths below it. One
+without a closing `/` holds its own path and the paths below it at a segment
+boundary: `/functions/v1/renew` holds `/functions/v1/renew` and
+`/functions/v1/renew/x`, not `/functions/v1/renewal`. The generated route
+matches it with `path_separated_prefix`. `/a/b` and `/a/b/` count as the same
+prefix, so one file may not hold both.
 
 ## Build and test
 
@@ -273,15 +289,19 @@ it does not try to model the rest of Envoy.
   host's HTTP filter chain, ahead of the host's own filters, in that order, and
   appear once. The router ends the chain. An upgrade (`upgrade_configs`) may not
   bring its own filter list: upgrades use the main chain.
-- **Local reply.** The generated mapper must be the first mapper of the connection
-  manager's `local_reply_config`. Envoy uses the first mapper that matches. A later
-  mapper may not answer with a 3xx status or add the answer marker.
+- **Local reply.** The two generated mappers must be the first mappers of the
+  connection manager's `local_reply_config`, as generated and in order: a 503 from
+  a failed check (`UAEX`), then a 503 with an upstream failure flag on a request
+  path under `/session/`. Envoy uses the first mapper that matches. A host route's
+  503 matches neither. A later mapper may not answer with a 3xx status or add the
+  answer marker.
 - **Routes.** The generated routes go first, as generated and in order, in a
   virtual host of their own whose only domain is the public authority. Envoy picks
   that virtual host for the authority in any case, so the routes do not match on
   `:authority` themselves. Host routes may follow them there, matched by `prefix`,
   `path` or `path_separated_prefix` only, and not under `/session/` or under a
-  generated prefix (compared in any case). No route outside the generated ones
+  generated prefix (compared in any case, and at a segment boundary for a prefix
+  without a closing `/`). No route outside the generated ones
   reaches a module or page cluster or the service's own clusters, picks its cluster
   from a header or plugin, mirrors requests, matches `:authority` with
   `invert_match`, or switches one of the service's filters, at the route, weighted

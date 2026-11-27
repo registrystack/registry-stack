@@ -55,9 +55,9 @@ fn set_audit_destination_constraints(schema: &mut Value) {
 pub(crate) fn route_prefix_schema(_generator: &mut SchemaGenerator) -> Schema {
     json_schema!({
         "type": "string",
-        "minLength": 3,
+        "minLength": 2,
         "maxLength": 256,
-        "pattern": "^/(?!session/)(?!.*[%\\\\?#])(?:(?!\\.\\.?/)[!-\\.0-~]+/)+$",
+        "pattern": "^/(?!session(?:/|$))(?!.*[%\\\\?#])(?:(?!\\.\\.?(?:/|$))[!-\\.0-~]+(?:/|$))+$",
     })
 }
 
@@ -289,6 +289,12 @@ mod tests {
                 false,
             ),
             ("prefix: /api/registry/", "prefix: api/registry", false),
+            ("prefix: /api/registry/", "prefix: /api/registry", true),
+            ("prefix: /api/registry/", "prefix: /api/registry/..", false),
+            ("prefix: /api/registry/", "prefix: /api//registry", false),
+            ("prefix: /apply/", "prefix: /session", false),
+            ("prefix: /apply/", "prefix: /sess", true),
+            ("prefix: /apply/", "prefix: /a", true),
             ("  citizen:\n", "  Citizen:\n", false),
             ("  citizen:\n", "  citizen:\n    id: redundant\n", false),
             (
