@@ -93,37 +93,6 @@ Neither acceptance nor `submitted` is proof of delivery to the recipient or of l
 
 {/* TODO[evidence]: cite a test that shows a message moving from accepted to failed or unknown after the 202. */}
 
-## Provision PostgreSQL
-
-Create the roles and the database, then hand the schema to the migration role:
-
-```sql
-CREATE ROLE messaging_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS;
-CREATE ROLE messaging_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS;
-CREATE DATABASE messaging;
-```
-
-Set each role's password with `\password messaging_migration` and `\password messaging_runtime` in
-`psql`, which prompts for it instead of taking it in a statement.
-
-In the `messaging` database:
-
-```sql
-REVOKE ALL ON DATABASE messaging FROM PUBLIC;
-GRANT CONNECT ON DATABASE messaging TO messaging_migration, messaging_runtime;
-ALTER SCHEMA public OWNER TO messaging_migration;
-REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO messaging_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO messaging_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO messaging_runtime;
-```
-
-{/* Evidence: crates/registry-messaging/migrations; crates/registry-messaging/src/store.rs. */}
-
 ## Write the runtime file
 
 The package carries no runtime file. `messagingctl init <directory>` writes a starter project with
@@ -209,9 +178,9 @@ unset value
 Write `smtp-username`, `smtp-password`, `sms-gateway-token`, and `sms-gateway-callback-key` the same
 way. Each must be a regular file owned by the runtime user, mode `0400` or `0600`, with one link.
 
-`serve` never reads the migration credential; only `apply` and `retention erase-expired` connect
-with it. Write `migration-database-url`, the URL for `messaging_migration`, only on the host that
-runs those two commands.
+`serve` never reads the migration credential; only `provision`, `apply`, and
+`retention erase-expired` read it. Write `migration-database-url`, the URL for
+`messaging_migration`, only on the host that runs those commands.
 
 :::caution[Keep the audit key]
 The audit key derives the pseudonyms the journal uses for callers and recipients. Rotating it
@@ -254,6 +223,64 @@ reaching a database.
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, check(); observed with messagingctl
     0.42.0-dev on 2026-10-19, paths replaced. */}
+
+## Provision PostgreSQL
+
+Your runtime file already names the roles, their passwords, and the database. They are the URLs in
+`database.migrationUrlRef` and `database.runtimeUrlRef`. `provision` reads the runtime file and the
+package it names, so write the file and build the package first. Put both database URLs in their
+secret files, then run `messagingctl provision` once as a PostgreSQL role that can create roles and
+databases:
+
+```sh
+messagingctl provision --runtime-config /etc/registry-messaging/runtime.yaml --admin-url-file admin-url
+```
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
+`CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable instead,
+use `--admin-url-env NAME`. The connection requires TLS and verifies the server certificate. Set
+`database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
+administrator URL or a password.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema, and takes `CREATE` on it
+  from `PUBLIC`.
+
+Run it again at any time. It creates only what is missing. It refuses a role that exists with a
+different password than its URL holds, and tells you which role.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "messaging_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "messaging_migration"
+CREATE ROLE "messaging_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "messaging_runtime"
+CREATE DATABASE "messaging" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "messaging" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "messaging" TO "messaging_migration", "messaging_runtime";
+ALTER DATABASE "messaging" ALLOW_CONNECTIONS true;
+\connect "messaging"
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "messaging_migration";
+```
+
+The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
+
+`provision` grants the runtime role nothing beyond `CONNECT`. `apply`, in the next section, grants
+it its access to the schema and the Messaging tables and sequences. The runtime requires TLS on
+its database connection and refuses one it cannot verify; `database.caBundleRef` names the CA
+bundle when a private CA fronts PostgreSQL.
+
+{/* Evidence: crates/registry-messagingctl/src/provision.rs;
+    crates/registry-messaging/migrations; crates/registry-messaging/src/store.rs. */}
 
 ## Record and serve the package
 

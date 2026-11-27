@@ -7681,6 +7681,7 @@ dependencies = [
  "registry-platform-dispatch",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-provision",
  "registry-platform-testing",
  "registry-platform-yaml",
  "registry-rstack-dev",
