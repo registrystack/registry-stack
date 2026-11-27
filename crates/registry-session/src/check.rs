@@ -21,6 +21,7 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use registry_platform_httputil::BearerToken;
+use tokio::sync::{OwnedMutexGuard, Semaphore};
 use zeroize::Zeroizing;
 
 use crate::config::{ModuleConfig, Route, RuntimeConfig};
@@ -59,9 +60,18 @@ impl Decision {
             Self::Allow { authorization } => {
                 let mut response = Response::new(Body::empty());
                 let headers = response.headers_mut();
+                // A page call carries no bearer token, so the gateway also
+                // removes any `Authorization` the browser sent. A module call
+                // gets the service's own, which the gateway sets after the
+                // removals.
+                let removed = if authorization.is_some() {
+                    "cookie"
+                } else {
+                    "cookie,authorization"
+                };
                 headers.insert(
                     HeaderName::from_static("x-envoy-auth-headers-to-remove"),
-                    HeaderValue::from_static("cookie"),
+                    HeaderValue::from_static(removed),
                 );
                 if let Some(token) = authorization {
                     headers.insert(header::AUTHORIZATION, token.authorization_header_value());
@@ -109,12 +119,20 @@ enum Renewal {
     Unavailable,
 }
 
+/// How many renewals may be in flight at the issuer at once, across all
+/// sessions. A check that finds none free allows with its unexpired token.
+const MAXIMUM_CONCURRENT_REFRESHES: usize = 32;
+
 struct Inner<G> {
     config: Arc<RuntimeConfig>,
     store: Arc<Store>,
     grants: G,
     /// Where a session ended by a refused renewal is recorded.
     journal: Option<Arc<Journal>>,
+    refresh_permits: Semaphore,
+    /// How many renewals have reached the session's renewal lock.
+    #[cfg(test)]
+    lock_requests: std::sync::atomic::AtomicUsize,
 }
 
 /// Decides each request the gateway forwards.
@@ -139,8 +157,21 @@ impl<G: Grants> Checker<G> {
                 store,
                 grants,
                 journal: None,
+                refresh_permits: Semaphore::new(MAXIMUM_CONCURRENT_REFRESHES),
+                #[cfg(test)]
+                lock_requests: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
+    }
+
+    /// Allow at most `limit` renewals in flight at the issuer at once. Only
+    /// call this before the checker is cloned.
+    #[must_use]
+    pub fn with_refresh_limit(mut self, limit: usize) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.refresh_permits = Semaphore::new(limit);
+        }
+        self
     }
 
     /// Record sessions that end because the issuer refused their renewal.
@@ -189,6 +220,16 @@ impl<G: Grants> Checker<G> {
     ) -> Decision {
         let config = &self.inner.config;
         let read = method == Method::GET || method == Method::HEAD;
+        // A request another site started never carries a token to a module,
+        // whatever its method: it could trigger a read with side effects.
+        if matches!(route, Route::Module(_))
+            && matches!(
+                single_header(headers, "sec-fetch-site"),
+                Ok(Some("cross-site")) | Err(())
+            )
+        {
+            return Decision::Refused;
+        }
         let allowed = match route {
             Route::Page(_) => read,
             Route::Module(_) => read || same_origin_page_call(headers, &config.origin()),
@@ -238,12 +279,31 @@ impl<G: Grants> Checker<G> {
             );
             return Decision::Refused;
         };
-        let renew_before = renew_before(&inner.config);
-        if access.expires_at > inner.store.now() + renew_before {
+        let now = inner.store.now();
+        if now < access.renew_at(renew_before(&inner.config)) {
             return Decision::Allow {
                 authorization: Some(access.token),
             };
         }
+        // A check never waits on the issuer while its token is still valid:
+        // it allows with that token while the issuer is being avoided after a
+        // failure, or another check is already renewing this session.
+        let valid = access.expires_at > now;
+        let held = if valid && access.retry_after.is_some_and(|after| after > now) {
+            return Decision::Allow {
+                authorization: Some(access.token),
+            };
+        } else {
+            match live.renewal.clone().try_lock_owned() {
+                Ok(guard) => Some(guard),
+                Err(_) if valid => {
+                    return Decision::Allow {
+                        authorization: Some(access.token),
+                    };
+                }
+                Err(_) => None,
+            }
+        };
         // The renewal runs in its own task: if the gateway times the check out
         // and this handler is dropped, the rotated refresh token is still
         // stored.
@@ -253,6 +313,7 @@ impl<G: Grants> Checker<G> {
             audience.to_owned(),
             live.kind.clone(),
             live.renewal.clone(),
+            held,
         ));
         match task.await {
             Ok(Renewal::Token(token)) => Decision::Allow {
@@ -261,7 +322,7 @@ impl<G: Grants> Checker<G> {
             Ok(Renewal::Expired) => Decision::Expired,
             Ok(Renewal::Unavailable) => Decision::Unavailable,
             Err(error) => {
-                tracing::error!(%error, "a session renewal task failed");
+                tracing::error!(panicked = error.is_panic(), "a session renewal task failed");
                 Decision::Unavailable
             }
         }
@@ -272,30 +333,63 @@ fn renew_before(config: &RuntimeConfig) -> Duration {
     Duration::from_secs(config.session.renew_before_seconds.get())
 }
 
-/// Take the session's renewal lock, then use the token another caller already
-/// renewed, or renew it.
+/// Hold the session's renewal lock (taking it when `held` is empty), then use
+/// the token another caller already renewed, or renew it.
 async fn renew<G: Grants>(
     inner: Arc<Inner<G>>,
     cookie: Zeroizing<String>,
     audience: String,
     kind: String,
     renewal: Arc<tokio::sync::Mutex<()>>,
+    held: Option<OwnedMutexGuard<()>>,
 ) -> Renewal {
-    let _held = renewal.lock_owned().await;
+    let _held = match held {
+        Some(guard) => guard,
+        None => {
+            #[cfg(test)]
+            inner
+                .lock_requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            renewal.lock_owned().await
+        }
+    };
     let store = &inner.store;
-    let margin = renew_before(&inner.config);
+    // The session may have ended while this waited for the lock, or crossed
+    // its absolute deadline.
+    if store.live(&cookie).is_none() {
+        return Renewal::Expired;
+    }
     let Some(access) = store.access(&cookie, &audience) else {
         return Renewal::Expired;
     };
-    if access.expires_at > store.now() + margin {
+    let now = store.now();
+    if now < access.renew_at(renew_before(&inner.config)) {
         return Renewal::Token(access.token);
     }
+    // Without a renewal, an unexpired token still serves and an expired one
+    // cannot.
+    let valid = access.expires_at > now;
+    let without_renewal = |token: BearerToken| {
+        if valid {
+            Renewal::Token(token)
+        } else {
+            Renewal::Unavailable
+        }
+    };
+    if access.retry_after.is_some_and(|after| after > now) {
+        return without_renewal(access.token);
+    }
     let Some(refresh_token) = store.refresh_token(&cookie, &audience) else {
-        if access.expires_at > store.now() {
+        if valid {
             return Renewal::Token(access.token);
         }
-        store.remove(&cookie);
+        if let Some(session) = store.remove(&cookie) {
+            store.release(&session);
+        }
         return Renewal::Expired;
+    };
+    let Ok(_permit) = inner.refresh_permits.try_acquire() else {
+        return without_renewal(access.token);
     };
     match inner.grants.refresh(&kind, &refresh_token, &audience).await {
         Ok(renewed) => {
@@ -319,16 +413,14 @@ async fn renew<G: Grants>(
         }
         Err(GrantError::Refused) => {
             if let Some(session) = store.remove(&cookie) {
+                store.release(&session);
                 record_ended(&inner, &session).await;
             }
             Renewal::Expired
         }
         Err(GrantError::Unavailable) => {
-            if access.expires_at > store.now() {
-                Renewal::Token(access.token)
-            } else {
-                Renewal::Unavailable
-            }
+            store.note_unavailable(&cookie);
+            without_renewal(access.token)
         }
     }
 }
@@ -417,7 +509,7 @@ fn strip_check_prefix(target: &str) -> Option<&str> {
 }
 
 /// Whether `path` (no query) is safe to match: no dot segment, empty segment,
-/// backslash, or percent-encoded `/`, `\` or `.`.
+/// backslash, semicolon, or percent-encoded `/`, `\`, `.`, `%` or NUL.
 pub(crate) fn clean_path(path: &str) -> bool {
     let Some(segments) = path.strip_prefix('/') else {
         return false;
@@ -425,8 +517,13 @@ pub(crate) fn clean_path(path: &str) -> bool {
     if path.contains('\\') {
         return false;
     }
+    // `;` starts a path parameter some upstreams strip, and `%25` and `%00`
+    // are double encoding and a NUL.
+    if path.contains(';') {
+        return false;
+    }
     let lower = path.to_ascii_lowercase();
-    if ["%2f", "%5c", "%2e"]
+    if ["%2f", "%5c", "%2e", "%25", "%00"]
         .iter()
         .any(|encoded| lower.contains(encoded))
     {
@@ -510,7 +607,7 @@ mod tests {
     use super::*;
     use crate::clock::{Clock, ManualClock};
     use crate::grants::fake::FakeIssuer;
-    use crate::store::{random_token, AudienceGrant, Session};
+    use crate::store::{random_token, Access, AudienceGrant, Session};
 
     const PERSON: &str = "https://api.example/person";
     const CASEWORK: &str = "https://casework.example/api";
@@ -542,6 +639,7 @@ mod tests {
         issuer: Arc<FakeIssuer>,
         store: Arc<Store>,
         config: Arc<RuntimeConfig>,
+        checker: Checker<Arc<FakeIssuer>>,
         router: Router,
     }
 
@@ -551,17 +649,36 @@ mod tests {
         }
 
         fn with_document(text: &str) -> Self {
+            Self::build(text, None)
+        }
+
+        /// A harness whose service allows `limit` renewals in flight at once.
+        fn with_refresh_limit(limit: usize) -> Self {
+            Self::build(&crate::config::tests::document(), Some(limit))
+        }
+
+        fn build(text: &str, refresh_limit: Option<usize>) -> Self {
             let config = Arc::new(crate::config::tests::load(text).expect("config"));
             let clock = Arc::new(ManualClock::new());
             let issuer = FakeIssuer::new(clock.clone());
-            let store = Arc::new(Store::new(clock.clone(), 100, 100));
-            let checker = Checker::new(config.clone(), store.clone(), issuer.clone());
+            let (ended, revoker) = crate::revoker::channel(16);
+            tokio::spawn(revoker.run(issuer.clone()));
+            let store = Arc::new(
+                Store::new(clock.clone(), 100, 100)
+                    .with_idle_lifetime(Duration::from_secs(config.session.idle_lifetime_seconds()))
+                    .with_ended_sessions(ended),
+            );
+            let mut checker = Checker::new(config.clone(), store.clone(), issuer.clone());
+            if let Some(limit) = refresh_limit {
+                checker = checker.with_refresh_limit(limit);
+            }
             Self {
                 clock,
                 issuer,
                 store,
                 config,
-                router: check_router(checker),
+                router: check_router(checker.clone()),
+                checker,
             }
         }
 
@@ -572,6 +689,15 @@ mod tests {
         }
 
         fn sign_in_with(&self, kind: &str, refreshable: bool) -> String {
+            self.sign_in_for(kind, refreshable, None)
+        }
+
+        /// A session whose tokens last `lifetime` instead of the issuer's.
+        fn sign_in_short(&self, kind: &str, lifetime: Duration) -> String {
+            self.sign_in_for(kind, true, Some(lifetime))
+        }
+
+        fn sign_in_for(&self, kind: &str, refreshable: bool, lifetime: Option<Duration>) -> String {
             let cookie = random_token().expect("random");
             let audiences = self
                 .config
@@ -582,7 +708,9 @@ mod tests {
                     AudienceGrant {
                         audience: audience.to_owned(),
                         access_token,
-                        expires_at,
+                        expires_at: lifetime
+                            .map_or(expires_at, |lifetime| self.clock.now() + lifetime),
+                        issued_at: self.clock.now(),
                         refresh_token: refreshable.then_some(refresh),
                     }
                 })
@@ -710,11 +838,18 @@ mod tests {
             .is_some_and(|value| !value.is_empty()));
     }
 
+    /// A module call is allowed with a bearer token and loses its cookie; a
+    /// page call carries no token and loses its cookie and any `Authorization`.
     fn assert_allowed(reply: &Reply) {
         assert_eq!(reply.status, StatusCode::OK);
+        let removed = if reply.authorization().is_some() {
+            "cookie"
+        } else {
+            "cookie,authorization"
+        };
         assert_eq!(
             reply.header("x-envoy-auth-headers-to-remove"),
-            Some("cookie")
+            Some(removed)
         );
     }
 
@@ -756,6 +891,12 @@ mod tests {
             "/api/%2e/x",
             "/api/%2E%2e/x",
             "/api/.%2e/x",
+            "/api/..;/x",
+            "/api/a;b/x",
+            "/api/%00/x",
+            "/api/a%00",
+            "/api/%252e/x",
+            "/api/%25/x",
         ] {
             assert!(!clean_path(unclean), "{unclean}");
         }
@@ -786,6 +927,9 @@ mod tests {
             "/check/api/registry/%2e%2e/x",
             "/check/api/registry/%2E/x",
             "/check/apply/../staff/",
+            "/check/api/registry/..;/casework/x",
+            "/check/api/registry/%00",
+            "/check/api/registry/%252e%252e/x",
         ] {
             let reply = harness.get(&cookie, target).await;
             assert_problem(&reply, StatusCode::FORBIDDEN, "session.refused");
@@ -1094,9 +1238,9 @@ mod tests {
         let harness = Harness::new();
         let staff = harness.sign_in("staff");
         let registry = harness.get(&staff, "/check/api/registry/records").await;
-        let scheduling = harness.get(&staff, "/check/api/scheduling/slots").await;
+        let documents = harness.get(&staff, "/check/api/documents/slots").await;
         let casework = harness.get(&staff, "/check/api/casework/tasks").await;
-        for reply in [&registry, &scheduling, &casework] {
+        for reply in [&registry, &documents, &casework] {
             assert_allowed(reply);
         }
         // Two modules in the person audience share one token.
@@ -1104,7 +1248,7 @@ mod tests {
             registry.authorization(),
             Some(harness.bearer(&staff, PERSON))
         );
-        assert_eq!(registry.authorization(), scheduling.authorization());
+        assert_eq!(registry.authorization(), documents.authorization());
         assert_eq!(
             casework.authorization(),
             Some(harness.bearer(&staff, CASEWORK))
@@ -1150,29 +1294,55 @@ mod tests {
         assert_eq!(harness.issuer.refresh_calls(), 0);
     }
 
+    /// Spawn a GET of `target` with the session cookie, answered on its own
+    /// task so the caller can hold the issuer's gate meanwhile.
+    fn spawn_get(
+        harness: &Harness,
+        cookie: &str,
+        target: &str,
+    ) -> tokio::task::JoinHandle<Response> {
+        let router = harness.router.clone();
+        let request = Request::builder()
+            .uri(target)
+            .header("cookie", harness.cookie_header(cookie))
+            .body(Body::empty())
+            .expect("request");
+        tokio::spawn(async move { router.oneshot(request).await.expect("response") })
+    }
+
+    /// Wait until `count` renewals have reached the session's renewal lock, so
+    /// a test opens the issuer's gate only when every waiter is queued.
+    async fn until_waiting(harness: &Harness, count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while harness
+                .checker
+                .inner
+                .lock_requests
+                .load(std::sync::atomic::Ordering::SeqCst)
+                < count
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the waiters reached the renewal lock");
+    }
+
     #[tokio::test]
-    async fn five_concurrent_checks_at_expiry_make_one_refresh_and_all_get_the_new_token() {
+    async fn five_concurrent_checks_with_an_expired_token_make_one_refresh_and_all_get_the_new_token(
+    ) {
         let harness = Harness::new();
         let cookie = harness.sign_in("citizen");
         let old = harness.bearer(&cookie, PERSON);
-        harness.clock.advance(Duration::from_secs(250));
+        harness.clock.advance(Duration::from_secs(301));
         harness.issuer.close_gate();
-        let session = harness.cookie_header(&cookie);
         let handles: Vec<_> = (0..5)
-            .map(|_| {
-                let router = harness.router.clone();
-                let request = Request::builder()
-                    .uri("/check/api/registry/records")
-                    .header("cookie", &session)
-                    .body(Body::empty())
-                    .expect("request");
-                tokio::spawn(async move { router.oneshot(request).await.expect("response") })
-            })
+            .map(|_| spawn_get(&harness, &cookie, "/check/api/registry/records"))
             .collect();
         harness.issuer.refresh_started().await;
-        for _ in 0..50 {
-            tokio::task::yield_now().await;
-        }
+        // One check holds the lock at the issuer's gate, and the other four are
+        // queued on it.
+        until_waiting(&harness, 4).await;
         harness.issuer.open_gate();
         let mut tokens = Vec::new();
         for handle in handles {
@@ -1184,6 +1354,407 @@ mod tests {
         assert!(tokens.iter().all(|token| *token == tokens[0]));
         assert_ne!(tokens[0], old);
         assert_eq!(tokens[0], harness.bearer(&cookie, PERSON));
+    }
+
+    #[tokio::test]
+    async fn a_valid_token_is_allowed_at_once_while_a_renewal_hangs() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("citizen");
+        let old = harness.bearer(&cookie, PERSON);
+        harness.clock.advance(Duration::from_secs(250));
+        harness.issuer.close_gate();
+        let first = spawn_get(&harness, &cookie, "/check/api/registry/records");
+        harness.issuer.refresh_started().await;
+        for _ in 0..10 {
+            let reply = tokio::time::timeout(
+                Duration::from_secs(2),
+                harness.get(&cookie, "/check/api/registry/records"),
+            )
+            .await
+            .expect("a valid token is not held up by the renewal");
+            assert_allowed(&reply);
+            assert_eq!(reply.authorization(), Some(old.clone()));
+        }
+        // No task piled up behind the hung renewal.
+        assert_eq!(harness.issuer.refresh_calls(), 1);
+        harness.issuer.open_gate();
+        let reply = reply(first.await.expect("task")).await;
+        assert_allowed(&reply);
+        assert_ne!(reply.authorization(), Some(old));
+    }
+
+    #[tokio::test]
+    async fn renewal_backs_off_after_the_issuer_is_unreachable_and_doubles_to_a_minute() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("citizen");
+        harness.issuer.set_unavailable(true);
+        harness.clock.advance(Duration::from_secs(250));
+        let old = harness.bearer(&cookie, PERSON);
+        let check = || harness.get(&cookie, "/check/api/registry/records");
+        for _ in 0..4 {
+            let reply = check().await;
+            assert_allowed(&reply);
+            assert_eq!(reply.authorization(), Some(old.clone()));
+        }
+        assert_eq!(harness.issuer.refresh_calls(), 1);
+        // 5 seconds, then 10, then 20.
+        for (waited, calls) in [(4, 1), (1, 2), (9, 2), (1, 3), (19, 3), (1, 4)] {
+            harness.clock.advance(Duration::from_secs(waited));
+            assert_allowed(&check().await);
+            assert_eq!(harness.issuer.refresh_calls(), calls, "after {waited} s");
+        }
+        // The last failure, at 285 s, set a 40 s backoff. Past the token's
+        // expiry at 300 s the backoff still holds: 503 at once, with no call to
+        // the issuer, until it ends at 325 s.
+        for (waited, calls) in [(20, 4), (10, 4), (10, 5)] {
+            harness.clock.advance(Duration::from_secs(waited));
+            assert_problem(
+                &check().await,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session.unavailable",
+            );
+            assert_eq!(harness.issuer.refresh_calls(), calls, "after {waited} s");
+        }
+    }
+
+    #[test]
+    fn the_backoff_doubles_from_five_seconds_to_at_most_sixty_and_a_renewal_clears_it() {
+        let harness_clock = Arc::new(ManualClock::new());
+        let store = Store::new(harness_clock.clone(), 4, 4);
+        let issuer = FakeIssuer::new(harness_clock.clone());
+        let (access_token, expires_at, refresh) = issuer.sign_in(PERSON);
+        let session = Session::new(
+            "citizen".to_owned(),
+            "https://id.example".to_owned(),
+            "p".to_owned(),
+            Map::new(),
+            vec![AudienceGrant {
+                audience: PERSON.to_owned(),
+                access_token,
+                expires_at,
+                issued_at: harness_clock.now(),
+                refresh_token: Some(refresh),
+            }],
+            harness_clock.now() + Duration::from_secs(3600),
+        );
+        let _ = store.insert("c", session).expect("room");
+        assert!(store
+            .access("c", PERSON)
+            .expect("access")
+            .retry_after
+            .is_none());
+        for seconds in [5, 10, 20, 40, 60, 60, 60] {
+            store.note_unavailable("c");
+            let retry_after = store.access("c", PERSON).expect("access").retry_after;
+            assert_eq!(
+                retry_after,
+                Some(harness_clock.now() + Duration::from_secs(seconds))
+            );
+        }
+        let renewed = crate::grants::Renewed {
+            access_token: BearerToken::new("renewed-token").expect("token"),
+            expires_at: harness_clock.now() + Duration::from_secs(300),
+            refresh_token: None,
+        };
+        store.apply_renewed("c", PERSON, renewed).expect("stored");
+        assert!(store
+            .access("c", PERSON)
+            .expect("access")
+            .retry_after
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn no_more_than_the_refresh_limit_renew_at_once_and_the_rest_use_their_valid_token() {
+        let harness = Harness::with_refresh_limit(1);
+        let first = harness.sign_in("citizen");
+        let second = harness.sign_in("citizen");
+        let old = harness.bearer(&second, PERSON);
+        harness.clock.advance(Duration::from_secs(250));
+        harness.issuer.close_gate();
+        let held = spawn_get(&harness, &first, "/check/api/registry/records");
+        harness.issuer.refresh_started().await;
+        let reply = tokio::time::timeout(
+            Duration::from_secs(2),
+            harness.get(&second, "/check/api/registry/records"),
+        )
+        .await
+        .expect("answered without the issuer");
+        assert_allowed(&reply);
+        assert_eq!(reply.authorization(), Some(old));
+        assert_eq!(harness.issuer.refresh_calls(), 1);
+        harness.issuer.open_gate();
+        assert_allowed(&reply_of(held).await);
+    }
+
+    async fn reply_of(handle: tokio::task::JoinHandle<Response>) -> Reply {
+        reply(handle.await.expect("task")).await
+    }
+
+    #[tokio::test]
+    async fn a_session_past_its_deadline_while_waiting_for_the_renewal_lock_is_expired() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("citizen");
+        harness.clock.advance(Duration::from_secs(301));
+        harness.issuer.close_gate();
+        let holder = spawn_get(&harness, &cookie, "/check/api/registry/records");
+        harness.issuer.refresh_started().await;
+        let waiter = spawn_get(&harness, &cookie, "/check/api/registry/records");
+        until_waiting(&harness, 1).await;
+        let lifetime = harness.config.session.absolute_lifetime_seconds.get();
+        harness.clock.advance(Duration::from_secs(lifetime));
+        harness.issuer.open_gate();
+        assert_problem(
+            &reply_of(waiter).await,
+            StatusCode::UNAUTHORIZED,
+            "session.expired",
+        );
+        let _ = holder.await;
+    }
+
+    #[test]
+    fn a_token_is_due_at_the_smaller_of_the_span_and_half_its_lifetime() {
+        let clock = ManualClock::new();
+        let issued_at = clock.now();
+        let access = |lifetime: u64| Access {
+            token: BearerToken::new("token-value").expect("token"),
+            expires_at: issued_at + Duration::from_secs(lifetime),
+            issued_at,
+            retry_after: None,
+        };
+        let span = Duration::from_secs(60);
+        assert_eq!(
+            access(300).renew_at(span),
+            issued_at + Duration::from_secs(240)
+        );
+        assert_eq!(
+            access(120).renew_at(span),
+            issued_at + Duration::from_secs(60)
+        );
+        assert_eq!(
+            access(60).renew_at(span),
+            issued_at + Duration::from_secs(30)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_short_lived_token_is_renewed_at_half_its_lifetime_not_on_every_call() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in_short("citizen", Duration::from_secs(60));
+        harness.clock.advance(Duration::from_secs(29));
+        assert_allowed(&harness.get(&cookie, "/check/api/registry/records").await);
+        assert_eq!(harness.issuer.refresh_calls(), 0);
+        harness.clock.advance(Duration::from_secs(1));
+        assert_allowed(&harness.get(&cookie, "/check/api/registry/records").await);
+        assert_eq!(harness.issuer.refresh_calls(), 1);
+    }
+
+    /// Wait until the issuer has been asked `count` times to revoke.
+    async fn until_revoked(harness: &Harness, count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while harness.issuer.revoke_calls() < count {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the revocations reached the issuer");
+    }
+
+    #[tokio::test]
+    async fn sessions_that_expire_without_a_sign_out_have_their_refresh_tokens_revoked() {
+        let harness = Harness::new();
+        let absolute = harness.sign_in("citizen");
+        let idle = harness.sign_in("citizen");
+        let absolute_token = harness
+            .store
+            .refresh_token(&absolute, PERSON)
+            .expect("refresh");
+        let idle_token = harness.store.refresh_token(&idle, PERSON).expect("refresh");
+        // One session is used once and then left idle. The other keeps being
+        // used until its absolute deadline.
+        let idle_lifetime = harness.config.session.idle_lifetime_seconds();
+        harness.clock.advance(Duration::from_secs(1000));
+        assert!(harness.store.live(&absolute).is_some());
+        harness
+            .clock
+            .advance(Duration::from_secs(idle_lifetime - 1000));
+        assert!(harness.store.live(&idle).is_none(), "idle for its lifetime");
+        until_revoked(&harness, 1).await;
+        assert!(harness.issuer.family_revoked(&idle_token));
+        assert!(!harness.issuer.family_revoked(&absolute_token));
+        while harness.store.live(&absolute).is_some() {
+            harness.clock.advance(Duration::from_secs(1000));
+        }
+        until_revoked(&harness, 2).await;
+        assert!(harness.issuer.family_revoked(&absolute_token));
+    }
+
+    #[tokio::test]
+    async fn a_refused_renewal_revokes_the_refresh_tokens_of_the_other_audiences() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("staff");
+        let person = harness
+            .store
+            .refresh_token(&cookie, PERSON)
+            .expect("refresh");
+        let casework = harness
+            .store
+            .refresh_token(&cookie, CASEWORK)
+            .expect("refresh");
+        harness
+            .issuer
+            .revoke("staff", &person)
+            .await
+            .expect("revoked");
+        harness.clock.advance(Duration::from_secs(250));
+        let reply = harness.get(&cookie, "/check/api/registry/records").await;
+        assert_problem(&reply, StatusCode::UNAUTHORIZED, "session.expired");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !harness.issuer.family_revoked(&casework) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the other audience's family was revoked");
+    }
+
+    #[tokio::test]
+    async fn a_page_allow_removes_the_browsers_authorization_and_cookie_headers() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("citizen");
+        let page = harness.get(&cookie, "/check/apply/form").await;
+        assert_eq!(
+            page.header("x-envoy-auth-headers-to-remove"),
+            Some("cookie,authorization")
+        );
+        assert!(page.authorization().is_none());
+        let module = harness.get(&cookie, "/check/api/registry/records").await;
+        assert_eq!(
+            module.header("x-envoy-auth-headers-to-remove"),
+            Some("cookie")
+        );
+        assert!(module.authorization().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_cross_site_request_to_a_module_is_refused_for_every_method() {
+        let harness = Harness::new();
+        let cookie = harness.sign_in("citizen");
+        let session = harness.cookie_header(&cookie);
+        for method in ["GET", "POST", "DELETE"] {
+            let reply = harness
+                .call(
+                    method,
+                    "/check/api/registry/records",
+                    &[
+                        ("cookie", &session),
+                        ("registry-client", "page"),
+                        ("sec-fetch-site", "cross-site"),
+                    ],
+                )
+                .await;
+            assert_problem(&reply, StatusCode::FORBIDDEN, "session.refused");
+        }
+        let repeated = harness
+            .call(
+                "GET",
+                "/check/api/registry/records",
+                &[
+                    ("cookie", &session),
+                    ("sec-fetch-site", "same-origin"),
+                    ("sec-fetch-site", "cross-site"),
+                ],
+            )
+            .await;
+        assert_problem(&repeated, StatusCode::FORBIDDEN, "session.refused");
+        for site in ["same-origin", "same-site", "none"] {
+            let reply = harness
+                .call(
+                    "GET",
+                    "/check/api/registry/records",
+                    &[("cookie", &session), ("sec-fetch-site", site)],
+                )
+                .await;
+            assert_allowed(&reply);
+        }
+    }
+
+    /// The process-wide log buffer. A subscriber installed for the whole process
+    /// keeps every callsite enabled, so what a test asserts on does not depend on
+    /// which tests ran beside it. The values a test asserts the logs lack are
+    /// random per test, so other tests' lines cannot match them.
+    fn captured_logs() -> String {
+        static BUFFER: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Vec<u8>>>> =
+            std::sync::OnceLock::new();
+        #[derive(Clone)]
+        struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("sink").extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buffer = BUFFER.get_or_init(|| {
+            let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink = Sink(buffer.clone());
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(move || sink.clone())
+                .finish();
+            tracing::subscriber::set_global_default(subscriber).expect("one global subscriber");
+            buffer
+        });
+        String::from_utf8(buffer.lock().expect("logs").clone()).expect("utf8")
+    }
+
+    #[tokio::test]
+    async fn no_log_line_carries_a_cookie_a_token_or_a_path() {
+        captured_logs();
+        let harness = Harness::new();
+        let cookie = harness.sign_in("staff");
+        let person = harness
+            .store
+            .refresh_token(&cookie, PERSON)
+            .expect("refresh");
+        let access = harness.bearer(&cookie, PERSON);
+        let session = harness.cookie_header(&cookie);
+        harness.get(&cookie, "/check/api/registry/records").await;
+        harness.get(&cookie, "/check/apply/path-canary").await;
+        harness.get(&cookie, "/check/api/nowhere/path-canary").await;
+        harness
+            .call(
+                "POST",
+                "/check/api/registry/records",
+                &[("cookie", &session)],
+            )
+            .await;
+        // An unreachable issuer, then a refused renewal.
+        harness.issuer.set_unavailable(true);
+        harness.clock.advance(Duration::from_secs(250));
+        harness.get(&cookie, "/check/api/registry/records").await;
+        harness.issuer.set_unavailable(false);
+        harness.clock.advance(Duration::from_secs(60));
+        harness
+            .issuer
+            .revoke("staff", &person)
+            .await
+            .expect("revoked");
+        harness.get(&cookie, "/check/api/registry/records").await;
+        let text = captured_logs();
+        assert!(text.contains("session check"), "the check logs its outcome");
+        for secret in [
+            cookie.as_str(),
+            person.expose(),
+            "refresh-",
+            "access-",
+            "canary",
+            access.to_str().expect("ascii"),
+        ] {
+            assert!(!text.contains(secret), "a log line carries a secret value");
+        }
     }
 
     #[tokio::test]
@@ -1353,8 +1924,10 @@ mod tests {
             "session.unavailable",
         );
         assert!(harness.store.live(&cookie).is_some(), "the session is kept");
-        // The refresh token was never spent, so the issuer coming back recovers.
+        // The refresh token was never spent, so the issuer coming back recovers
+        // once the backoff has passed.
         harness.issuer.set_unavailable(false);
+        harness.clock.advance(Duration::from_secs(10));
         let reply = harness.get(&cookie, "/check/api/registry/records").await;
         assert_allowed(&reply);
         assert_eq!(reply.authorization(), Some(harness.bearer(&cookie, PERSON)));

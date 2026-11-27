@@ -419,6 +419,7 @@ async fn complete<G: Grants + Redeemer>(
         audience,
         access_token: redeemed.access_token,
         expires_at: redeemed.expires_at,
+        issued_at: app.store.now(),
         refresh_token: Some(refresh_token),
     };
 

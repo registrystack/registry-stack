@@ -86,6 +86,9 @@ impl HttpIssuer {
                         .with_revocation_endpoint(endpoint(config.issuer.revocation.as_str())?)
                 })
                 .map_err(|error| RuntimeError::Issuer(error.to_string()))?
+                .with_request_timeout(Duration::from_millis(
+                    config.issuer.timeout_milliseconds.get(),
+                ))
                 .with_fetch_url_policy(policy.clone());
             let client = ClientSecretClient::new(client_config)
                 .map_err(|error| RuntimeError::Issuer(error.to_string()))?;

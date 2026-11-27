@@ -17,6 +17,7 @@ pub mod journal;
 pub mod offline;
 pub mod pages;
 mod public;
+pub mod revoker;
 pub mod runtime;
 mod signin;
 pub mod store;
@@ -82,7 +83,9 @@ pub fn command() -> Command {
                         .help(
                             "Also check the runtime file against the identity generator's \
                              receipt: the person audience and each kind of sign-in's audiences \
-                             must match. This reads the process environment, as the service does",
+                             must match, and a module on the person audience must carry a member \
+                             product's name as its id. `${NAME}` expressions are not resolved \
+                             unless --environment is given",
                         )
                         .value_parser(value_parser!(PathBuf)),
                 ),

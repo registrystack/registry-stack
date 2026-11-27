@@ -21,6 +21,7 @@ use zeroize::Zeroizing;
 
 use crate::clock::Clock;
 use crate::grants::{RefreshToken, Renewed};
+use crate::revoker::EndedSessions;
 
 /// The length of a base64url encoding of 32 random bytes.
 pub const TOKEN_LENGTH: usize = 43;
@@ -159,6 +160,8 @@ pub struct AudienceGrant {
     pub audience: String,
     pub access_token: BearerToken,
     pub expires_at: Instant,
+    /// When the issuer issued the token, which gives its lifetime.
+    pub issued_at: Instant,
     pub refresh_token: Option<RefreshToken>,
 }
 
@@ -178,10 +181,26 @@ pub struct Session {
     claims: Map<String, Value>,
     audiences: Vec<AudienceGrant>,
     deadline: Instant,
+    /// The last time a request presented the session, set by the store.
+    last_seen: Instant,
     renewal: Arc<tokio::sync::Mutex<()>>,
     /// The order the store admitted this session in, so a person's oldest
     /// session is the one with the smallest value.
     admitted: u64,
+    /// Set after the issuer could not be reached for a renewal, so checks do
+    /// not ask again at once.
+    backoff: Option<Backoff>,
+}
+
+/// How long renewals wait after the issuer could not be reached: 5 seconds,
+/// doubling with each further failure to at most 60.
+const FIRST_BACKOFF: Duration = Duration::from_secs(5);
+const MAXIMUM_BACKOFF: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Copy, Debug)]
+struct Backoff {
+    failures: u32,
+    retry_after: Instant,
 }
 
 impl Session {
@@ -204,8 +223,10 @@ impl Session {
             claims,
             audiences,
             deadline,
+            last_seen: deadline,
             renewal: Arc::new(tokio::sync::Mutex::new(())),
             admitted: 0,
+            backoff: None,
         }
     }
 
@@ -260,6 +281,20 @@ pub struct Live {
 pub struct Access {
     pub token: BearerToken,
     pub expires_at: Instant,
+    pub issued_at: Instant,
+    /// When the session may ask the issuer again, after a failure to reach it.
+    pub retry_after: Option<Instant>,
+}
+
+impl Access {
+    /// When the token is due for renewal: `renew_before` ahead of its expiry,
+    /// or half its lifetime ahead when the issuer issues shorter tokens.
+    #[must_use]
+    pub fn renew_at(&self, renew_before: Duration) -> Instant {
+        let lifetime = self.expires_at.saturating_duration_since(self.issued_at);
+        let span = renew_before.min(lifetime / 2);
+        self.expires_at.checked_sub(span).unwrap_or(self.issued_at)
+    }
 }
 
 /// The store refused to hold another entry.
@@ -269,7 +304,7 @@ pub struct Exhausted;
 /// The person's sessions an insert ended to keep their share. They stay
 /// ended: the caller revokes their refresh tokens at the issuer.
 #[must_use]
-pub struct Replaced(Vec<([u8; 32], Session)>);
+pub struct Replaced(Vec<Session>);
 
 impl fmt::Debug for Replaced {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -295,30 +330,101 @@ impl Replaced {
     /// The sessions the insert ended, whose refresh tokens are still live at
     /// the issuer until the caller revokes them.
     pub fn sessions(&self) -> impl Iterator<Item = &Session> {
-        self.0.iter().map(|(_, session)| session)
+        self.0.iter()
+    }
+}
+
+type Key = [u8; 32];
+
+/// The sessions, and for each person the keys of their sessions, so a
+/// sign-in finds a person's share without walking the store.
+#[derive(Default)]
+struct Sessions {
+    entries: HashMap<Key, Session>,
+    by_person: HashMap<(String, String), Vec<Key>>,
+    /// The last time a full store was swept for sessions that are over, so
+    /// sign-ins into a full store do not each walk it.
+    last_sweep: Option<Instant>,
+}
+
+impl Sessions {
+    fn person(session: &Session) -> (String, String) {
+        (session.issuer.clone(), session.subject.clone())
+    }
+
+    fn add(&mut self, key: Key, session: Session) {
+        self.by_person
+            .entry(Self::person(&session))
+            .or_default()
+            .push(key);
+        self.entries.insert(key, session);
+    }
+
+    fn take(&mut self, key: &Key) -> Option<Session> {
+        let session = self.entries.remove(key)?;
+        let person = Self::person(&session);
+        if let Some(keys) = self.by_person.get_mut(&person) {
+            keys.retain(|held| held != key);
+            if keys.is_empty() {
+                self.by_person.remove(&person);
+            }
+        }
+        Some(session)
     }
 }
 
 pub struct Store {
     clock: Arc<dyn Clock>,
-    sessions: Mutex<HashMap<[u8; 32], Session>>,
+    sessions: Mutex<Sessions>,
     pending: Mutex<HashMap<[u8; 32], PendingSignIn>>,
     maximum_sessions: usize,
     maximum_pending: usize,
+    /// How long a session may go unused, when bounded.
+    idle_lifetime: Option<Duration>,
+    /// Where the refresh tokens of sessions that end without a sign-out go.
+    ended: Option<EndedSessions>,
     /// How many sessions the store has admitted, which orders them.
     admitted: AtomicU64,
 }
+
+/// How often a full store is swept for sessions that are over.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
 impl Store {
     #[must_use]
     pub fn new(clock: Arc<dyn Clock>, maximum_sessions: usize, maximum_pending: usize) -> Self {
         Self {
             clock,
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(Sessions::default()),
             pending: Mutex::new(HashMap::new()),
             maximum_sessions,
             maximum_pending,
+            idle_lifetime: None,
+            ended: None,
             admitted: AtomicU64::new(0),
+        }
+    }
+
+    /// End a session that no request has presented for `lifetime`.
+    #[must_use]
+    pub fn with_idle_lifetime(mut self, lifetime: Duration) -> Self {
+        self.idle_lifetime = Some(lifetime);
+        self
+    }
+
+    /// Hand the refresh tokens of sessions that end without a sign-out
+    /// (expiry, eviction) to `ended`.
+    #[must_use]
+    pub fn with_ended_sessions(mut self, ended: EndedSessions) -> Self {
+        self.ended = Some(ended);
+        self
+    }
+
+    /// Queue the refresh tokens of `session`, which ended without a sign-out,
+    /// for revocation at the issuer.
+    pub fn release(&self, session: &Session) {
+        if let Some(ended) = &self.ended {
+            ended.revoke(&session.kind, session.refresh_tokens());
         }
     }
 
@@ -326,6 +432,14 @@ impl Store {
     #[must_use]
     pub fn now(&self) -> Instant {
         self.clock.now()
+    }
+
+    /// Whether `session` is past its absolute deadline or unused for too long.
+    fn over(&self, session: &Session, now: Instant) -> bool {
+        session.deadline <= now
+            || self
+                .idle_lifetime
+                .is_some_and(|idle| now.saturating_duration_since(session.last_seen) >= idle)
     }
 
     /// Hold `pending` under `cookie` for `lifetime`.
@@ -360,56 +474,95 @@ impl Store {
             .then_some(pending)
     }
 
-    /// Admit `session` under `cookie`. The person's own share is made first:
-    /// their expired sessions go, and at [`MAXIMUM_SESSIONS_PER_PERSON`] their
-    /// oldest one ends. Only then is the store's own bound checked, so a person
-    /// signing in again never takes another slot. A refused insert changes
-    /// nothing; an admitted one returns the sessions it ended. Insert is the last
-    /// fallible step of a sign-in, because nothing brings an ended session back.
-    pub fn insert(&self, cookie: &str, session: Session) -> Result<Replaced, Exhausted> {
-        let mut session = session;
-        let mut sessions = lock(&self.sessions);
-        let now = self.now();
-        let same_person =
-            |held: &Session| held.issuer == session.issuer && held.subject == session.subject;
-        sessions.retain(|_, held| !same_person(held) || held.deadline > now);
-        let mut held: Vec<(u64, [u8; 32])> = sessions
+    /// Remove every session that is over from a full store, at most once per
+    /// [`SWEEP_INTERVAL`], and return them.
+    fn sweep(&self, sessions: &mut Sessions, now: Instant) -> Vec<Session> {
+        if sessions
+            .last_sweep
+            .is_some_and(|last| now < last + SWEEP_INTERVAL)
+        {
+            return Vec::new();
+        }
+        sessions.last_sweep = Some(now);
+        let over: Vec<Key> = sessions
+            .entries
             .iter()
-            .filter(|(_, held)| same_person(held))
-            .map(|(key, held)| (held.admitted, *key))
+            .filter(|(_, held)| self.over(held, now))
+            .map(|(key, _)| *key)
             .collect();
-        held.sort_unstable();
-        let excess = (held.len() + 1).saturating_sub(MAXIMUM_SESSIONS_PER_PERSON);
-        if sessions.len() - excess >= self.maximum_sessions {
-            sessions.retain(|_, held| held.deadline > now);
-        }
-        // The retain may have dropped some of the person's own sessions that
-        // were counted above; recount against what is left.
-        held.retain(|(_, key)| sessions.contains_key(key));
-        let excess = (held.len() + 1).saturating_sub(MAXIMUM_SESSIONS_PER_PERSON);
-        if sessions.len() - excess >= self.maximum_sessions {
-            return Err(Exhausted);
-        }
-        let replaced = held
-            .into_iter()
-            .take(excess)
-            .filter_map(|(_, key)| sessions.remove_entry(&key))
-            .collect();
-        session.admitted = self.admitted.fetch_add(1, Ordering::Relaxed);
-        sessions.insert(digest(cookie), session);
-        Ok(Replaced(replaced))
+        over.iter().filter_map(|key| sessions.take(key)).collect()
     }
 
-    /// The live session behind `cookie`. A session past its absolute deadline
-    /// is removed and not returned.
+    /// Admit `session` under `cookie`. The person's own share is made first:
+    /// their sessions that are over go, and at [`MAXIMUM_SESSIONS_PER_PERSON`]
+    /// their oldest one ends. Only then is the store's own bound checked, and
+    /// a full store first drops every session that is over, so a person signing
+    /// in again never takes another slot. A refused insert ends only sessions
+    /// that were over anyway; an admitted one returns the live sessions it
+    /// ended. Insert is the last fallible step of a sign-in, because nothing
+    /// brings an ended session back.
+    pub fn insert(&self, cookie: &str, session: Session) -> Result<Replaced, Exhausted> {
+        let mut session = session;
+        let now = self.now();
+        session.last_seen = now;
+        let person = Sessions::person(&session);
+        let mut sessions = lock(&self.sessions);
+        let mut over = Vec::new();
+        let mut held: Vec<(u64, Key)> = Vec::new();
+        for key in sessions.by_person.get(&person).cloned().unwrap_or_default() {
+            let Some(candidate) = sessions.entries.get(&key) else {
+                continue;
+            };
+            if self.over(candidate, now) {
+                over.extend(sessions.take(&key));
+            } else {
+                held.push((candidate.admitted, key));
+            }
+        }
+        held.sort_unstable();
+        let mut excess = (held.len() + 1).saturating_sub(MAXIMUM_SESSIONS_PER_PERSON);
+        if sessions.entries.len() - excess >= self.maximum_sessions {
+            over.extend(self.sweep(&mut sessions, now));
+            held.retain(|(_, key)| sessions.entries.contains_key(key));
+            excess = (held.len() + 1).saturating_sub(MAXIMUM_SESSIONS_PER_PERSON);
+        }
+        let outcome = if sessions.entries.len() - excess >= self.maximum_sessions {
+            Err(Exhausted)
+        } else {
+            let replaced = held
+                .into_iter()
+                .take(excess)
+                .filter_map(|(_, key)| sessions.take(&key))
+                .collect();
+            session.admitted = self.admitted.fetch_add(1, Ordering::Relaxed);
+            sessions.add(digest(cookie), session);
+            Ok(Replaced(replaced))
+        };
+        drop(sessions);
+        for ended in &over {
+            self.release(ended);
+        }
+        outcome
+    }
+
+    /// The live session behind `cookie`, which this request now counts as
+    /// using. A session past its absolute deadline or unused for the idle
+    /// lifetime is removed, its refresh tokens queued for revocation, and not
+    /// returned.
     pub fn live(&self, cookie: &str) -> Option<Live> {
         let key = digest(cookie);
+        let now = self.now();
         let mut sessions = lock(&self.sessions);
-        let session = sessions.get(&key)?;
-        if session.deadline <= self.now() {
-            sessions.remove(&key);
+        if self.over(sessions.entries.get(&key)?, now) {
+            let ended = sessions.take(&key);
+            drop(sessions);
+            if let Some(ended) = ended {
+                self.release(&ended);
+            }
             return None;
         }
+        let session = sessions.entries.get_mut(&key)?;
+        session.last_seen = now;
         Some(Live {
             kind: session.kind.clone(),
             renewal: session.renewal.clone(),
@@ -419,14 +572,16 @@ impl Store {
     /// The access token the session holds for `audience`.
     pub fn access(&self, cookie: &str, audience: &str) -> Option<Access> {
         let sessions = lock(&self.sessions);
-        let grant = sessions
-            .get(&digest(cookie))?
+        let session = sessions.entries.get(&digest(cookie))?;
+        let grant = session
             .audiences
             .iter()
             .find(|grant| grant.audience == audience)?;
         Some(Access {
             token: grant.access_token.clone(),
             expires_at: grant.expires_at,
+            issued_at: grant.issued_at,
+            retry_after: session.backoff.map(|backoff| backoff.retry_after),
         })
     }
 
@@ -434,6 +589,7 @@ impl Store {
     pub fn refresh_token(&self, cookie: &str, audience: &str) -> Option<RefreshToken> {
         let sessions = lock(&self.sessions);
         sessions
+            .entries
             .get(&digest(cookie))?
             .audiences
             .iter()
@@ -452,46 +608,67 @@ impl Store {
         audience: &str,
         renewed: Renewed,
     ) -> Result<(), Renewed> {
+        let now = self.now();
         let mut sessions = lock(&self.sessions);
-        let Some(grant) = sessions.get_mut(&digest(cookie)).and_then(|session| {
-            session
-                .audiences
-                .iter_mut()
-                .find(|grant| grant.audience == audience)
-        }) else {
+        let Some(session) = sessions.entries.get_mut(&digest(cookie)) else {
+            return Err(renewed);
+        };
+        let Some(grant) = session
+            .audiences
+            .iter_mut()
+            .find(|grant| grant.audience == audience)
+        else {
             return Err(renewed);
         };
         grant.access_token = renewed.access_token;
         grant.expires_at = renewed.expires_at;
+        grant.issued_at = now;
         if renewed.refresh_token.is_some() {
             grant.refresh_token = renewed.refresh_token;
         }
+        session.backoff = None;
         Ok(())
+    }
+
+    /// Record that the issuer could not be reached for the session's renewal:
+    /// no renewal is asked for until the backoff passes.
+    pub fn note_unavailable(&self, cookie: &str) {
+        let now = self.now();
+        let mut sessions = lock(&self.sessions);
+        if let Some(session) = sessions.entries.get_mut(&digest(cookie)) {
+            let failures = session.backoff.map_or(1, |backoff| backoff.failures + 1);
+            let doublings = failures.saturating_sub(1).min(4);
+            let delay = (FIRST_BACKOFF * 2u32.pow(doublings)).min(MAXIMUM_BACKOFF);
+            session.backoff = Some(Backoff {
+                failures,
+                retry_after: now + delay,
+            });
+        }
     }
 
     /// The issuer and subject of the live session's person.
     pub fn person(&self, cookie: &str) -> Option<(String, String)> {
         let sessions = lock(&self.sessions);
-        let session = sessions.get(&digest(cookie))?;
+        let session = sessions.entries.get(&digest(cookie))?;
         (session.deadline > self.now()).then(|| (session.issuer.clone(), session.subject.clone()))
     }
 
     /// The allow-listed who-am-I claims of the live session.
     pub fn claims(&self, cookie: &str) -> Option<Map<String, Value>> {
         let sessions = lock(&self.sessions);
-        let session = sessions.get(&digest(cookie))?;
+        let session = sessions.entries.get(&digest(cookie))?;
         (session.deadline > self.now()).then(|| session.claims.clone())
     }
 
     /// End the session and return it, so the caller can revoke its tokens.
     pub fn remove(&self, cookie: &str) -> Option<Session> {
-        lock(&self.sessions).remove(&digest(cookie))
+        lock(&self.sessions).take(&digest(cookie))
     }
 
     /// How many sessions the store holds, expired or not.
     #[must_use]
     pub fn session_count(&self) -> usize {
-        lock(&self.sessions).len()
+        lock(&self.sessions).entries.len()
     }
 }
 
@@ -527,6 +704,7 @@ mod tests {
             audience: audience.to_owned(),
             access_token: BearerToken::new(access).expect("token"),
             expires_at,
+            issued_at: Instant::now(),
             refresh_token: refresh.map(|token| RefreshToken::new(token).expect("token")),
         }
     }
@@ -899,5 +1077,130 @@ mod tests {
         );
         assert!(!printed.contains("canary"), "{printed}");
         let _ = store;
+    }
+
+    #[test]
+    fn a_session_unused_for_the_idle_lifetime_ends_and_use_extends_it() {
+        let clock = Arc::new(ManualClock::new());
+        let store = Store::new(clock.clone(), 4, 1).with_idle_lifetime(Duration::from_secs(600));
+        let _ = store
+            .insert("a", session_for(&clock, "https://id.example", "p1"))
+            .expect("room");
+        clock.advance(Duration::from_secs(599));
+        assert!(store.live("a").is_some());
+        clock.advance(Duration::from_secs(599));
+        assert!(
+            store.live("a").is_some(),
+            "the check at 599 s counted as use"
+        );
+        clock.advance(Duration::from_secs(600));
+        assert!(store.live("a").is_none());
+        assert_eq!(store.session_count(), 0);
+    }
+
+    #[test]
+    fn a_full_store_evicts_idle_sessions_first_and_then_refuses() {
+        let clock = Arc::new(ManualClock::new());
+        let store = Store::new(clock.clone(), 2, 1).with_idle_lifetime(Duration::from_secs(600));
+        let _ = store
+            .insert("a", session_for(&clock, "https://id.example", "p1"))
+            .expect("room");
+        let _ = store
+            .insert("b", session_for(&clock, "https://id.example", "p2"))
+            .expect("room");
+        assert_eq!(
+            store
+                .insert("c", session_for(&clock, "https://id.example", "p3"))
+                .unwrap_err(),
+            Exhausted
+        );
+        clock.advance(Duration::from_secs(300));
+        assert!(store.live("a").is_some());
+        clock.advance(Duration::from_secs(400));
+        // "b" was last used 700 s ago, "a" 400 s ago.
+        let _ = store
+            .insert("c", session_for(&clock, "https://id.example", "p3"))
+            .expect("the idle session made room");
+        assert!(store.live("b").is_none());
+        assert!(store.live("a").is_some());
+        assert!(store.live("c").is_some());
+        assert_eq!(
+            store
+                .insert("d", session_for(&clock, "https://id.example", "p4"))
+                .unwrap_err(),
+            Exhausted,
+            "nothing else is idle"
+        );
+    }
+
+    #[test]
+    fn the_person_index_follows_every_way_a_session_leaves() {
+        let clock = Arc::new(ManualClock::new());
+        let store = Store::new(clock.clone(), 10, 1).with_idle_lifetime(Duration::from_secs(600));
+        let indexed = |store: &Store| lock(&store.sessions).by_person.len();
+        for (cookie, person) in [("a", "p1"), ("b", "p1"), ("c", "p2")] {
+            let _ = store
+                .insert(cookie, session_for(&clock, "https://id.example", person))
+                .expect("room");
+        }
+        assert_eq!(indexed(&store), 2);
+        assert!(store.remove("c").is_some());
+        assert_eq!(indexed(&store), 1);
+        // The person's sessions replaced by their share leave the index too.
+        for cookie in ["d", "e"] {
+            let _ = store
+                .insert(cookie, session_for(&clock, "https://id.example", "p1"))
+                .expect("room");
+        }
+        assert_eq!(
+            lock(&store.sessions)
+                .by_person
+                .values()
+                .next()
+                .map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(store.session_count(), 3);
+        clock.advance(Duration::from_secs(600));
+        assert!(store.live("d").is_none());
+        let _ = store.live("e");
+        let _ = store.live("a");
+        let _ = store.live("b");
+        assert_eq!(store.session_count(), 0);
+        assert_eq!(indexed(&store), 0);
+    }
+
+    #[tokio::test]
+    async fn sessions_that_end_by_eviction_have_their_refresh_tokens_queued() {
+        let clock = Arc::new(ManualClock::new());
+        let issuer = crate::grants::fake::FakeIssuer::new(clock.clone());
+        let (ended, revoker) = crate::revoker::channel(4);
+        tokio::spawn(revoker.run(issuer.clone()));
+        let store = Store::new(clock.clone(), 1, 1)
+            .with_idle_lifetime(Duration::from_secs(600))
+            .with_ended_sessions(ended.clone());
+        let (access_token, expires_at, refresh) = issuer.sign_in("urn:person");
+        let mut first = session_for(&clock, "https://id.example", "p1");
+        first.audiences = vec![AudienceGrant {
+            audience: "urn:person".to_owned(),
+            access_token,
+            expires_at,
+            issued_at: clock.now(),
+            refresh_token: Some(refresh.clone()),
+        }];
+        let _ = store.insert("a", first).expect("room");
+        clock.advance(Duration::from_secs(600));
+        let _ = store
+            .insert("b", session_for(&clock, "https://id.example", "p2"))
+            .expect("the idle session made room");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !issuer.family_revoked(&refresh) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the evicted session's family was revoked");
+        assert_eq!(ended.failed(), 0);
+        assert_eq!(ended.dropped(), 0);
     }
 }

@@ -24,7 +24,7 @@ fn receipt(directory: &std::path::Path, casework: &str) -> PathBuf {
     std::fs::write(
         &path,
         json!({
-            "personAudience": {"audience": PERSON_AUDIENCE, "products": ["breg"]},
+            "personAudience": {"audience": PERSON_AUDIENCE, "products": ["breg", "documents"]},
             "sessionApps": {
                 "citizen-app": {"products": ["breg"], "audiences": [PERSON_AUDIENCE]},
                 "staff-app": {

@@ -23,14 +23,14 @@ use registry_platform_audit::{
 };
 pub use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, ListenerBind, LoadedRuntimeConfig,
-    PrivateListenerConfig, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
-    SecretReference, TlsTermination,
+    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerNetworkExposure,
+    LoadedRuntimeConfig, PrivateListenerConfig, RuntimeConfigLoader, RuntimeEnvelope,
+    SecretProvidersConfig, SecretReference, TlsTermination,
 };
 use registry_platform_httputil::{loopback::loopback_host, valid_resource_uri, valid_scope_token};
 use registry_platform_yaml::{
     escape_pointer_segment, BoundedU32, BoundedU64, Diagnostic, ExternalId, Identified, Invalid,
-    LocalId, Report, UniqueList, Url,
+    LocalId, Report, Severity, UniqueList, Url,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -77,6 +77,8 @@ const MAXIMUM_STORE_ENTRIES: u32 = 1_000_000;
 /// The shortest and longest absolute session lifetime: five minutes to a day.
 const MINIMUM_SESSION_SECONDS: u64 = 300;
 const MAXIMUM_SESSION_SECONDS: u64 = 86_400;
+/// The idle lifetime when the file names none.
+const DEFAULT_IDLE_SECONDS: u64 = 1800;
 /// The shortest and longest span before expiry in which an access token is
 /// renewed.
 const MINIMUM_RENEW_SECONDS: u64 = 10;
@@ -194,6 +196,13 @@ pub struct IssuerConfig {
     pub revocation: Url,
     /// The signing key set the service calls.
     pub jwks: Url,
+    /// How long the service waits for the issuer's token and revocation
+    /// endpoints. It must be below `gateway.checkTimeoutMilliseconds`, so a
+    /// check whose token is still valid is answered before the gateway gives
+    /// up on it. Default: 2000.
+    #[serde(default = "default_issuer_timeout")]
+    pub timeout_milliseconds:
+        BoundedU64<MINIMUM_ISSUER_TIMEOUT_MILLISECONDS, MAXIMUM_ISSUER_TIMEOUT_MILLISECONDS>,
 }
 
 impl IssuerConfig {
@@ -332,11 +341,20 @@ pub struct UpstreamConfig {
 
 const MINIMUM_CHECK_TIMEOUT_MILLISECONDS: u64 = 500;
 const MAXIMUM_CHECK_TIMEOUT_MILLISECONDS: u64 = 10_000;
+const DEFAULT_CHECK_TIMEOUT_MILLISECONDS: u64 = 3000;
+const MINIMUM_ISSUER_TIMEOUT_MILLISECONDS: u64 = 100;
+const MAXIMUM_ISSUER_TIMEOUT_MILLISECONDS: u64 = 10_000;
 const MAXIMUM_UPSTREAM_TIMEOUT_SECONDS: u32 = 3600;
 
 fn default_check_timeout(
 ) -> BoundedU64<MINIMUM_CHECK_TIMEOUT_MILLISECONDS, MAXIMUM_CHECK_TIMEOUT_MILLISECONDS> {
-    BoundedU64::new(3000).expect("the default check timeout is within its bounds")
+    BoundedU64::new(DEFAULT_CHECK_TIMEOUT_MILLISECONDS)
+        .expect("the default check timeout is within its bounds")
+}
+
+fn default_issuer_timeout(
+) -> BoundedU64<MINIMUM_ISSUER_TIMEOUT_MILLISECONDS, MAXIMUM_ISSUER_TIMEOUT_MILLISECONDS> {
+    BoundedU64::new(2000).expect("the default issuer timeout is within its bounds")
 }
 
 fn default_upstream_timeout() -> BoundedU32<1, MAXIMUM_UPSTREAM_TIMEOUT_SECONDS> {
@@ -473,9 +491,24 @@ pub struct SessionConfig {
     /// Default: 600.
     #[serde(default = "default_sign_in_lifetime")]
     pub sign_in_lifetime_seconds: BoundedU64<MINIMUM_SIGN_IN_SECONDS, MAXIMUM_SIGN_IN_SECONDS>,
+    /// How long a session may go without a request that presents it before it
+    /// ends, between 300 and `absoluteLifetimeSeconds`. When the store is
+    /// full, sessions past this are the first to make room. Default: 1800, or
+    /// `absoluteLifetimeSeconds` when that is shorter.
+    #[serde(default, rename = "idleLifetimeSeconds")]
+    pub idle_lifetime: Option<BoundedU64<MINIMUM_SESSION_SECONDS, MAXIMUM_SESSION_SECONDS>>,
 }
 
 impl SessionConfig {
+    /// The idle lifetime in force.
+    #[must_use]
+    pub fn idle_lifetime_seconds(&self) -> u64 {
+        self.idle_lifetime.map_or_else(
+            || DEFAULT_IDLE_SECONDS.min(self.absolute_lifetime_seconds.get()),
+            BoundedU64::get,
+        )
+    }
+
     /// `maximumSessions` as a count. The bound fits `usize` on every target
     /// the workspace builds for.
     #[must_use]
@@ -499,6 +532,7 @@ impl Default for SessionConfig {
             absolute_lifetime_seconds: default_absolute_lifetime(),
             renew_before_seconds: default_renew_before(),
             sign_in_lifetime_seconds: default_sign_in_lifetime(),
+            idle_lifetime: None,
         }
     }
 }
@@ -775,6 +809,9 @@ pub struct RuntimeCheck {
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
+    /// Whether a member that decides a kind's audiences holds an expression
+    /// the check did not substitute, so the audiences it derived are stand-ins.
+    pub deferred_audiences: bool,
 }
 
 /// The route a request path belongs to.
@@ -792,6 +829,23 @@ impl RuntimeConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
         match read_runtime(path.as_ref(), true) {
             (Some(loaded), _) => Ok(loaded.config),
+            (None, check) => Err(RuntimeConfigError {
+                diagnostics: check.diagnostics,
+                unavailable: check.unavailable,
+            }),
+        }
+    }
+
+    /// Load and validate the document without substituting `${NAME}`
+    /// expressions: a member that holds one decodes as a stand-in. The second
+    /// value is whether a member that decides the audiences holds one, so a
+    /// caller that compares audiences knows they are not the written ones.
+    /// This reads no environment variable and no secret.
+    pub fn load_without_substitution(
+        path: impl AsRef<Path>,
+    ) -> Result<(Self, bool), RuntimeConfigError> {
+        match read_runtime(path.as_ref(), false) {
+            (Some(loaded), check) => Ok((loaded.config, check.deferred_audiences)),
             (None, check) => Err(RuntimeConfigError {
                 diagnostics: check.diagnostics,
                 unavailable: check.unavailable,
@@ -954,33 +1008,63 @@ fn read_runtime(
             let audit_deferred =
                 finding.pointer.starts_with("/audit") && check.defers("/audit/destination");
             if !check.defers(&finding.pointer) && !audit_deferred {
-                diagnostics.push(check.error_at(
+                let mut diagnostic = check.error_at(
                     RUNTIME_KIND,
                     finding.code,
                     &finding.pointer,
                     finding.message,
                     finding.action,
-                ));
+                );
+                if finding.warning {
+                    diagnostic.severity = Severity::Warning;
+                }
+                diagnostics.push(diagnostic);
             }
         }
     }
     let unavailable = check.unavailable;
-    let loaded = check.loaded.filter(|_| diagnostics.is_empty());
+    let refused = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error);
+    let deferred_audiences = check.loaded.as_ref().is_some_and(|loaded| {
+        deferred_audience_inputs(&loaded.config, &|pointer| check.defers(pointer))
+    });
+    let loaded = check.loaded.filter(|_| !refused);
     (
         loaded,
         RuntimeCheck {
             diagnostics,
             unavailable,
+            deferred_audiences,
         },
     )
 }
 
-/// One refusal of a member the shared loader accepted.
+/// Whether a member that decides which audiences a kind reaches holds an
+/// expression the check did not substitute.
+fn deferred_audience_inputs(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> bool {
+    defers("/personAudience")
+        || (0..config.modules.len()).any(|index| {
+            ["id", "audience", "signIns"]
+                .iter()
+                .any(|member| defers(&format!("/modules/{index}/{member}")))
+        })
+        || config.sign_ins.iter().any(|sign_in| {
+            defers(&format!(
+                "/signIns/{}",
+                escape_pointer_segment(sign_in.id.as_str())
+            ))
+        })
+}
+
+/// One refusal of a member the shared loader accepted, or a warning about a
+/// setting that is accepted but leaves an obligation with the operator.
 struct Finding {
     code: &'static str,
     pointer: String,
     message: String,
     action: String,
+    warning: bool,
 }
 
 impl Finding {
@@ -990,6 +1074,14 @@ impl Finding {
             pointer: pointer.to_owned(),
             message: message.to_owned(),
             action: action.to_owned(),
+            warning: false,
+        }
+    }
+
+    fn warning(code: &'static str, pointer: &str, message: &str, action: &str) -> Self {
+        Self {
+            warning: true,
+            ..Self::new(code, pointer, message, action)
         }
     }
 }
@@ -1034,6 +1126,34 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
     }
     route_findings(config, &mut findings);
     kind_findings(config, &mut findings);
+    let check_timeout = config
+        .gateway
+        .as_ref()
+        .map_or(DEFAULT_CHECK_TIMEOUT_MILLISECONDS, |gateway| {
+            gateway.check_timeout_milliseconds.get()
+        });
+    if config.issuer.timeout_milliseconds.get() >= check_timeout {
+        findings.push(Finding::new(
+            "platform.session-runtime.issuer-timeout-not-below-check-timeout",
+            "/issuer/timeoutMilliseconds",
+            "issuer.timeoutMilliseconds is not below the gateway's check timeout, so a check \
+             could be cut off by the gateway while it waits for the issuer",
+            "Lower issuer.timeoutMilliseconds, or raise gateway.checkTimeoutMilliseconds (3000 \
+             when the file has no gateway block).",
+        ));
+    }
+    if config
+        .session
+        .idle_lifetime
+        .is_some_and(|idle| idle.get() > config.session.absolute_lifetime_seconds.get())
+    {
+        findings.push(Finding::new(
+            "platform.session-runtime.idle-lifetime-exceeds-absolute",
+            "/session/idleLifetimeSeconds",
+            "session.idleLifetimeSeconds is longer than session.absoluteLifetimeSeconds",
+            "Write an idle lifetime no longer than the absolute lifetime.",
+        ));
+    }
     gateway_findings(config, &mut findings);
     for (index, claim) in config
         .who_am_i
@@ -1107,6 +1227,19 @@ fn listener_findings(
             "Bind a loopback address, or a private address only the gateway can reach.",
         ));
     }
+    if config.listener.network_exposure == ListenerNetworkExposure::ContainerPrivate
+        && config.check_listener.ip().is_unspecified()
+    {
+        findings.push(Finding::warning(
+            "platform.session-runtime.check-listener-unspecified",
+            "/checkListener",
+            "checkListener binds the unspecified address in a container network, so every peer \
+             on that network can reach the check, which hands out bearer tokens to anyone \
+             holding a session cookie",
+            "Bind the address only the gateway reaches, or restrict the check port to the \
+             gateway with a network policy.",
+        ));
+    }
     if config.check_listener == config.listener.bind && !defers("/listener/bind") {
         findings.push(Finding::new(
             "platform.session-runtime.check-listener-not-distinct",
@@ -1151,8 +1284,36 @@ fn endpoint_findings(
             ));
         }
     }
+    let origin = config.public_origin.to_url();
+    if termination_known && development && !loopback_origin(&origin) {
+        findings.push(Finding::new(
+            "platform.session-runtime.development-origin-not-loopback",
+            "/publicOrigin",
+            "publicOrigin is not http on 127.0.0.1, [::1] or localhost, which \
+             listener.tlsTermination development-loopback requires: the development session \
+             cookie lacks the __Host- prefix and Secure",
+            "Write the loopback origin the browser uses, or use loopback-plaintext behind a \
+             gateway that terminates TLS.",
+        ));
+    }
     // The service serves its routes at the root of the gateway's origin.
-    if config.public_origin.to_url().path() != "/" {
+    if origin.path() == "/" {
+        let canonical = origin.origin().ascii_serialization();
+        if origin.origin().is_tuple() && config.public_origin.as_str() != canonical {
+            findings.push(Finding::new(
+                "platform.session-runtime.public-origin-not-canonical",
+                "/publicOrigin",
+                &format!(
+                    "publicOrigin is not written as a browser sends it in the Origin header, \
+                     which is {canonical}"
+                ),
+                &format!(
+                    "Write {canonical}: lower-case scheme and host, no default port, no path, \
+                     no trailing slash."
+                ),
+            ));
+        }
+    } else {
         findings.push(Finding::new(
             "platform.session-runtime.public-origin-not-origin",
             "/publicOrigin",
@@ -1204,12 +1365,13 @@ fn route_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
                  segment, percent sign, backslash, query, or fragment",
                 "Write the prefix as an exact path such as /api/registry/.",
             ));
-        } else if prefix.starts_with(SESSION_PREFIX) {
+        } else if prefix.starts_with(SESSION_PREFIX) || SESSION_PREFIX.starts_with(prefix) {
             findings.push(Finding::new(
                 "platform.session-runtime.prefix-under-session",
                 &pointer,
-                "the prefix is under /session/, which the service keeps for its own routes",
-                "Choose a prefix outside /session/.",
+                "the prefix is /session/, under it, or a parent of it, such as /, and the \
+                 service keeps /session/ for its own routes",
+                "Choose a prefix outside /session/ that does not contain it.",
             ));
         }
         if seen.contains(&prefix) {
@@ -1378,6 +1540,11 @@ fn gateway_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
     }
 }
 
+/// Whether `url` is plain http on exactly `127.0.0.1`, `[::1]` or `localhost`.
+fn loopback_origin(url: &url::Url) -> bool {
+    url.scheme() == "http" && matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
+}
+
 fn is_loopback(url: &url::Url) -> bool {
     url.scheme() == "http"
         && url
@@ -1440,22 +1607,14 @@ fn block_finding(error: &ConfigBlockError) -> Finding {
             "Correct the member as the message describes.",
         ),
     };
-    Finding {
-        code,
-        pointer: pointer_of(error.field()),
-        message: error.to_string(),
-        action: action.to_owned(),
-    }
+    Finding::new(code, &pointer_of(error.field()), &error.to_string(), action)
 }
 
 /// The code, position, and fix for a refusal of the audit block, under the
 /// member names this file uses.
 fn audit_finding(error: &AuditDestinationError) -> Finding {
-    let finding = |code, pointer: &str, message: String, action: &str| Finding {
-        code,
-        pointer: pointer.to_owned(),
-        message,
-        action: action.to_owned(),
+    let finding = |code, pointer: &str, message: String, action: &str| {
+        Finding::new(code, pointer, &message, action)
     };
     match error {
         AuditDestinationError::MissingPath => finding(
@@ -1540,11 +1699,11 @@ issuer:
   jwks: https://id.example/oauth2/jwks
 personAudience: https://api.example/person
 modules:
-  - id: registry
+  - id: breg
     prefix: /api/registry/
     audience: person
-  - id: scheduling
-    prefix: /api/scheduling/
+  - id: documents
+    prefix: /api/documents/
     audience: person
   - id: casework
     prefix: /api/casework/
@@ -1584,7 +1743,7 @@ audit:
 
     /// Write `text` as a runtime file in a fresh directory the loader
     /// accepts: absolute, and with no symbolic link on its path.
-    fn written(text: &str) -> (tempfile::TempDir, PathBuf) {
+    pub(crate) fn written(text: &str) -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory
             .path()
@@ -1775,7 +1934,7 @@ audit:
                 "checkListener: ${SESSION_TEST_UNSET_CHECK}",
             )
             .replace(
-                "prefix: /api/scheduling/",
+                "prefix: /api/documents/",
                 "prefix: ${SESSION_TEST_UNSET_PREFIX}",
             )
             .replace(
@@ -1919,16 +2078,6 @@ audit:
 
     #[test]
     fn the_public_origin_is_an_origin_only() {
-        let root = document().replace(
-            "publicOrigin: https://app.example",
-            "publicOrigin: https://app.example/",
-        );
-        assert_eq!(
-            load(&root)
-                .expect("a trailing slash is the root path")
-                .origin(),
-            "https://app.example"
-        );
         refused(
             &document().replace(
                 "publicOrigin: https://app.example",
@@ -1994,7 +2143,7 @@ audit:
             let text = document().replace("prefix: /apply/", &format!("prefix: '{bad}'"));
             refused(&text, &code("invalid-prefix"), "/pages/0/prefix");
         }
-        for fine in ["/", "/api/.hidden/", "/api/v1.2/"] {
+        for fine in ["/api/.hidden/", "/api/v1.2/"] {
             let text = document().replace("/api/registry/", fine);
             assert_eq!(findings_of(&text), []);
         }
@@ -2002,7 +2151,7 @@ audit:
 
     #[test]
     fn a_prefix_under_the_session_routes_is_refused() {
-        for bad in ["/session/", "/session/x/"] {
+        for bad in ["/session/", "/session/x/", "/"] {
             refused(
                 &document().replace("/api/registry/", bad),
                 &code("prefix-under-session"),
@@ -2021,9 +2170,172 @@ audit:
     }
 
     #[test]
+    fn development_loopback_needs_a_loopback_public_origin() {
+        found(
+            &development().replace("http://127.0.0.1:8120", "https://app.example"),
+            &code("development-origin-not-loopback"),
+            "/publicOrigin",
+        );
+        for loopback in [
+            "http://127.0.0.1:8120",
+            "http://127.0.0.1",
+            "http://[::1]:8120",
+            "http://localhost:8120",
+        ] {
+            let text = development().replace("http://127.0.0.1:8120", loopback);
+            assert_eq!(findings_of(&text), [], "{loopback}");
+        }
+        for elsewhere in ["http://10.0.0.5:8120", "http://app.example"] {
+            found(
+                &development().replace("http://127.0.0.1:8120", elsewhere),
+                &code("development-origin-not-loopback"),
+                "/publicOrigin",
+            );
+        }
+    }
+
+    #[test]
+    fn the_public_origin_must_be_written_as_a_browser_sends_it() {
+        for spelling in [
+            "https://app.example:443",
+            "https://App.example",
+            "HTTPS://app.example",
+            "https://app.example/",
+        ] {
+            let text = document().replace(
+                "publicOrigin: https://app.example",
+                &format!("publicOrigin: {spelling}"),
+            );
+            refused(&text, &code("public-origin-not-canonical"), "/publicOrigin");
+            let (_directory, path) = written(&text);
+            let message = check_runtime(&path, true).diagnostics[0].message.clone();
+            assert!(message.contains("https://app.example"), "{message}");
+        }
+        for canonical in ["https://app.example", "https://app.example:8443"] {
+            let text = document().replace(
+                "publicOrigin: https://app.example",
+                &format!("publicOrigin: {canonical}"),
+            );
+            assert_eq!(findings_of(&text), [], "{canonical}");
+        }
+    }
+
+    fn with_issuer_timeout(text: &str, milliseconds: u32) -> String {
+        text.replace(
+            "  jwks: https://id.example/oauth2/jwks\n",
+            &format!(
+                "  jwks: https://id.example/oauth2/jwks\n  timeoutMilliseconds: {milliseconds}\n"
+            ),
+        )
+    }
+
+    #[test]
+    fn the_issuer_timeout_is_bounded_and_below_the_gateways_check_timeout() {
+        let config = load(&document()).expect("valid document");
+        assert_eq!(config.issuer.timeout_milliseconds.get(), 2000);
+        // Without a gateway block the check timeout is the default, 3000.
+        refused(
+            &with_issuer_timeout(&document(), 3000),
+            &code("issuer-timeout-not-below-check-timeout"),
+            "/issuer/timeoutMilliseconds",
+        );
+        load(&with_issuer_timeout(&document(), 2999)).expect("below the default check timeout");
+        for bad in [99, 10_001] {
+            refused(
+                &with_issuer_timeout(&document(), bad),
+                "config.out-of-range",
+                "/issuer/timeoutMilliseconds",
+            );
+        }
+        let fixture = include_str!("../tests/gateway/runtime.yaml");
+        let gateway = |check: u32, issuer: u32| {
+            with_issuer_timeout(
+                &fixture.replace(
+                    "gateway:\n",
+                    &format!("gateway:\n  checkTimeoutMilliseconds: {check}\n"),
+                ),
+                issuer,
+            )
+        };
+        found(
+            &gateway(1500, 2000),
+            &code("issuer-timeout-not-below-check-timeout"),
+            "/issuer/timeoutMilliseconds",
+        );
+        found(
+            &gateway(1500, 1500),
+            &code("issuer-timeout-not-below-check-timeout"),
+            "/issuer/timeoutMilliseconds",
+        );
+        assert_eq!(findings_of(&gateway(1500, 1499)), []);
+    }
+
+    #[test]
+    fn the_idle_lifetime_has_a_default_and_stays_within_the_absolute_lifetime() {
+        let config = load(&document()).expect("valid document");
+        assert_eq!(config.session.idle_lifetime_seconds(), 1800);
+        let short = format!("{}session:\n  absoluteLifetimeSeconds: 600\n", document());
+        assert_eq!(
+            load(&short).expect("valid").session.idle_lifetime_seconds(),
+            600
+        );
+        let explicit = format!("{}session:\n  idleLifetimeSeconds: 900\n", document());
+        assert_eq!(
+            load(&explicit)
+                .expect("valid")
+                .session
+                .idle_lifetime_seconds(),
+            900
+        );
+        refused(
+            &format!("{}session:\n  idleLifetimeSeconds: 299\n", document()),
+            "config.out-of-range",
+            "/session/idleLifetimeSeconds",
+        );
+        refused(
+            &format!(
+                "{}session:\n  absoluteLifetimeSeconds: 3600\n  idleLifetimeSeconds: 7200\n",
+                document()
+            ),
+            &code("idle-lifetime-exceeds-absolute"),
+            "/session/idleLifetimeSeconds",
+        );
+    }
+
+    #[test]
+    fn an_unspecified_check_listener_in_a_container_network_is_a_warning() {
+        let text = document()
+            .replace("bind: 10.0.0.5:8120", "bind: 0.0.0.0:8120")
+            .replace(
+                "  tlsTermination: operator-controlled-upstream\n",
+                "  tlsTermination: operator-controlled-upstream\n  networkExposure: container-private\n",
+            )
+            .replace(
+                "checkListener: 10.0.0.5:8121",
+                "checkListener: 0.0.0.0:8121",
+            );
+        let (_directory, path) = written(&text);
+        let check = check_runtime(&path, true);
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        let warning = &check.diagnostics[0];
+        assert_eq!(warning.severity, registry_platform_yaml::Severity::Warning);
+        assert_eq!(warning.code, code("check-listener-unspecified"));
+        assert_eq!(warning.path, "/checkListener");
+        load(&text).expect("a warning does not refuse the file");
+        // A specific private address raises nothing.
+        assert_eq!(
+            findings_of(&text.replace(
+                "checkListener: 0.0.0.0:8121",
+                "checkListener: 10.0.0.5:8121"
+            )),
+            []
+        );
+    }
+
+    #[test]
     fn two_equal_prefixes_are_refused_across_modules_and_pages() {
         refused(
-            &document().replace("/api/scheduling/", "/api/registry/"),
+            &document().replace("/api/documents/", "/api/registry/"),
             &code("duplicate-prefix"),
             "/modules/1/prefix",
         );
@@ -2042,7 +2354,7 @@ audit:
     #[test]
     fn two_modules_cannot_share_an_id() {
         refused(
-            &document().replace("id: scheduling", "id: registry"),
+            &document().replace("id: documents", "id: breg"),
             &code("duplicate-module-id"),
             "/modules/1/id",
         );
@@ -2166,9 +2478,9 @@ audit:
     #[test]
     fn the_person_audience_is_first_even_when_a_module_of_another_audience_comes_first() {
         let text = document().replace(
-            "modules:\n  - id: registry\n    prefix: /api/registry/\n    audience: person\n",
+            "modules:\n  - id: breg\n    prefix: /api/registry/\n    audience: person\n",
             "modules:\n  - id: other\n    prefix: /api/other/\n    audience: https://other.example/api\n  - \
-             id: registry\n    prefix: /api/registry/\n    audience: person\n",
+             id: breg\n    prefix: /api/registry/\n    audience: person\n",
         );
         let config = load(&text).expect("valid document");
         assert_eq!(
@@ -2184,22 +2496,22 @@ audit:
     #[test]
     fn moving_a_module_out_of_the_person_audience_adds_it_to_every_kind_that_calls_it() {
         let text = document().replace(
-            "    prefix: /api/scheduling/\n    audience: person\n",
-            "    prefix: /api/scheduling/\n    audience: https://scheduling.example/api\n",
+            "    prefix: /api/documents/\n    audience: person\n",
+            "    prefix: /api/documents/\n    audience: https://documents.example/api\n",
         );
         let config = load(&text).expect("valid document");
         assert_eq!(
             config.audience_set("citizen"),
             [
                 "https://api.example/person",
-                "https://scheduling.example/api"
+                "https://documents.example/api"
             ]
         );
         assert_eq!(
             config.audience_set("staff"),
             [
                 "https://api.example/person",
-                "https://scheduling.example/api",
+                "https://documents.example/api",
                 "https://casework.example/api"
             ]
         );
@@ -2213,8 +2525,8 @@ audit:
                 "    prefix: /api/registry/\n    audience: person\n    signIns: [citizen]\n",
             )
             .replace(
-                "    prefix: /api/scheduling/\n    audience: person\n",
-                "    prefix: /api/scheduling/\n    audience: person\n    signIns: [citizen]\n",
+                "    prefix: /api/documents/\n    audience: person\n",
+                "    prefix: /api/documents/\n    audience: person\n    signIns: [citizen]\n",
             );
         let config = load(&text).expect("valid document");
         assert_eq!(
@@ -2234,7 +2546,7 @@ audit:
             Some(Route::Module(module)) => module.id.as_str().to_owned(),
             other => panic!("{path}: {other:?}"),
         };
-        assert_eq!(module("/api/registry/records/1"), "registry");
+        assert_eq!(module("/api/registry/records/1"), "breg");
         assert_eq!(module("/api/casework/tasks"), "casework");
         assert!(matches!(
             config.route("/api/casework/docs/a.html"),

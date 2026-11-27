@@ -4,6 +4,7 @@
 //! listeners.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use registry_platform_audit::{AuditProfile, AuditWriter};
@@ -17,6 +18,7 @@ use crate::config::{describe_secret_failure, RateLimitConfig, RuntimeConfig};
 use crate::issuer::HttpIssuer;
 use crate::journal::Journal;
 use crate::public::{self, App};
+use crate::revoker;
 use crate::store::Store;
 
 /// Why the service could not start. The text names the member at fault and
@@ -106,11 +108,17 @@ impl Service {
         );
 
         let config = Arc::new(config);
-        let store = Arc::new(Store::new(
-            Arc::new(SystemClock),
-            config.session.sessions(),
-            config.session.pending_sign_ins(),
-        ));
+        let (ended, revoker) = revoker::channel(revoker::QUEUE_CAPACITY);
+        tokio::spawn(revoker.run(issuer.clone()));
+        let store = Arc::new(
+            Store::new(
+                Arc::new(SystemClock),
+                config.session.sessions(),
+                config.session.pending_sign_ins(),
+            )
+            .with_idle_lifetime(Duration::from_secs(config.session.idle_lifetime_seconds()))
+            .with_ended_sessions(ended),
+        );
         let checker = Checker::new(config.clone(), store.clone(), issuer.clone())
             .with_journal(journal.clone());
         let app = Arc::new(App {

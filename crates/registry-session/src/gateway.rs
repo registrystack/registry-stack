@@ -1226,11 +1226,18 @@ mod tests {
                 "{to}: {found:?}"
             );
         }
-        let timeout = FIXTURE.replacen(
-            "hostFilters:",
-            "checkTimeoutMilliseconds: 500\n  hostFilters:",
-            1,
-        );
+        // The issuer's timeout stays below the shortest check timeout.
+        let timeout = FIXTURE
+            .replacen(
+                "hostFilters:",
+                "checkTimeoutMilliseconds: 500\n  hostFilters:",
+                1,
+            )
+            .replacen(
+                "  jwks: https://id.example/oauth2/jwks\n",
+                "  jwks: https://id.example/oauth2/jwks\n  timeoutMilliseconds: 400\n",
+                1,
+            );
         assert_eq!(codes(&timeout), Vec::<String>::new());
     }
 

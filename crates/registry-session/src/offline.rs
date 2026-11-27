@@ -71,7 +71,8 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     let (mut diagnostics, mut unavailable) =
         check_runtime_file(request.runtime, request.environment);
     if let (Some(receipt), false) = (request.identity_receipt, diagnostics.iter().any(is_error)) {
-        let (found, unreadable) = receipt_diagnostics(request.runtime, receipt);
+        let (found, unreadable) =
+            receipt_diagnostics(request.runtime, receipt, request.environment);
         diagnostics.extend(found);
         unavailable |= unreadable;
     }
@@ -198,7 +199,13 @@ fn receipt_diagnostic(code: &str, pointer: &str, message: &str, action: &str) ->
 
 /// Cross-check the runtime file with the identity generator's receipt.
 /// Returns the findings and whether the receipt could not be read at all.
-fn receipt_diagnostics(runtime: &Path, receipt: &Path) -> (Vec<Diagnostic>, bool) {
+/// The runtime file is read without substituting `${NAME}` expressions unless
+/// `environment` is set, so the comparison needs no secret or variable.
+fn receipt_diagnostics(
+    runtime: &Path,
+    receipt: &Path,
+    environment: bool,
+) -> (Vec<Diagnostic>, bool) {
     let unreadable = |reason: &str| {
         (
             vec![receipt_diagnostic(
@@ -226,20 +233,26 @@ fn receipt_diagnostics(runtime: &Path, receipt: &Path) -> (Vec<Diagnostic>, bool
     let Some(absolute) = absolute_lexical(runtime) else {
         return unreadable("the runtime file path could not be made absolute");
     };
-    let config = match crate::config::RuntimeConfig::load(&absolute) {
-        Ok(config) => config,
-        Err(error) => {
-            let mut found = error.diagnostics;
-            found.push(receipt_diagnostic(
-                "platform.session-check.receipt-needs-environment",
-                "",
-                "the runtime file could not be loaded with the process environment, so it cannot \
-                 be compared with the receipt",
-                "Set the variables the runtime file's `${NAME}` expressions name, then run the \
-                 check again.",
-            ));
-            return (found, false);
+    let loaded = if environment {
+        crate::config::RuntimeConfig::load(&absolute).map(|config| (config, false))
+    } else {
+        crate::config::RuntimeConfig::load_without_substitution(&absolute)
+    };
+    let config = match loaded {
+        Ok((config, false)) => config,
+        Ok((_, true)) => {
+            return (
+                vec![receipt_diagnostic(
+                    "platform.session-check.receipt-needs-environment",
+                    "",
+                    "a member that decides the audiences is a `${NAME}` expression, so the runtime \
+                     file cannot be compared with the receipt as written",
+                    "Run the check with --environment and the variables set.",
+                )],
+                false,
+            );
         }
+        Err(error) => return (error.diagnostics, error.unavailable),
     };
     (receipt_findings(&config, &receipt), false)
 }
@@ -287,6 +300,32 @@ pub(crate) fn receipt_findings(
             ),
             "Make the runtime file's personAudience the one the identity deployment declares.",
         ));
+    }
+    let members: Vec<&str> = receipt["personAudience"]["products"]
+        .as_array()
+        .map(|products| {
+            products
+                .iter()
+                .filter_map(|product| product.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    for (index, module) in config.modules.iter().enumerate() {
+        if module.audience == crate::config::ModuleAudience::Person
+            && !members.contains(&module.id.as_str())
+        {
+            findings.push(receipt_diagnostic(
+                "platform.session-check.person-module-not-a-member",
+                &format!("/modules/{index}"),
+                &format!(
+                    "the module {} is routed on the person audience, but the identity receipt \
+                     does not list a product of that name as a member of it",
+                    module.id.as_str()
+                ),
+                "Give the module the name of a person-audience member product as its id, or \
+                 route it on its own audience.",
+            ));
+        }
     }
     for sign_in in &config.sign_ins {
         let client_id = sign_in.client_id.as_str();
@@ -417,6 +456,93 @@ mod tests {
             codes(&unlisted),
             ["platform.session-check.sign-in-not-in-receipt"]
         );
+    }
+
+    #[test]
+    fn a_module_on_the_person_audience_must_carry_a_member_product_as_its_id() {
+        let mut other = receipt();
+        other["personAudience"]["products"] = json!(["breg"]);
+        let findings = receipt_findings(&config(), &other);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(
+            findings[0].code,
+            "platform.session-check.person-module-not-a-member"
+        );
+        assert_eq!(findings[0].path, "/modules/1");
+        assert!(findings[0].message.contains("documents"));
+        let mut none = receipt();
+        none["personAudience"]
+            .as_object_mut()
+            .expect("object")
+            .remove("products");
+        assert_eq!(
+            codes(&none),
+            [
+                "platform.session-check.person-module-not-a-member",
+                "platform.session-check.person-module-not-a-member"
+            ]
+        );
+    }
+
+    /// Runs `check --identity-receipt` on `runtime` with the receipt of
+    /// [`receipt`], with the environment flag as given, and returns the exit
+    /// code and the JSON report.
+    fn run_with_receipt(runtime: &str, environment: bool) -> (u8, serde_json::Value) {
+        let (_directory, runtime_path) = crate::config::tests::written(runtime);
+        let receipt_path = runtime_path.with_file_name("identity-receipt.json");
+        std::fs::write(&receipt_path, receipt().to_string()).expect("receipt");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run(
+            &CheckRequest {
+                runtime: &runtime_path,
+                environment,
+                format: OutputFormat::Json,
+                deny_warnings: false,
+                identity_receipt: Some(&receipt_path),
+            },
+            &mut stdout,
+            &mut stderr,
+        );
+        (
+            exit,
+            serde_json::from_slice(&stdout).expect("a JSON report"),
+        )
+    }
+
+    #[test]
+    fn the_receipt_check_resolves_no_expression_the_comparison_does_not_need() {
+        // The variables are unset: the issuer's token endpoint and the audit
+        // path are deferred, and the audiences the receipt names are written.
+        let text = crate::config::tests::document()
+            .replace(
+                "token: https://id.example/oauth2/token",
+                "token: ${SESSION_TEST_UNSET_RECEIPT_TOKEN}",
+            )
+            .replace(
+                "path: /var/lib/session/audit.jsonl",
+                "path: ${SESSION_TEST_UNSET_RECEIPT_AUDIT}",
+            );
+        let (exit, report) = run_with_receipt(&text, false);
+        assert_eq!(exit, 0, "{report}");
+        assert_eq!(report["errors"], 0);
+    }
+
+    #[test]
+    fn a_receipt_value_that_is_an_unresolved_expression_cannot_be_compared() {
+        let text = crate::config::tests::document().replace(
+            "personAudience: https://api.example/person",
+            "personAudience: ${SESSION_TEST_UNSET_RECEIPT_AUDIENCE}",
+        );
+        let (exit, report) = run_with_receipt(&text, false);
+        assert_eq!(exit, 1, "{report}");
+        let codes: Vec<&str> = report["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .filter_map(|diagnostic| diagnostic["code"].as_str())
+            .collect();
+        assert_eq!(codes, ["platform.session-check.receipt-needs-environment"]);
     }
 
     #[test]

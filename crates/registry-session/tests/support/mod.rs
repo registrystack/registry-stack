@@ -690,8 +690,7 @@ secretProviders:\n  file:\n    root: {secrets}\n\
 issuer:\n  id: {issuer}\n  authorization: {issuer}/authorize\n  endSession: {issuer}/logout\n  token: {issuer}/token\n  revocation: {issuer}/revoke\n  jwks: {issuer}/jwks\n\
 personAudience: {PERSON_AUDIENCE}\n\
 modules:\n\
-\x20 - id: registry\n    prefix: /api/registry/\n    audience: person\n\
-\x20 - id: scheduling\n    prefix: /api/scheduling/\n    audience: person\n\
+\x20 - id: breg\n    prefix: /api/registry/\n    audience: person\n\
 \x20 - id: documents\n    prefix: /api/documents/\n    audience: person\n\
 \x20 - id: casework\n    prefix: /api/casework/\n    audience: {CASEWORK_AUDIENCE}\n    signIns: [staff]\n\
 pages:\n  - prefix: /apply/\n    signIn: citizen\n  - prefix: /staff/\n    signIn: staff\n\

@@ -422,32 +422,32 @@ async fn the_two_listeners_serve_only_their_own_routes() {
     assert_eq!(page.status, StatusCode::FORBIDDEN);
 }
 
+/// Several renewals in a row, with the real token client against an issuer
+/// that rotates every refresh token and revokes the family of a reused one:
+/// each renewal presents the token the last one returned, so no family dies.
 #[tokio::test]
-async fn five_parallel_checks_at_expiry_make_one_refresh_and_later_renewals_work() {
+async fn five_parallel_checks_in_the_renewal_window_make_one_refresh_and_later_renewals_work() {
     let harness = Harness::start_with(Options {
         extra_document: "session:\n  renewBeforeSeconds: 10\n".to_owned(),
         ..Options::default()
     })
     .await;
-    // The first access token is only just outside the renewal margin, so it
-    // enters the margin within a few seconds.
-    harness.issuer.set_access_lifetime(12);
+    // A 4 second token is renewed with 2 seconds left, half its lifetime.
+    harness.issuer.set_access_lifetime(4);
     let citizen = harness.sign_in("/apply/", "citizen-a").await;
-    // Every later token is also only just outside the margin, so each renewal
-    // is followed by another once a second has passed.
-    harness.issuer.set_access_lifetime(11);
-    tokio::time::sleep(Duration::from_millis(2300)).await;
+    tokio::time::sleep(Duration::from_millis(2100)).await;
 
     let one = || harness.check("GET", "/api/registry/records", Some(&citizen.cookie));
     let (a, b, c, d, e) = tokio::join!(one(), one(), one(), one(), one());
     let replies = [a, b, c, d, e];
     assert!(replies.iter().all(|reply| reply.status == StatusCode::OK));
+    // One check renews. The others, whose token is still valid, use it at once.
     assert_eq!(harness.issuer.refresh_calls(), 1);
     let tokens: std::collections::HashSet<String> = replies.iter().map(bearer).collect();
-    assert_eq!(tokens.len(), 1);
+    assert!(tokens.len() <= 2);
 
     for round in 2..=4 {
-        tokio::time::sleep(Duration::from_millis(1100)).await;
+        tokio::time::sleep(Duration::from_millis(2100)).await;
         let reply = one().await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(harness.issuer.refresh_calls(), round);
@@ -558,7 +558,8 @@ async fn a_refused_renewal_ends_the_session_and_is_audited() {
         ..Options::default()
     })
     .await;
-    harness.issuer.set_access_lifetime(12);
+    // A 4 second token is due for renewal at half its lifetime.
+    harness.issuer.set_access_lifetime(4);
     let citizen = harness.sign_in("/apply/", "citizen-a").await;
     harness.issuer.set_access_lifetime(600);
     // The refresh token is spent elsewhere, so the issuer revokes the family.
@@ -656,4 +657,98 @@ async fn every_public_path_the_gateway_routes_is_served_and_its_headers_agree() 
     assert!(allowed
         .header(registry_session::gateway::AUTHORIZATION_HEADER)
         .is_some());
+}
+
+/// The process-wide log buffer. A subscriber installed for the whole process
+/// keeps every callsite enabled, so what a test asserts on does not depend on
+/// which tests ran beside it. The values a test asserts the logs lack are
+/// random per test, so other tests' lines cannot match them.
+fn captured_logs() -> String {
+    static BUFFER: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Vec<u8>>>> =
+        std::sync::OnceLock::new();
+    #[derive(Clone)]
+    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("sink").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = BUFFER.get_or_init(|| {
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Sink(buffer.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || sink.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).expect("one global subscriber");
+        buffer
+    });
+    String::from_utf8(buffer.lock().expect("logs").clone()).expect("utf8")
+}
+
+#[tokio::test]
+async fn no_log_line_carries_a_cookie_a_token_a_code_a_state_or_a_secret() {
+    captured_logs();
+    let harness = Harness::start().await;
+    // A complete sign-in, keeping the callback so its code and state are known.
+    let start = harness.start_sign_in("/apply/").await;
+    let flow = start
+        .cookie_pair(support::FLOW_COOKIE)
+        .expect("flow cookie");
+    let callback = harness.authorize_as(start.location(), "citizen-a").await;
+    let query: std::collections::HashMap<String, String> = url::Url::parse(&callback)
+        .expect("callback url")
+        .query_pairs()
+        .into_owned()
+        .collect();
+    let done = harness.callback(&callback, Some(&flow)).await;
+    assert_eq!(done.status, StatusCode::OK);
+    let cookie = done.cookie_pair(SESSION_COOKIE).expect("session cookie");
+    let session_value = cookie.split_once('=').expect("pair").1.to_owned();
+    let allowed = harness
+        .check("GET", "/api/registry/records", Some(&cookie))
+        .await;
+    let access = bearer(&allowed);
+    // Refusals and a replayed callback exercise the warning paths.
+    harness.callback(&callback, Some(&flow)).await;
+    harness
+        .check("GET", "/api/casework/tasks", Some(&cookie))
+        .await;
+    harness.get("/session/me", Some(&cookie)).await;
+    harness
+        .sign_out(Some(&cookie), &[("origin", &harness.public)])
+        .await;
+
+    let text = captured_logs();
+    assert!(!text.is_empty(), "the service logs something");
+    let mut secrets = vec![
+        session_value,
+        access,
+        harness.citizen_secret.clone(),
+        harness.staff_secret.clone(),
+    ];
+    secrets.extend(query.get("code").cloned());
+    secrets.extend(query.get("state").cloned());
+    secrets.extend(
+        harness
+            .issuer
+            .issued_refresh_tokens()
+            .into_iter()
+            .map(|(token, _)| token),
+    );
+    secrets.extend(
+        harness
+            .issuer
+            .authorize_log()
+            .iter()
+            .filter_map(|request| request.get("state").cloned()),
+    );
+    for secret in secrets {
+        assert!(!secret.is_empty());
+        assert!(!text.contains(&secret), "a log line carries a secret value");
+    }
 }
