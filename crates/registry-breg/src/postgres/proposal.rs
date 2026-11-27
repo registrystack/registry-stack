@@ -6,7 +6,7 @@ use super::*;
 use crate::api::proposals::{ProposalListQuery, ProposalMutationInput};
 use crate::api::VerifiedRequestClaims;
 use crate::model::ProposalOperation;
-use crate::mutation::{CheckedProposalTaskAuthority, ProposalApplyPreflight};
+use crate::mutation::{link_readable, CheckedProposalTaskAuthority, ProposalApplyPreflight};
 use crate::postgres::{begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation};
 use crate::proposal_store;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1702,20 +1702,6 @@ impl PostgresRecordMutationService {
             return Err(MutationError::PreconditionFailed);
         }
         Ok(value)
-    }
-}
-
-/// Whether a link check's authorization outcome lets the caller read the
-/// Proposal. Only the two refusals a Proposal read gives a caller who may not
-/// read it omit the link. A conflict, a retryable conflict or any other
-/// failure stays an error, which the revision read answers as unavailable.
-fn link_readable(outcome: Result<(), MutationError>) -> Result<bool, MutationError> {
-    match outcome {
-        Ok(()) => Ok(true),
-        Err(MutationError::AuthorizationRefused(_) | MutationError::PreconditionFailed) => {
-            Ok(false)
-        }
-        Err(error) => Err(error),
     }
 }
 

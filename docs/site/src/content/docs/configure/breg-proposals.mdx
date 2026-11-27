@@ -148,6 +148,8 @@ Attachments keep their own `writableAttachments` grant.
 
 A grant that holds Edit, Revise or Rebase must also read every input it may write: `readableInputs` has to cover `writableInputs`, or every declared input when `writableInputs` is absent.
 Get and List serve `input` projected to `readableInputs`, while a write replaces the stored input as a whole, so a client that merges its change into what it read would otherwise clear the inputs it could not see.
+With the rule for inputs outside `writableInputs` above, such a grant reads every declared input, whatever `writableInputs` names.
+`readableInputs` requires Get, so a grant that holds Edit, Revise or Rebase without `get` must add it.
 The compiler refuses the grant with `breg.proposal.input-write-unreadable`, naming the access profile, the Action and the missing inputs.
 An agent profile without a task grant cannot hold Get, drafts blind and is exempt.
 
@@ -385,7 +387,7 @@ Keep paging while `nextCursor` is present.
 ### When the review authority refuses the hand-off
 
 When the review authority refuses to accept the current submission for good, Apply reads `review-ended` with recovery `revise`, as in the table.
-Proposal Get, every command response, each Proposal in a list, and the per-version submission read then also carry the authority's reason, when it is one BReg recognises:
+Proposal Get, each Proposal in a list, and the per-version submission read then also carry the authority's reason, when it is one BReg recognises:
 
 ```json
 "handoffRefusal": {"code": "review.initiator-required"}
@@ -422,7 +424,7 @@ Any other result leaves the Proposal `submitted` until it is applied or cancelle
 
 ### The decision
 
-Proposal Get, each Proposal in a list, and the per-version submission read carry `decision` once the reviewer decided the submission:
+Proposal Get, each Proposal in a list, the per-version submission read and, under Get authority, each command response carry `decision` once the reviewer decided the submission:
 
 ```json
 "decision": {
@@ -436,9 +438,12 @@ Proposal Get, each Proposal in a list, and the per-version submission read carry
 `publicReason` appears only when the reviewer wrote one for the subject; it is the only reviewer text BReg serves.
 Notes, internal reasons and the reviewer's identity stay with the review provider.
 A provider-side end (`cancelled`, `superseded`) is not a decision and has no `decision`; neither has a result whose content retention erased.
-Every Proposal command response, and each attachment upload or removal, carries `decision`, `handoffRefusal` and `input` exactly as a read by the same caller would right after the command, so a client need not read the Proposal again.
-A profile that may run a command but holds no Get grant on the Proposal gets none of the three, because command authority is not read authority.
-Each response that serves a public reason, a read or a command, records a fixed `proposal-review-public-reason` marker in its audit entry, never the text.
+Every Proposal command response, and each attachment upload or removal, carries `decision` and `input` exactly as a Get by the same caller would right after the command, so a client need not read the Proposal again.
+A profile that may run a command but holds no Get grant on the Proposal gets neither, because command authority is not read authority.
+A replay with the same `Idempotency-Key` returns the stored response of the first execution, not the Proposal's current state.
+A command receipt stored before this release replays without `decision` and `input`.
+A later package that narrows the grant's `readableInputs` makes an earlier key conflict instead of replaying an input a Get now withholds.
+Each response that serves a public reason, a read, a command or a replay, records a fixed `proposal-review-public-reason` marker in its audit entry, never the text.
 
 Revise after an approved, not yet applied, manual submission discards the approval.
 The approval binds the earlier version only, and the revised version needs its own Review before it can be applied.

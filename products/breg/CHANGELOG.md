@@ -60,8 +60,26 @@
 - BREAKING: the compiler refuses a Proposal grant that holds `edit`, `revise`
   or `rebase` unless its `readableInputs` cover every input it may write
   (`writableInputs`, or every declared input when absent), with
-  `breg.proposal.input-write-unreadable`. Add the named inputs to
-  `readableInputs`. An agent profile without a task grant is exempt.
+  `breg.proposal.input-write-unreadable`. With the existing rule for inputs
+  outside `writableInputs`, such a grant reads every declared input. Add the
+  named inputs to `readableInputs`, and `get` if the grant lacks it, because
+  `readableInputs` requires Get. An agent profile without a task grant is
+  exempt.
+
+- Every Proposal command response, attachment uploads and removals included,
+  carries `decision` and `input` as a Get by the same caller would serve them
+  right after the command, so a client need not read the Proposal again. A
+  profile without Get on the Proposal gets neither. Attachment metadata on a
+  command response follows the same Get check. A replay returns the stored
+  response and records the `proposal-review-public-reason` audit marker when
+  that response holds a public reason. A command receipt stored before this
+  release replays without the two members. The idempotency binding covers the
+  grant's `readableInputs` when it names any, so after a package narrows them
+  an earlier key conflicts instead of replaying a withheld input.
+
+- The Proposal attachment download declares its 200 response as `*/*`, the
+  stored file's own media type, instead of `application/octet-stream`.
+  Generated clients that switch on the declared response type regenerate.
 
 - BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The
   POST carries `webhook-id`, `webhook-timestamp` and `webhook-signature`, an

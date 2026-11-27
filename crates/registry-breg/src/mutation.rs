@@ -9,7 +9,7 @@ pub(crate) use action::validate_action_attachments;
 pub(crate) use action::{HookChangeApplication, HookChangeOutcome};
 mod proposal;
 pub(crate) use proposal::{
-    proposal_http_method, proposal_operation_name, CheckedProposalTaskAuthority,
+    link_readable, proposal_http_method, proposal_operation_name, CheckedProposalTaskAuthority,
     ProposalApplyPreflight,
 };
 pub(crate) use proposal::{PUBLIC_REASON_REFERENCE, REVIEW_PROGRESS_REFERENCE};

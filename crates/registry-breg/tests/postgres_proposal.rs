@@ -4637,7 +4637,9 @@ async fn command_response_carries_the_decision_a_get_would_serve() {
     assert!(!entries[before..]
         .iter()
         .any(|entry| entry.to_string().contains("Public reason canary")));
-    // A replay returns the stored body, decision included.
+    // A replay returns the stored body, decision included, and audits the
+    // public reason it serves again with the same marker.
+    let before_replay = fixture.audit_capture.entries().len();
     let replay = post_command_link(
         &fixture.http.base_url,
         &current["links"]["cancel"],
@@ -4645,6 +4647,77 @@ async fn command_response_carries_the_decision_a_get_would_serve() {
     )
     .await;
     assert_eq!(replay, cancelled);
+    assert_replay_marks_the_public_reason(&fixture, before_replay, "cancel");
+    fixture.finish().await;
+}
+
+/// The replay's terminal audit entry carries the public-reason marker and
+/// never the reason's text.
+fn assert_replay_marks_the_public_reason(
+    fixture: &client_http::ClientFixture,
+    before: usize,
+    operation: &str,
+) {
+    let entries = fixture.audit_capture.entries();
+    assert!(
+        entries[before..].iter().any(|entry| {
+            entry["record"]["phase"] == "terminal"
+                && entry["record"]["outcome"] == "replayed"
+                && entry["record"]["operationId"] == format!("proposals.correct-name.{operation}")
+                && entry["record"]["fieldSetReference"] == "proposal-review-public-reason"
+        }),
+        "{:?}",
+        &entries[before..]
+    );
+    assert!(!entries[before..]
+        .iter()
+        .any(|entry| entry.to_string().contains("Public reason canary")));
+}
+
+/// An Apply replay is answered from its receipt before any review evidence is
+/// fetched, and audits the approved decision's public reason as the first
+/// response did.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn apply_replay_marks_the_public_reason_it_serves() {
+    let (source, policy) = reviewed_source();
+    let review = std::sync::Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Reviewed", "decision-apply-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("decision-apply-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    inject_review_decision(&fixture, &review, policy, "approved").await;
+    let current = client.read_proposal(&submitted).await.unwrap().value;
+    let apply = client
+        .prepare_proposal(
+            &current,
+            "apply",
+            json!({"submissionVersion":1,"effectDigest":current.effect_digest().unwrap()}),
+            &key("decision-apply"),
+        )
+        .unwrap();
+    let applied =
+        serde_json::to_value(client.execute_proposal(&apply).await.unwrap().value).unwrap();
+    assert_eq!(applied["state"], "applied", "{applied}");
+    assert_eq!(applied["decision"]["publicReason"], "Public reason canary");
+    let before_replay = fixture.audit_capture.entries().len();
+    let replay = client.execute_proposal(&apply).await.unwrap();
+    assert_eq!(serde_json::to_value(replay.value).unwrap(), applied);
+    assert_replay_marks_the_public_reason(&fixture, before_replay, "apply");
     fixture.finish().await;
 }
 
@@ -4740,7 +4813,9 @@ async fn command_response_withholds_the_decision_from_a_profile_without_get() {
     )
     .await;
     assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
-    for member in ["decision", "handoffRefusal", "input"] {
+    // No command leaves a Proposal `submitted` with a refused hand-off, so
+    // `handoffRefusal` cannot appear on a command response at all.
+    for member in ["decision", "input"] {
         assert!(cancelled.get(member).is_none(), "{member}: {cancelled}");
     }
     assert!(!cancelled.to_string().contains("Public reason canary"));
@@ -5257,7 +5332,14 @@ async fn proposal_inputs_require_an_explicit_selected_profile_allowlist() {
     reader["permissions"]["proposals"][0]["operations"] = json!(["get", "list"]);
     reader["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
     reader["permissions"]["proposals"][0]["readableInputs"] = json!(["target"]);
+    // A Get grant that cannot write may name no inputs, and then reads none.
+    let mut blind_reader = reader.clone();
+    blind_reader["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("readableInputs");
     source["accessProfiles"]["input-reader"] = reader;
+    source["accessProfiles"]["blind-reader"] = blind_reader;
     let fixture =
         client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
     let client = &fixture.http.client;
@@ -5313,6 +5395,18 @@ async fn proposal_inputs_require_an_explicit_selected_profile_allowlist() {
     assert!(!serde_json::to_string(&value)
         .unwrap()
         .contains("input-secret-canary"));
+    let blind = reqwest::get(format!(
+        "{}/v1/proposals/{}?accessProfile=blind-reader",
+        fixture.http.base_url,
+        draft.id()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(blind.status(), reqwest::StatusCode::OK);
+    let blind: Value = blind.json().await.unwrap();
+    assert_eq!(blind["state"], "draft", "{blind}");
+    assert!(blind.get("input").is_none(), "{blind}");
+    assert!(!blind.to_string().contains("input-secret-canary"));
     fixture.finish().await;
 }
 
@@ -6461,6 +6555,106 @@ async fn narrowed_attachment_disclosure_refuses_the_old_exact_receipt_without_re
     assert_eq!(row.get::<_, i64>(0), 1);
     assert_eq!(row.get::<_, i64>(1), 2);
     drop(current);
+    fixture.finish().await;
+}
+
+/// A command receipt holds the inputs its caller could read. Once a later
+/// package narrows that grant's `readableInputs`, the old key conflicts
+/// instead of replaying an input a Get now withholds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn narrowed_input_disclosure_refuses_the_old_exact_receipt() {
+    let mut source = registry_source(false);
+    let mut canceller = source["accessProfiles"]["clerk"].clone();
+    canceller["default"] = json!(false);
+    canceller["permissions"]["actions"] = json!([]);
+    canceller["permissions"]["records"] = json!([]);
+    canceller["permissions"]["proposals"][0]["operations"] = json!(["get", "list", "cancel"]);
+    canceller["permissions"]["proposals"][0]["writableAttachments"] = json!([]);
+    source["accessProfiles"]["canceller"] = canceller;
+    let fixture =
+        client_http::ClientFixture::start(compile(source.clone()), claims("author", "zone-a"))
+            .await;
+    let draft = start(&fixture, "Narrowed input canary", "narrow-input-start").await;
+    let read = reqwest::get(format!(
+        "{}/v1/proposals/{}?accessProfile=canceller",
+        fixture.http.base_url,
+        draft.id()
+    ))
+    .await
+    .unwrap();
+    assert_eq!(read.status(), reqwest::StatusCode::OK);
+    let view: Value = read.json().await.unwrap();
+    let link = view["links"]["cancel"].clone();
+    let cancelled = post_command_link(&fixture.http.base_url, &link, "narrow-input-cancel").await;
+    assert_eq!(cancelled["input"]["value"], "Narrowed input canary");
+
+    let mut next = source;
+    next["accessProfiles"]["canceller"]["permissions"]["proposals"][0]["readableInputs"] =
+        json!(["target"]);
+    assert_eq!(
+        fixture.registry.actions().actions[0].definition_revision,
+        compile(next.clone()).actions().actions[0].definition_revision
+    );
+    let (registry, identity) = proposal_activation::activate_successor(&fixture, &next).await;
+    let current = successor_client(&fixture, registry, identity).await;
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}{}",
+            current.base_url.trim_end_matches('/'),
+            link["path"].as_str().unwrap()
+        ))
+        .query(&[("accessProfile", "canceller")])
+        .header("content-type", "application/json")
+        .header("if-match", link["ifMatch"].as_str().unwrap())
+        .header("idempotency-key", "narrow-input-cancel")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    assert!(!response
+        .text()
+        .await
+        .unwrap()
+        .contains("Narrowed input canary"));
+    drop(current);
+    fixture.finish().await;
+}
+
+/// An attachment upload or removal is an Edit, and its response carries the
+/// readable inputs as a Get would.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn attachment_upload_and_removal_responses_carry_the_readable_inputs() {
+    let fixture =
+        client_http::ClientFixture::start(registry(false), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let draft = start(
+        &fixture,
+        "Attachment input canary",
+        "attachment-input-start",
+    )
+    .await;
+    let expected = serde_json::to_value(&draft).unwrap()["input"].clone();
+    assert_eq!(expected["value"], "Attachment input canary");
+    let uploaded = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"synthetic-support",
+            &key("attachment-input-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(serde_json::to_value(&uploaded).unwrap()["input"], expected);
+    let removed = client
+        .delete_proposal_attachment(&uploaded, "support", &key("attachment-input-remove"))
+        .await
+        .unwrap()
+        .value;
+    assert!(removed.revision() > uploaded.revision());
+    assert_eq!(serde_json::to_value(&removed).unwrap()["input"], expected);
     fixture.finish().await;
 }
 

@@ -686,6 +686,11 @@ impl MutationTransaction {
                 if let Some(writable_inputs)=&permission.writable_inputs {
                     contract["writableInputs"]=json!(writable_inputs);
                 }
+                // A receipt holds the inputs a Get served, so narrowing them refuses the old key
+                // instead of replaying a withheld value. Bound only when non-empty, as above.
+                if !permission.readable_inputs.is_empty() {
+                    contract["readableInputs"]=json!(permission.readable_inputs);
+                }
                 contract
             });
         let digest=Sha256::digest(canonicalize_json(&json!({
@@ -1040,7 +1045,7 @@ impl MutationTransaction {
                 TerminalAuditOutcome::Replayed,
                 0,
                 &[],
-                None,
+                replayed_public_reason(stored.response.body())?,
             )?;
             check_current_proposal_grant(input.authority)?;
             guarded
@@ -1249,7 +1254,7 @@ impl MutationTransaction {
                 TerminalAuditOutcome::Replayed,
                 0,
                 &[],
-                None,
+                replayed_public_reason(stored.response.body())?,
             )?;
             check_current_proposal_grant(input.authority)?;
             guarded
@@ -3516,10 +3521,12 @@ impl MutationTransaction {
         let Some(claims) = claims else {
             return Ok(value);
         };
-        // The decision, the hand-off refusal and the inputs are disclosed to a
-        // caller whose selected access profile holds Get authority on this
-        // Proposal, on every response: a command's authority is not read
-        // authority, so a profile without Get is served none of them.
+        // A command response discloses the decision, the hand-off refusal,
+        // the inputs and the attachments to a caller whose selected access
+        // profile holds Get authority on this Proposal: a command's authority
+        // is not read authority, so a profile without Get is served none of
+        // them. Reads serve the inputs and attachments the same way; a List
+        // item carries the decision under List authority.
         let get_authority = match crate::api::proposals::authorize(
             registry,
             action,
@@ -3528,15 +3535,12 @@ impl MutationTransaction {
             ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
             Some(document.proposal_id),
         ) {
-            Some(authority)
-                if self
-                    .authorize_proposal_document(tx, registry, document, &authority)
-                    .await
-                    .is_ok() =>
-            {
-                Some(authority)
-            }
-            _ => None,
+            Some(authority) => link_readable(
+                self.authorize_proposal_document(tx, registry, document, &authority)
+                    .await,
+            )?
+            .then_some(authority),
+            None => None,
         };
         let is_read = matches!(
             current.operation,
@@ -3627,19 +3631,19 @@ impl MutationTransaction {
             ("reviewContext", ProposalOperation::GetReviewContext),
         ];
         for (name, operation) in operations {
-            let profiles = std::iter::once(current.common.access_profile());
-            let authority = profiles
-                .filter_map(|profile| {
-                    crate::api::proposals::authorize(
-                        registry,
-                        action,
-                        claims,
-                        Some(profile),
-                        ProposalAuthorityOperation::Lifecycle(operation),
-                        Some(document.proposal_id),
-                    )
-                })
-                .next();
+            // The Get gate above already ran the document check for `self`.
+            let authority = if operation == ProposalOperation::Get {
+                get_authority.clone()
+            } else {
+                crate::api::proposals::authorize(
+                    registry,
+                    action,
+                    claims,
+                    Some(current.common.access_profile()),
+                    ProposalAuthorityOperation::Lifecycle(operation),
+                    Some(document.proposal_id),
+                )
+            };
             let Some(authority) = authority else {
                 continue;
             };
@@ -3656,10 +3660,11 @@ impl MutationTransaction {
             {
                 continue;
             }
-            if self
-                .authorize_proposal_document(tx, registry, document, &authority)
-                .await
-                .is_err()
+            if operation != ProposalOperation::Get
+                && self
+                    .authorize_proposal_document(tx, registry, document, &authority)
+                    .await
+                    .is_err()
             {
                 continue;
             }
@@ -3812,14 +3817,8 @@ impl MutationTransaction {
             .iter()
             .find(|permission| permission.profile_id == current.common.access_profile());
         if let Some(permission) = permission {
-            let read = crate::api::proposals::authorize(
-                registry,
-                action,
-                claims,
-                Some(current.common.access_profile()),
-                ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
-                Some(document.proposal_id),
-            );
+            // Attachments are Get-scoped like the inputs: the same gate decides them.
+            let read = get_authority.as_ref();
             let write = crate::api::proposals::authorize(
                 registry,
                 action,
@@ -3876,15 +3875,7 @@ impl MutationTransaction {
                 value["attachments"] = Value::Object(slots);
             }
             self.append_additions(
-                tx,
-                registry,
-                action,
-                document,
-                current,
-                claims,
-                permission,
-                read.as_ref(),
-                &mut value,
+                tx, registry, action, document, current, claims, permission, read, &mut value,
             )
             .await?;
         }
@@ -4312,9 +4303,35 @@ pub(crate) fn proposal_turn(
     .as_str()
 }
 
-/// The audit marker of a read that served a decision's public reason.
+/// The audit marker of a response that served a decision's public reason: a
+/// read, a command, or a command's replay.
 pub(crate) const PUBLIC_REASON_REFERENCE: &str = "proposal-review-public-reason";
 pub(crate) const REVIEW_PROGRESS_REFERENCE: &str = "proposal-review-progress";
+
+/// Whether a Get-authority document check lets the caller read the Proposal.
+/// Only the two refusals a Proposal read gives a caller who may not read it
+/// withhold what Get serves. A conflict, a retryable conflict or any other
+/// failure stays an error, so nobody takes a failure for a refusal that would
+/// silently omit what the caller may read.
+pub(crate) fn link_readable(outcome: Result<(), MutationError>) -> Result<bool, MutationError> {
+    match outcome {
+        Ok(()) => Ok(true),
+        Err(MutationError::AuthorizationRefused(_) | MutationError::PreconditionFailed) => {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The audit marker a replay records when the stored response it serves
+/// again holds a decision's public reason.
+fn replayed_public_reason(body: &[u8]) -> Result<Option<&'static str>, MutationError> {
+    let response: Value = serde_json::from_slice(body).map_err(|_| MutationError::Unavailable)?;
+    Ok(response
+        .pointer("/decision/publicReason")
+        .is_some()
+        .then_some(PUBLIC_REASON_REFERENCE))
+}
 
 /// Why the review authority refused one submission's hand-off for good, as
 /// the allowlisted code recorded when it refused. A hand-off still pending,

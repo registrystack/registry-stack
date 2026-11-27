@@ -846,12 +846,15 @@ impl BRegProposal {
     pub const fn turn(&self) -> Option<BRegProposalTurn> {
         self.turn
     }
-    /// The current submission's review decision, served on reads only.
+    /// The current submission's review decision. Reads serve it, and a
+    /// command response does when the caller's profile holds Get on the
+    /// Proposal.
     pub fn decision(&self) -> Option<&BRegProposalDecision> {
         self.decision.as_ref()
     }
     /// The review authority's allowlisted reason for refusing the current
-    /// submission, served on reads only.
+    /// submission, served on reads while the Proposal is submitted. No command
+    /// leaves a refused hand-off submitted, so command responses carry none.
     pub fn handoff_refusal(&self) -> Option<BRegProposalHandoffRefusal> {
         self.handoff_refusal.map(|member| member.code)
     }

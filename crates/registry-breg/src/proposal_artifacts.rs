@@ -133,6 +133,8 @@ pub(crate) fn append_proposal_openapi(
                             operation["parameters"].as_array_mut().unwrap().push(json!({"name":name,"in":"query","required":false,"schema":schema,
                                 "description":"All three review-context query members are required together and select only get-review-context authority. Omit all three for ordinary get authority."}));
                         }
+                        // Any type, unlike the record download's slot types: a carried-forward
+                        // file keeps the type it was stored with.
                         operation["responses"]["200"]["content"] = json!({"*/*":{"schema":{"type":"string","contentMediaType":"application/octet-stream","maxLength":crate::contract::MAX_ATTACHMENT_BYTES}}});
                     } else if method == "patch" {
                         let content=slot.content_types.iter().map(|mime|(mime.clone(),json!({"schema":{"type":"string","format":"binary","maxLength":slot.maximum_bytes}}))).collect::<Map<_,_>>();
