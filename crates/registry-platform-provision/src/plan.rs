@@ -667,8 +667,13 @@ mod tests {
             let target = target();
             let plan = plan(&product, &target).unwrap();
             let script = render_script(&plan);
-            for secret in [PASSWORD_M, PASSWORD_R, "SCRAM-SHA-256", "PASSWORD '"] {
-                assert!(!script.contains(secret), "{secret} in {script}");
+            for (label, secret) in [
+                ("the migration password", PASSWORD_M),
+                ("the runtime password", PASSWORD_R),
+                ("a SCRAM verifier", "SCRAM-SHA-256"),
+                ("a PASSWORD clause", "PASSWORD '"),
+            ] {
+                assert!(!script.contains(secret), "the script holds {label}");
             }
             for rendered in [format!("{plan:?}"), format!("{target:?}")] {
                 assert!(!rendered.contains(PASSWORD_M) && !rendered.contains(PASSWORD_R));

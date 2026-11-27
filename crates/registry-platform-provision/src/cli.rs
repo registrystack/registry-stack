@@ -1285,13 +1285,13 @@ mod tests {
         assert!(run.stdout.contains("\\password \"app_migration\""));
         assert!(run.stdout.contains("\\password \"app_runtime\""));
         assert!(run.stdout.contains("\\connect \"app\""));
-        for secret in [
-            MIGRATION_PASSWORD,
-            RUNTIME_PASSWORD,
-            "SCRAM-SHA-256$",
-            "postgres://",
+        for (label, secret) in [
+            ("the migration password", MIGRATION_PASSWORD),
+            ("the runtime password", RUNTIME_PASSWORD),
+            ("a SCRAM verifier", "SCRAM-SHA-256$"),
+            ("a connection URL", "postgres://"),
         ] {
-            assert!(!run.stdout.contains(secret), "script holds {secret}");
+            assert!(!run.stdout.contains(secret), "the script holds {label}");
         }
         assert!(!run.stdout.contains("PASSWORD '"));
     }
@@ -2442,14 +2442,14 @@ mod tests {
         for format in [["--format", "human"], ["--format", "json"]] {
             let run = execute_run(&format, Some(&admin), Ok(split_input()), &backend);
             let output = run.all_output();
-            for secret in [
-                MIGRATION_PASSWORD,
-                RUNTIME_PASSWORD,
-                ADMIN_PASSWORD,
-                "SCRAM-SHA-256$",
-                "postgres://",
+            for (label, secret) in [
+                ("the migration password", MIGRATION_PASSWORD),
+                ("the runtime password", RUNTIME_PASSWORD),
+                ("the administrator password", ADMIN_PASSWORD),
+                ("a SCRAM verifier", "SCRAM-SHA-256$"),
+                ("a connection URL", "postgres://"),
             ] {
-                assert!(!output.contains(secret), "{format:?} leaked {secret}");
+                assert!(!output.contains(secret), "{format:?} output holds {label}");
             }
         }
     }
