@@ -1690,7 +1690,8 @@ mod tests {
             } else {
                 format!(
                     "REVOKE CREATE ON SCHEMA public FROM PUBLIC; \
-                     GRANT USAGE, CREATE ON SCHEMA public TO {migration}"
+                     GRANT USAGE, CREATE ON SCHEMA public TO {migration}; \
+                     GRANT USAGE ON SCHEMA public TO {runtime}"
                 )
             };
             assert_eq!(batches.setup, expected_setup, "{label}");
@@ -1731,7 +1732,8 @@ mod tests {
     }
 
     #[test]
-    fn casework_setup_gives_only_migration_role_public_schema_creation() {
+    fn casework_setup_gives_the_runtime_role_usage_on_public_and_only_the_migration_role_creation()
+    {
         let names = Names::new(RUN_ID, "casework");
         let sql = Batches::new(&names, false, false, "migration-secret", "runtime-secret")
             .unwrap()
@@ -1744,11 +1746,15 @@ mod tests {
             "GRANT USAGE, CREATE ON SCHEMA public TO {}",
             quote_identifier(&names.migration_role)
         )));
-        assert!(!sql.contains(&names.runtime_role));
+        assert!(sql.ends_with(&format!(
+            "GRANT USAGE ON SCHEMA public TO {}",
+            quote_identifier(&names.runtime_role)
+        )));
+        assert_eq!(sql.matches(&names.runtime_role).count(), 1, "{sql}");
     }
 
     #[test]
-    fn messaging_setup_gives_only_migration_role_public_schema_creation() {
+    fn messaging_setup_gives_the_runtime_role_no_public_schema_creation() {
         let names = Names::new(RUN_ID, "messaging");
         let sql = Batches::new(&names, false, false, "migration-secret", "runtime-secret")
             .unwrap()
@@ -1757,7 +1763,10 @@ mod tests {
             sql.starts_with("REVOKE CREATE ON SCHEMA public FROM PUBLIC;"),
             "{sql}"
         );
-        assert!(!sql.contains(&names.runtime_role));
+        assert!(!sql.contains(&format!(
+            "CREATE ON SCHEMA public TO {}",
+            quote_identifier(&names.runtime_role)
+        )));
         assert_eq!(
             names.database,
             format!("rstack_{RUN_ID}_messaging"),

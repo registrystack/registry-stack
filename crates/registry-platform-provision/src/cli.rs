@@ -20,9 +20,9 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
-    admin_config, execute, render_script, verify_logins, AdminConfig, AdminConfigError, Mode,
-    Needs, Outcome, Plan, ProductDatabase, ProvisionError, ProvisionTarget, RoleCredential, Scope,
-    StatementOutcome,
+    admin_config, execute_recording, render_script, verify_logins, AdminConfig, AdminConfigError,
+    Failure, Mode, Needs, Outcome, Plan, PlanError, ProductDatabase, ProvisionError,
+    ProvisionTarget, RoleCredential, Scope, StatementOutcome,
 };
 
 pub const REPORT_API_VERSION: &str =
@@ -135,6 +135,8 @@ pub struct ReportStatement {
     pub step: String,
     pub scope: ReportScope,
     pub needs: ReportNeeds,
+    /// `not-run` for a statement the run did not reach, the one that failed
+    /// included.
     pub outcome: ReportOutcome,
     pub sql: String,
 }
@@ -154,6 +156,8 @@ pub struct PlatformCliDatabaseProvisionReport {
     pub version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub product: Option<String>,
+    /// Whether a statement could have been sent to the server: false for a
+    /// print-mode run and for a run that stopped before the first statement.
     pub executed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role_mode: Option<RoleMode>,
@@ -169,8 +173,7 @@ pub struct PlatformCliDatabaseProvisionReport {
 
 /// Runs the plan and then checks that each product role can log in. A test
 /// replaces it, so the report logic needs no server.
-type Backend<'a> =
-    &'a dyn Fn(&AdminConfig, &Plan, &ProvisionTarget) -> Result<Outcome, ProvisionError>;
+type Backend<'a> = &'a dyn Fn(&AdminConfig, &Plan, &ProvisionTarget) -> Result<Outcome, Failure>;
 
 /// The most bytes read from the administrator URL file.
 const MAXIMUM_ADMIN_URL_BYTES: u64 = 8192;
@@ -243,15 +246,47 @@ fn refuse(
     }
 }
 
-fn target_invalid(message: &str) -> Refusal {
+fn target_invalid_with(message: &str, action: &str) -> Refusal {
     refuse(
         ReportStatus::UsageError,
         "platform.provision.target-invalid",
         "",
         message,
+        action,
+    )
+}
+
+fn target_invalid(message: &str) -> Refusal {
+    target_invalid_with(
+        message,
         "Correct database.migrationUrlRef and database.runtimeUrlRef in the runtime file, then \
          run provision again.",
     )
+}
+
+/// A name the plan refuses. The action names the URL member to correct and
+/// never quotes its value.
+fn plan_refusal(error: &PlanError) -> Refusal {
+    let rule = "A role name must not hold a control character or a backslash, and must not be \
+                public, none or start with pg_.";
+    let action = match error {
+        PlanError::InvalidName {
+            what: "database name",
+        } => "Change the database name, the path of database.migrationUrlRef and \
+              database.runtimeUrlRef. It must not hold a control character, a backslash or =, \
+              and must not be postgres, template0 or template1."
+            .to_owned(),
+        PlanError::InvalidName {
+            what: "migration role name",
+        } => format!("Change the user in the migration URL (database.migrationUrlRef). {rule}"),
+        PlanError::InvalidName {
+            what: "runtime role name",
+        } => format!("Change the user in the runtime URL (database.runtimeUrlRef). {rule}"),
+        _ => "Correct database.migrationUrlRef and database.runtimeUrlRef in the runtime file, \
+             then run provision again."
+            .to_owned(),
+    };
+    target_invalid_with(&error.to_string(), &action)
 }
 
 fn target_mismatch(message: String) -> Refusal {
@@ -290,6 +325,9 @@ fn read_admin_url(args: &ProvisionArgs) -> Result<Zeroizing<String>, Refusal> {
     let raw = match (&args.admin_url_file, &args.admin_url_env) {
         (Some(path), None) => {
             let read = std::fs::File::open(path).and_then(|file| {
+                if !file.metadata()?.is_file() {
+                    return Err(std::io::Error::other("not a regular file"));
+                }
                 let mut text = String::new();
                 file.take(MAXIMUM_ADMIN_URL_BYTES + 1)
                     .read_to_string(&mut text)
@@ -364,6 +402,12 @@ fn admin_refusal(error: AdminConfigError) -> Refusal {
 fn execution_refusal(tool: &str, error: &ProvisionError) -> Refusal {
     use ProvisionError as E;
     let (status, action) = match error {
+        E::AdminConnectFailed { sqlstate } if sqlstate.as_deref() == Some("3D000") => (
+            ReportStatus::OperationalFailure,
+            "The database the administrator URL names does not exist. Name one that does, such \
+             as postgres, then run provision again."
+                .to_owned(),
+        ),
         E::AdminConnectFailed { .. } => (
             ReportStatus::OperationalFailure,
             "Check the host, port, credentials and TLS certificate of the administrator URL, \
@@ -388,6 +432,23 @@ fn execution_refusal(tool: &str, error: &ProvisionError) -> Refusal {
              then run provision again."
                 .to_owned(),
         ),
+        E::RoleMembershipDiffers { .. } => (
+            ReportStatus::DomainRefusal,
+            "Use another role name in the product URLs, or revoke the role's memberships as an \
+             administrator, then run provision again."
+                .to_owned(),
+        ),
+        E::DatabaseIsTemplate { .. } => (
+            ReportStatus::DomainRefusal,
+            "Use another database name in the product URLs, then run provision again.".to_owned(),
+        ),
+        E::ExtensionIncomplete { .. } => (
+            ReportStatus::DomainRefusal,
+            "As a superuser, run every statement of the extension.postgis step, which \
+             provision --print-sql prints, after dropping a PostGIS installed in another \
+             schema, then run provision again."
+                .to_owned(),
+        ),
         E::DatabaseOwnerDiffers { .. } => (
             ReportStatus::DomainRefusal,
             "Use another database name, or run provision as the database owner or a role that \
@@ -404,12 +465,34 @@ fn execution_refusal(tool: &str, error: &ProvisionError) -> Refusal {
             ReportStatus::DomainRefusal,
             "Upgrade the extension as a superuser, then run provision again.".to_owned(),
         ),
-        E::RoleLoginFailed { .. } => (
-            ReportStatus::DomainRefusal,
-            "The role exists with a different password. Set its password to the one in its \
-             product URL as an administrator, or correct the URL, then run provision again."
-                .to_owned(),
-        ),
+        E::RoleLoginFailed { sqlstate, .. } => match sqlstate.as_deref() {
+            Some("28P01") => (
+                ReportStatus::DomainRefusal,
+                "The role exists with a different password. Set its password to the one in \
+                 its product URL as an administrator, or correct the URL, then run provision \
+                 again."
+                    .to_owned(),
+            ),
+            Some("28000") => (
+                ReportStatus::DomainRefusal,
+                "The server refused the role. Check that the role can log in and that \
+                 pg_hba.conf lets it connect over TLS from this host, then run provision \
+                 again."
+                    .to_owned(),
+            ),
+            Some(_) => (
+                ReportStatus::DomainRefusal,
+                "Read the PostgreSQL server log for the refused login, fix the cause, then run \
+                 provision again."
+                    .to_owned(),
+            ),
+            None => (
+                ReportStatus::OperationalFailure,
+                "Check that the server accepts connections from this host, then run provision \
+                 again."
+                    .to_owned(),
+            ),
+        },
         E::EffectUnconfirmed { .. } => (
             ReportStatus::OperationalFailure,
             "Run provision again.".to_owned(),
@@ -472,9 +555,12 @@ fn outcome_word(outcome: ReportOutcome) -> &'static str {
     }
 }
 
-/// The plan's statements with the outcome of each, `not-run` when no
-/// executor outcome is given.
-fn report_statements(plan: &Plan, outcome: Option<&Outcome>) -> Vec<ReportStatement> {
+/// The plan's statements with the outcome of each statement the executor
+/// reached, and `not-run` for the rest.
+fn report_statements(
+    plan: &Plan,
+    reached: &[(&'static str, StatementOutcome)],
+) -> Vec<ReportStatement> {
     plan.statements()
         .iter()
         .enumerate()
@@ -482,8 +568,8 @@ fn report_statements(plan: &Plan, outcome: Option<&Outcome>) -> Vec<ReportStatem
             step: statement.step.to_owned(),
             scope: report_scope(statement.scope),
             needs: report_needs(statement.needs),
-            outcome: outcome
-                .and_then(|outcome| outcome.statements.get(index))
+            outcome: reached
+                .get(index)
                 .map_or(ReportOutcome::NotRun, |(_, outcome)| {
                     report_outcome(*outcome)
                 }),
@@ -633,11 +719,16 @@ fn run_with(
     let plan = match crate::plan(&input.product, &target) {
         Ok(plan) => plan,
         Err(error) => {
-            refused(&mut report, target_invalid(&error.to_string()));
+            // A refused name is not repeated in the report.
+            report.role_mode = None;
+            report.database = None;
+            report.migration_role = None;
+            report.runtime_role = None;
+            refused(&mut report, plan_refusal(&error));
             return output.refusal(&report);
         }
     };
-    report.statements = report_statements(&plan, None);
+    report.statements = report_statements(&plan, &[]);
 
     if args.print_sql {
         report.ok = true;
@@ -683,20 +774,34 @@ fn run_with(
         return output.refusal(&report);
     }
 
-    report.executed = true;
+    if admin.database() == target.database {
+        refused(
+            &mut report,
+            target_invalid_with(
+                "the administrator URL names the product database, which provision creates",
+                "Point the administrator URL at the postgres maintenance database or another \
+                 existing database, then run provision again.",
+            ),
+        );
+        return output.refusal(&report);
+    }
+
     match backend(&admin, &plan, &target) {
         Ok(outcome) => {
+            report.executed = true;
             report.ok = true;
             report.status = ReportStatus::Complete;
-            report.statements = report_statements(&plan, Some(&outcome));
+            report.statements = report_statements(&plan, &outcome.statements);
             let written = match format {
                 OutputFormat::Json => output.json(&report),
                 OutputFormat::Human => write_summary(output.stdout, &report, outcome.single_role),
             };
             output.write_failed(written)
         }
-        Err(error) => {
-            refused(&mut report, execution_refusal(tool, &error));
+        Err(failure) => {
+            report.executed = failure.error.may_have_run_statements();
+            report.statements = report_statements(&plan, &failure.reached);
+            refused(&mut report, execution_refusal(tool, &failure.error));
             output.refusal(&report)
         }
     }
@@ -735,12 +840,17 @@ fn write_summary(
 /// Converges the server, then opens a session as each product role.
 fn server_backend(
     runtime: &tokio::runtime::Runtime,
-) -> impl Fn(&AdminConfig, &Plan, &ProvisionTarget) -> Result<Outcome, ProvisionError> + '_ {
+) -> impl Fn(&AdminConfig, &Plan, &ProvisionTarget) -> Result<Outcome, Failure> + '_ {
     move |admin, plan, target| {
         runtime.block_on(async {
-            let outcome = execute(admin, plan, Mode::Converge).await?;
-            verify_logins(admin, target).await?;
-            Ok(outcome)
+            let outcome = execute_recording(admin, plan, Mode::Converge).await?;
+            match verify_logins(admin, target).await {
+                Ok(()) => Ok(outcome),
+                Err(error) => Err(Failure {
+                    error,
+                    reached: outcome.statements,
+                }),
+            }
         })
     }
 }
@@ -978,7 +1088,7 @@ mod tests {
         _: &AdminConfig,
         plan: &Plan,
         _: &ProvisionTarget,
-    ) -> Result<Outcome, ProvisionError> {
+    ) -> Result<Outcome, Failure> {
         Ok(Outcome {
             statements: plan
                 .statements()
@@ -996,11 +1106,7 @@ mod tests {
         })
     }
 
-    fn must_not_run(
-        _: &AdminConfig,
-        _: &Plan,
-        _: &ProvisionTarget,
-    ) -> Result<Outcome, ProvisionError> {
+    fn must_not_run(_: &AdminConfig, _: &Plan, _: &ProvisionTarget) -> Result<Outcome, Failure> {
         panic!("the backend must not run");
     }
 
@@ -1279,7 +1385,8 @@ mod tests {
 
     fn refusal_json(error: ProvisionError) -> (u8, Value) {
         let admin = admin_url("db.example", 5432);
-        let backend = move |_: &AdminConfig, _: &Plan, _: &ProvisionTarget| Err(error.clone());
+        let backend =
+            move |_: &AdminConfig, _: &Plan, _: &ProvisionTarget| Err(error.clone().into());
         let run = execute_run(
             &["--format", "json"],
             Some(&admin),
@@ -1372,11 +1479,51 @@ mod tests {
             (
                 E::RoleLoginFailed {
                     role: "app_runtime".to_owned(),
+                    sqlstate: Some("28P01".to_owned()),
                 },
                 "platform.provision.role-login-failed",
                 "domain-refusal",
                 1,
                 None,
+            ),
+            (
+                E::RoleLoginFailed {
+                    role: "app_runtime".to_owned(),
+                    sqlstate: None,
+                },
+                "platform.provision.role-login-failed",
+                "operational-failure",
+                3,
+                None,
+            ),
+            (
+                E::RoleMembershipDiffers {
+                    step: "role.runtime",
+                    role: "app_runtime".to_owned(),
+                },
+                "platform.provision.role-membership-differs",
+                "domain-refusal",
+                1,
+                Some("role.runtime"),
+            ),
+            (
+                E::DatabaseIsTemplate {
+                    database: "app".to_owned(),
+                },
+                "platform.provision.database-is-template",
+                "domain-refusal",
+                1,
+                Some("database.create"),
+            ),
+            (
+                E::ExtensionIncomplete {
+                    step: "extension.postgis",
+                    extension: "postgis".to_owned(),
+                },
+                "platform.provision.extension-incomplete",
+                "domain-refusal",
+                1,
+                Some("extension.postgis"),
             ),
             (
                 E::EffectUnconfirmed {
@@ -1403,7 +1550,12 @@ mod tests {
             assert_eq!(actual_exit, exit, "{code}");
             assert_eq!(report["ok"], false, "{code}");
             assert_eq!(report["status"], status, "{code}");
-            assert_eq!(report["executed"], true, "{code}");
+            let ran = !matches!(
+                code,
+                "platform.provision.admin-connect-failed"
+                    | "platform.provision.unsupported-postgres"
+            );
+            assert_eq!(report["executed"], ran, "{code}");
             let diagnostics = report["diagnostics"].as_array().unwrap();
             assert_eq!(diagnostics.len(), 1, "{code}");
             let diagnostic = &diagnostics[0];
@@ -1416,6 +1568,116 @@ mod tests {
                 assert_eq!(statement["outcome"], "not-run", "{code}");
             }
         }
+    }
+
+    #[test]
+    fn a_failure_part_way_reports_what_ran_before_it() {
+        let admin = admin_url("db.example", 5432);
+        let backend = |_: &AdminConfig, plan: &Plan, _: &ProvisionTarget| {
+            let reached = plan
+                .statements()
+                .iter()
+                .take(3)
+                .map(|statement| {
+                    let outcome = if statement.probe.is_some() {
+                        StatementOutcome::Created
+                    } else {
+                        StatementOutcome::Applied
+                    };
+                    (statement.step, outcome)
+                })
+                .collect();
+            Err(Failure {
+                error: ProvisionError::StatementNeedsPrivilege {
+                    step: "database.revoke-public",
+                    needs: Needs::DatabaseOwner,
+                    scope: Scope::Server,
+                    database: "app".to_owned(),
+                },
+                reached,
+            })
+        };
+        let run = execute_run(
+            &["--format", "json"],
+            Some(&admin),
+            Ok(split_input()),
+            &backend,
+        );
+        assert_eq!(run.exit, 1);
+        let report = run.json();
+        assert_eq!(report["executed"], true);
+        let outcomes: Vec<&str> = report["statements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|statement| statement["outcome"].as_str().unwrap())
+            .collect();
+        assert_eq!(&outcomes[..3], ["created", "created", "created"]);
+        assert!(outcomes[3..].iter().all(|outcome| *outcome == "not-run"));
+    }
+
+    #[test]
+    fn a_login_check_failure_keeps_the_outcomes_of_the_run_that_preceded_it() {
+        let admin = admin_url("db.example", 5432);
+        let backend = |admin: &AdminConfig, plan: &Plan, target: &ProvisionTarget| {
+            let outcome = created_everything(admin, plan, target)?;
+            Err(Failure {
+                error: ProvisionError::RoleLoginFailed {
+                    role: "app_runtime".to_owned(),
+                    sqlstate: Some("28P01".to_owned()),
+                },
+                reached: outcome.statements,
+            })
+        };
+        let run = execute_run(
+            &["--format", "json"],
+            Some(&admin),
+            Ok(split_input()),
+            &backend,
+        );
+        assert_eq!(run.exit, 1);
+        let report = run.json();
+        assert_eq!(report["executed"], true);
+        assert!(report["statements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|statement| statement["outcome"] != "not-run"));
+    }
+
+    #[test]
+    fn a_login_refusal_blames_the_password_only_for_a_password_failure() {
+        let action_for = |sqlstate: Option<&str>| {
+            let (_, report) = refusal_json(ProvisionError::RoleLoginFailed {
+                role: "app_runtime".to_owned(),
+                sqlstate: sqlstate.map(str::to_owned),
+            });
+            report["diagnostics"][0]["suggestedAction"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert!(action_for(Some("28P01")).contains("different password"));
+        for other in [Some("28000"), Some("53300"), None] {
+            assert!(
+                !action_for(other).contains("different password"),
+                "{other:?}"
+            );
+        }
+        assert!(action_for(Some("28000")).contains("pg_hba.conf"));
+    }
+
+    #[test]
+    fn a_missing_administrator_database_gets_its_own_action() {
+        let (exit, report) = refusal_json(ProvisionError::AdminConnectFailed {
+            sqlstate: Some("3D000".to_owned()),
+        });
+        assert_eq!(exit, 3);
+        let action = report["diagnostics"][0]["suggestedAction"]
+            .as_str()
+            .unwrap();
+        assert!(action.contains("does not exist"), "{action}");
+        assert!(!action.contains("host, port"), "{action}");
     }
 
     #[test]
@@ -1442,7 +1704,7 @@ mod tests {
     fn a_text_refusal_goes_to_stderr_and_stdout_stays_empty() {
         let admin = admin_url("db.example", 5432);
         let backend = |_: &AdminConfig, _: &Plan, _: &ProvisionTarget| {
-            Err(ProvisionError::UnsupportedPostgres)
+            Err(ProvisionError::UnsupportedPostgres.into())
         };
         let run = execute_run(&[], Some(&admin), Ok(split_input()), &backend);
         assert_eq!(run.exit, 1);
@@ -1761,13 +2023,180 @@ mod tests {
     }
 
     #[test]
+    fn a_control_character_in_a_role_name_is_refused_in_print_mode_with_no_script() {
+        let migration = format!("postgres://app_migration:{MIGRATION_PASSWORD}@db.example/app");
+        let runtime =
+            format!("postgres://app_runtime%0A%5C!%20id:{RUNTIME_PASSWORD}@db.example/app");
+        for format in [["--format", "human"], ["--format", "json"]] {
+            let mut arguments = vec!["--print-sql"];
+            arguments.extend(format);
+            let run = execute_run(
+                &arguments,
+                None,
+                Ok(input_with(&migration, &runtime, owned_product())),
+                &must_not_run,
+            );
+            assert_eq!(run.exit, 2, "{}", run.all_output());
+            let output = run.all_output();
+            for script in [
+                "CREATE ROLE",
+                "\\password",
+                "\\connect",
+                "\\!",
+                "-- provision script",
+            ] {
+                assert!(!output.contains(script), "{format:?}: {output}");
+            }
+            assert!(!output.contains(RUNTIME_PASSWORD), "{output}");
+            if format[1] == "json" {
+                let diagnostic = first_diagnostic(&run);
+                assert_eq!(diagnostic["code"], "platform.provision.target-invalid");
+                let action = diagnostic["suggestedAction"].as_str().unwrap();
+                assert!(
+                    action.contains("user") && action.contains("runtime"),
+                    "{action}"
+                );
+                assert!(!action.contains("\\!"), "{action}");
+                assert!(run.json().get("runtimeRole").is_none());
+            } else {
+                assert!(
+                    output.contains("platform.provision.target-invalid"),
+                    "{output}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_refused_url_member_is_named_in_the_action_and_never_quoted() {
+        let cases = [
+            (
+                "postgres://app_migration%0A:pw1@db.example/app",
+                "postgres://app_runtime:pw2@db.example/app",
+                "migration URL",
+            ),
+            (
+                "postgres://app_migration:pw1@db.example/app%0Ax",
+                "postgres://app_runtime:pw2@db.example/app%0Ax",
+                "database name",
+            ),
+            (
+                "postgres://app_migration:pw1@db.example/host%3Dattacker",
+                "postgres://app_runtime:pw2@db.example/host%3Dattacker",
+                "database name",
+            ),
+        ];
+        for (migration, runtime, member) in cases {
+            let run = execute_run(
+                &["--print-sql", "--format", "json"],
+                None,
+                Ok(input_with(migration, runtime, owned_product())),
+                &must_not_run,
+            );
+            assert_eq!(run.exit, 2, "{migration}");
+            let diagnostic = first_diagnostic(&run);
+            assert_eq!(diagnostic["code"], "platform.provision.target-invalid");
+            let action = diagnostic["suggestedAction"].as_str().unwrap();
+            assert!(action.contains(member), "{member}: {action}");
+            assert!(!run.stdout.contains("attacker"), "{}", run.stdout);
+        }
+    }
+
+    #[test]
+    fn the_administrators_own_database_cannot_be_the_product_database() {
+        let admin =
+            format!("postgres://admin:{ADMIN_PASSWORD}@db.example:5432/app?sslmode=verify-full");
+        let run = execute_run(
+            &["--format", "json"],
+            Some(&admin),
+            Ok(split_input()),
+            &must_not_run,
+        );
+        assert_eq!(run.exit, 2, "{}", run.all_output());
+        assert_eq!(
+            first_diagnostic(&run)["code"],
+            "platform.provision.target-invalid"
+        );
+        assert!(!run.stdout.contains(ADMIN_PASSWORD));
+    }
+
+    fn admin_file_run(contents: &[u8]) -> Run {
+        let directory = tempfile::tempdir().expect("scratch directory");
+        let path = directory.path().join("admin.url");
+        std::fs::write(&path, contents).expect("admin file");
+        let path = path.display().to_string();
+        let args = parse(&["--runtime-config", "r", "--admin-url-file", path.as_str()]).unwrap();
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let exit = run_with(
+            "casectl",
+            "1",
+            &args,
+            OutputFormat::Json,
+            |_| Ok(split_input()),
+            &must_not_run,
+            &mut stdout,
+            &mut stderr,
+        );
+        Run {
+            exit,
+            stdout: String::from_utf8(stdout).expect("utf-8"),
+            stderr: String::from_utf8(stderr).expect("utf-8"),
+        }
+    }
+
+    #[test]
+    fn an_unusable_administrator_file_is_a_usage_error() {
+        let oversized = vec![b'a'; 9000];
+        let cases: [(&str, &[u8]); 4] = [
+            ("larger than 8 KiB", &oversized),
+            ("empty", b""),
+            ("whitespace only", b"  \n\t\n"),
+            ("not UTF-8", &[0xff, 0xfe, 0xfd]),
+        ];
+        for (what, contents) in cases {
+            let run = admin_file_run(contents);
+            assert_eq!(run.exit, 2, "{what}: {}", run.all_output());
+            assert_eq!(
+                first_diagnostic(&run)["code"],
+                "platform.provision.admin-url-invalid",
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_administrator_path_that_is_not_a_regular_file_is_a_usage_error() {
+        let directory = tempfile::tempdir().expect("scratch directory");
+        let path = directory.path().display().to_string();
+        let args = parse(&["--runtime-config", "r", "--admin-url-file", path.as_str()]).unwrap();
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let exit = run_with(
+            "casectl",
+            "1",
+            &args,
+            OutputFormat::Json,
+            |_| Ok(split_input()),
+            &must_not_run,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, 2);
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "platform.provision.admin-url-invalid"
+        );
+    }
+
+    #[test]
     fn no_output_ever_holds_a_password_verifier_or_url() {
         let admin = admin_url("db.example", 5432);
         let backend = |_: &AdminConfig, _: &Plan, _: &ProvisionTarget| {
             Err(ProvisionError::StatementFailed {
                 step: "role.migration",
                 sqlstate: "42710".to_owned(),
-            })
+            }
+            .into())
         };
         for format in [["--format", "human"], ["--format", "json"]] {
             let run = execute_run(&format, Some(&admin), Ok(split_input()), &backend);

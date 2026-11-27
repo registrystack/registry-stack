@@ -277,8 +277,9 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public
 
 The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
 
-`provision` grants the runtime role nothing beyond `CONNECT`. `apply`, in the next section, grants
-it its access to the schema and the Messaging tables and sequences. The runtime requires TLS on
+`provision` grants the runtime role `CONNECT` on the database and `USAGE` on the `public` schema,
+and running `provision` again restores that grant. `apply`, in the next section, grants it its
+access to the Messaging tables and sequences. It does not restore `USAGE` on `public`. The runtime requires TLS on
 its database connection and refuses one it cannot verify; `database.caBundleRef` names the CA
 bundle when a private CA fronts PostgreSQL.
 

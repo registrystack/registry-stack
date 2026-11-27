@@ -181,10 +181,11 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public
 
 The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
 
-`provision` grants the runtime role nothing beyond `CONNECT`. `apply` grants it exactly what serving
-needs: usage on the schema, read and write on the Scheduling tables, usage and select on the outbox
-identity sequence, and read on the activation ledgers. It reissues the grants on every run, so a
-table a later migration adds is covered. The runtime requires TLS on its database connection and
+`provision` grants the runtime role `CONNECT` on the database and `USAGE` on the `public` schema,
+and running `provision` again restores that grant. `apply` grants it the rest of what serving needs:
+read and write on the Scheduling tables, usage and select on the outbox identity sequence, and read
+on the activation ledgers. It reissues those grants on every run, so a table a later migration adds
+is covered, but it does not restore `USAGE` on `public`. The runtime requires TLS on its database connection and
 refuses one it cannot verify; `database.caBundleRef` names the CA bundle when a private CA fronts
 PostgreSQL.
 

@@ -5432,7 +5432,7 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "b819cb03b63fd52ba179f2ed4062c2c26ec1da3dd57278abe3819db21d6898ad"
+        "sha256": "5a9e84b169d847669e97d8d53073ddbb98928c92470ee167f9020df98120fd6b"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
@@ -5540,7 +5540,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
+        "sha256": "980b91e5598a527abac734928b06c7290c2b4c4482589c9dd832127f0bc2f9bc"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-grant-changed.schema.json",
@@ -5558,7 +5558,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
+        "sha256": "980b91e5598a527abac734928b06c7290c2b4c4482589c9dd832127f0bc2f9bc"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-version-ready.schema.json",
@@ -5576,7 +5576,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
+        "sha256": "980b91e5598a527abac734928b06c7290c2b4c4482589c9dd832127f0bc2f9bc"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-version-rejected.schema.json",
@@ -5594,7 +5594,7 @@
       "description": "Registry Document Store project JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
+        "sha256": "980b91e5598a527abac734928b06c7290c2b4c4482589c9dd832127f0bc2f9bc"
       },
       "artifact": {
         "path": "products/documents/generated/project/project.schema.json",
@@ -5612,11 +5612,11 @@
       "description": "Registry Document Store runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "819d4b5c92e5a318e75e3d89c0e38d65bb53632c6ff1dbcc7f2fa1cd627c310a"
+        "sha256": "980b91e5598a527abac734928b06c7290c2b4c4482589c9dd832127f0bc2f9bc"
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "93ad66566ca8cd15468565ae01f966a85ce5b8f6f00588babde370d155190402",
+        "sha256": "c132d0dea03c4d33a9387b5e0ddfb5b9dc7b6384287c7133e3c06d51114716ce",
         "mediaType": "application/schema+json"
       }
     },
@@ -5972,7 +5972,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "c9ac98430ca6c4b4cf404688dda544d196aa624cc9dfb56cf737a3e2c8b8b359"
+        "sha256": "b098b5a7aaef9607076c971ce3bb2fd55e4100233f89e7cedf82083171788e37"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/project.schema.json",
@@ -5990,7 +5990,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "c9ac98430ca6c4b4cf404688dda544d196aa624cc9dfb56cf737a3e2c8b8b359"
+        "sha256": "b098b5a7aaef9607076c971ce3bb2fd55e4100233f89e7cedf82083171788e37"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/provider.schema.json",
@@ -6008,11 +6008,11 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "c9ac98430ca6c4b4cf404688dda544d196aa624cc9dfb56cf737a3e2c8b8b359"
+        "sha256": "b098b5a7aaef9607076c971ce3bb2fd55e4100233f89e7cedf82083171788e37"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "3c5429e7eedfcaf3ff2d79b7979f8996fafbfc93edc454e98acf09715810fb18",
+        "sha256": "daa1af1db5b235398feaa98417f8cf682a60703557065df61552d0579d97819a",
         "mediaType": "application/schema+json"
       }
     },
@@ -6026,7 +6026,7 @@
       "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "c9ac98430ca6c4b4cf404688dda544d196aa624cc9dfb56cf737a3e2c8b8b359"
+        "sha256": "b098b5a7aaef9607076c971ce3bb2fd55e4100233f89e7cedf82083171788e37"
       },
       "artifact": {
         "path": "products/messaging/generated/authoring/template.schema.json",
@@ -6098,11 +6098,11 @@
       "description": "Report of the shared `provision` command that creates a product's PostgreSQL roles, database, schemas and extensions.",
       "source": {
         "path": "crates/registry-platform-provision/src/cli.rs",
-        "sha256": "76bb9ff03c5acfde5c92823721ded6f3587b5185fef95cd4c80c159bbc04be69"
+        "sha256": "097c8da77b747a79f756b5ab511c296a0b1868e1650ebb8826dfb3b981e02164"
       },
       "artifact": {
         "path": "crates/registry-platform-provision/schema/provision-report.schema.json",
-        "sha256": "6b3a5f1f63ac5bc66ce1d84142cb4004f62cb47e130c57685cdc2fc5d1ec6d15",
+        "sha256": "e0e39e826b35c83161ea544805d6b33a18bd1365033fd497022cefe05f30b0bb",
         "mediaType": "application/schema+json"
       }
     },

@@ -38,6 +38,7 @@ from ci_changes import (
     ADAPTER_PACKAGES,
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
+    PROVISION_JOURNEY_INPUTS,
     PROVISION_JOURNEY_PACKAGES,
     RENDER_TUTORIAL_INPUTS,
     SCHEDULING_TUTORIAL_INPUTS,
@@ -2890,7 +2891,9 @@ class CiChangesTest(unittest.TestCase):
         # The casework-postgres job owns the stock-issuer task approval
         # journey through Evidence, BReg, and Scheduling. It must run on every
         # change that selects the BReg product gate and on every change to the
-        # Scheduling runtime whose probe example the journey builds.
+        # Scheduling runtime whose probe example the journey builds. A change
+        # that joins the BReg contracts lane only for another product's
+        # provisioning journey does not select the BReg product gate.
         paths = [f"{root}/src/lib.rs" for root in self.workspace.roots.values()]
         paths.extend(
             (
@@ -2905,7 +2908,10 @@ class CiChangesTest(unittest.TestCase):
         for path in paths:
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
-                if outputs["breg_contracts"] or (
+                provisioning_only = matches(path, *PROVISION_JOURNEY_INPUTS) and not (
+                    set(outputs["rust_packages"]) & BREG_PACKAGES
+                )
+                if (outputs["breg_contracts"] and not provisioning_only) or (
                     "registry-scheduling" in outputs["rust_packages"]
                 ):
                     self.assertTrue(outputs["casework_postgres"])
@@ -4449,6 +4455,18 @@ on:
             "crates/registry-documents/migrations/0001_documents.sql",
             "crates/registry-messaging/migrations/0001_messaging.sql",
             "crates/registry-scheduling/migrations/0001_scheduling.sql",
+            "crates/registry-casework/src/activation.rs",
+            "crates/registry-documents/src/activation.rs",
+            "crates/registry-messaging/src/activation.rs",
+            "crates/registry-scheduling/src/store/activation.rs",
+            "crates/registry-coordinator/src/deployment.rs",
+            "crates/registry-coordinator/src/store.rs",
+            "crates/registry-coordinator/src/cli.rs",
+            *(
+                f"crates/{package}/src/lib.rs"
+                for package in journeys
+                if package != "registry-coordinator"
+            ),
         ]
         for graph, workspace in (("real", self.workspace), ("edgeless", edgeless)):
             for path in paths:

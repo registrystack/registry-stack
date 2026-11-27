@@ -39,6 +39,25 @@
   and the crypto stack. A service that passes its trace id to `record_refusal!`
   enables the feature.
 
+- `registry-platform-provision` is the one provisioning plan for every
+  database-backed tool, with the `provision` command behind its `cli` feature
+  (`cli::run_provision`). From the two product URLs it creates the migration
+  and runtime login roles, an isolated database closed to `PUBLIC`, the
+  product's schema layout and the optional `btree_gist` and PostGIS
+  extensions. It can run as an administrator over verified TLS, converging by
+  object, or print a `psql` script that holds no password and stops at the
+  first error. It refuses an existing role with other attributes, role-level
+  settings or a membership it did not grant, a template database, a PostGIS
+  installed outside its schema or without the bbox membership, a role name
+  that is `public`, `none` or starts with `pg_`, a name with a control
+  character or backslash, and the `postgres`, `template0` and `template1`
+  databases. It grants the runtime role `USAGE` on `public` directly, so
+  running `provision` again restores it. A run that stops part-way reports
+  the statements that ran. `registry-platform-activation` exports
+  `MINIMUM_SERVER_VERSION_NUM`, the PostgreSQL 17 floor the plan and the
+  activation ledger share. `rstack dev` provisions its databases from the
+  same plan.
+
 - A `test-support` feature in `registry-platform-provision` gives the product
   provision tests one verified-TLS superuser session, so they run against a
   TLS-only PostgreSQL server. It is enabled only by dev-dependencies.

@@ -94,6 +94,10 @@ pub enum Probe {
     Role {
         name: String,
         login: bool,
+        /// The one role this plan itself grants to the role, with
+        /// `INHERIT FALSE, SET TRUE, ADMIN FALSE`. Membership of any other
+        /// role is refused: it would carry privileges the plan did not grant.
+        member_of: Option<String>,
     },
     Database {
         name: String,
@@ -101,11 +105,24 @@ pub enum Probe {
     Extension {
         name: String,
         minimum_version: Option<(u32, u32)>,
+        /// What the same statement block sets up beside the extension. An
+        /// extension present without it was installed outside the plan.
+        setup: Option<ExtensionSetup>,
     },
     Schema {
         name: String,
         owner: String,
     },
+}
+
+/// The schema an extension must live in and the role membership the
+/// extension's statement block grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionSetup {
+    pub schema: String,
+    /// `member` must be able to `SET ROLE` to `role`.
+    pub member: String,
+    pub role: String,
 }
 
 pub struct Statement {
@@ -197,8 +214,35 @@ pub fn verify_server_version(version_num: i32) -> Result<(), UnsupportedPostgres
 
 const MAX_NAME_BYTES: usize = 63;
 
+/// Databases a product must never be provisioned into: PostgreSQL's own.
+const RESERVED_DATABASES: [&str; 3] = ["postgres", "template0", "template1"];
+
+/// A name reaches the printed `psql` script, where a line break would end a
+/// meta-command and a backslash would start one, so no byte below 0x20, DEL
+/// or backslash is allowed in any name.
 fn check_name(what: &'static str, name: &str) -> Result<(), PlanError> {
-    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.contains('\0') {
+    let unsafe_byte = |byte: u8| byte < 0x20 || byte == 0x7f || byte == b'\\';
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.bytes().any(unsafe_byte) {
+        return Err(PlanError::InvalidName { what });
+    }
+    Ok(())
+}
+
+/// `public` and `none` are keywords in a `GRANT` list, and `pg_` names belong
+/// to PostgreSQL.
+fn check_role_name(what: &'static str, name: &str) -> Result<(), PlanError> {
+    check_name(what, name)?;
+    let lower = name.to_ascii_lowercase();
+    if lower == "public" || lower == "none" || lower.starts_with("pg_") {
+        return Err(PlanError::InvalidName { what });
+    }
+    Ok(())
+}
+
+/// `\connect` reads a database name holding `=` as a connection string.
+fn check_database_name(what: &'static str, name: &str) -> Result<(), PlanError> {
+    check_name(what, name)?;
+    if name.contains('=') || RESERVED_DATABASES.contains(&name) {
         return Err(PlanError::InvalidName { what });
     }
     Ok(())
@@ -235,7 +279,11 @@ fn statement(
     }
 }
 
-fn login_role(step: &'static str, credential: &RoleCredential) -> Statement {
+fn login_role(
+    step: &'static str,
+    credential: &RoleCredential,
+    member_of: Option<&str>,
+) -> Statement {
     let verifier = Zeroizing::new(postgres_protocol::password::scram_sha_256(
         credential.password.as_bytes(),
     ));
@@ -247,6 +295,7 @@ fn login_role(step: &'static str, credential: &RoleCredential) -> Statement {
         Some(Probe::Role {
             name: credential.name.clone(),
             login: true,
+            member_of: member_of.map(str::to_owned),
         }),
     );
     statement.executable = Zeroizing::new(sql::create_role_sql(&credential.name, &verifier));
@@ -261,9 +310,9 @@ fn login_role(step: &'static str, credential: &RoleCredential) -> Statement {
 /// already holds, so it runs every time. Passwords reach only the private
 /// executable text, as SCRAM verifiers.
 pub fn plan(product: &ProductDatabase, target: &ProvisionTarget) -> Result<Plan, PlanError> {
-    check_name("database name", &target.database)?;
-    check_name("migration role name", &target.migration.name)?;
-    check_name("runtime role name", &target.runtime.name)?;
+    check_database_name("database name", &target.database)?;
+    check_role_name("migration role name", &target.migration.name)?;
+    check_role_name("runtime role name", &target.runtime.name)?;
     let single_role = target.migration.name == target.runtime.name;
     if single_role && *target.migration.password != *target.runtime.password {
         return Err(PlanError::SingleRolePasswordsDiffer);
@@ -278,15 +327,20 @@ pub fn plan(product: &ProductDatabase, target: &ProvisionTarget) -> Result<Plan,
     }
     if let Some(spatial) = &product.spatial {
         check_plain_identifier("PostGIS schema name", &spatial.schema)?;
-        check_name("PostGIS bbox role name", &spatial.bbox_role)?;
+        check_role_name("PostGIS bbox role name", &spatial.bbox_role)?;
     }
 
     let database = target.database.as_str();
     let migration = target.migration.name.as_str();
     let runtime = target.runtime.name.as_str();
-    let mut statements = vec![login_role("role.migration", &target.migration)];
+    // The migration role is the one the plan makes a member of the bbox role.
+    let bbox = product
+        .spatial
+        .as_ref()
+        .map(|spatial| spatial.bbox_role.as_str());
+    let mut statements = vec![login_role("role.migration", &target.migration, bbox)];
     if !single_role {
-        statements.push(login_role("role.runtime", &target.runtime));
+        statements.push(login_role("role.runtime", &target.runtime, None));
     }
     if let Some(spatial) = &product.spatial {
         statements.push(statement(
@@ -297,6 +351,7 @@ pub fn plan(product: &ProductDatabase, target: &ProvisionTarget) -> Result<Plan,
             Some(Probe::Role {
                 name: spatial.bbox_role.clone(),
                 login: false,
+                member_of: None,
             }),
         ));
     }
@@ -351,6 +406,7 @@ pub fn plan(product: &ProductDatabase, target: &ProvisionTarget) -> Result<Plan,
             Some(Probe::Extension {
                 name: "btree_gist".to_owned(),
                 minimum_version: None,
+                setup: None,
             }),
         ));
     }
@@ -370,7 +426,7 @@ pub fn plan(product: &ProductDatabase, target: &ProvisionTarget) -> Result<Plan,
         SchemaLayout::PublicForMigration => {
             statements.push(in_database(
                 "schema.public",
-                sql::public_schema_sql(migration),
+                sql::public_schema_sql(migration, runtime),
                 None,
             ));
         }
@@ -383,6 +439,11 @@ pub fn plan(product: &ProductDatabase, target: &ProvisionTarget) -> Result<Plan,
             Some(Probe::Extension {
                 name: "postgis".to_owned(),
                 minimum_version: Some(spatial.minimum_postgis),
+                setup: Some(ExtensionSetup {
+                    schema: spatial.schema.clone(),
+                    member: migration.to_owned(),
+                    role: spatial.bbox_role.clone(),
+                }),
             }),
         );
         postgis.needs = Needs::Superuser;
@@ -404,7 +465,8 @@ pub fn render_script(plan: &Plan) -> String {
     let mut script = format!(
         "-- provision script, product {}. Nothing was run.\n\
          -- For a server where these objects do not exist yet. Review, then run with psql as an\n\
-         -- administrator that has CREATEROLE and CREATEDB.\n\
+         -- administrator that has CREATEROLE and CREATEDB. It stops at the first error.\n\
+         \\set ON_ERROR_STOP on\n\
          SET createrole_self_grant = {};\n",
         plan.product,
         sql::quote_literal(sql::CREATEROLE_SELF_GRANT),
@@ -559,7 +621,8 @@ mod tests {
             role.probe,
             Some(Probe::Role {
                 name: "casework_migration".to_owned(),
-                login: true
+                login: true,
+                member_of: None,
             })
         );
         let create = by_step("database.create");
@@ -732,6 +795,167 @@ mod tests {
         );
     }
 
+    fn invalid(what: &'static str) -> PlanError {
+        PlanError::InvalidName { what }
+    }
+
+    fn plan_for(target: &ProvisionTarget) -> Result<Plan, PlanError> {
+        plan(&product(SchemaLayout::PublicForMigration), target)
+    }
+
+    #[test]
+    fn names_with_control_characters_or_backslashes_are_refused() {
+        for bad in ["a\nb", "a\rb", "a\x1bb", "a\x7fb", "a\\b", "a\tb"] {
+            let mut database = target();
+            database.database = bad.to_owned();
+            assert_eq!(
+                plan_for(&database).unwrap_err(),
+                invalid("database name"),
+                "{bad:?}"
+            );
+
+            let mut migration = target();
+            migration.migration = RoleCredential::new(bad, PASSWORD_M);
+            assert_eq!(
+                plan_for(&migration).unwrap_err(),
+                invalid("migration role name"),
+                "{bad:?}"
+            );
+
+            let mut runtime = target();
+            runtime.runtime = RoleCredential::new(bad, PASSWORD_R);
+            assert_eq!(
+                plan_for(&runtime).unwrap_err(),
+                invalid("runtime role name"),
+                "{bad:?}"
+            );
+
+            let mut spatial = breg_spatial();
+            spatial.spatial.as_mut().unwrap().bbox_role = bad.to_owned();
+            assert_eq!(
+                plan(&spatial, &target()).unwrap_err(),
+                invalid("PostGIS bbox role name"),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_database_name_with_an_equals_sign_is_refused_but_a_role_name_may_hold_one() {
+        let mut database = target();
+        database.database = "host=attacker.example dbname=x".to_owned();
+        assert_eq!(plan_for(&database).unwrap_err(), invalid("database name"));
+
+        let mut role = target();
+        role.runtime = RoleCredential::new("app=runtime", PASSWORD_R);
+        assert!(plan_for(&role).is_ok());
+    }
+
+    #[test]
+    fn reserved_role_names_are_refused() {
+        for reserved in [
+            "public",
+            "PUBLIC",
+            "none",
+            "None",
+            "pg_read_all_data",
+            "PG_x",
+        ] {
+            let mut migration = target();
+            migration.migration = RoleCredential::new(reserved, PASSWORD_M);
+            assert_eq!(
+                plan_for(&migration).unwrap_err(),
+                invalid("migration role name"),
+                "{reserved}"
+            );
+            let mut runtime = target();
+            runtime.runtime = RoleCredential::new(reserved, PASSWORD_R);
+            assert_eq!(
+                plan_for(&runtime).unwrap_err(),
+                invalid("runtime role name"),
+                "{reserved}"
+            );
+        }
+        let mut spatial = breg_spatial();
+        spatial.spatial.as_mut().unwrap().bbox_role = "public".to_owned();
+        assert_eq!(
+            plan(&spatial, &target()).unwrap_err(),
+            invalid("PostGIS bbox role name")
+        );
+        let mut single = target();
+        single.migration = RoleCredential::new("public", PASSWORD_M);
+        single.runtime = RoleCredential::new("public", PASSWORD_M);
+        assert!(plan_for(&single).is_err());
+    }
+
+    #[test]
+    fn the_postgres_template_and_maintenance_databases_are_refused() {
+        for reserved in ["postgres", "template0", "template1"] {
+            let mut database = target();
+            database.database = reserved.to_owned();
+            assert_eq!(
+                plan_for(&database).unwrap_err(),
+                invalid("database name"),
+                "{reserved}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_printed_script_stops_at_the_first_error_before_anything_else() {
+        let script = render_script(&plan(&breg_spatial(), &target()).unwrap());
+        let first = script
+            .lines()
+            .find(|line| !line.starts_with("--"))
+            .expect("a statement line");
+        assert_eq!(first, "\\set ON_ERROR_STOP on", "{script}");
+    }
+
+    #[test]
+    fn the_runtime_role_gets_usage_on_public_from_the_plan() {
+        let plan = plan(&product(SchemaLayout::PublicForMigration), &target()).unwrap();
+        let public = plan
+            .statements()
+            .iter()
+            .find(|statement| statement.step == "schema.public")
+            .unwrap();
+        assert_eq!(public.probe, None);
+        assert_eq!(public.scope, Scope::Database);
+        assert_eq!(
+            public.printable,
+            "REVOKE CREATE ON SCHEMA public FROM PUBLIC; \
+             GRANT USAGE, CREATE ON SCHEMA public TO \"casework_migration\"; \
+             GRANT USAGE ON SCHEMA public TO \"casework_runtime\""
+        );
+        assert!(!public.printable.contains("GRANT OPTION"));
+    }
+
+    #[test]
+    fn single_role_public_layout_grants_the_one_role_once() {
+        let target = ProvisionTarget {
+            database: "adapter".to_owned(),
+            migration: RoleCredential::new("adapter", PASSWORD_M),
+            runtime: RoleCredential::new("adapter", PASSWORD_M),
+        };
+        let plan = plan(&product(SchemaLayout::PublicForMigration), &target).unwrap();
+        let public = plan
+            .statements()
+            .iter()
+            .find(|statement| statement.step == "schema.public")
+            .unwrap();
+        assert_eq!(
+            public.printable,
+            "REVOKE CREATE ON SCHEMA public FROM PUBLIC; \
+             GRANT USAGE, CREATE ON SCHEMA public TO \"adapter\""
+        );
+    }
+
+    #[test]
+    fn literals_with_a_backslash_are_written_as_escape_strings() {
+        assert_eq!(quote_literal("a\\b'c"), "E'a\\\\b''c'");
+        assert_eq!(quote_literal("plain"), "'plain'");
+    }
+
     #[test]
     fn server_below_the_floor_is_refused() {
         for version in [0, 90_600, 160_999, 169_999] {
@@ -817,7 +1041,7 @@ mod tests {
     #[test]
     fn breg_setup_installs_extension_and_all_owned_schemas() {
         let layout = SchemaLayout::Owned(breg_schemas());
-        let sql = database_setup_sql("casework_migration", &layout, true);
+        let sql = database_setup_sql("casework_migration", "casework_runtime", &layout, true);
         assert!(sql.starts_with("CREATE EXTENSION btree_gist;"), "{sql}");
         for schema in breg_schemas() {
             assert!(
@@ -839,18 +1063,20 @@ mod tests {
     }
 
     #[test]
-    fn public_setup_restricts_create_and_grants_the_migration_role() {
+    fn public_setup_restricts_create_and_grants_both_roles() {
         assert_eq!(
             database_setup_sql(
                 "casework_migration",
+                "casework_runtime",
                 &SchemaLayout::PublicForMigration,
                 false
             ),
             "REVOKE CREATE ON SCHEMA public FROM PUBLIC; \
-             GRANT USAGE, CREATE ON SCHEMA public TO \"casework_migration\""
+             GRANT USAGE, CREATE ON SCHEMA public TO \"casework_migration\"; \
+             GRANT USAGE ON SCHEMA public TO \"casework_runtime\""
         );
         assert_eq!(
-            database_setup_sql("m", &SchemaLayout::CreatedByApply, false),
+            database_setup_sql("m", "r", &SchemaLayout::CreatedByApply, false),
             ""
         );
     }

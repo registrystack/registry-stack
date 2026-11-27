@@ -25,11 +25,15 @@ pub mod sql;
 pub mod test_support;
 
 pub use admin::{admin_config, AdminConfig, AdminConfigError};
-pub use execute::{execute, verify_logins, Mode, Outcome, ProvisionError, StatementOutcome};
+pub use execute::{
+    execute, execute_recording, verify_logins, Failure, Mode, Outcome, ProvisionError,
+    StatementOutcome,
+};
 
 pub use plan::{
-    plan, render_script, verify_server_version, Needs, Plan, PlanError, Probe, ProductDatabase,
-    ProvisionTarget, RoleCredential, SchemaLayout, Scope, Spatial, Statement, UnsupportedPostgres,
+    plan, render_script, verify_server_version, ExtensionSetup, Needs, Plan, PlanError, Probe,
+    ProductDatabase, ProvisionTarget, RoleCredential, SchemaLayout, Scope, Spatial, Statement,
+    UnsupportedPostgres,
 };
 
 #[cfg(feature = "cli")]
