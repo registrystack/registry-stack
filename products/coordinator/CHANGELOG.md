@@ -22,15 +22,30 @@
   host, an IPv4-mapped loopback literal such as `[::ffff:127.0.0.1]` counts as
   loopback, the same as `127.0.0.1`. A database host of `localhost` is matched
   in any letter case. Host names other than `localhost` stay refused.
-- **BREAKING**. Coordinator resolves every event trigger and review completion
-  key at startup and refuses a key it cannot use or that another trigger or
-  completion connection shares. Event and completion routes take Standard
-  Webhooks headers and answer a
-  `WWW-Authenticate: Registry-Signature scheme="standard-webhooks", version="v1"`
-  challenge. Completions no longer read `Idempotency-Key` or `Authorization`.
-  Startup refuses a deployed trigger without a key entry and a key entry
-  without a deployed trigger. The event route no longer answers
-  `503 event.source-unavailable`.
+- **BREAKING**. Coordinator verifies event and review completion deliveries
+  with Standard Webhooks. The signature is `v1,<base64>` over `webhook-id`,
+  `webhook-timestamp` and the exact body bytes. A delivery must be within 300
+  seconds of the Coordinator clock in either direction. A refused delivery
+  answers 401 with
+  `WWW-Authenticate: Registry-Signature scheme="standard-webhooks", version="v1"`.
+  A completion also carries `Registry-Recipient-Binding`, which selects the
+  connection's key. A completion no longer reads `Idempotency-Key` or
+  `Authorization`, and its `eventId` must equal `webhook-id`. An event route
+  no longer answers `503 event.source-unavailable`.
+- **BREAKING**. Configure one key per event trigger under
+  `eventSources.<alias>.triggers.<workflow>.<trigger>.hmacSha256KeyRef`, in
+  place of `eventSources.<alias>.signingKeyRef`. Configure
+  `connections.<id>.completion.hmacSha256KeyRef` in place of
+  `completion.bearerTokenRef`, with the same file in the Casework destination.
+  Startup refuses the removed keys with the replacement. It also refuses a
+  deployed trigger without a key entry, a key entry without a deployed
+  trigger, and a key that is unavailable, shorter than 32 bytes, longer than
+  64 bytes or starts with `whsec_`. It refuses the same key bytes in two
+  triggers or completion connections, including previous keys, and names both
+  paths. A refusal never names a key byte.
+- To rotate, keep `hmacSha256KeyRef` fixed, put the new bytes behind it, and
+  set `previousHmacSha256KeyRef` to the old bytes on the trigger or the
+  completion. Coordinator accepts either key. Restart to load the new files.
 - A static key set that startup refuses now names the rule it broke, and the
   key's position for a rule about one key, in the `access.configuration`
   message instead of pointing at the issuer and policy configuration.

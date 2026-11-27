@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+- Every URL hook delivery is signed with Standard Webhooks. The signature is
+  `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body
+  bytes, joined by periods, with HMAC-SHA-256. `webhook-id` is the envelope
+  id, which stays the same on every retry and replay, and `webhook-timestamp`
+  is the Unix time of the attempt. `registry-platform-crypto` adds
+  `delivery_signature::sign`, `verify`, `verify_authenticity`, `DeliveryKey`,
+  `DeliveryKeys` and `distinct_delivery_keys`. A key is 32 to 64 exact bytes,
+  never trimmed or decoded, and text that starts with `whsec_` is refused. A
+  delivery is fresh within 300 seconds before or after the receiver clock.
+  `DeliveryKeys` holds the current key and an optional previous key. The
+  header lists the current key's signature first, then the previous key's.
+  Shared vectors in `standard-webhooks.json` pin the bytes, and
+  `scripts/test_standard_webhooks_vectors.py` checks them with an independent
+  implementation.
+
+- BREAKING: the shared URL hook destination block takes
+  `hmacSha256KeyRef` and an optional `previousHmacSha256KeyRef`. The previous
+  reference is outside the binding digest, so adding or removing it during
+  rotation does not change the digest a pending delivery pinned. Activation
+  reads both files as exact bytes and refuses a key it cannot use. The
+  refusal names the full path, such as
+  `destinations.hooks.<id>.hmacSha256KeyRef`, the byte count and whether the
+  file ends in a newline, and never a key byte. It also refuses two
+  destinations that resolve to the same bytes and a previous key equal to the
+  current key. Each of those messages names both paths and says to write 32
+  new random bytes to a separate secret. In `registry-platform-hooks`,
+  `UrlDestinationParts` takes `keys` in place of `hmac_sha256_key`,
+  `UrlDestination::with_hmac_sha256_key` becomes `keys`,
+  `DeliverySignatureFields` carries only `id`, `timestamp` and `body`, and
+  `UrlHookActivationError` has `SigningKeyUnavailable`, `InvalidSigningKey`
+  and `RepeatedSigningKey` in place of `InvalidSigningMaterial`. A hook
+  delivery no longer carries the Version 1 headers or `Idempotency-Key`.
+
+- The request template `EventDestinationRequestTemplate::signed_event_delivery`
+  sends exactly five headers, `accept`, `content-type`, `webhook-id`,
+  `webhook-timestamp` and `webhook-signature`, and forbids an
+  authorization header.
+
+- `registry-platform-hooks` adds `receiver::verify_hook_delivery` for
+  receivers. It requires one value for each header and `content-type` of
+  `application/json`, verifies the signature over the exact body bytes, checks
+  the 300-second window, parses the envelope, and then requires the envelope
+  `id` to equal `webhook-id`. `receiver::verify_delivery` still reads
+  Version 1 deliveries.
+
+- The documentation site publishes
+  [Receive signed deliveries](https://docs.registrystack.org/reference/delivery-signing/),
+  which covers the headers, key generation, the window, deduplication by
+  `webhook-id` and key rotation. `products/platform/examples/delivery-receiver-go`
+  is a standard-library Go receiver, and CI runs its tests against the shared
+  vectors.
+
 - `registry-platform-config` re-exports `declared`, `declared_from`,
   `PostureError`, `POSTURE_ENV` and `DEVELOPMENT`, so a product resolves its
   declared posture without its own dependency on `registry-platform-posture`.
