@@ -302,6 +302,7 @@ The browser holds the opaque `__Host-registry-session` cookie.
 The gateway strips cookies before forwarding signed-in module calls and attaches the person's token.
 Page upstreams receive neither cookies nor a bearer.
 For a write, your page sends `Registry-Client: page`.
+Browsers do not add this header, and general-purpose HTTP clients and platform SDKs do not either, such as Supabase's `functions.invoke`. A page that calls a module route with one of them adds the header to every write.
 The request must also carry an `Origin` matching `publicOrigin` and, when present, `Sec-Fetch-Site: same-origin`.
 
 {/* Evidence: crates/registry-session/src/config.rs SESSION_COOKIE;
