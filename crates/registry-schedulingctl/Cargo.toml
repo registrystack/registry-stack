@@ -26,6 +26,7 @@ registry-cli-api.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
+registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-yaml.workspace = true
 registry-scheduling.workspace = true
 registry-scheduling-core.workspace = true
@@ -34,6 +35,7 @@ serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 # The database suites reach the runtime's plaintext test connection through
@@ -42,6 +44,7 @@ uuid.workspace = true
 # holding both crates, and the runtime's own database suite would then be
 # compiled and run by shards that have no server to offer it.
 chrono.workspace = true
+registry-platform-provision = { workspace = true, features = ["test-support"] }
 tokio-postgres.workspace = true
 
 [[test]]
@@ -54,4 +57,8 @@ required-features = ["postgres-test"]
 
 [[test]]
 name = "activation_postgres"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "provision_postgres"
 required-features = ["postgres-test"]

@@ -46,3 +46,7 @@ product.
 - PostgreSQL verification requires a separate disposable database and the
   `postgres-test` feature. A test binary that skips because its database URL
   is absent is not database verification.
+  The `provision_postgres` target of `registry-schedulingctl` needs
+  `PROVISION_TEST_DATABASE_URL`, a disposable superuser URL (`sslmode=verify-full`
+  on a server that offers verified TLS), and
+  `PROVISION_TEST_DATABASE_CA`, the path of the CA PEM. It fails without them.

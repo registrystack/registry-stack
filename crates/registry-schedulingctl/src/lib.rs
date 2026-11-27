@@ -5,7 +5,8 @@
 //! checks every project file offline, and with `--runtime-config` the
 //! runtime file too, `test` replays every fixture offline, `explain`
 //! publishes what the runtime would serve, `package` writes the deployment
-//! identity the runtime verifies, `plan`, `apply`, and `status` activate a
+//! identity the runtime verifies, `provision` creates the roles and the
+//! database the runtime file names, `plan`, `apply`, and `status` activate a
 //! verified package on a deployment's database and report its activation
 //! ledger, `records apply` performs the one attributable operator write of a
 //! deployment's live environment records, and `intents` reads the delivery
@@ -14,6 +15,7 @@
 pub mod activation;
 pub mod intents;
 mod project;
+mod provision;
 pub mod records;
 mod report;
 mod selected_binary;
@@ -73,6 +75,8 @@ enum Command {
     Package(PackageArgs),
     /// Report what `apply` would do to a deployment's database, writing nothing.
     Plan(ActivationArgs),
+    /// Create the roles and the database the runtime file names, or print the SQL.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Activate the verified package on a deployment's database.
     Apply(ApplyArgs),
     /// Report the active package and the activation ledger of a deployment's database.
@@ -326,6 +330,7 @@ where
         Command::Serve(args) => {
             return serve(args, format, format_requested, stdout, stderr);
         }
+        Command::Provision(args) => return provision(&args, format),
         command => command,
     };
     let command_name = command_path(&command);
@@ -416,6 +421,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Explain(_) => "explain",
         Command::Package(_) => "package",
         Command::Plan(_) => "plan",
+        Command::Provision(_) => "provision",
         Command::Apply(_) => "apply",
         Command::Status(_) => "status",
         Command::Records(RecordsArgs {
@@ -425,12 +431,32 @@ fn command_path(command: &Command) -> &'static str {
     }
 }
 
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFormat) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "schedulingctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        args,
+        shared,
+        provision::load,
+    )
+}
+
 fn run(cli: Cli) -> Result<Value> {
     match cli.command {
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
         }
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
+        Command::Provision(_) => {
+            unreachable!("provision writes its own report before report dispatch")
+        }
         Command::Init(args) => project::init(&args.project, &args.template),
         Command::Check(args) => {
             let checked = if args.runtime_config.is_some() {
