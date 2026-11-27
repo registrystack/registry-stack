@@ -21,6 +21,7 @@ default = []
 # wake the interval pass loop early. The facade never enables or links it.
 job-hook = [
     "dep:base64",
+    "dep:registry-platform-authcommon",
     "dep:futures",
     "dep:registry-platform-crypto",
     "dep:registry-platform-ratelimit",
@@ -90,10 +91,12 @@ required-features = ["job-hook", "postgres-test"]
 registry-adapter-engine.workspace = true
 registry-adapter-core.workspace = true
 registry-adapter-connectors = { workspace = true, optional = true }
+registry-platform-authcommon = { workspace = true, optional = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto = { workspace = true, optional = true }
 registry-platform-httputil = { workspace = true, optional = true }
+registry-platform-loopback.workspace = true
 registry-platform-metrics.workspace = true
 registry-platform-ratelimit = { workspace = true, optional = true }
 registry-platform-yaml.workspace = true

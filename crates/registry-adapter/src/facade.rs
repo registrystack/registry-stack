@@ -68,6 +68,7 @@ use crate::idempotent::{
 };
 use crate::journal::{self, JournalEvent};
 use crate::serve::{Authenticator, Caller, CallerRefusal};
+use registry_platform_authcommon::{FailedCheck, RefusalNote};
 
 const REQUEST_ID_HEADER: &str = "x-registry-request-id";
 const WRITE_REQUEST_DIGEST_DOMAIN: &[u8] = b"registry-adapter:write-request:v2\0";
@@ -353,6 +354,7 @@ pub fn router(state: Arc<FacadeState>) -> Router {
         );
     let unmatched = Arc::clone(&state);
     let metrics = Arc::clone(&state.metrics);
+    let refusals = state.metrics.refusals();
     router
         .fallback(move |correlation: Option<Extension<RequestCorrelation>>| {
             let shared = Arc::clone(&unmatched);
@@ -369,6 +371,10 @@ pub fn router(state: Arc<FacadeState>) -> Router {
                 )
             }
         })
+        .layer(middleware::from_fn_with_state(
+            refusals,
+            crate::metrics::record_refusals,
+        ))
         .layer(middleware::from_fn_with_state(
             metrics,
             crate::metrics::count_requests,
@@ -519,6 +525,7 @@ async fn answer_async_status(
             &physical_request_id,
             ErrorClass::FacadeNotAcceptable,
             StatusCode::NOT_ACCEPTABLE,
+            None,
         )
         .await;
     }
@@ -545,6 +552,7 @@ async fn answer_async_status(
             &physical_request_id,
             ErrorClass::FacadeNotFound,
             StatusCode::NOT_FOUND,
+            None,
         )
         .await;
     };
@@ -608,6 +616,7 @@ async fn answer_async_status(
                 &physical_request_id,
                 ErrorClass::FacadeNotFound,
                 StatusCode::NOT_FOUND,
+                Some(FailedCheck::Visibility),
             )
             .await;
         }
@@ -632,7 +641,7 @@ async fn answer_async_status(
             &physical_request_id,
         );
     };
-    if !admits_stored(
+    if let Err(check) = admitted(
         &state.loaded.project,
         &caller,
         metadata.profile_operation(),
@@ -646,6 +655,7 @@ async fn answer_async_status(
             &physical_request_id,
             ErrorClass::FacadeForbidden,
             StatusCode::FORBIDDEN,
+            Some(check),
         )
         .await;
     }
@@ -790,6 +800,7 @@ async fn answer_async_status(
                         &physical_request_id,
                         ErrorClass::FacadeNotFound,
                         StatusCode::NOT_FOUND,
+                        Some(FailedCheck::Visibility),
                     )
                     .await;
                 }
@@ -1210,6 +1221,7 @@ async fn answer(
             &request_id,
             ErrorClass::FacadeNotAcceptable,
             StatusCode::NOT_ACCEPTABLE,
+            None,
         )
         .await;
     }
@@ -1222,10 +1234,16 @@ async fn answer(
             &request_id,
             ErrorClass::FacadeNotFound,
             StatusCode::NOT_FOUND,
+            None,
         )
         .await;
     }
-    if !admits(&state.loaded.project, &caller, operation) {
+    if let Err(check) = admitted(
+        &state.loaded.project,
+        &caller,
+        operation.operation.as_str(),
+        operation.record_type.as_str(),
+    ) {
         return refuse_call(
             state,
             operation,
@@ -1234,6 +1252,7 @@ async fn answer(
             &request_id,
             ErrorClass::FacadeForbidden,
             StatusCode::FORBIDDEN,
+            Some(check),
         )
         .await;
     }
@@ -1311,6 +1330,7 @@ async fn answer(
                 &request_id,
                 ErrorClass::FacadeUnsupportedMediaType,
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                None,
             )
             .await;
         }
@@ -1325,6 +1345,7 @@ async fn answer(
                     &request_id,
                     ErrorClass::FacadePayloadTooLarge,
                     StatusCode::PAYLOAD_TOO_LARGE,
+                    None,
                 )
                 .await;
             }
@@ -1495,6 +1516,7 @@ async fn answer(
             &request_id,
             ErrorClass::OutcomeNotFound,
             StatusCode::NOT_FOUND,
+            None,
         )
         .await;
     }
@@ -3429,71 +3451,100 @@ fn journal_fault(error: &tokio_postgres::Error) -> String {
 }
 
 async fn authenticate(state: &FacadeState, headers: &HeaderMap) -> Result<Caller, CallerRefusal> {
-    let Some(token) = bearer_token(headers) else {
-        state.authenticator.log_header_refusal();
-        return Err(CallerRefusal::Unauthenticated);
-    };
+    let token = bearer_token(headers).map_err(CallerRefusal::Unauthenticated)?;
     state.authenticator.authenticate(token).await
 }
 
-/// The bearer credential of the `Authorization` header, if it carries one.
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.split_once(' ')?;
-    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
+/// The bearer credential of the `Authorization` header, or the check its
+/// header failed: absent or another scheme is a missing credential, an
+/// unreadable or empty one is a malformed credential.
+fn bearer_token(headers: &HeaderMap) -> Result<&str, FailedCheck> {
+    let value = headers
+        .get(header::AUTHORIZATION)
+        .ok_or(FailedCheck::CredentialMissing)?
+        .to_str()
+        .map_err(|_| FailedCheck::CredentialMalformed)?;
+    let Some((scheme, token)) = value.split_once(' ') else {
+        return Err(if value.eq_ignore_ascii_case("bearer") {
+            FailedCheck::CredentialMalformed
+        } else {
+            FailedCheck::CredentialMissing
+        });
+    };
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return Err(FailedCheck::CredentialMissing);
+    }
+    if token.is_empty() {
+        return Err(FailedCheck::CredentialMalformed);
+    }
+    Ok(token)
+}
+
+/// Mark a response as the refusal of `check`, for the recording layer.
+fn noted(mut response: Response, check: FailedCheck) -> Response {
+    response.extensions_mut().insert(RefusalNote::new(check));
+    response
 }
 
 /// Whether some access profile the caller's scopes satisfy admits the
 /// operation on the record type. A profile that names no scope admits
 /// nobody: an empty requirement is not a satisfied one.
 fn admits(project: &AdapterProject, caller: &Caller, operation: &ServedOperation) -> bool {
-    project.access_profiles.iter().any(|profile| {
-        !profile.scopes.is_empty()
-            && profile
-                .scopes
-                .iter()
-                .all(|scope| caller.scopes.iter().any(|held| held == scope.as_str()))
-            && profile
-                .operations
-                .iter()
-                .any(|id| id.as_str() == operation.operation)
-            && profile
-                .record_types
-                .iter()
-                .any(|name| name.as_str() == operation.record_type)
-    })
+    admitted(
+        project,
+        caller,
+        operation.operation.as_str(),
+        operation.record_type.as_str(),
+    )
+    .is_ok()
 }
 
-fn admits_stored(
+/// The check a refused call failed: `Scope` when no profile's scopes are all
+/// held, `Operation` when some profile is held and none names the operation
+/// on the record type.
+fn admitted(
     project: &AdapterProject,
     caller: &Caller,
     profile_operation: &str,
     record_type: &str,
-) -> bool {
-    project.access_profiles.iter().any(|profile| {
-        !profile.scopes.is_empty()
-            && profile
+) -> Result<(), FailedCheck> {
+    let mut scoped = false;
+    for profile in &project.access_profiles {
+        if profile.scopes.is_empty()
+            || !profile
                 .scopes
                 .iter()
                 .all(|scope| caller.scopes.iter().any(|held| held == scope.as_str()))
-            && profile
-                .operations
-                .iter()
-                .any(|id| id.as_str() == profile_operation)
+        {
+            continue;
+        }
+        scoped = true;
+        if profile
+            .operations
+            .iter()
+            .any(|id| id.as_str() == profile_operation)
             && profile
                 .record_types
                 .iter()
                 .any(|name| name.as_str() == record_type)
+        {
+            return Ok(());
+        }
+    }
+    Err(if scoped {
+        FailedCheck::Operation
+    } else {
+        FailedCheck::Scope
     })
 }
 
 fn refusal_response(profile: Problems<'_>, refusal: CallerRefusal, request_id: &str) -> Response {
     let (class, status) = match refusal {
-        CallerRefusal::Unauthenticated => {
+        CallerRefusal::Unauthenticated(_) => {
             (ErrorClass::FacadeUnauthenticated, StatusCode::UNAUTHORIZED)
         }
         CallerRefusal::Unavailable if profile.profile.is_govstack_consultation() => {
-            return consultation_unavailable(request_id);
+            return noted(consultation_unavailable(request_id), refusal.failed_check());
         }
         CallerRefusal::Unavailable => (ErrorClass::Facade, StatusCode::SERVICE_UNAVAILABLE),
     };
@@ -3503,7 +3554,7 @@ fn refusal_response(profile: Problems<'_>, refusal: CallerRefusal, request_id: &
             .headers_mut()
             .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
     }
-    response
+    noted(response, refusal.failed_check())
 }
 
 /// The members of a record a route may wrap its domain fields in, beside the
@@ -3775,6 +3826,9 @@ pub(crate) struct Refusal {
     /// maps to the fixed request member holding it.
     validation_pointers: Vec<String>,
     detail: Option<&'static str>,
+    /// The check a caller refusal failed, for the operator-side counter and
+    /// log. `None` for a request that is merely invalid.
+    check: Option<FailedCheck>,
 }
 
 trait LoadedProblems {
@@ -3816,6 +3870,7 @@ impl Refusal {
             write_problem: Some(code),
             validation_pointers: Vec::new(),
             detail: None,
+            check: None,
         }
     }
 
@@ -3827,6 +3882,7 @@ impl Refusal {
             write_problem: None,
             validation_pointers: Vec::new(),
             detail: None,
+            check: None,
         }
     }
 
@@ -3838,6 +3894,19 @@ impl Refusal {
             write_problem: None,
             validation_pointers: Vec::new(),
             detail: None,
+            check: None,
+        }
+    }
+
+    /// The refusal of a cursor the codec would not open. A cursor that fails
+    /// authentication was tampered with or minted for another caller,
+    /// binding or client, and the two are one by construction, so the check
+    /// is `Ownership`.
+    fn from_cursor(refusal: CursorRefusal) -> Self {
+        Self {
+            check: matches!(refusal, CursorRefusal::Unauthenticated)
+                .then_some(FailedCheck::Ownership),
+            ..Self::invalid_cursor(refusal.reason())
         }
     }
 
@@ -3849,6 +3918,7 @@ impl Refusal {
             write_problem: None,
             validation_pointers: Vec::new(),
             detail: None,
+            check: None,
         }
     }
 }
@@ -3957,7 +4027,7 @@ fn open_search(
             let binding = cursor_binding(state, operation, caller, filters);
             let sealed = codec
                 .open(cursor, &binding, SystemTime::now())
-                .map_err(|refusal: CursorRefusal| Refusal::invalid_cursor(refusal.reason()))?;
+                .map_err(Refusal::from_cursor)?;
             let (size, continuation) =
                 unwrap_continuation(sealed).ok_or_else(|| Refusal::invalid_cursor("malformed"))?;
             (Some(continuation), Some(size))
@@ -4572,7 +4642,11 @@ fn seal_next(
 /// Answer a verified caller's refused call (403, or a record type the
 /// operation does not serve) after journaling it as `callRefused` with the
 /// class and status only. The refusal is also logged, so an operator sees it
-/// without reading the journal.
+/// without reading the journal. `check` names the check a caller refusal (403,
+/// or a concealing 404) failed, for the operator-side counter and log; it is
+/// `None` for an answer that is not a refusal of the caller, such as an
+/// unsupported media type.
+#[allow(clippy::too_many_arguments)]
 async fn refuse_call(
     state: &FacadeState,
     operation: &ServedOperation,
@@ -4581,6 +4655,7 @@ async fn refuse_call(
     request_id: &str,
     class: ErrorClass,
     status: StatusCode,
+    check: Option<FailedCheck>,
 ) -> Response {
     let profile = state.loaded.problems();
     tracing::warn!(
@@ -4606,7 +4681,11 @@ async fn refuse_call(
             request_id,
         );
     }
-    facade_problem(profile, class, status, record_type, request_id)
+    let response = facade_problem(profile, class, status, record_type, request_id);
+    match check {
+        Some(check) => noted(response, check),
+        None => response,
+    }
 }
 
 /// Refuse a verified and admitted call whose supplied whole-contract pin is
@@ -4807,7 +4886,7 @@ async fn refuse_request(
         )
     };
     let mut failure = exchange_failure_detail(profile, refusal.class);
-    failure["reason"] = Value::String(refusal.reason);
+    failure["reason"] = Value::String(refusal.reason.clone());
     if operation.write_support.is_some() {
         let code = refusal.write_problem.or_else(|| {
             (refusal.status == StatusCode::UNPROCESSABLE_ENTITY).then_some("invalid-content")
@@ -4834,6 +4913,22 @@ async fn refuse_request(
         );
     }
     warn_exchange_failed(refusal.class, refusal.status);
+    let check = refusal.check;
+    let response = refusal_answer(profile, operation, record_type, request_id, &refusal);
+    match check {
+        Some(check) => noted(response, check),
+        None => response,
+    }
+}
+
+/// The answer a refused request gets, rendered from its class and status.
+fn refusal_answer(
+    profile: Problems<'_>,
+    operation: &ServedOperation,
+    record_type: &str,
+    request_id: &str,
+    refusal: &Refusal,
+) -> Response {
     if let Some(code) = refusal.write_problem {
         return govstack_problem(code, refusal.status, request_id);
     }
@@ -5759,6 +5854,88 @@ mod tests {
             &operation
         ));
         assert!(!admits(&example_project(json!([])), &caller, &operation));
+    }
+
+    #[test]
+    fn a_refused_call_names_the_check_it_failed() {
+        let caller = Caller {
+            reference: "caller".to_owned(),
+            issuer: "https://issuer.example.invalid".to_owned(),
+            client_id: "case-portal".to_owned(),
+            scopes: vec!["records.read".to_owned()],
+        };
+        let project = example_project(json!(["records.read"]));
+        assert_eq!(admitted(&project, &caller, "records-get", "person"), Ok(()));
+        // The caller holds the profile's scope but the profile names no such
+        // operation or record type.
+        assert_eq!(
+            admitted(&project, &caller, "records-purge", "person"),
+            Err(FailedCheck::Operation)
+        );
+        assert_eq!(
+            admitted(&project, &caller, "records-get", "household"),
+            Err(FailedCheck::Operation)
+        );
+        // No profile's scopes are all held, and a profile with no scope
+        // admits nobody.
+        let stranger = Caller {
+            scopes: vec!["other.scope".to_owned()],
+            ..caller
+        };
+        assert_eq!(
+            admitted(&project, &stranger, "records-get", "person"),
+            Err(FailedCheck::Scope)
+        );
+        assert_eq!(
+            admitted(
+                &example_project(json!([])),
+                &stranger,
+                "records-get",
+                "person"
+            ),
+            Err(FailedCheck::Scope)
+        );
+    }
+
+    #[test]
+    fn a_bearer_header_names_the_check_it_failed() {
+        let with = |value: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(
+                    header::AUTHORIZATION,
+                    HeaderValue::from_str(value).expect("a header value"),
+                );
+            }
+            headers
+        };
+        assert_eq!(bearer_token(&with(Some("Bearer abc"))), Ok("abc"));
+        assert_eq!(bearer_token(&with(Some("bearer abc"))), Ok("abc"));
+        assert_eq!(
+            bearer_token(&with(None)),
+            Err(FailedCheck::CredentialMissing)
+        );
+        assert_eq!(
+            bearer_token(&with(Some("Basic YWJj"))),
+            Err(FailedCheck::CredentialMissing)
+        );
+        assert_eq!(
+            bearer_token(&with(Some("Bearer"))),
+            Err(FailedCheck::CredentialMalformed)
+        );
+        assert_eq!(
+            bearer_token(&with(Some("Bearer "))),
+            Err(FailedCheck::CredentialMalformed)
+        );
+        let mut unreadable = HeaderMap::new();
+        unreadable.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_bytes(b"Bearer \xff").expect("opaque bytes"),
+        );
+        assert_eq!(
+            bearer_token(&unreadable),
+            Err(FailedCheck::CredentialMalformed)
+        );
     }
 
     fn person_schema() -> Value {

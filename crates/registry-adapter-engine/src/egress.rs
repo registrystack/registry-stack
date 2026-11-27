@@ -2144,14 +2144,12 @@ pub(crate) fn destination_profile(parsed_base: &url::Url) -> DestinationProfile 
 
 /// Whether the origin's host explicitly denotes loopback: the name
 /// `localhost` or a loopback address literal, the platform's own
-/// admission rule for the development profile.
+/// admission rule for the development profile. The destination policy pins
+/// the name to loopback addresses when it connects.
 pub(crate) fn denotes_loopback(origin: &url::Url) -> bool {
-    match origin.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
+    origin
+        .host_str()
+        .is_some_and(|host| registry_platform_httputil::loopback::loopback_host(host).is_some())
 }
 
 /// Whether a destination profile admits a token endpoint: the same
@@ -3716,6 +3714,26 @@ mod tests {
             destination_profile(&public_name),
             DestinationProfile::PrivateServiceHttp
         );
+        for spelled in [
+            "http://127.0.0.2:8080/",
+            "http://[::1]:8080/",
+            "http://[::ffff:127.0.0.1]:8080/",
+        ] {
+            let origin = url::Url::parse(spelled).expect("parsed");
+            assert_eq!(
+                destination_profile(&origin),
+                DestinationProfile::LoopbackDevelopmentHttp,
+                "{spelled}"
+            );
+        }
+        for spelled in ["http://a.localhost:8080/", "http://localhost.:8080/"] {
+            let origin = url::Url::parse(spelled).expect("parsed");
+            assert_eq!(
+                destination_profile(&origin),
+                DestinationProfile::PrivateServiceHttp,
+                "{spelled}"
+            );
+        }
     }
 
     /// Under the postgres-test feature an https loopback origin takes

@@ -44,8 +44,6 @@
 
 use std::fmt;
 use std::future::Future;
-#[cfg(feature = "rabbitmq-test-plaintext")]
-use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -320,10 +318,7 @@ impl LapinRabbitMqSource {
         }
         #[cfg(feature = "rabbitmq-test-plaintext")]
         if matches!(config.tls, RabbitMqTls::PlaintextTest)
-            && !config
-                .host
-                .parse::<IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
+            && registry_platform_loopback::loopback_literal(&config.host).is_none()
         {
             return Err(RabbitMqReadFault::InvalidBounds);
         }

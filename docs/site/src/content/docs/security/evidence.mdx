@@ -41,16 +41,16 @@ A failed authentication, a malformed request, an invalid selector, and a rate
 limit write no native audit entry, even when Evidence decides them after
 authorisation. Watch for them in operational logs and metrics instead.
 
-Evidence counts every `401`, `403` and `429` answer by the check that failed, in
+Evidence counts every refused request by the check that refused it, in
 `evidence_request_refusals_total{check}` on the private metrics listener. The `check` label is a
 closed set of 45 names such as `credential-missing`, `token-signature`, `scope`, `access-profile`,
-`purpose`, `revision-pin` and `rate-limit`, and no caller value becomes a label. Each refusal also
-writes one `request refused` log line that names the check and the request's trace id. The runtime
-writes at most five such lines per check per minute and reports how many it held back in
-`suppressed`. The counter and the line carry only a fixed check name, never a token, claim, client,
-selector value or requirement. The check is operator-side only: the response a caller receives is
-the same closed `401`, `403` or `429` it always was. An issuer key set that cannot be reached
-still answers `401`, and counts under `key-source-unavailable`.
+`purpose`, `revision-pin` and `rate-limit`, every one published at zero, and no caller value becomes
+a label. An issuer key set that cannot be reached still answers `401`, and counts under
+`key-source-unavailable`. Each refusal also writes one `request refused` log line with
+`failed_check` and the request's trace id when it has one, at most five lines per check per minute,
+with `suppressed` counting what a window held back. Neither the counter nor the line holds a token,
+claim, client, subject, scope or identifier, and recording a refusal changes nothing the caller
+receives: the response is the same closed `401`, `403` or `429` it always was.
 
 {/* Evidence: crates/registry-evidence/src/observability.rs, record_refusal and Metrics::render;
     crates/registry-evidence/src/refusal_recording_tests.rs,

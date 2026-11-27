@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -746,6 +746,7 @@ The metrics are Prometheus text (`text/plain; version=0.0.4`, served with `Cache
 | `coordinator_runs_finished_total` | counter | `state`: `finished`, `failed`, `cancelled`, `cancelled-after-effect`, `expired` |
 | `coordinator_step_attempts_total` | counter | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent`, `unavailable` |
 | `coordinator_authentication_refusals_total` | counter | `reason`: `refused`, `policy`, `unavailable` |
+| `coordinator_request_refusals_total` | counter | `check`: the closed set of 45 failed checks, every value published at zero |
 | `coordinator_metrics_sample_failures_total` | counter | `sample`: `dispatch-queue`, `run-holds` |
 | `coordinator_dispatch_jobs` | gauge | `state`: `pending`, `leased`, `unknown` |
 | `coordinator_runs_attention` | gauge | `reason`: `definition-refused`, `other` |

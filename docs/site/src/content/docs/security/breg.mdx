@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-21"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -160,11 +160,13 @@ A request batch audits both items as not available, and the metric still counts 
     declared_existence_disclosure_mode_governs_the_public_collapse,
     a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it. */}
 
+BReg counts every refused request by the check that refused it, in `breg_request_refusals_total{check}` on the private metrics listener.
+The `check` label is a closed set of 45 names, every one published at zero, and no caller value becomes a label.
+Each refusal also writes one `request refused` log line with `failed_check` and the request's trace id when it has one, at most five lines per check per minute, with `suppressed` counting what a window held back.
 A request that BReg answers `404 resource.not_found` because the caller may not see the target reads the same to the caller whatever the reason.
-The operator can tell the reasons apart.
-`breg_request_refusals_total{check}` counts the request under the rule that refused it, for example `scope`, `purpose`, `requester-client`, `row-boundary`, `task-grant-binding`, `disclosure` or `visibility`, and one `request refused` line names the same `failed_check`.
+The operator can tell the reasons apart: the counter holds the request under the rule that refused it, for example `scope`, `purpose`, `requester-client`, `row-boundary`, `task-grant-binding`, `disclosure` or `visibility`.
 A refused write the engine answers with `write.outside-boundary` counts under `row-boundary`, and a Proposal outside the caller's scope counts under `ownership`.
-The counter and the line carry only that fixed name, never a token, claim, client, subject, route parameter or record identifier, and they change nothing the caller receives.
+Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and recording a refusal changes nothing the caller receives.
 A `visibility` count is a record that is absent or outside the boundary, and BReg does not say which, so it also counts a caller probing for identifiers.
 The audit journal's `refusalReason` stays the three values it lists below.
 
@@ -506,8 +508,7 @@ The residuals refer to these obligations by number.
    Loopback HTTP is accepted for an issuer; anything else needs
    `authentication.oidc.allowInsecureHttp: true`, which is logged at startup and reported by
    `bregctl doctor` (`BREG-RES-17`).
-   Loopback means an address in `127.0.0.0/8`, `::1`, an IPv4-mapped form of a `127.0.0.0/8`
-   address, or the exact name `localhost`.
+   Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which BReg connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
    A pinned key set (`authentication.oidc.jwksSource.type: static`) holds public keys only.
    BReg refuses a key that carries a private or symmetric member (`d`, `p`, `q`, `dp`, `dq`, `qi`,
    `oth`, `k`), a repeated member name, a missing or repeated `kid`, or a key that does not match

@@ -43,7 +43,8 @@ and the restore drill is in
   Members it does not know, such as `x5c` or `ext`, are ignored.
 - The operator's view of a refusal: the answer to the caller names a problem code and no cause, so
   an operator tells the causes apart from the private metrics listener and the log.
-  Every refused request is counted in `documents_request_refusals_total{check}`.
+  The Document Store counts every refused request by the check that refused it, in
+  `documents_request_refusals_total{check}` on the private metrics listener.
   The `check` label is a closed set of 45 names such as `credential-missing`, `token-signature`,
   `scope`, `actor-kind`, `access-profile`, `operation`, `ownership` and `visibility`, every one
   published at zero, and no caller value becomes a label.
@@ -51,9 +52,9 @@ and the restore drill is in
   refused custody placement, a caller that sees a document but may not act on it, a document or
   upload the caller may not see, and a verifier that cannot reach its key source
   (`key-source-unavailable`).
-  Each refusal also writes one `request refused` log line that names the check.
-  The runtime writes at most five such lines per check per minute and reports how many it held back
-  in `suppressed`.
+  Each refusal also writes one `request refused` log line with `failed_check` and the request's
+  trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
+  a window held back.
   A scope refusal carries a fixed remedy that names `authentication.oidc.scopeClaim`.
   Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
   recording a refusal changes nothing the caller receives.
@@ -113,6 +114,7 @@ Findings name the member and rule, never the value.
 
 `development-loopback` is the only listener setting that permits a disabled verifier or an `http`
 hook URL, and the hook URL must also be a loopback address.
+Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which the Document Store connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
 Do not set it in production.
 
 {/* Evidence: crates/registry-documents/src/config.rs

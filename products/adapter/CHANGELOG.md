@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- BREAKING: an Adapter job whose runtime document names a plain `http://`
+  endpoint by host name must now list the address range that host resolves to
+  in `allowedPrivateCidrs`. An omitted or empty list admits no private
+  address, where before it admitted every one for such a host. To migrate, add
+  the smallest range that contains the endpoint, serve the endpoint over
+  https, or bind it on loopback. An affected job now fails `check` with
+  `adapter.runtime.insecure-origin`. The job host's hook ingress also counts
+  and logs every refused credential and rate limit under
+  `adapter_job_request_refusals_total{check}`, with no answer change, and the
+  fixture destination and the plaintext test RabbitMQ and PostgreSQL sources
+  use the Adapter's one loopback definition (the RabbitMQ and PostgreSQL test
+  sources still take address literals only).
+- The payment routes count and log every refused caller under the check that
+  refused it, in the same `adapter_request_refusals_total{check}` counter and
+  `request refused` line as the facade. No answer changes. The simulator
+  provider connection and a payment provider base URL accept the same
+  loopback address literals as the rest of the Adapter (the rest of
+  `127.0.0.0/8`, `::1` and the IPv4-mapped forms) and still refuse the name
+  `localhost`.
+- The facade counts and logs every refused caller under the check that
+  refused it. `adapter_request_refusals_total{check}` rises by one and the log
+  carries one `request refused` line with the fixed `failed_check` label, at
+  most five lines per check per minute, replacing the per-stage
+  authentication log line. No answer changes. Loopback is one definition
+  everywhere the Adapter decides it: the rest of `127.0.0.0/8`, `::1` and the
+  IPv4-mapped forms count beside `127.0.0.1`, the name `localhost` is pinned to
+  loopback addresses, and `a.localhost` and `localhost.` stay named hosts. A
+  plain `http://` origin named by host name now fails the runtime check with
+  `adapter.runtime.insecure-origin` when `allowedPrivateCidrs` is empty.
 - The facade listener answers `GET /health` and `GET /ready` without
   authentication. `/health` answers `{"status":"ok"}`. `/ready` answers
   `{"status":"ready"}` when the journal migrations match the binary and the

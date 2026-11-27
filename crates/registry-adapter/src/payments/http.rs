@@ -14,7 +14,7 @@ use super::{
     },
     provider_mapping::{PaymentMappingProgram, PaymentMappingRegistry},
     registry::BregBridge,
-    service::{PaymentService, SyntheticProvider},
+    service::{PaymentFailure, PaymentService, SyntheticProvider},
     store::{migrate, PaymentStore},
 };
 use crate::serve::{Authenticator, Caller, CallerRefusal, ServeError};
@@ -22,6 +22,7 @@ use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Path as RoutePath, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -32,6 +33,7 @@ use registry_payment_protocol::{
     PaymentProblem, PaymentProblemCode as Error, ProviderConfirmation, RecordProviderConfirmation,
     RecordReceipt, RequestCollection, RequestDisbursement,
 };
+use registry_platform_authcommon::{FailedCheck, RefusalNote};
 use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, SecretResolver,
 };
@@ -411,7 +413,13 @@ impl PreparedPayments {
             g2p,
             disbursements,
         });
-        Ok(Router::new()
+        Ok(payment_router(state))
+    }
+}
+
+/// The payment routes over `state`, with the refusal recording layer.
+fn payment_router(state: Arc<HttpState>) -> Router {
+    Router::new()
         .route("/v1/payments/{connection}/collections", post(request))
         .route(
             "/v1/payments/{connection}/collections/receipt",
@@ -442,8 +450,11 @@ impl PreparedPayments {
             post(record_provider_confirmation),
         )
         .layer(DefaultBodyLimit::max(MAX_PAYMENT_BODY_BYTES))
-        .with_state(state))
-    }
+        .layer(middleware::from_fn_with_state(
+            crate::metrics::refusal_recorder(),
+            crate::metrics::record_refusals,
+        ))
+        .with_state(state)
 }
 
 pub async fn run_only(
@@ -488,28 +499,46 @@ pub async fn run_only(
 }
 
 async fn caller(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
-    let value =
-        single_header(headers, "authorization").map_err(|_| HttpError(Error::Unauthenticated))?;
-    let bearer = value
-        .strip_prefix("Bearer ")
-        .ok_or(HttpError(Error::Unauthenticated))?;
+    let mut values = headers.get_all("authorization").iter();
+    let value = match (values.next(), values.next()) {
+        (Some(value), None) => value.to_str().ok(),
+        (None, _) => {
+            return Err(HttpError::refused(
+                Error::Unauthenticated,
+                FailedCheck::CredentialMissing,
+            ))
+        }
+        _ => None,
+    }
+    .ok_or(HttpError::refused(
+        Error::Unauthenticated,
+        FailedCheck::CredentialMalformed,
+    ))?;
+    let bearer = value.strip_prefix("Bearer ").ok_or(HttpError::refused(
+        Error::Unauthenticated,
+        FailedCheck::CredentialMissing,
+    ))?;
     state
         .authenticator
         .authenticate(bearer)
         .await
-        .map_err(|error| {
-            HttpError(match error {
-                CallerRefusal::Unauthenticated => Error::Unauthenticated,
-                CallerRefusal::Unavailable => Error::Unavailable,
-            })
+        .map_err(|error| match error {
+            CallerRefusal::Unauthenticated(_) => {
+                HttpError::refused(Error::Unauthenticated, error.failed_check())
+            }
+            CallerRefusal::Unavailable => {
+                HttpError::refused(Error::Unavailable, FailedCheck::KeySourceUnavailable)
+            }
         })
 }
 
 fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, HttpError> {
     let mut values = headers.get_all(name).iter();
     match (values.next(), values.next()) {
-        (Some(value), None) => value.to_str().map_err(|_| HttpError(Error::InvalidRequest)),
-        _ => Err(HttpError(Error::InvalidRequest)),
+        (Some(value), None) => value
+            .to_str()
+            .map_err(|_| HttpError::plain(Error::InvalidRequest)),
+        _ => Err(HttpError::plain(Error::InvalidRequest)),
     }
 }
 fn body<T: DeserializeOwned>(headers: &HeaderMap, uri: &Uri, bytes: &[u8]) -> Result<T, HttpError> {
@@ -517,24 +546,25 @@ fn body<T: DeserializeOwned>(headers: &HeaderMap, uri: &Uri, bytes: &[u8]) -> Re
         || uri.query().is_some()
         || single_header(headers, "content-type")? != "application/json"
     {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     // The payment wire contract requires named fields in a JSON object.
     if !bytes.trim_ascii_start().starts_with(b"{") {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
-    let request = T::deserialize(&mut decoder).map_err(|_| HttpError(Error::InvalidRequest))?;
+    let request =
+        T::deserialize(&mut decoder).map_err(|_| HttpError::plain(Error::InvalidRequest))?;
     decoder
         .end()
-        .map_err(|_| HttpError(Error::InvalidRequest))?;
+        .map_err(|_| HttpError::plain(Error::InvalidRequest))?;
     Ok(request)
 }
 fn collection(value: &str) -> Result<Uuid, HttpError> {
     Uuid::parse_str(value)
         .ok()
         .filter(|id| !id.is_nil())
-        .ok_or(HttpError(Error::InvalidRequest))
+        .ok_or(HttpError::plain(Error::InvalidRequest))
 }
 
 async fn request(
@@ -596,7 +626,7 @@ async fn read(
 ) -> Result<Response, HttpError> {
     let caller = caller(&state, &headers).await?;
     if uri.query().is_some() || !bytes.is_empty() {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let id = collection(&id)?;
     let result = state.service.read(&connection, &caller, id).await;
@@ -622,7 +652,7 @@ async fn record_receipt(
     let id = collection(&id)?;
     let request: RecordReceipt = body(&headers, &uri, &bytes)?;
     if request.collection_id != id {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let key = single_header(&headers, "idempotency-key")?;
     let result = state
@@ -651,39 +681,45 @@ async fn g2p_connection<'a>(
         .disbursements
         .iter()
         .find(|entry| entry.id == id)
-        .ok_or(Error::NotFound)
+        .ok_or(PaymentFailure::concealing(Error::NotFound))
         .and_then(|connection| {
-            if !connection.allowed_clients.contains(&caller.client_id)
-                || !caller.scopes.contains(&connection.required_scope)
-            {
-                Err(Error::Forbidden)
+            if !connection.allowed_clients.contains(&caller.client_id) {
+                Err(PaymentFailure::refused(
+                    Error::Forbidden,
+                    FailedCheck::RequesterClient,
+                ))
+            } else if !caller.scopes.contains(&connection.required_scope) {
+                Err(PaymentFailure::refused(
+                    Error::Forbidden,
+                    FailedCheck::Scope,
+                ))
             } else {
                 Ok(connection)
             }
         });
-    if let Err(error) = selected {
+    if let Err(failure) = &selected {
         state
             .service
-            .audit_access(caller, operation, None, Some(error))
+            .audit_access(caller, operation, None, Some(failure.code))
             .await
-            .map_err(|_| HttpError(Error::Unavailable))?;
+            .map_err(|_| HttpError::plain(Error::Unavailable))?;
     }
-    selected.map_err(HttpError)
+    selected.map_err(HttpError::from)
 }
 
 fn g2p_principal(caller: &Caller) -> Result<String, Error> {
     super::model::digest(&[&caller.issuer, &caller.client_id, &caller.reference])
 }
 
-fn g2p_error(error: G2pError) -> Error {
-    match error {
+fn g2p_error(error: G2pError) -> PaymentFailure {
+    PaymentFailure::concealing(match error {
         G2pError::InvalidRequest => Error::InvalidRequest,
         G2pError::Conflict => Error::Conflict,
         G2pError::NotFound => Error::NotFound,
         G2pError::Unavailable => Error::Unavailable,
         G2pError::OutcomeUnknown => Error::OutcomeUnknown,
         G2pError::RecoveryHeld => Error::RecoveryHeld,
-    }
+    })
 }
 
 fn disbursement_accepted(attempt: &G2pAttempt) -> Result<DisbursementAccepted, Error> {
@@ -754,17 +790,17 @@ async fn request_disbursement(
     let request: RequestDisbursement = body(&headers, &uri, &bytes)?;
     request
         .validate()
-        .map_err(|_| HttpError(Error::InvalidRequest))?;
+        .map_err(|_| HttpError::plain(Error::InvalidRequest))?;
     let key = single_header(&headers, "idempotency-key")?;
     if !super::config::text(key, 128) {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let selected = g2p_connection(&state, &connection, &caller, "request-disbursement").await?;
     let result = state
         .g2p
         .request_disbursement(
             &connection,
-            &g2p_principal(&caller).map_err(HttpError)?,
+            &g2p_principal(&caller).map_err(HttpError::plain)?,
             key,
             request.instruction_record_id,
             request.instruction_version,
@@ -773,7 +809,7 @@ async fn request_disbursement(
         )
         .await
         .map_err(g2p_error)
-        .and_then(|attempt| disbursement_accepted(&attempt));
+        .and_then(|attempt| disbursement_accepted(&attempt).map_err(PaymentFailure::from));
     finish(
         &state,
         &caller,
@@ -797,24 +833,24 @@ async fn disbursement_receipt(
     let request: RequestDisbursement = body(&headers, &uri, &bytes)?;
     request
         .validate()
-        .map_err(|_| HttpError(Error::InvalidRequest))?;
+        .map_err(|_| HttpError::plain(Error::InvalidRequest))?;
     let key = single_header(&headers, "idempotency-key")?;
     if !super::config::text(key, 128) {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     g2p_connection(&state, &connection, &caller, "request-disbursement-receipt").await?;
     let result = state
         .g2p
         .request_receipt(
             &connection,
-            &g2p_principal(&caller).map_err(HttpError)?,
+            &g2p_principal(&caller).map_err(HttpError::plain)?,
             key,
             request.instruction_record_id,
             request.instruction_version,
         )
         .await
         .map_err(g2p_error)
-        .and_then(|attempt| disbursement_accepted(&attempt));
+        .and_then(|attempt| disbursement_accepted(&attempt).map_err(PaymentFailure::from));
     finish(
         &state,
         &caller,
@@ -836,16 +872,20 @@ async fn read_disbursement(
 ) -> Result<Response, HttpError> {
     let caller = caller(&state, &headers).await?;
     if uri.query().is_some() || !bytes.is_empty() {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     g2p_connection(&state, &connection, &caller, "read-disbursement").await?;
     let id = collection(&id)?;
     let result = state
         .g2p
-        .disbursement_status(&connection, &g2p_principal(&caller).map_err(HttpError)?, id)
+        .disbursement_status(
+            &connection,
+            &g2p_principal(&caller).map_err(HttpError::plain)?,
+            id,
+        )
         .await
         .map_err(g2p_error)
-        .and_then(|attempt| disbursement_status(&attempt));
+        .and_then(|attempt| disbursement_status(&attempt).map_err(PaymentFailure::from));
     finish(
         &state,
         &caller,
@@ -869,26 +909,26 @@ async fn record_provider_confirmation(
     let id = collection(&id)?;
     let request: RecordProviderConfirmation = body(&headers, &uri, &bytes)?;
     if request.disbursement_id != id {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let key = single_header(&headers, "idempotency-key")?;
     if !super::config::text(key, 128) {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     g2p_connection(&state, &connection, &caller, "record-provider-confirmation").await?;
     let result = state
         .g2p
         .record_provider_confirmation(
             &connection,
-            &g2p_principal(&caller).map_err(HttpError)?,
+            &g2p_principal(&caller).map_err(HttpError::plain)?,
             key,
             id,
         )
         .await
         .map_err(g2p_error)
-        .and_then(|attempt| {
+        .and_then(|attempt| -> Result<_, PaymentFailure> {
             if attempt.state != G2pAttemptState::ConfirmationRecorded {
-                return Err(Error::RecoveryHeld);
+                return Err(Error::RecoveryHeld.into());
             }
             let status = disbursement_status(&attempt)?;
             let confirmation = ProviderConfirmation {
@@ -925,14 +965,19 @@ async fn finish<T: Serialize>(
     id: Option<Uuid>,
     mutation: bool,
     status: StatusCode,
-    result: Result<T, Error>,
+    result: Result<T, PaymentFailure>,
 ) -> Result<Response, HttpError> {
     state
         .service
-        .audit_access(caller, operation, id, result.as_ref().err().copied())
+        .audit_access(
+            caller,
+            operation,
+            id,
+            result.as_ref().err().map(|failure| failure.code),
+        )
         .await
         .map_err(|_| {
-            HttpError(if mutation {
+            HttpError::plain(if mutation {
                 Error::OutcomeUnknown
             } else {
                 Error::Unavailable
@@ -940,7 +985,7 @@ async fn finish<T: Serialize>(
         })?;
     result
         .map(|value| headers((status, Json(value)).into_response()))
-        .map_err(HttpError)
+        .map_err(HttpError::from)
 }
 
 /// The attempt an accepted request names, recorded in its audit event.
@@ -957,14 +1002,37 @@ impl AuditedAttempt for DisbursementAccepted {
         self.disbursement_id
     }
 }
-fn audited_attempt<T: AuditedAttempt>(result: &Result<T, Error>) -> Option<Uuid> {
+fn audited_attempt<T: AuditedAttempt, E>(result: &Result<T, E>) -> Option<Uuid> {
     result.as_ref().ok().map(AuditedAttempt::attempt_id)
 }
 
-struct HttpError(Error);
+/// A payment error with, for a refused caller, the check it failed.
+struct HttpError {
+    code: Error,
+    check: Option<FailedCheck>,
+}
+impl HttpError {
+    fn plain(code: Error) -> Self {
+        Self { code, check: None }
+    }
+    fn refused(code: Error, check: FailedCheck) -> Self {
+        Self {
+            code,
+            check: Some(check),
+        }
+    }
+}
+impl From<PaymentFailure> for HttpError {
+    fn from(failure: PaymentFailure) -> Self {
+        Self {
+            code: failure.code,
+            check: failure.check,
+        }
+    }
+}
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
-        let problem = PaymentProblem::from(self.0);
+        let problem = PaymentProblem::from(self.code);
         let status =
             StatusCode::from_u16(problem.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut response = (status, Json(problem)).into_response();
@@ -972,6 +1040,9 @@ impl IntoResponse for HttpError {
             "content-type",
             HeaderValue::from_static("application/problem+json"),
         );
+        if let Some(check) = self.check {
+            response.extensions_mut().insert(RefusalNote::new(check));
+        }
         headers(response)
     }
 }
@@ -997,6 +1068,9 @@ fn headers(mut response: Response) -> Response {
 fn refused(message: &str) -> ServeError {
     ServeError::Configuration(format!("adapter.payment.configuration: {message}"))
 }
+
+#[cfg(all(test, feature = "postgres-test"))]
+mod refusal_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1030,7 +1104,10 @@ mod tests {
             assert!(
                 matches!(
                     body::<RequestCollection>(&headers, &uri, invalid.as_bytes()),
-                    Err(HttpError(Error::InvalidRequest))
+                    Err(HttpError {
+                        code: Error::InvalidRequest,
+                        ..
+                    })
                 ),
                 "unexpected result for {invalid}"
             );
@@ -1042,7 +1119,10 @@ mod tests {
         at_limit.push(b' ');
         assert!(matches!(
             body::<RequestCollection>(&headers, &uri, &at_limit),
-            Err(HttpError(Error::InvalidRequest))
+            Err(HttpError {
+                code: Error::InvalidRequest,
+                ..
+            })
         ));
     }
 
@@ -1064,15 +1144,15 @@ mod tests {
             simulation: false,
         };
         assert_eq!(
-            audited_attempt(&Ok(collection.clone())),
+            audited_attempt::<_, Error>(&Ok(collection.clone())),
             Some(collection.collection_id)
         );
         assert_eq!(
-            audited_attempt(&Ok(disbursement.clone())),
+            audited_attempt::<_, Error>(&Ok(disbursement.clone())),
             Some(disbursement.disbursement_id)
         );
         assert_eq!(
-            audited_attempt::<CollectionAccepted>(&Err(Error::OutcomeUnknown)),
+            audited_attempt::<CollectionAccepted, Error>(&Err(Error::OutcomeUnknown)),
             None
         );
     }

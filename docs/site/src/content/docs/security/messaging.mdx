@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -43,15 +43,17 @@ A verifier that cannot reach a verdict, because the issuer's discovery document 
 fetched, read or used, is `503 service.unavailable` with `Retry-After: 5`; the credential is not what
 is wrong, so a caller should retry rather than rotate it.
 Causes inside each status are told apart only by operator-side signals, never in the response.
-Every refused request is counted in `messaging_request_refusals_total{check}` on the private metrics
-listener. The `check` label is a closed set of 45 names such as `token-signature`, `scope`,
-`actor-kind`, `access-profile`, `delivery-signature` and `visibility`, and no caller value becomes a
-label. Each refusal also writes one `request refused` log line that names the check and the
-request's trace id. The runtime writes at most five such lines per check per minute and reports how
-many it held back in `suppressed`. Where an operator can fix the cause in configuration, the line
-carries a fixed remedy that names the setting, for example `accessProfiles` for `access-profile` or
-`authentication.oidc.scopeClaim` for `scope`. A verifier that cannot reach its key source counts
-under `key-source-unavailable`.
+Messaging counts every refused request by the check that refused it, in
+`messaging_request_refusals_total{check}` on the private metrics listener. The `check` label is a
+closed set of 45 names such as `token-signature`, `scope`, `actor-kind`, `access-profile`,
+`delivery-signature` and `visibility`, every one published at zero, and no caller value becomes a
+label. A verifier that cannot reach its key source counts under `key-source-unavailable`. Each
+refusal also writes one `request refused` log line with `failed_check` and the request's trace id
+when it has one, at most five lines per check per minute, with `suppressed` counting what a window
+held back. Where an operator can fix the cause in configuration, the line carries a fixed remedy
+that names the setting, for example `accessProfiles` for `access-profile` or
+`authentication.oidc.scopeClaim` for `scope`. Neither the counter nor the line holds a token, claim,
+client, subject, scope or identifier, and recording a refusal changes nothing the caller receives.
 A static key set (`jwksSource: static`) holds public keys only. The runtime refuses to start on a
 set that carries a private member (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth` or `k`), a symmetric key,
 a repeated member name, or a key without a unique `kid`, and the startup error names the rule and
@@ -123,10 +125,10 @@ no `import`, `eval`, `print` or `debug`.
 SMTP requires `STARTTLS` or implicit TLS, verifies the certificate against the configured host
 name, sends no credential to a relay that does not offer `STARTTLS`, and cannot have a header line
 opened from template data.
-Plain `http` and `development-loopback` SMTP are limited to loopback, which means an address in
-`127.0.0.0/8`, `::1`, an IPv4-mapped form of a `127.0.0.0/8` address, or the exact name `localhost`.
-No other name is loopback, so `localhost.` and `gateway.localhost` are refused. SMTP connects only
-to the loopback address it checked.
+Plain `http` and `development-loopback` SMTP are limited to loopback.
+Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which Messaging connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
+SMTP refuses `localhost.` and `gateway.localhost`, and connects only to the loopback address it
+checked.
 A production listener posture refuses plaintext SMTP at `messagingctl check` and at startup.
 (MESSAGING-SEC-03)
 

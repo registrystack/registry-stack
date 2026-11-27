@@ -9,7 +9,7 @@
 //! payment host builds its authenticator through the same function and
 //! authenticates a bearer through the same method. The module sits under
 //! `serve` so it can also ask the authenticator's own verifier for the check
-//! that refused a token, which `CallerRefusal` does not carry.
+//! that refused a token and compare it with the check `CallerRefusal` carries.
 use super::*;
 use registry_platform_config::SecretProvider;
 use registry_platform_testing::{
@@ -68,8 +68,15 @@ async fn observe(authenticator: &Authenticator, token: &str) -> Outcome {
     match (admission, verdict) {
         (Ok(_), Ok(_)) => Outcome::Admitted(None),
         (Ok(_), Err(_)) => panic!("authenticate admitted a token its own verifier refused"),
-        (Err(_), Err(error)) => stage_of(&error),
-        (Err(CallerRefusal::Unauthenticated), Ok(_)) => {
+        (Err(refusal), Err(error)) => {
+            assert_eq!(
+                refusal.failed_check(),
+                error.failed_check(),
+                "the refusal carries the check the verifier named"
+            );
+            stage_of(&error)
+        }
+        (Err(CallerRefusal::Unauthenticated(_)), Ok(_)) => {
             "refused/claims".parse().expect("result value")
         }
         (Err(CallerRefusal::Unavailable), Ok(_)) => {

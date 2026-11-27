@@ -12,14 +12,14 @@ use std::time::{Duration, SystemTime};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_adapter_core::AdapterRuntimeConfig;
-use registry_platform_authcommon::validate_compact_access_token;
+use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
 use registry_platform_config::{
     DatabaseConfig, JwksSource, SecretReference as ConfigSecretReference, SecretResolver,
 };
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    AuthenticationStage, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    OidcError, TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
 use registry_platform_yaml::SecretReference;
 use thiserror::Error;
@@ -76,10 +76,21 @@ pub struct Caller {
 /// Why a request has no caller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CallerRefusal {
-    /// The credential is absent or was refused.
-    Unauthenticated,
+    /// The credential is absent or was refused, at the named check.
+    Unauthenticated(FailedCheck),
     /// The verifier could not reach a verdict (issuer or key set outage).
     Unavailable,
+}
+
+impl CallerRefusal {
+    /// The check the request failed, for the operator-side counter and log.
+    #[must_use]
+    pub const fn failed_check(self) -> FailedCheck {
+        match self {
+            Self::Unauthenticated(check) => check,
+            Self::Unavailable => FailedCheck::KeySourceUnavailable,
+        }
+    }
 }
 
 /// The longest subject the journal's caller reference column holds.
@@ -90,32 +101,11 @@ pub struct Authenticator {
 }
 
 impl Authenticator {
-    /// Log the refusal of a request whose `Authorization` header is absent,
-    /// not text, or not a bearer credential, so every 401 leaves the same
-    /// value-free, rate-limited trace as a refused token.
-    pub fn log_header_refusal(&self) {
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            AuthenticationStage::Header,
-            "Adapter authentication refused"
-        );
-    }
-
     pub async fn authenticate(&self, token: &str) -> Result<Caller, CallerRefusal> {
-        validate_compact_access_token(token).map_err(|_| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                AuthenticationStage::Header,
-                "Adapter authentication refused"
-            );
-            CallerRefusal::Unauthenticated
-        })?;
+        validate_compact_access_token(token)
+            .map_err(|_| CallerRefusal::Unauthenticated(FailedCheck::CredentialMalformed))?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                error.authentication_stage(),
-                "Adapter authentication refused"
-            );
+            let check = error.failed_check();
             match error {
                 OidcError::Transport(_)
                 | OidcError::BoundedRead(_)
@@ -127,19 +117,16 @@ impl Authenticator {
                 | OidcError::EmptyKeySet
                 | OidcError::MissingIssuer
                 | OidcError::ConflictingEndpointConfiguration => CallerRefusal::Unavailable,
-                _ => CallerRefusal::Unauthenticated,
+                _ => CallerRefusal::Unauthenticated(check),
             }
         })?;
         // An exchanged token names the authority whose assertion produced
         // it. This runtime declares no assertion authority, so it admits
         // no exchanged token.
         if verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM) {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                AuthenticationStage::Client,
-                "Adapter authentication refused: an exchanged credential arrived at a deployment that declares no assertion authority"
-            );
-            return Err(CallerRefusal::Unauthenticated);
+            return Err(CallerRefusal::Unauthenticated(
+                FailedCheck::TokenAssertionIssuer,
+            ));
         }
         let issuer = verified
             .claims
@@ -150,14 +137,7 @@ impl Authenticator {
                     && issuer.len() <= MAX_CALLER_ISSUER_BYTES
                     && !issuer.contains('\0')
             })
-            .ok_or_else(|| {
-                registry_platform_oidc::log_authentication_refusal!(
-                    self.verifier,
-                    AuthenticationStage::Profile,
-                    "Adapter authentication refused: the issuer is absent or unusable for caller isolation"
-                );
-                CallerRefusal::Unauthenticated
-            })?;
+            .ok_or(CallerRefusal::Unauthenticated(FailedCheck::TokenClaims))?;
         let client_id = verified
             .matched_client_id()
             .ok()
@@ -168,14 +148,7 @@ impl Authenticator {
                     && !client.contains('\0')
             })
             .map(str::to_owned)
-            .ok_or_else(|| {
-                registry_platform_oidc::log_authentication_refusal!(
-                    self.verifier,
-                    AuthenticationStage::Client,
-                    "Adapter authentication refused: the admitted client identity is unavailable"
-                );
-                CallerRefusal::Unauthenticated
-            })?;
+            .ok_or(CallerRefusal::Unauthenticated(FailedCheck::TokenClient))?;
         let reference = verified
             .claims
             .sub
@@ -185,14 +158,7 @@ impl Authenticator {
                     && subject.len() <= MAXIMUM_SUBJECT_BYTES
                     && !subject.contains('\0')
             })
-            .ok_or_else(|| {
-                registry_platform_oidc::log_authentication_refusal!(
-                    self.verifier,
-                    AuthenticationStage::Profile,
-                    "Adapter authentication refused: the subject is absent or unusable as a caller reference"
-                );
-                CallerRefusal::Unauthenticated
-            })?;
+            .ok_or(CallerRefusal::Unauthenticated(FailedCheck::TokenClaims))?;
         Ok(Caller {
             reference,
             issuer,

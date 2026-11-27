@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -359,6 +359,7 @@ the series below and nothing else. The public listener does not route `/metrics`
 | `scheduling_hook_oldest_pending_age_seconds` | none | Gauge of how many seconds ago the oldest pending hook delivery's event was captured. Zero when none is pending |
 | `scheduling_worker_last_success_age_seconds` | `worker`: `hold-expiry`, `retention` | Gauge of seconds since the worker last finished a pass |
 | `scheduling_metrics_sample_failures_total` | `queue`: `outbox`, `hook-deliveries` | Scrapes in which that queue could not be read |
+| `scheduling_request_refusals_total` | `check`: the closed set of 45 failed checks, every value published at zero | Requests refused, by the check that failed. Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute, with `suppressed` counting what a window held back. Neither carries a token, claim, client, subject or identifier |
 
 Every state is listed, with a zero when no row is in it. Watch
 `scheduling_outbox_items{state="dead-lettered"}` and
