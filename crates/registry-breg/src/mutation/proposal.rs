@@ -2384,7 +2384,7 @@ impl MutationTransaction {
                 Err(MutationError::PreconditionFailed)
             };
         };
-        if preconditions.contract != action.requires {
+        if preconditions.contract != crate::model::without_labels(&action.requires) {
             return Err(MutationError::PreconditionFailed);
         }
         preconditions.validate().map_err(workflow_error)?;
@@ -2443,7 +2443,8 @@ impl MutationTransaction {
                     Some(target.expected_revision),
                     registry,
                     trusted_now,
-                )?;
+                )
+                .map_err(|error| restore_guard_label(error, action))?;
             }
             if let Some(fields) =
                 crate::commit_evidence::target_fields(&preconditions.evidence).get(&target.id)
@@ -4368,6 +4369,20 @@ fn verify_guard(
     }
 }
 
+/// A frozen Proposal holds its guards without labels, so a refusal at Apply
+/// takes the label from the Action as it is compiled now.
+fn restore_guard_label(error: MutationError, action: &CompiledAction) -> MutationError {
+    let MutationError::ProposalGuardFailed(mut failure) = error else {
+        return error;
+    };
+    failure.guard.label = action
+        .requires
+        .iter()
+        .find(|guard| guard.input == failure.guard.input && guard.field == failure.guard.field)
+        .and_then(|guard| guard.label.clone());
+    MutationError::ProposalGuardFailed(failure)
+}
+
 fn proposal_read_fields(action: &CompiledAction, entity_id: &str) -> BTreeSet<String> {
     action
         .target_uses
@@ -4806,7 +4821,9 @@ mod commit_guard_date_tests {
             at_least: None,
             at_most: None,
             current_date: Some(crate::model::CompiledCurrentDateRelation::OnOrAfter),
+            label: None,
             current_date_offset_days: 0,
+            current_date_offset_months: 0,
             at_least_input: None,
             at_most_input: None,
         };

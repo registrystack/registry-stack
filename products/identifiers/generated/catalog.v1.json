@@ -30,7 +30,7 @@
       "description": "Base Registry Engine fixed Proposal lifecycle event schema, reproduced byte-for-byte from its packaged artifact.",
       "source": {
         "path": "crates/registry-breg/src/proposal_hooks.rs",
-        "sha256": "02fe083f3d06c107298847923f42c0036ee98d5ba12347e527e886c0cedd2178"
+        "sha256": "23fceb42341650d4f4a3477a025fe8a8065759a7f490ec98a0ff11281c23a917"
       },
       "artifact": {
         "path": "products/breg/generated/event-schemas/proposal-lifecycle.schema.json",
@@ -4946,7 +4946,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "1205595c67c8ae57e9744b2a52b98cbff6546416f1271491a42d29387ddbaa70"
+        "sha256": "a90f5a0d37662f711d136c6bc418cd93308ceac4b3e64b5d249a5890709bd1ed"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -5184,7 +5184,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "0689f2010a51d1bc5b12c20377b208a5b579c525828a2246d03da5f6f64ac408",
+        "sha256": "fc153209d577848348fbe95965500b0269cb57c7ce4e80c87013057280df2275",
         "mediaType": "application/schema+json"
       }
     },
@@ -5202,7 +5202,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "206317fcd5bc1ca10bbf77c534305c26094c7879143319214bfb1fbd627a2738",
+        "sha256": "2140744201848a465df671c0ab4b1f2a160ea3feb3758d78e8dbdda41a1ddada",
         "mediaType": "application/schema+json"
       }
     },

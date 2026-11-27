@@ -53,6 +53,44 @@ fn prospective_row_boundary_refusal_is_documented_only_where_it_can_apply() {
 }
 
 #[test]
+fn availability_response_admits_a_bounded_guard_label_beside_its_reason() {
+    let registry = compiled_asset_result_action_registry();
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "register-asset")
+        .unwrap();
+    let schema = inline_validator(&super::openapi_action_availability_response_schema(action));
+    let unavailable = |members: Value| {
+        let mut availability = json!({
+            "available": false, "observedRevision": 3,
+            "reason": "guard-not-satisfied", "recovery": "none"
+        });
+        for (key, value) in members.as_object().unwrap() {
+            availability[key] = value.clone();
+        }
+        json!({"availability": availability})
+    };
+    assert_valid(&schema, &unavailable(json!({})));
+    assert_valid(
+        &schema,
+        &unavailable(
+            json!({"guardReason": "not-submitted", "guardLabel": "Only a submitted application can be approved."}),
+        ),
+    );
+    assert_invalid(&schema, &unavailable(json!({"guardLabel": ""})));
+    assert_invalid(
+        &schema,
+        &unavailable(json!({"guardLabel": "a".repeat(257)})),
+    );
+    assert_invalid(
+        &schema,
+        &json!({"availability": {"available": true, "observedRevision": 3, "guardLabel": "Misplaced."}}),
+    );
+}
+
+#[test]
 fn write_outside_boundary_problem_is_exact_and_does_not_narrow_located_problems() {
     let schema = inline_validator(&super::problem_schema());
     let boundary = crate::problem::ProblemCode::WriteOutsideBoundary;

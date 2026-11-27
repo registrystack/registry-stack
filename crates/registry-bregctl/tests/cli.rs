@@ -2883,7 +2883,18 @@ fn facility_starter_checks_clean_with_warnings_denied() {
         .unwrap()
         .iter()
         .any(|operation| operation == "get"));
-    assert_eq!(operator["rowBoundaries"].as_array().unwrap().len(), 1);
+    // The template writes the boundary once, as a set, and the grant refers to it.
+    assert_eq!(
+        operator["rowBoundaries"],
+        json!({"rowBoundarySet": "same-jurisdiction"})
+    );
+    assert_eq!(
+        registry["rowBoundarySets"]["same-jurisdiction"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
     let checked = bregctl(&[
         "--format",

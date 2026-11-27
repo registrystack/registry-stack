@@ -59,6 +59,7 @@ mod identity_facts;
 mod import_authority_lifecycle;
 mod init_from_model;
 mod instance_claim_lifecycle;
+mod migration_draft;
 mod module_lock_patch;
 mod package_inspection;
 mod package_lifecycle;
@@ -1593,6 +1594,16 @@ enum MigrationCommand {
 
     /// Assess a Registry pinned by a failed activation, and execute only the safe transition it names.
     Reconcile(MigrationReconcileArgs),
+
+    /// Write the reviewed migration directory for a successor whose changes need no SQL.
+    ///
+    /// Covers every access or disclosure change against the baseline package,
+    /// measures the candidate on the disposable database the runtime
+    /// configuration names, and writes descriptor.json and rehearsal.json
+    /// under <OUTPUT>/modules/<MODULE>/migrations/<ID>. Pass <OUTPUT> as
+    /// --reviewed-migrations to test and package. Never overwrites an existing
+    /// migration.
+    Draft(MigrationDraftArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -1628,6 +1639,33 @@ struct MigrationReconcileArgs {
     /// Perform the single safe transition the assessment names.
     #[arg(long)]
     execute: bool,
+}
+
+#[derive(Debug, Args)]
+struct MigrationDraftArgs {
+    /// Base Registry Engine project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+
+    /// Absolute directory of the chain tip package the successor follows.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    baseline_package: PathBuf,
+
+    /// Runtime configuration file of the disposable schema-test database.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Absolute reviewed-migrations directory the draft is written under.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    output: PathBuf,
+
+    /// Module the migration directory belongs to.
+    #[arg(long, value_name = "LOCAL_ID")]
+    module: String,
+
+    /// Identifier of the migration, also its directory name.
+    #[arg(long, value_name = "LOCAL_ID")]
+    id: String,
 }
 
 #[derive(Debug, Args)]
@@ -2183,6 +2221,21 @@ struct MigrationExplainSuccessReport {
     assurance: BaselineAssurance,
     package_digest: String,
     plan: MigrationInspectionSummary,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MigrationDraftSuccessReport {
+    ok: bool,
+    command: &'static str,
+    /// The migration directory, relative to --output.
+    directory: String,
+    change_class: registry_breg::package::CompiledRegistryChangeClass,
+    covers: Vec<registry_breg::migration_plan::ReviewedChangeCover>,
+    plan_digest: String,
+    prior_package_digest: String,
+    final_schema_fingerprint: String,
+    postgres_major: u16,
 }
 
 #[derive(Serialize)]
@@ -3162,6 +3215,12 @@ where
                         write_migration_reconcile_success(&report, format, stdout, stderr)
                     }
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
+                };
+            }
+            MigrationCommand::Draft(args) => {
+                return match migration_draft(&args) {
+                    Ok(report) => write_migration_draft_success(&report, format, stdout, stderr),
+                    Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
             }
         },
@@ -7861,6 +7920,28 @@ fn migration_explain(
         assurance: BaselineAssurance::RuntimeBound,
         package_digest: inspected.package_digest().to_owned(),
         plan: inspected.migration_summary().clone(),
+    })
+}
+
+fn migration_draft(args: &MigrationDraftArgs) -> Result<MigrationDraftSuccessReport, Refusal> {
+    let drafted = migration_draft::run(&migration_draft::DraftRequest {
+        project: &args.project,
+        baseline_package: &args.baseline_package,
+        runtime_config: &args.runtime_config,
+        output: &args.output,
+        module: &args.module,
+        id: &args.id,
+    })?;
+    Ok(MigrationDraftSuccessReport {
+        ok: true,
+        command: migration_draft::COMMAND,
+        directory: drafted.directory,
+        change_class: registry_breg::package::CompiledRegistryChangeClass::AccessOrDisclosureChange,
+        covers: drafted.covers,
+        plan_digest: drafted.plan_digest,
+        prior_package_digest: drafted.prior_package_digest,
+        final_schema_fingerprint: drafted.final_schema_fingerprint,
+        postgres_major: drafted.postgres_major,
     })
 }
 
@@ -14203,6 +14284,58 @@ fn write_migration_explain_success(
             ExitCode::from(OPERATIONAL_FAILURE_EXIT)
         }
     }
+}
+
+fn write_migration_draft_success(
+    report: &MigrationDraftSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        write_ctl_report(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        write_migration_draft_human(report, stdout)
+    };
+    write_result(result, stderr)
+}
+
+fn write_migration_draft_human(
+    report: &MigrationDraftSuccessReport,
+    stdout: &mut dyn Write,
+) -> io::Result<()> {
+    let mut lines = report::Lines::new();
+    lines.lead(&format!(
+        "Drafted a reviewed migration covering {}.",
+        report::counted(report.covers.len(), "change")
+    ));
+    lines.pairs(&[
+        ("directory", report.directory.clone()),
+        ("plan digest", report.plan_digest.clone()),
+        ("prior package digest", report.prior_package_digest.clone()),
+        (
+            "final schema fingerprint",
+            report.final_schema_fingerprint.clone(),
+        ),
+        ("postgres major", report.postgres_major.to_string()),
+    ]);
+    for cover in &report.covers {
+        let target = [
+            cover.target.record_type_id.as_deref(),
+            cover.target.member_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(".");
+        lines.pairs(&[(
+            "covers",
+            format!("{} at {target}", change_code_name(cover.code)),
+        )]);
+    }
+    stdout.write_all(lines.finish().as_bytes())
 }
 
 fn write_migration_reconcile_success(

@@ -364,6 +364,41 @@ async fn current_date_offset_is_enforced_at_immediate_commit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn current_date_month_offset_is_enforced_at_immediate_commit() {
+    let mut source = support::project();
+    source["project"]["timezone"] = json!("UTC");
+    source["recordTypes"]["parent"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"eligible-on", "type":"date", "classification":"restricted"
+        }));
+    source["actions"]["register-child"]["commitGuards"]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "input":"parent", "field":"eligible-on", "currentDate":"on-or-after",
+            "currentDateOffsetMonths":1
+        }));
+    let (database, registry, identity) = setup_with_project(source).await;
+    let today = registry
+        .local_date_at(time::OffsetDateTime::now_utc())
+        .unwrap();
+    let threshold = today.checked_add_months(chrono::Months::new(1)).unwrap();
+    set_parent_eligible_on(&database, &registry, threshold).await;
+    let app = app(&database, registry.clone(), identity, None);
+    let accepted = invoke(app.clone(), "month-offset-accepted", ID).await;
+    assert_eq!(accepted.0, StatusCode::OK, "{}", accepted.1);
+    let committed = counts(&database, &registry).await;
+
+    set_parent_eligible_on(&database, &registry, today).await;
+    let refused = invoke(app, "month-offset-refused", ID).await;
+    assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
+    assert_eq!(counts(&database, &registry).await, committed);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ordered_input_guards_compare_dates_and_instants_against_stored_fields() {
     let mut source = with_parent_get(
         support::project(),
@@ -1101,6 +1136,123 @@ fn status_sql(registry: &registry_breg::CompiledRegistry) -> String {
 async fn counts(database: &TestDatabase, registry: &registry_breg::CompiledRegistry) -> Vec<i64> {
     let row = database.admin.query_one(&format!("SELECT (SELECT count(*) FROM registry_data.{}), (SELECT count(*) FROM registry_internal.registry_revisions), (SELECT count(*) FROM registry_internal.registry_outbox), (SELECT count(*) FROM registry_internal.registry_idempotency), (SELECT count(*) FROM registry_internal.registry_immediate_action_applications), (SELECT count(*) FROM registry_internal.registry_immediate_action_results)", q(&registry.entities()["child"].physical_table)), &[]).await.unwrap();
     (0..6).map(|index| row.get(index)).collect()
+}
+
+const GUARD_LABEL: &str = "Only an active parent can take a new child.";
+
+/// The registrar's one guard carries a reason and an authored label.
+fn with_guard_label(mut source: Value) -> Value {
+    let guard = &mut source["actions"]["register-child"]["commitGuards"]["targets"][0];
+    guard["reason"] = json!("parent-inactive");
+    guard["label"] = json!(GUARD_LABEL);
+    source
+}
+
+/// A body without the per-request `traceId`, so two refusals compare.
+fn without_trace(mut body: Value) -> Value {
+    body.as_object_mut().unwrap().remove("traceId");
+    body
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guard_label_rides_only_the_readable_guard_refusal_and_availability() {
+    let source = with_guard_label(with_parent_get(support::project(), &["status", "zone"]));
+    let (database, registry, identity) = setup_with_project(source).await;
+    let app = app(&database, registry.clone(), identity, None);
+    database
+        .admin
+        .execute(
+            &status_sql(&registry),
+            &[&"inactive", &Uuid::parse_str(ID).unwrap()],
+        )
+        .await
+        .unwrap();
+    let before = counts(&database, &registry).await;
+
+    let refused = invoke(app.clone(), "labelled-guard", ID).await;
+    assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
+    assert_eq!(refused.1["code"], "action.guard_failed");
+    assert_eq!(refused.1["guardReason"], "parent-inactive");
+    assert_eq!(refused.1["detail"], GUARD_LABEL);
+
+    let unavailable = availability(app.clone(), json!({"parentId":ID})).await;
+    assert_eq!(unavailable.0, StatusCode::OK, "{}", unavailable.1);
+    assert_eq!(
+        unavailable.1,
+        json!({"availability":{
+            "available":false,
+            "observedRevision":2,
+            "reason":"guard-not-satisfied",
+            "guardReason":"parent-inactive",
+            "guardLabel":GUARD_LABEL,
+            "recovery":"none"
+        }})
+    );
+    assert_eq!(before, counts(&database, &registry).await);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unreadable_guard_field_never_discloses_the_guard_label() {
+    // The profile cannot read `status`, so the failed guard stays the fixed
+    // precondition refusal, byte-identical to a row-boundary refusal.
+    let source = with_guard_label(with_parent_get(support::project(), &["zone"]));
+    let (database, registry, identity) = setup_with_project(source).await;
+    insert_parent(
+        &database,
+        &registry,
+        &identity.activation_id,
+        FOREIGN_ID,
+        "active",
+        "zone-b",
+    )
+    .await;
+    let mut app = app(&database, registry.clone(), identity, None);
+    database
+        .admin
+        .execute(
+            &status_sql(&registry),
+            &[&"inactive", &Uuid::parse_str(ID).unwrap()],
+        )
+        .await
+        .unwrap();
+
+    let hidden_guard = invoke(app.clone(), "hidden-guard", ID).await;
+    let boundary = invoke(app.clone(), "hidden-boundary", FOREIGN_ID).await;
+    assert_eq!(hidden_guard.0, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(hidden_guard.0, boundary.0);
+    assert_eq!(hidden_guard.1["code"], "precondition.failed");
+    assert_eq!(
+        without_trace(hidden_guard.1.clone()),
+        without_trace(boundary.1),
+        "a hidden guard answers exactly as a boundary refusal does"
+    );
+    assert!(!hidden_guard.1.to_string().contains(GUARD_LABEL));
+    assert!(hidden_guard.1.get("guardReason").is_none());
+
+    // Neither the headers nor an availability answer carry the label.
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/actions/register-child")
+        .header("content-type", "application/json")
+        .header("idempotency-key", "hidden-guard-headers")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"input": {"parentId": ID, "label": "synthetic"}})).unwrap(),
+        ))
+        .unwrap();
+    request.extensions_mut().insert(registrar_claims());
+    let response = app.call(request).await.unwrap();
+    assert!(response
+        .headers()
+        .iter()
+        .all(|(_, value)| !String::from_utf8_lossy(value.as_bytes()).contains(GUARD_LABEL)));
+    let hidden_availability = availability(app, json!({"parentId":ID})).await;
+    assert!(
+        !hidden_availability.1.to_string().contains(GUARD_LABEL),
+        "{}",
+        hidden_availability.1
+    );
+    database.cleanup().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -492,6 +492,13 @@ pub struct CompiledAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grouping: Option<CompiledGrouping>,
     pub execution: CompiledActionExecution,
+    /// How an immediate Action guards its patches. Absent on every Action
+    /// that asks the caller for a condition.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::contract::ActionConcurrency::is_condition_required"
+    )]
+    pub concurrency: crate::contract::ActionConcurrency,
     pub definition_revision: String,
 }
 
@@ -637,6 +644,9 @@ pub struct CompiledCommitGuard {
     pub input: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Authored text for the refusal that names `reason`. Presentation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(rename = "recordType")]
     pub entity_id: String,
     pub field: String,
@@ -654,12 +664,26 @@ pub struct CompiledCommitGuard {
     pub current_date: Option<CompiledCurrentDateRelation>,
     #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub current_date_offset_days: i32,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub current_date_offset_months: i32,
     /// Keeps the stored field at or above the named action input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_least_input: Option<String>,
     /// Keeps the stored field at or below the named action input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_most_input: Option<String>,
+}
+
+/// The guards without their authored labels. A label is presentation copy, so
+/// a frozen Proposal binds and compares the guards without it.
+pub(crate) fn without_labels(guards: &[CompiledCommitGuard]) -> Vec<CompiledCommitGuard> {
+    guards
+        .iter()
+        .map(|guard| CompiledCommitGuard {
+            label: None,
+            ..guard.clone()
+        })
+        .collect()
 }
 
 impl CompiledCommitGuard {

@@ -1106,6 +1106,9 @@ struct ValidatedStep {
 #[derive(Clone, Default)]
 struct FixtureProblemBindings {
     refusal_label: Option<String>,
+    /// The `(reason, label)` pairs of the Action's guards, so a refusal may
+    /// carry a guard's authored label as its `detail`.
+    guard_labels: BTreeSet<(String, String)>,
     refusal_field_paths: BTreeSet<String>,
     request_field_paths: BTreeSet<String>,
     /// A record step's refusal may name one closed record location instead
@@ -3034,6 +3037,15 @@ fn compile_problem_bindings(
             }
         }
     }
+    if expectation.problem_code.as_deref() == Some("action.guard_failed") {
+        if let Some(action) = action {
+            bindings.guard_labels = action
+                .requires
+                .iter()
+                .filter_map(|guard| Some((guard.reason.clone()?, guard.label.clone()?)))
+                .collect();
+        }
+    }
     if matches!(
         expectation.problem_code.as_deref(),
         Some("action.refused" | "action.handler_failed" | "action.evidence_failed")
@@ -4723,14 +4735,22 @@ fn assert_response_with_observations(
                 )
             } else if code == "action.guard_failed" && document.get("guardReason").is_some() {
                 keys.push("guardReason");
-                if document
+                let Some(reason) = document
                     .get("guardReason")
                     .and_then(Value::as_str)
-                    .is_none_or(|reason| registry_platform_yaml::LocalId::new(reason).is_err())
-                {
+                    .filter(|reason| registry_platform_yaml::LocalId::new(*reason).is_ok())
+                else {
                     return Err(FixtureError::ResponseShapeRefused);
-                }
-                None
+                };
+                // A guard that authors a label answers with it as the detail.
+                document
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .filter(|detail| {
+                        step.problem_bindings
+                            .guard_labels
+                            .contains(&(reason.to_owned(), (*detail).to_owned()))
+                    })
             } else if let Some((entity, field)) = &step.problem_bindings.pattern_field {
                 keys.extend(["recordType", "fieldId"]);
                 if document.get("recordType").and_then(Value::as_str) != Some(entity.as_str())
@@ -8613,6 +8633,59 @@ journeys:
         );
         validate_fixture_journeys(journeys.as_bytes(), &registry)
             .expect("constraint journeys validate")
+    }
+
+    #[test]
+    fn guard_failed_problem_accepts_a_bound_guard_label_as_its_detail() {
+        let suite = row_local_constraint_suite(
+            "jurisdiction, label, note, quantity, valid-from, valid-to",
+            "validFrom: 2, validTo: 1",
+        );
+        let label = "Only an active parent takes a child.";
+        let mut guard_step = suite.journeys[0].steps[0].clone();
+        guard_step.expect.status = 412;
+        guard_step.expect.problem_code = Some("action.guard_failed".to_owned());
+        guard_step
+            .problem_bindings
+            .guard_labels
+            .insert(("parent-inactive".to_owned(), label.to_owned()));
+        let problem = |reason: &str, detail: &str| {
+            json!({
+                "type": crate::problem::type_uri("action.guard_failed"),
+                "title": "Precondition Failed",
+                "status": 412,
+                "detail": detail,
+                "code": "action.guard_failed",
+                "traceId": "11111111111111111111111111111111",
+                "guardReason": reason
+            })
+        };
+        assert_response(
+            &guard_step,
+            StatusCode::PRECONDITION_FAILED,
+            &problem("parent-inactive", label),
+        )
+        .expect("a bound label is the detail of the refusal that names its reason");
+        assert_response(
+            &guard_step,
+            StatusCode::PRECONDITION_FAILED,
+            &problem("parent-inactive", "The action guard was not satisfied."),
+        )
+        .expect("the generic detail stays admitted");
+        for (reason, detail) in [
+            ("other-reason", label),
+            ("parent-inactive", "Some other text."),
+        ] {
+            assert!(
+                assert_response(
+                    &guard_step,
+                    StatusCode::PRECONDITION_FAILED,
+                    &problem(reason, detail),
+                )
+                .is_err(),
+                "a detail that is no bound label for its reason is refused"
+            );
+        }
     }
 
     #[test]

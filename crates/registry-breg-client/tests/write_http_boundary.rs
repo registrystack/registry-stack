@@ -2498,7 +2498,16 @@ async fn action_availability_is_metadata_bound_validated_and_sent_once() {
         json!({"availability":{"available":null,"observedRevision":7,
             "reason":"input-required","guardReason":"misplaced","recovery":"correct-input",
             "missingInputs":["legalName"]}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardLabel":"A label without its reason.","recovery":"none"}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged",
+            "guardLabel":"é".repeat(257),"recovery":"none"}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged",
+            "guardLabel":"label\ncanary","recovery":"none"}}),
     ];
+    let malformed_count = malformed.len();
     let fixture = test_client(
         std::iter::once(MockResponse::json(StatusCode::OK, metadata))
         .chain(std::iter::once(MockResponse::json(
@@ -2512,6 +2521,14 @@ async fn action_availability_is_metadata_bound_validated_and_sent_once() {
             StatusCode::OK,
             json!({"availability":{"available":false,"observedRevision":8,
                 "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged","recovery":"none"}}),
+        )
+        .with_header("cache-control", "no-store")
+        .with_header("vary", "authorization, accept")))
+        .chain(std::iter::once(MockResponse::json(
+            StatusCode::OK,
+            json!({"availability":{"available":false,"observedRevision":9,
+                "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged",
+                "guardLabel":"The legal name cannot change here.","recovery":"none"}}),
         )
         .with_header("cache-control", "no-store")
         .with_header("vary", "authorization, accept")))
@@ -2568,7 +2585,17 @@ async fn action_availability_is_metadata_bound_validated_and_sent_once() {
     assert_eq!(unavailable.available(), Some(false));
     assert_eq!(unavailable.observed_revision(), Some(8));
     assert_eq!(unavailable.guard_reason(), Some("legal_name_unchanged"));
-    for _ in 0..6 {
+    // An authored guard label rides beside its reason. The client checks its
+    // bounds and, like every refusal text, does not retain it.
+    let labelled = fixture
+        .client
+        .action_availability(&action, &request)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(labelled.observed_revision(), Some(9));
+    assert_eq!(labelled.guard_reason(), Some("legal_name_unchanged"));
+    for _ in 0..malformed_count {
         let error = fixture
             .client
             .action_availability(&action, &request)

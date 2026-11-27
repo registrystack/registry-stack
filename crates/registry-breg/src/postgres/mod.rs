@@ -238,7 +238,7 @@ pub(crate) use schema::verify_postgres_17_or_newer;
 pub(crate) use schema::PreparedSchemaTestCatalogVerifier;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub use schema::{
-    prepare_schema_test_database_with_connections, PreparedSchemaTestDatabase,
+    prepare_schema_test_database_with_connections, PreparedSchemaTestDatabase, SchemaMeasurement,
     SchemaTestDatabaseIdentity,
 };
 #[cfg(all(feature = "runtime", feature = "tooling"))]

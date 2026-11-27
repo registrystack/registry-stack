@@ -1259,6 +1259,18 @@ pub async fn rehearse_schema_fingerprint(
     config: &RuntimeConfig,
     registry: &CompiledRegistry,
 ) -> Result<String> {
+    measure_schema_install(config, registry)
+        .await
+        .map(|measurement| measurement.fingerprint)
+}
+
+/// The same rehearsal as [`rehearse_schema_fingerprint`], also returning the
+/// server's PostgreSQL major version, which a rehearsal receipt records.
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub async fn measure_schema_install(
+    config: &RuntimeConfig,
+    registry: &CompiledRegistry,
+) -> Result<crate::postgres::SchemaMeasurement> {
     validate_rehearsal_registry_binding(registry)?;
     let migration = config
         .migration_database_connection_config()
@@ -1302,7 +1314,9 @@ pub async fn rehearse_schema_fingerprint_with_connection_config_for_test(
     migration: &crate::postgres::ConnectionConfig,
 ) -> Result<String> {
     validate_rehearsal_registry_binding(registry)?;
-    rehearse_schema_fingerprint_with_connection_config(config, registry, migration).await
+    rehearse_schema_fingerprint_with_connection_config(config, registry, migration)
+        .await
+        .map(|measurement| measurement.fingerprint)
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -1310,7 +1324,7 @@ async fn rehearse_schema_fingerprint_with_connection_config(
     config: &RuntimeConfig,
     registry: &CompiledRegistry,
     migration: &crate::postgres::ConnectionConfig,
-) -> Result<String> {
+) -> Result<crate::postgres::SchemaMeasurement> {
     crate::postgres::rehearse_schema_fingerprint_with_connection(
         migration,
         config.database().roles().migration(),
