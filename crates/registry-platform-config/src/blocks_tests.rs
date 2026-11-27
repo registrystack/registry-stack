@@ -175,6 +175,34 @@ fn jwks_source_has_three_types_and_defaults_to_discovery() {
 }
 
 #[test]
+fn jwks_uri_loopback_follows_the_shared_definition() {
+    let check = |uri: &str| {
+        JwksSource::Uri {
+            uri: Url::new(uri).unwrap(),
+        }
+        .check("authentication.oidc.jwksSource", true)
+    };
+    for uri in [
+        "http://127.0.0.1:1/jwks",
+        "http://127.0.0.2:1/jwks",
+        "http://[::1]:1/jwks",
+        "http://[::ffff:127.0.0.1]:1/jwks",
+        "http://localhost:1/jwks",
+        "http://LOCALHOST:1/jwks",
+    ] {
+        check(uri).unwrap_or_else(|error| panic!("{uri}: {error:?}"));
+    }
+    for uri in [
+        "http://localhost.:1/jwks",
+        "http://issuer.localhost:1/jwks",
+        "http://0.0.0.0:1/jwks",
+        "http://[::ffff:10.0.0.1]:1/jwks",
+    ] {
+        assert!(check(uri).is_err(), "{uri}");
+    }
+}
+
+#[test]
 fn issuer_and_jwks_uri_are_checked_urls_when_read() {
     for text in [
         "https://issuer.example/a\\b".to_owned(),

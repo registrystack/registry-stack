@@ -92,14 +92,10 @@ impl IssuerNetworkPolicy {
         {
             return Err(OidcError::InvalidUrl);
         }
-        let loopback = issuer.host_str().is_some_and(|host| {
-            host.eq_ignore_ascii_case("localhost")
-                || host
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
-        });
+        let loopback = issuer
+            .host_str()
+            .and_then(registry_platform_httputil::loopback::loopback_host)
+            .is_some();
         if issuer.scheme() == "http" && !loopback && !allow_insecure_http {
             return Err(OidcError::InsecureHttpRequiresOptIn);
         }
@@ -1924,6 +1920,33 @@ mod tests {
                 &Url::parse("http://[::1]:8080/.well-known/openid-configuration").unwrap(),
             )
             .expect("IPv6 loopback keeps the same development behavior");
+    }
+
+    #[test]
+    fn issuer_loopback_follows_the_shared_definition() {
+        for issuer in [
+            "http://127.0.0.1:8080",
+            "http://127.0.0.2:8080",
+            "http://[::1]:8080",
+            "http://[::ffff:127.0.0.1]:8080",
+            "http://localhost:8080",
+            "http://LOCALHOST:8080",
+        ] {
+            IssuerNetworkPolicy::new(issuer, false)
+                .unwrap_or_else(|error| panic!("{issuer}: {error:?}"));
+        }
+        for issuer in [
+            "http://localhost.:8080",
+            "http://issuer.localhost:8080",
+            "http://0.0.0.0:8080",
+            "http://[::ffff:10.0.0.1]:8080",
+        ] {
+            let error = IssuerNetworkPolicy::new(issuer, false).expect_err(issuer);
+            assert!(
+                matches!(error, OidcError::InsecureHttpRequiresOptIn),
+                "{issuer}"
+            );
+        }
     }
 
     #[test]

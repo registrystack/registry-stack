@@ -7839,6 +7839,7 @@ name = "registry-platform-config"
 version = "0.49.0"
 dependencies = [
  "registry-platform-canonical-json",
+ "registry-platform-httpsec",
  "registry-platform-yaml",
  "rustix 1.1.6",
  "schemars",
@@ -7963,6 +7964,7 @@ dependencies = [
  "registry-platform-authcommon",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
+ "registry-platform-httpsec",
  "reqwest 0.12.28",
  "rustls-native-certs",
  "serde",

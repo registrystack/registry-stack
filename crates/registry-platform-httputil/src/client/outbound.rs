@@ -11,10 +11,6 @@ use url::Url;
 
 use super::TransportKind;
 
-/// The one host name a cleartext URL may carry. It is reserved for the loopback
-/// interface, so a credential sent to it cannot leave the host.
-const LOOPBACK_NAME: &str = "localhost";
-
 /// What a caller may vary about an outbound client. Everything else is fixed by
 /// [`build_client`].
 #[derive(Debug, Clone, Copy)]
@@ -47,17 +43,17 @@ pub fn build_client(options: OutboundOptions<'_>) -> Result<reqwest::Client, &'s
 ///
 /// A secret in cleartext is only acceptable when it cannot leave the host, which
 /// is the local development and tutorial case. The accepted forms are the ones an
-/// adopter types: either loopback numeric family, or the reserved name
-/// `localhost`. Any other name is refused, because a name that happens to resolve
-/// to a loopback address is still resolved off-host, and the answer can change.
+/// adopter types: a loopback address literal, or the reserved name `localhost`.
+/// Any other name is refused, because a name that happens to resolve to a
+/// loopback address is still resolved off-host, and the answer can change. The
+/// client built by [`build_client`] is pinned to the loopback addresses for
+/// `localhost`, so the name is never resolved off-host.
 pub fn transport_protects_the_credential(url: &Url) -> bool {
     match url.scheme() {
         "https" => true,
-        "http" => url.host().is_some_and(|host| match host {
-            url::Host::Ipv4(ip) => ip.is_loopback(),
-            url::Host::Ipv6(ip) => ip.is_loopback(),
-            url::Host::Domain(name) => name == LOOPBACK_NAME,
-        }),
+        "http" => url
+            .host()
+            .is_some_and(|host| crate::loopback::loopback_host(&host.to_string()).is_some()),
         _ => false,
     }
 }
@@ -157,6 +153,32 @@ mod tests {
             assert!(held.len() < 64, "the listen backlog never filled");
         }
         (address, listener, held)
+    }
+
+    #[test]
+    fn cleartext_is_protected_only_on_loopback() {
+        for raw in [
+            "http://127.0.0.1/",
+            "http://127.9.9.9:8080/",
+            "http://[::1]/",
+            "http://localhost:8080/",
+            "http://LOCALHOST/",
+            "https://example.org/",
+        ] {
+            let url = Url::parse(raw).expect("url");
+            assert!(transport_protects_the_credential(&url), "{raw}");
+        }
+        for raw in [
+            "http://a.localhost/",
+            "http://localhost./",
+            "http://10.0.0.1/",
+            "http://0.0.0.0/",
+            "http://example.org/",
+            "ftp://127.0.0.1/",
+        ] {
+            let url = Url::parse(raw).expect("url");
+            assert!(!transport_protects_the_credential(&url), "{raw}");
+        }
     }
 
     #[tokio::test]

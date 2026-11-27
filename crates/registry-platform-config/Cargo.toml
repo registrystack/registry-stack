@@ -15,6 +15,7 @@ schema = ["dep:schemars", "registry-platform-yaml/schema"]
 
 [dependencies]
 registry-platform-canonical-json = { workspace = true }
+registry-platform-httpsec.workspace = true
 registry-platform-yaml.workspace = true
 rustix.workspace = true
 schemars = { workspace = true, optional = true }

@@ -426,12 +426,10 @@ fn valid_jwks_uri(value: &Url, allow_loopback_http: bool, allow_insecure_http: b
         "http" => {
             allow_insecure_http
                 || (allow_loopback_http
-                    && match parsed.host() {
-                        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-                        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-                        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-                        None => false,
-                    })
+                    && parsed
+                        .host_str()
+                        .and_then(registry_platform_httpsec::loopback::loopback_host)
+                        .is_some())
         }
         _ => false,
     }

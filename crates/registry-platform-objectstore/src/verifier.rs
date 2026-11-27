@@ -13,7 +13,7 @@
 //! scanner and rules generation the operator bound the URL to, and enters
 //! only the binding digest a product records beside each verdict.
 
-use std::{fmt, net::IpAddr, time::Duration};
+use std::{fmt, time::Duration};
 
 use registry_platform_config::{
     AttachmentVerifierConfig, ProtectedSecret, SecretReference, SecretResolver,
@@ -106,8 +106,8 @@ impl HttpVerifierSettings {
         let url = Url::parse(text).map_err(|_| VerifierError::InvalidConfiguration)?;
         let loopback = url
             .host_str()
-            .and_then(|host| host.trim_matches(['[', ']']).parse::<IpAddr>().ok())
-            .is_some_and(|ip| ip.is_loopback());
+            .and_then(registry_platform_httputil::loopback::loopback_literal)
+            .is_some();
         let policy_id = config.policy_id.as_str();
         if text.len() > MAXIMUM_URL_BYTES
             || text.trim() != text
