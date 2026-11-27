@@ -1052,16 +1052,24 @@ const HOOK_MAXIMUM_SKEW_SECONDS: u32 = 3600;
 fn hook_freshness(
     py: Python<'_>,
     max_skew_seconds: Option<&Bound<'_, PyAny>>,
-    caller_enforced_freshness: bool,
+    caller_enforced_freshness: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<BRegHookFreshness> {
     let invalid = || {
         to_py_err(
             py,
             MappedError::binding(
                 "invalid-request",
-                "hook freshness options are invalid: max_skew_seconds is a whole number from 1 to 3600 and cannot be combined with caller_enforced_freshness",
+                "hook freshness options are invalid: max_skew_seconds is a whole number from 1 to 3600, caller_enforced_freshness is a bool, and the two cannot be combined",
             ),
         )
+    };
+    let caller_enforced_freshness = match caller_enforced_freshness {
+        None => false,
+        Some(value) if value.is_none() => false,
+        Some(value) => match value.cast::<PyBool>() {
+            Ok(flag) => flag.is_true(),
+            Err(_) => return Err(invalid()),
+        },
     };
     let Some(value) = max_skew_seconds.filter(|value| !value.is_none()) else {
         return Ok(if caller_enforced_freshness {
@@ -1097,7 +1105,7 @@ fn hook_freshness(
 /// `BaseRegistryClientError` with kind `hook-verification` and a value-free
 /// `code`; input of the wrong shape raises kind `invalid-request`.
 #[pyfunction]
-#[pyo3(signature = (*, method, path, headers, body, key, max_skew_seconds=None, caller_enforced_freshness=false))]
+#[pyo3(signature = (*, method, path, headers, body, key, max_skew_seconds=None, caller_enforced_freshness=None))]
 #[allow(clippy::too_many_arguments)]
 fn verify_hook_delivery<'py>(
     py: Python<'py>,
@@ -1107,7 +1115,7 @@ fn verify_hook_delivery<'py>(
     body: &Bound<'py, PyAny>,
     key: &Bound<'py, PyAny>,
     max_skew_seconds: Option<&Bound<'py, PyAny>>,
-    caller_enforced_freshness: bool,
+    caller_enforced_freshness: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let freshness = hook_freshness(py, max_skew_seconds, caller_enforced_freshness)?;
     let method = hook_text(py, method, "method")?;

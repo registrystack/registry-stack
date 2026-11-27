@@ -11,6 +11,11 @@ pub enum BRegHookFreshness {
     #[default]
     DefaultWindow,
     /// Refuse a delivery time further than `skew` from the receiver clock.
+    ///
+    /// The Rust verifier applies `skew` as given. A zero `skew` refuses every
+    /// delivery and a very large one disables the window. The Node and Python
+    /// bindings accept 1 to 3600 seconds only. A receiver that wants no window
+    /// of its own uses [`Self::CallerEnforced`], which says so explicitly.
     Within { skew: Duration },
     /// Check only that the delivery time is well formed. The caller enforces
     /// its own window.
