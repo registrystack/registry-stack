@@ -619,7 +619,13 @@ PROVISION_JOURNEY_PACKAGES = (
 )
 PROVISION_JOURNEY_INPUTS = (
     *(f"crates/{package}/src/provision.rs" for package in PROVISION_JOURNEY_PACKAGES),
-    *(f"crates/{package}/tests/provision*.rs" for package in PROVISION_JOURNEY_PACKAGES),
+    # Each journey's test file. The database-free `provision_cli.rs` stays out.
+    *(
+        f"crates/{package}/tests/provision_postgres.rs"
+        for package in PROVISION_JOURNEY_PACKAGES
+        if package != "registry-caseworkctl"
+    ),
+    "crates/registry-caseworkctl/tests/provision.rs",
     "crates/registry-casework/migrations/**",
     "crates/registry-documents/migrations/**",
     "crates/registry-messaging/migrations/**",

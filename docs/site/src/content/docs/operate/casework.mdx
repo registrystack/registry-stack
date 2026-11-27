@@ -221,7 +221,21 @@ records single-role mode.
 
 If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
 flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
-`\password` line that prompts for the password in `psql`, so the script holds no password.
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "casework_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "casework_migration"
+CREATE ROLE "casework_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "casework_runtime"
+CREATE DATABASE "casework" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "casework" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "casework" TO "casework_migration", "casework_runtime";
+ALTER DATABASE "casework" ALLOW_CONNECTIONS true;
+\connect "casework"
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "casework_migration"; GRANT USAGE ON SCHEMA public TO "casework_runtime";
+```
 
 {/* Evidence: crates/registry-caseworkctl/src/provision.rs; crates/registry-platform-provision/src/plan.rs,
     SchemaLayout::PublicForMigration; crates/registry-caseworkctl/tests/provision.rs. */}

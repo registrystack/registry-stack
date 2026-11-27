@@ -85,7 +85,7 @@ REVOKE ALL ON DATABASE "documents" FROM PUBLIC;
 GRANT CONNECT ON DATABASE "documents" TO "documents_migration", "documents_runtime";
 ALTER DATABASE "documents" ALLOW_CONNECTIONS true;
 \connect "documents"
-REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "documents_migration";
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "documents_migration"; GRANT USAGE ON SCHEMA public TO "documents_runtime";
 ```
 
 The names come from your URLs. Add `--format json` for a report of each statement and its outcome.

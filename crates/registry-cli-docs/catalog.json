@@ -5542,6 +5542,111 @@
           "subcommands": []
         },
         {
+          "name": "provision",
+          "invocation": "bregctl provision",
+          "about": "Create the PostgreSQL roles, database and schemas a Registry needs, from its runtime file",
+          "long_about": "Create the PostgreSQL roles, database and schemas a Registry needs, from its runtime file. The runtime file's two database URLs name both roles, the database and both passwords. The administrator URL comes from a file or an environment variable, never from the command line. The command grants the runtime role CONNECT on the database: apply grants the rest. With --package, a package that needs PostGIS also gets its schema, extension and bounding-box role, which CREATE EXTENSION postgis needs a superuser for, and both roles get USAGE on the PostGIS schema.",
+          "usage": "bregctl provision [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one `apply` reads. A symbolic link at any component of this path is refused.",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-file <ADMIN_URL_FILE>",
+              "description": "File holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-env <ADMIN_URL_ENV>",
+              "description": "Name of the environment variable holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--print-sql",
+              "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--package <ABSOLUTE_DIRECTORY>",
+              "description": "Absolute target package directory; a package that needs PostGIS adds the PostGIS steps. A symbolic link at any component of this path is refused.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--admin-url-file <ADMIN_URL_FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--print-sql"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-file <ADMIN_URL_FILE>",
+                "--print-sql"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "name": "timer",
           "invocation": "bregctl timer",
           "about": "Inspect and operate native Record timers through bounded audited commands",
@@ -10199,6 +10304,102 @@
           "subcommands": []
         },
         {
+          "name": "provision",
+          "invocation": "caseworkctl provision",
+          "about": "Create the migration and runtime roles and the database named by the runtime file",
+          "long_about": null,
+          "usage": "caseworkctl provision [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one `apply` reads",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-file <ADMIN_URL_FILE>",
+              "description": "File holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-env <ADMIN_URL_ENV>",
+              "description": "Name of the environment variable holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--print-sql",
+              "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--admin-url-file <ADMIN_URL_FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--print-sql"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-file <ADMIN_URL_FILE>",
+                "--print-sql"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "name": "api",
           "invocation": "caseworkctl api",
           "about": "Call the Casework HTTP API with a saved connection or an explicit URL",
@@ -12311,6 +12512,102 @@
           "subcommands": []
         },
         {
+          "name": "provision",
+          "invocation": "coordinatorctl provision",
+          "about": "Create the database, the migration and runtime roles, and the grants `apply` expects, as a PostgreSQL administrator",
+          "long_about": null,
+          "usage": "coordinatorctl provision [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one `apply` reads",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-file <ADMIN_URL_FILE>",
+              "description": "File holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-env <ADMIN_URL_ENV>",
+              "description": "Name of the environment variable holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--print-sql",
+              "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--admin-url-file <ADMIN_URL_FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--print-sql"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-file <ADMIN_URL_FILE>",
+                "--print-sql"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "name": "apply",
           "invocation": "coordinatorctl apply",
           "about": "Apply every listed workflow's package and least-privileged runtime grants using migration credentials",
@@ -13970,6 +14267,102 @@
             }
           ],
           "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "provision",
+          "invocation": "documentsctl provision",
+          "about": "Create the roles and the database the runtime file names, or print the SQL",
+          "long_about": null,
+          "usage": "documentsctl provision [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one `apply` reads",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-file <ADMIN_URL_FILE>",
+              "description": "File holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-env <ADMIN_URL_ENV>",
+              "description": "Name of the environment variable holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--print-sql",
+              "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--admin-url-file <ADMIN_URL_FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--print-sql"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-file <ADMIN_URL_FILE>",
+                "--print-sql"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {
@@ -20881,6 +21274,102 @@
           "subcommands": []
         },
         {
+          "name": "provision",
+          "invocation": "messagingctl provision",
+          "about": "Create the roles and the database the runtime file names, or print the SQL",
+          "long_about": null,
+          "usage": "messagingctl provision [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one `apply` reads",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-file <ADMIN_URL_FILE>",
+              "description": "File holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-env <ADMIN_URL_ENV>",
+              "description": "Name of the environment variable holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--print-sql",
+              "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--admin-url-file <ADMIN_URL_FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--print-sql"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-file <ADMIN_URL_FILE>",
+                "--print-sql"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "name": "plan",
           "invocation": "messagingctl plan",
           "about": "Report what activating the configured package would change, without writing",
@@ -25813,6 +26302,102 @@
             }
           ],
           "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "provision",
+          "invocation": "schedulingctl provision",
+          "about": "Create the roles and the database the runtime file names, or print the SQL",
+          "long_about": null,
+          "usage": "schedulingctl provision [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one `apply` reads",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-file <ADMIN_URL_FILE>",
+              "description": "File holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-env <ADMIN_URL_ENV>",
+              "description": "Name of the environment variable holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--print-sql",
+              "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--admin-url-file <ADMIN_URL_FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--print-sql"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-file <ADMIN_URL_FILE>",
+                "--print-sql"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {

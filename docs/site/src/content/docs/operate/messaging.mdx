@@ -272,7 +272,7 @@ REVOKE ALL ON DATABASE "messaging" FROM PUBLIC;
 GRANT CONNECT ON DATABASE "messaging" TO "messaging_migration", "messaging_runtime";
 ALTER DATABASE "messaging" ALLOW_CONNECTIONS true;
 \connect "messaging"
-REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "messaging_migration";
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "messaging_migration"; GRANT USAGE ON SCHEMA public TO "messaging_runtime";
 ```
 
 The names come from your URLs. Add `--format json` for a report of each statement and its outcome.

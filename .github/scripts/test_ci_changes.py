@@ -4480,6 +4480,29 @@ on:
                             PROVISION_POSTGRES_LANE, outputs["breg_contracts_lanes"]
                         )
 
+    def test_database_free_provisioning_tests_do_not_select_the_tls_postgres_lane(
+        self,
+    ) -> None:
+        # `provision_cli.rs` reads no database, so the ordinary package tests
+        # cover it and the TLS PostgreSQL journey need not run. The Base
+        # Registry Engine tool is left out: any change to a breg package
+        # selects the breg contracts for its own reasons.
+        edgeless = Workspace(without_dependency_edges(self.metadata))
+        checked = 0
+        for package in PROVISION_JOURNEY_PACKAGES:
+            path = f"crates/{package}/tests/provision_cli.rs"
+            if package == "registry-bregctl" or not Path(path).exists():
+                continue
+            checked += 1
+            for graph, workspace in (("real", self.workspace), ("edgeless", edgeless)):
+                for event, outputs in (
+                    ("pull_request", classify(workspace, (path,), pull_request=True)),
+                    ("merge_group", classify(workspace, (path,))),
+                ):
+                    with self.subTest(graph=graph, path=path, event=event):
+                        self.assertFalse(outputs["breg_contracts"])
+        self.assertGreater(checked, 0)
+
     def test_contracts_journeys_lane_runs_each_product_provisioning_journey(
         self,
     ) -> None:

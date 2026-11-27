@@ -42,7 +42,7 @@ pub enum OutputFormat {
 /// `--format` flag, passed to [`run_provision`].
 #[derive(clap::Args, Debug, Clone)]
 pub struct ProvisionArgs {
-    /// The product's runtime file, the one `apply` reads
+    /// Runtime configuration file, the one `apply` reads
     #[arg(long, value_name = "FILE")]
     pub runtime_config: PathBuf,
     /// File holding the administrator PostgreSQL URL
