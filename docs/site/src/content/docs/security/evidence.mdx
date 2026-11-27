@@ -57,14 +57,18 @@ receives: the response is the same closed `401`, `403` or `429` it always was.
     every_refusal_is_counted_logged_once_by_its_check_and_answered_as_before;
     crates/registry-evidence/tests/golden/refusal_answers.json. */}
 
-The wallet-facing services record every refused request the same way. Evidence OID4VCI counts each
-one in `evidence_oid4vci_request_refusals_total{check}` and Evidence OID4VP in
-`evidence_oid4vp_request_refusals_total{check}`, and each writes one bounded `request refused` log
-line that carries only the check name. The checks cover a missing or malformed bearer credential, a
-token that fails verification, a missing scope or client, an unusable single-use code or access
+The wallet-facing services record refused requests the same way. Evidence OID4VCI counts each one in
+`evidence_oid4vci_request_refusals_total{check}` and Evidence OID4VP in
+`evidence_oid4vp_request_refusals_total{check}`. Each writes one bounded `request refused` log line
+with the check name, with `decision` and `suppressed`, and for OID4VP also the answer's trace id.
+The checks cover a missing or malformed bearer credential, a token that fails verification, a
+missing scope or client, a task grant the offer cannot use, an unusable single-use code or access
 token, an Evidence refusal, a session read that belongs to another principal, an unknown or foreign
-session status, and a spent request budget. Capacity answers, unknown routes and malformed requests
-are not recorded. The answers a caller receives are unchanged.
+session status, and a spent request budget. An issuer key set that cannot be reached answers `503`
+from both wallet services and counts under `key-source-unavailable`, so alert on that check rather
+than on a rise in `401`. Capacity answers, unknown routes, malformed requests, the read of a
+reference nobody holds and the wallet response protocol refusals are not recorded. The answers a
+caller receives are unchanged.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/observability.rs, observe and record_refusal;
     crates/registry-evidence-oid4vci/src/service.rs, unauthorized, store_response,

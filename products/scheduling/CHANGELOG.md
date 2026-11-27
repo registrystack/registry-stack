@@ -8,10 +8,19 @@
   `request refused` line with `failed_check` and the request's trace id, at
   most five lines per check per minute. That line replaces the
   authentication refusal line that carried a `stage` field. Refusal statuses,
-  headers and bodies are unchanged.
-- A static key set with a private key member or a repeated member name is
-  refused at startup under `scheduling.runtime.unreadable-jwks-secret`, with
-  the rule it broke, in place of `scheduling.runtime-dependency.unavailable`.
+  headers and bodies are unchanged. An answer replayed from a stored receipt
+  under the same idempotency key is not counted again, because the decision
+  was counted when it was made. A grant or access token that lapses while a
+  commitment waits inside the capacity transaction counts under
+  `task-grant-expired`, and a hold or appointment that another caller or
+  source manager holds counts under `ownership`.
+- A static key set that the shared key set rule refuses is refused at startup
+  under `scheduling.runtime.unreadable-jwks-secret`, with the rule it broke,
+  in place of `scheduling.runtime-dependency.unavailable`. The rule refuses a
+  key set that is not JSON, is not a key set, is empty, holds a key that is
+  not an object, a symmetric or unsupported key type, an OKP key or a key of
+  the wrong shape, a private key member, a missing `kid`, or a repeated
+  `kid`.
 - A reminder or hook destination in plain `http` accepts any loopback host by
   the shared rule: an address of `127.0.0.0/8`, `::1`, an IPv4-mapped form of
   `127.0.0.0/8`, or `localhost` in any case. `localhost.` and `*.localhost`
@@ -27,8 +36,15 @@
   caller learns to present a grant that expires sooner. The status is
   unchanged. An expired grant, a missing grant, and a grant that does not cover
   the offering still answer `operation.not-authorized`, and a deployment that
-  lists status authorities never answers the new code. Clients that branch on
-  the code gain the new member in `SchedulingProblemCode`.
+  lists status authorities never answers the new code. The code is answered
+  only where no existing hold or appointment is named, which is creating a
+  hold and creating an appointment. Releasing or confirming a hold,
+  rescheduling, recording attendance and cancelling answer
+  `operation.not-authorized` for the same grant, as an unknown identifier does,
+  so the answer does not say whether the identifier exists. Clients that
+  branch on the code gain the new member in `SchedulingProblemCode`. A client
+  from before this release reports the code as a protocol error with an
+  unknown outcome, so upgrade the client before shortening grants.
 
 ## 0.47.0 - 2026-11-21
 

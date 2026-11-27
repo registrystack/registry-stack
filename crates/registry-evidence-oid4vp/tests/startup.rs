@@ -559,3 +559,44 @@ async fn startup_code_for(harness: &Harness) -> String {
         .code
         .clone()
 }
+
+const PUBLIC_KEY_WITH_EXT: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","kid":"issuer-key","ext":true,"x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}]}"#;
+const KEY_WITH_PRIVATE_MEMBER: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","kid":"issuer-key","d":"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}]}"#;
+
+#[tokio::test]
+async fn a_static_key_set_with_an_ext_member_loads() {
+    let harness = Harness::new(&Options {
+        applicant_static_jwks: Some(PUBLIC_KEY_WITH_EXT),
+        ..Options::default()
+    })
+    .await;
+    harness
+        .try_service()
+        .await
+        .expect("a public key with an ext member is a valid static key set");
+}
+
+#[tokio::test]
+async fn a_static_key_set_with_a_private_member_is_refused_with_the_validator_text() {
+    let harness = Harness::new(&Options {
+        applicant_static_jwks: Some(KEY_WITH_PRIVATE_MEMBER),
+        ..Options::default()
+    })
+    .await;
+    let error = harness
+        .try_service()
+        .await
+        .expect_err("a key set holding a private member is refused at startup");
+    let diagnostic = error.diagnostic();
+    assert_eq!(diagnostic.code, "evidence.oid4vp.issuer-unavailable");
+    assert_eq!(diagnostic.path, "/applicantTokens");
+    assert!(
+        diagnostic.message.contains("private-key member \"d\""),
+        "the startup message names the broken rule: {}",
+        diagnostic.message
+    );
+    assert!(
+        !diagnostic.message.contains("jpsQnnGQmL"),
+        "the key material is never repeated"
+    );
+}

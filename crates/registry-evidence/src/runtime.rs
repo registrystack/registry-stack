@@ -4589,6 +4589,11 @@ mod tests {
             let failure = pack_source_failure(error);
             assert_eq!(failure.problem, problem);
             assert_eq!(failure.category, category);
+            assert_eq!(
+                failure.check(),
+                (category == "source-authority").then_some(FailedCheck::SourceAuthority),
+                "only the authority refusal is recorded as a refusal: {category}"
+            );
             assert!(
                 categories.insert(category),
                 "two pack failures share the category {category}"
@@ -4599,6 +4604,25 @@ mod tests {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
             }));
         }
+    }
+
+    #[test]
+    fn refusals_built_outside_the_request_path_carry_the_check_that_refused() {
+        let channel = acquisition_channel_refusal();
+        assert_eq!(channel.problem(), ProblemCode::NotAuthorized);
+        assert_eq!(channel.check(), Some(FailedCheck::AcquisitionChannel));
+
+        let request_rate = map_request_limit(RateLimitError::RequestExceeded);
+        assert_eq!(request_rate.problem(), ProblemCode::RateLimited);
+        assert_eq!(request_rate.check(), Some(FailedCheck::RateLimit));
+        let selector_rate = map_selector_limit(RateLimitError::FailedSelectorExceeded);
+        assert_eq!(selector_rate.problem(), ProblemCode::RateLimited);
+        assert_eq!(selector_rate.check(), Some(FailedCheck::RateLimit));
+        assert_eq!(
+            map_request_limit(RateLimitError::CostExceedsBurst).check(),
+            None,
+            "a request the burst can never hold is not a rate-limit refusal"
+        );
     }
 
     #[test]

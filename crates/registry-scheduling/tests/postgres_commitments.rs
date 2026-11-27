@@ -8892,6 +8892,18 @@ async fn the_offline_path_accepts_at_most_fifteen_minutes_of_remaining_lifetime(
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
     assert_eq!(problem["code"], "grant.lifetime-too-long");
+    // The refusal is audited under the same reason every grant refusal
+    // carries, so an audit consumer keyed on it still sees these.
+    let journal = audit_by_reason(&fx);
+    assert_eq!(
+        journal.keys().cloned().collect::<Vec<_>>(),
+        vec!["authorization.refused".to_owned()]
+    );
+    assert_eq!(journal["authorization.refused"]["outcome"], "denied");
+    assert_eq!(
+        journal["authorization.refused"]["operation"],
+        "appointment.create"
+    );
 
     let a_day_left = agent_token_with_grant_exp(pinned_now().timestamp() + 86_400);
     let (status, problem) = fx

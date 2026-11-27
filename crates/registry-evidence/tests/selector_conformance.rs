@@ -998,6 +998,57 @@ async fn standing_agent_requires_an_explicit_agent_profile() {
     assert!(bound.server.received_requests().await.unwrap().is_empty());
 }
 
+/// The package grant ceiling names the actor kinds and audiences a definition
+/// serves for every caller, so a standing caller outside it is counted under
+/// the member for the claim that failed, not under a task-grant member.
+#[tokio::test]
+async fn a_package_grant_ceiling_refusal_is_counted_under_the_claim_that_failed() {
+    let request = grant_request(None);
+
+    let wrong_actor_kind = prepare_service_with_ceiling(
+        false,
+        None,
+        Some(("agent", &format!("\"{EVIDENCE_AUDIENCE}\""))),
+    )
+    .await;
+    assert_authorization_error(
+        &wrong_actor_kind,
+        &access_token(json!({})),
+        &request,
+        AuthorizationError::Unauthorized(FailedCheck::ActorKind),
+    )
+    .await;
+
+    let wrong_audience =
+        prepare_service_with_ceiling(false, None, Some(("service", "\"urn:example:other\""))).await;
+    assert_authorization_error(
+        &wrong_audience,
+        &access_token(json!({})),
+        &request,
+        AuthorizationError::Unauthorized(FailedCheck::AccessProfile),
+    )
+    .await;
+    let subject = json!({
+        "given_name": "Adaeze",
+        "family_name": "Okafor",
+        "birth_date": "1990-07-11",
+        "event_reference": "synthetic-event-001"
+    });
+    let wrong_audience_for_a_grant = prepare_service_with_ceiling(
+        false,
+        None,
+        Some(("service, agent", "\"urn:example:other\"")),
+    )
+    .await;
+    assert_authorization_error(
+        &wrong_audience_for_a_grant,
+        &access_token(task_grant_claims(subject)),
+        &request,
+        AuthorizationError::Unauthorized(FailedCheck::TaskGrantBinding),
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn task_grant_context_is_bound_before_selector_or_source_access() {
     let service = prepare_service(false).await;
@@ -1066,7 +1117,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
         &service,
         &access_token(wrong_actor),
         &request,
-        AuthorizationError::Unauthorized(FailedCheck::TaskGrantClaims),
+        AuthorizationError::Unauthorized(FailedCheck::ActorKind),
     )
     .await;
 
@@ -1076,7 +1127,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
         &service,
         &access_token(expired),
         &request,
-        AuthorizationError::Unauthorized(FailedCheck::TaskGrantClaims),
+        AuthorizationError::Unauthorized(FailedCheck::TaskGrantExpired),
     )
     .await;
 
@@ -1121,6 +1172,16 @@ async fn prepare_service_for_actor(
     write_source_secret: bool,
     profile_actor: Option<&str>,
 ) -> PreparedService {
+    prepare_service_with_ceiling(write_source_secret, profile_actor, None).await
+}
+
+/// `ceiling` is the actor kinds and audiences, as YAML flow sequence bodies,
+/// that every requirement's package grant ceiling admits.
+async fn prepare_service_with_ceiling(
+    write_source_secret: bool,
+    profile_actor: Option<&str>,
+    ceiling: Option<(&str, &str)>,
+) -> PreparedService {
     let temporary = tempfile::tempdir().expect("temporary selector conformance root");
     let root = temporary
         .path()
@@ -1148,6 +1209,16 @@ async fn prepare_service_for_actor(
             config.replacen(marker, &format!("{marker}    actorKind: {actor}\n"), 1),
         )
         .unwrap();
+    }
+    if let Some((actor_kinds, audiences)) = ceiling {
+        let config_path = bundle_root.join("evidence.yaml");
+        let config = fs::read_to_string(&config_path).unwrap();
+        let marker = "  purposes:\n";
+        assert!(config.contains(marker));
+        let block = format!(
+            "  grantCeiling:\n    authorities: [statutory, organizational, consent, delegated, explicit-request]\n    actorKinds: [{actor_kinds}]\n    valueOrigins: [authenticated-context, authenticated-grant, request]\n    audiences: [{audiences}]\n{marker}"
+        );
+        fs::write(&config_path, config.replace(marker, &block)).unwrap();
     }
     write_secret(&secret_root, "audit-key", AUDIT_KEY);
     write_secret(&secret_root, "binding-key", BINDING_KEY);

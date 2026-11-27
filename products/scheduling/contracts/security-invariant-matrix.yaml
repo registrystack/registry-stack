@@ -58,7 +58,9 @@ invariants:
       back to the offline path. The unchecked-final-fifteen-minutes keyword
       admits only grants with at most 900 seconds remaining, and answers an
       unexpired grant with more left with grant.lifetime-too-long once the
-      bounds have matched. The transaction
+      bounds have matched, on a route that creates a hold or an appointment.
+      A route that names an existing hold or appointment answers
+      operation.not-authorized instead. The transaction
       re-checks the earlier of the verified access-token and grant
       deadlines after every lock wait and immediately before commit. Status is
       an observation, not a distributed transaction: withdrawal after a

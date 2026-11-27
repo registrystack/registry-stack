@@ -776,7 +776,8 @@ event.
 Operational logs contain route templates, the public `trace_id`, the
 server-minted audit operation identifier, duration,
 status category, the public problem code, and safe internal error categories
-only. The internal category is narrower than the public problem code but is
+only. A refused request adds one `request refused` line that names the failed
+check, as described under the refusal counter below. The internal category is narrower than the public problem code but is
 drawn from the same kind of fixed, closed set of service-chosen strings. It
 names the internal step that failed, never what that step saw, and it carries
 no counts. A record that was not found and a record that matched more than once
@@ -845,7 +846,8 @@ the same bytes. Operators must update semantic audit readers to recognize all
 three entry schemas before deploying the request-batch runtime.
 
 The serving process writes those records as line-delimited JSON on standard
-error, one per served request, and `EVIDENCE_LOG` selects verbosity with a
+error, one per served request, plus at most five `request refused` lines per
+check per minute, and `EVIDENCE_LOG` selects verbosity with a
 default of `info`. Offline commands print their own result and emit no
 operational records. Every response, including responses to unrouted paths,
 carries a W3C `traceparent` header. Evidence reuses a valid inbound trace
@@ -861,8 +863,9 @@ public addresses are refused. A container deployment may declare
 `metricsListener.networkExposure: container-private` to bind `0.0.0.0` or `::`.
 The evidence listener never serves `/metrics`,
 and the metrics listener never serves evidence. Series carry only the registered
-route template, request method, status category, and reviewed problem code, or
-for the source series a governed source identifier from the bundle, so series
+route template, request method, status category, and reviewed problem code, for
+the source series a governed source identifier from the bundle, or for the
+refusal series the closed failed-check name, so series
 cardinality is bounded by the deployed contract and cannot grow with caller
 input. A path that matches no route is counted as `unmatched` and a
 method outside the served set as `other`, so a caller cannot write a label
@@ -1031,18 +1034,29 @@ lifecycle: the telemetry listener cannot outlive a failed evidence listener.
 The listener serves `GET /metrics` and answers every other path with `404`,
 including the evidence routes. The exposition is Prometheus text format,
 declared as `Content-Type: text/plain; version=0.0.4`. Two request-boundary
-series are published:
+series and one refusal counter are published:
 
 | Series | Type | Meaning |
 |---|---|---|
 | `evidence_http_requests_total` | counter | Requests served at the evidence boundary |
 | `evidence_http_request_duration_seconds` | histogram | Duration of those requests |
+| `evidence_request_refusals_total{check}` | counter | Requests refused with `401`, `403` or `429`, by the check that refused them |
+
+The refusal counter has one label, `check`. Its values are the closed set of 45
+failed-check names (for example `credential-missing`, `token-signature`, `scope`,
+`access-profile`, `purpose`, `revision-pin` and `rate-limit`), and every value is
+published at zero from startup. No caller value becomes a label. Each refusal
+also writes one `request refused` log line with `failed_check`, the request's
+`trace_id` and `suppressed`, at most five lines per check per minute. The caller
+still receives the same closed `401`, `403` or `429`. The counter and the line
+are for the operator and name which check refused a request, so scrape access
+to the private metrics listener is operator-only.
 
 The histogram publishes `_bucket`, `_sum`, and `_count`. Its upper bounds in
 seconds are `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1.0`,
 `5.0`, and `+Inf`. They are fixed by the build and are not configurable.
 
-Both series carry the same four labels, and each is drawn from a closed set
+The two request-boundary series carry the same four labels, and each is drawn from a closed set
 fixed by the deployed contract rather than by anything a caller sends:
 
 | Label | Values |
@@ -1065,10 +1079,12 @@ reviewed problem codes are the closed public set: `evidence.invalid-request`,
 exact status of a denial belongs to the closed public problem contract rather
 than to operational telemetry. `error` carries the same reviewed problem code
 the caller received, which makes a denial rate observable without making the
-reason for any one request observable.
+reason for any one request observable on these two series. The refusal counter
+is the series that names the failed check, in aggregate and without a request
+identifier.
 
-Because both label sets are closed, series cardinality is bounded by the route
-table and the problem-code set regardless of traffic, and the registry needs no
+Because every label set is closed, series cardinality is bounded by the route
+table, the problem-code set and the failed-check set regardless of traffic, and the registry needs no
 eviction. A caller cannot create a series or write a label value: a path
 matching no route is counted as `unmatched` and the requested path is never
 recorded anywhere in the exposition.

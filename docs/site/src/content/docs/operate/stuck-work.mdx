@@ -124,7 +124,7 @@ The signals show a failing dependency instead.
   Outcomes other than `success` are failures, for example `timeout`, `transport`, `credential`, and `rate-limited`.
 - `evidence_signer_requests_total{signer,outcome}` does the same for the signer.
 - `evidence_source_shape_drift_total{source}` rises when a source starts answering in a shape the bundle does not describe.
-- `evidence_request_refusals_total{check}` counts requests refused with `401`, `403` or `429`, by the check that failed. A rise under `key-source-unavailable` means the issuer's key set cannot be reached.
+- `evidence_request_refusals_total{check}` counts requests refused with `401`, `403` or `429`, by the check that failed. A rise under `key-source-unavailable` means Evidence cannot reach or use the issuer's key set, or a caller named a published key that Evidence refuses.
 - `evidence_rate_limiter_tracked_keys` rises toward its ceiling of 100,000 keys.
 - With OID4VCI enabled, `evidence_oid4vci_store_entries` approaches `evidence_oid4vci_store_capacity`, and `evidence_oid4vci_outcomes_total{outcome}` counts `store-saturated` and `store-fault`.
 - `evidencectl doctor --runtime-config` is a preflight of the runtime file and, with `--require-audit-under`, of the audit path.

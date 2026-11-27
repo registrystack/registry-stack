@@ -244,6 +244,17 @@ fn scenarios() -> Vec<Scenario> {
             unauthorized,
             FailedCheck::TokenClaims,
         ),
+        evidence(
+            "expired-task-grant",
+            Credential::Token(access_token(Some({
+                let mut grant = parent_grant_claims();
+                grant["registry_grant_exp"] = json!(now - 1);
+                grant
+            }))),
+            adult(),
+            forbidden,
+            FailedCheck::TaskGrantExpired,
+        ),
         Scenario {
             name: "batch-without-credential",
             method: "POST",
@@ -516,5 +527,15 @@ async fn a_request_over_the_rate_budget_is_counted_under_rate_limit() {
         .await;
     assert_eq!(limited.status_code(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(limited.header("retry-after"), "1");
+    assert_eq!(limited.header("content-type"), "application/problem+json");
+    assert_eq!(limited.header("cache-control"), "no-store");
+    let body: Value = limited.json();
+    assert_eq!(body["status"], json!(429));
+    assert_eq!(body["code"], json!("evidence.rate-limited"));
+    assert_eq!(body["title"], json!("Evidence request rate is exhausted"));
+    assert_eq!(
+        body["detail"],
+        json!("the Evidence request rate is exhausted")
+    );
     assert_eq!(counted(&metrics.render(), FailedCheck::RateLimit), 1);
 }

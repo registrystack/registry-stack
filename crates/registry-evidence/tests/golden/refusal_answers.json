@@ -107,6 +107,24 @@
     },
     "status": 401
   },
+  "expired-task-grant": {
+    "body": {
+      "code": "evidence.denied",
+      "detail": "the Evidence request is not permitted",
+      "status": 403,
+      "title": "Evidence request is not permitted",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": null
+    },
+    "status": 403
+  },
   "expired-token": {
     "body": {
       "code": "auth.invalid-credential",

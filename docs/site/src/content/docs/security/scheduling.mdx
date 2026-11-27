@@ -184,9 +184,12 @@ it is listed with them.
   The signed token does not say whether the grant was issued in immediate or deferred mode.
 - Consequence: a grant with 900 seconds or less remaining qualifies for the bounded offline path
   with no revocation check. An unexpired grant with more than 900 seconds remaining answers
-  `grant.lifetime-too-long`, only after its bounds have matched, so the answer reveals nothing about
-  which services and locations a grant reaches. It does reveal to the holder that the deployment has
-  no status authority listed. The holder already controls its own grant, so this is accepted.
+  `grant.lifetime-too-long` when it creates a hold or an appointment, only after its bounds have
+  matched, so the answer reveals nothing about which services and locations a grant reaches. On a
+  route that names an existing hold or appointment, the same grant answers
+  `operation.not-authorized`, as an unknown identifier does, so the answer reveals nothing about
+  which identifiers exist. The code does reveal to the holder that the deployment has no status
+  authority listed. The holder already controls its own grant, so this is accepted.
   Even with status checks, a withdrawal that follows a positive status answer can race the
   in-flight local commit; the interval is bounded by the short execution credential and by deadline
   re-checks after every lock wait and before commit.

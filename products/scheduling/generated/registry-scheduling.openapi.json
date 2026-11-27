@@ -4104,15 +4104,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -4311,15 +4308,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -4609,15 +4603,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -5146,15 +5137,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -6573,15 +6561,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"

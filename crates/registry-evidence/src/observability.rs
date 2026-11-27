@@ -24,6 +24,10 @@
 //! drifted from the declared projection and emits rate-limited operator WARN
 //! records that name the source, declared JSON pointers, and closed reasons,
 //! never a response value, an undeclared member name, a selector, or a subject.
+//!
+//! The refusal counter is the second exception. Its `check` label is the
+//! closed [`FailedCheck`](registry_platform_authcommon::FailedCheck) set, fixed
+//! and zero-filled at construction, so no request can extend it.
 
 use std::{
     collections::BTreeMap,
@@ -268,7 +272,7 @@ fn record_response_refusal(metrics: &Metrics, response: &Response, operation: &O
                 .is_some_and(|code| is_refusal_code(*code))
             {
                 tracing::error!(
-                    target: "registry_evidence::refusal",
+                    target: module_path!(),
                     trace_id = operation.trace_id().as_str(),
                     "a refusal was answered without the check that failed"
                 );

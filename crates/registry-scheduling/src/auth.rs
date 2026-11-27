@@ -388,6 +388,8 @@ fn unix_now() -> Result<u64, AuthenticationError> {
 /// committing capacity for as long as the clock stayed unreadable, and the
 /// deployment would be told nothing. Nothing has been learned about the
 /// credential either, so the answer is the outage answer, not a challenge.
+/// The edge counts that answer as `key-source-unavailable` because no member
+/// names a clock failure. The error line above names the clock.
 fn unix_seconds(observed: SystemTime) -> Result<u64, AuthenticationError> {
     observed
         .duration_since(UNIX_EPOCH)
@@ -1025,16 +1027,48 @@ mod tests {
         ));
     }
     #[tokio::test]
-    async fn malformed_compact_tokens_are_refused_as_malformed_credentials() {
+    async fn malformed_compact_tokens_are_refused_as_malformed_credentials_and_logged_value_free() {
+        use registry_platform_testing::CapturedDiagnosticLogs;
+        use tracing::instrument::WithSubscriber;
+        let captured = CapturedDiagnosticLogs::default();
+        let subscriber = captured.subscriber();
         let tokens = registry_platform_testing::malformed_access_token_fixtures();
         let auth = authenticator();
+        let malformed = Some(AuthenticationError::Refused(
+            FailedCheck::CredentialMalformed,
+        ));
         for token in &tokens {
-            let malformed = Some(AuthenticationError::Refused(
-                FailedCheck::CredentialMalformed,
-            ));
-            assert_eq!(auth.authenticate_read(token).await.err(), malformed);
-            assert_eq!(auth.authenticate_explain(token).await.err(), malformed);
-            assert_eq!(auth.authenticate_mutate(token).await.err(), malformed);
+            assert_eq!(
+                auth.authenticate_read(token)
+                    .with_subscriber(subscriber.clone())
+                    .await
+                    .err(),
+                malformed
+            );
+            assert_eq!(
+                auth.authenticate_explain(token)
+                    .with_subscriber(subscriber.clone())
+                    .await
+                    .err(),
+                malformed
+            );
+            assert_eq!(
+                auth.authenticate_mutate(token)
+                    .with_subscriber(subscriber.clone())
+                    .await
+                    .err(),
+                malformed
+            );
+        }
+        // The refusal line is written at the HTTP edge. Whatever the
+        // authenticator itself logs carries no part of a credential.
+        let rendered = captured.text();
+        assert!(!rendered.contains("canary"));
+        for token in tokens.iter().filter(|token| !token.is_empty()) {
+            assert!(
+                !rendered.contains(token),
+                "diagnostics must not contain credentials"
+            );
         }
     }
 

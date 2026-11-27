@@ -185,3 +185,36 @@ async fn scrape(State(state): State<MetricsState>) -> Response {
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use registry_platform_authcommon::FailedCheck;
+
+    use super::*;
+    use crate::session::system_clock;
+
+    #[test]
+    fn the_scrape_publishes_every_check_at_zero_and_counts_a_refusal_under_its_check() {
+        let metrics = Metrics::new().expect("the metrics declare");
+        let store = SessionStore::new(4, 1024, system_clock());
+        let scrape = metrics.render(&store).expect("the scrape renders");
+        for check in FailedCheck::ALL {
+            let series = format!(
+                "evidence_oid4vp_request_refusals_total{{check=\"{}\"}} ",
+                check.as_str()
+            );
+            assert!(
+                scrape.contains(&format!("{series}0")),
+                "{} is published at zero",
+                check.as_str()
+            );
+        }
+
+        assert!(metrics
+            .refusal_recorder()
+            .record(FailedCheck::Scope)
+            .is_some());
+        let scrape = metrics.render(&store).expect("the scrape renders");
+        assert!(scrape.contains("evidence_oid4vp_request_refusals_total{check=\"scope\"} 1"));
+    }
+}

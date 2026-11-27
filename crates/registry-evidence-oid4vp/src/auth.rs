@@ -34,6 +34,7 @@ pub enum AuthError {
 impl AuthError {
     /// The check the request failed.
     #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
     pub const fn failed_check(&self) -> FailedCheck {
         match self {
             Self::Refused(check) => *check,
@@ -51,8 +52,10 @@ pub enum AuthSetupError {
     Discovery,
     #[error("the static key set secret could not be read")]
     StaticKeySecret,
-    #[error("the static key set is not a valid JWKS")]
-    StaticKeySet,
+    /// The validator's account of the rule the document broke. It names a key
+    /// position and a member, never a value.
+    #[error("the static key set is not a valid JWKS: {0}")]
+    StaticKeySet(String),
 }
 
 /// Verifies bearer tokens from one issuer and extracts the caller.
@@ -111,7 +114,7 @@ impl TokenAuthenticator {
                     .resolve(document_ref)
                     .map_err(|_| AuthSetupError::StaticKeySecret)?;
                 let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| AuthSetupError::StaticKeySet)?;
+                    .map_err(|error| AuthSetupError::StaticKeySet(error.to_string()))?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };

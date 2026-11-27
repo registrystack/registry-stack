@@ -467,8 +467,11 @@ pub fn authority_selected_by_principal(
 #[deny(clippy::wildcard_enum_match_arm)]
 fn task_grant_check(error: TaskGrantError) -> FailedCheck {
     match error {
-        TaskGrantError::Claims | TaskGrantError::PrincipalMismatch => FailedCheck::TaskGrantClaims,
-        TaskGrantError::Client | TaskGrantError::Resource => FailedCheck::TaskGrantBinding,
+        TaskGrantError::Claims => FailedCheck::TaskGrantClaims,
+        TaskGrantError::Expired => FailedCheck::TaskGrantExpired,
+        TaskGrantError::PrincipalMismatch | TaskGrantError::Client | TaskGrantError::Resource => {
+            FailedCheck::TaskGrantBinding
+        }
     }
 }
 
@@ -484,11 +487,7 @@ pub fn match_entitlement(
 ) -> Result<MatchedEntitlement, AuthorizationError> {
     let has_task_grant = match context.grant() {
         Ok(Some(_)) if context.actor_kind() == ActorKind::Agent => true,
-        Ok(Some(_)) => {
-            return Err(AuthorizationError::Unauthorized(
-                FailedCheck::TaskGrantClaims,
-            ))
-        }
+        Ok(Some(_)) => return Err(AuthorizationError::Unauthorized(FailedCheck::ActorKind)),
         Err(error) => return Err(AuthorizationError::Unauthorized(task_grant_check(error))),
         Ok(None) => false,
     };
@@ -498,16 +497,23 @@ pub fn match_entitlement(
         .iter()
         .find(|candidate| candidate.id == request.requirement)
         .ok_or(AuthorizationError::Unauthorized(FailedCheck::AccessProfile))?;
-    if requirement.grant_ceiling.as_ref().is_some_and(|ceiling| {
-        !ceiling
+    if let Some(ceiling) = &requirement.grant_ceiling {
+        if !ceiling.actor_kinds.contains(&context.actor_kind()) {
+            return Err(AuthorizationError::Unauthorized(FailedCheck::ActorKind));
+        }
+        if !ceiling
             .audiences
             .iter()
             .any(|audience| audience == context.evidence_audience())
-            || !ceiling.actor_kinds.contains(&context.actor_kind())
-    }) {
-        return Err(AuthorizationError::Unauthorized(
-            FailedCheck::TaskGrantBinding,
-        ));
+        {
+            // The audience is the caller's own claim. It is a grant binding
+            // only when the caller presented a task grant.
+            return Err(AuthorizationError::Unauthorized(if has_task_grant {
+                FailedCheck::TaskGrantBinding
+            } else {
+                FailedCheck::AccessProfile
+            }));
+        }
     }
     if !requirement
         .purposes
@@ -1486,6 +1492,22 @@ mod tests {
     use super::*;
 
     use crate::model::HolderPublicKey;
+
+    #[test]
+    fn every_task_grant_error_is_counted_under_the_member_that_names_it() {
+        for (error, check) in [
+            (TaskGrantError::Claims, FailedCheck::TaskGrantClaims),
+            (TaskGrantError::Expired, FailedCheck::TaskGrantExpired),
+            (
+                TaskGrantError::PrincipalMismatch,
+                FailedCheck::TaskGrantBinding,
+            ),
+            (TaskGrantError::Client, FailedCheck::TaskGrantBinding),
+            (TaskGrantError::Resource, FailedCheck::TaskGrantBinding),
+        ] {
+            assert_eq!(task_grant_check(error), check, "{error:?}");
+        }
+    }
 
     #[test]
     fn resolved_selector_debug_never_exposes_values() {

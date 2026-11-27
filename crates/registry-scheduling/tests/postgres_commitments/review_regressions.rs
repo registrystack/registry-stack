@@ -429,3 +429,211 @@ async fn a_foreign_callers_refusals_name_ownership_and_grant_scope() {
         );
     }
 }
+
+/// The task grant the booking agent carries, with a day left on it and the
+/// attendance action added: past the offline path's fifteen-minute cap.
+fn long_lived_agent_token() -> String {
+    let mut grant = grant_claims();
+    grant["registry_grant_exp"] = json!(pinned_now().timestamp() + 86_400);
+    grant["registry_grant_bounds"]["permissions"][0]["actions"]
+        .as_array_mut()
+        .expect("the actions are a list")
+        .push(json!("attendance.record"));
+    let mut claims = json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    claims
+        .as_object_mut()
+        .expect("claims are an object")
+        .extend(
+            grant
+                .as_object()
+                .expect("grant claims are an object")
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    token(claims)
+}
+
+/// SCHEDULING-DEC-01. On a route that names an existing hold or appointment,
+/// a grant with too much lifetime left answers `operation.not-authorized`,
+/// the same answer an unknown id gives, so the answer never says whether the
+/// id exists. The operator's line still names `task-grant-lifetime`.
+#[tokio::test]
+async fn an_id_addressed_route_answers_an_existing_and_an_unknown_id_alike_under_a_long_grant() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
+    let fx = fixture().await;
+    let long = long_lived_agent_token();
+    let held = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "long-grant-hold",
+            admission(&fx, OFFERING, held),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().unwrap().to_owned();
+    let (appointment_id, revision) = booked(&fx, 480, 620, "long-grant-appointment").await;
+    let other = first_slot(&fx, OFFERING, 640, 700).await;
+    let unknown = Uuid::new_v4().to_string();
+
+    let routes = |hold: &str, appointment: &str| {
+        vec![
+            ("release", "DELETE", format!("/v1/holds/{hold}"), None, None),
+            (
+                "confirm",
+                "POST",
+                "/v1/appointments".to_owned(),
+                Some("long-grant-confirm"),
+                Some(json!({"hold": hold, "admission": null})),
+            ),
+            (
+                "reschedule",
+                "POST",
+                format!("/v1/appointments/{appointment}/reschedule"),
+                Some("long-grant-reschedule"),
+                Some(
+                    json!({"observedRevision": revision, "admission": admission(&fx, OFFERING, other)}),
+                ),
+            ),
+            (
+                "attendance",
+                "PUT",
+                format!("/v1/appointments/{appointment}/attendance"),
+                Some("long-grant-attendance"),
+                Some(json!({
+                    "observedAppointmentRevision": revision,
+                    "observedRevision": 0,
+                    "state": "arrived",
+                    "observedAt": stamp(pinned_now() - TimeDelta::minutes(5)),
+                })),
+            ),
+            (
+                "cancel",
+                "POST",
+                format!("/v1/appointments/{appointment}/cancel"),
+                Some("long-grant-cancel"),
+                Some(json!({"observedRevision": revision, "reason": null})),
+            ),
+        ]
+    };
+    let existing_routes = routes(&hold_id, &appointment_id);
+    let unknown_routes = routes(&unknown, &unknown);
+    for (existing, missing) in existing_routes.into_iter().zip(unknown_routes) {
+        let (label, method, uri, key, body) = existing;
+        let mut answers = Vec::new();
+        let mut checks = Vec::new();
+        for (target, (_, method, uri, key, body)) in [
+            ("existing", (label, method, uri, key, body)),
+            ("unknown", missing),
+        ] {
+            let captured = CapturedDiagnosticLogs::default();
+            let (status, mut answer) = fx
+                .request(method, &uri, &long, key, body)
+                .with_subscriber(captured.subscriber())
+                .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{label} {target}: {answer}");
+            assert_eq!(
+                answer["code"], "operation.not-authorized",
+                "{label} {target}"
+            );
+            answer
+                .as_object_mut()
+                .expect("a problem body")
+                .remove("traceId");
+            answers.push(answer);
+            let lines = refusal_lines(&captured.text());
+            assert_eq!(lines.len(), 1, "{label} {target}");
+            checks.push(lines[0]["fields"]["failed_check"].clone());
+        }
+        assert_eq!(
+            answers[0], answers[1],
+            "{label}: an existing id and an unknown id answer alike"
+        );
+        assert_eq!(checks, ["task-grant-lifetime", "visibility"], "{label}");
+    }
+
+    // No caller-named id is involved: a new hold keeps the specific code. A
+    // fresh deployment keeps this line clear of the per-check log limit the
+    // five routes above used up.
+    let fx = fixture().await;
+    let other = first_slot(&fx, OFFERING, 640, 700).await;
+    let captured = CapturedDiagnosticLogs::default();
+    let (status, answer) = fx
+        .post(
+            "/v1/holds",
+            &long,
+            "long-grant-new-hold",
+            admission(&fx, OFFERING, other),
+        )
+        .with_subscriber(captured.subscriber())
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    assert_eq!(answer["code"], "grant.lifetime-too-long");
+    let lines = refusal_lines(&captured.text());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["fields"]["failed_check"], "task-grant-lifetime");
+}
+
+/// A task grant that lapses between the request's admission and the capacity
+/// transaction's decision-time re-check is a lapsed grant, not an ownership
+/// refusal.
+#[tokio::test]
+async fn a_grant_that_lapses_inside_the_transaction_is_counted_as_expired() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tracing::instrument::WithSubscriber;
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let door = pinned_now();
+    let observations = Arc::new(AtomicUsize::new(0));
+    let observed = observations.clone();
+    fx.store.pin_clock(Arc::new(move || {
+        if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+            door
+        } else {
+            door + TimeDelta::minutes(20)
+        }
+    }));
+    let captured = CapturedDiagnosticLogs::default();
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "lapsed-in-transaction",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .with_subscriber(captured.subscriber())
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    let lines = refusal_lines(&captured.text());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["fields"]["failed_check"], "task-grant-expired");
+}
+
+/// A caller with the reads scope and no task grant, reading another
+/// caller's appointment, is refused on ownership.
+#[tokio::test]
+async fn a_reads_scope_caller_reading_another_owners_appointment_is_an_ownership_refusal() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
+    let fx = fixture().await;
+    let (appointment_id, _) = booked(&fx, 300, 440, "reads-scope-foreign").await;
+    let captured = CapturedDiagnosticLogs::default();
+    let (status, answer) = fx
+        .get(&format!("/v1/appointments/{appointment_id}"), &fx.reader)
+        .with_subscriber(captured.subscriber())
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    assert_eq!(answer["code"], "operation.not-authorized");
+    let lines = refusal_lines(&captured.text());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["fields"]["failed_check"], "ownership");
+}

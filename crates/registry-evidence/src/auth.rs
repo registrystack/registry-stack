@@ -118,6 +118,8 @@ pub struct AuthenticatedContext {
 pub enum TaskGrantError {
     #[error("task-grant claims are invalid")]
     Claims,
+    #[error("task grant has expired")]
+    Expired,
     #[error("task-grant principal does not match the authenticated principal")]
     PrincipalMismatch,
     #[error("task-grant client context is invalid")]
@@ -547,8 +549,12 @@ impl Authenticator {
             .map_err(|_| AuthenticationError::Context(FailedCheck::TokenTime))?
             .as_secs();
         let mut task_grant =
-            grant_claims(&verified.claims, &self.claims.contextual_claims, now_unix)
-                .map_err(|_: ClaimError| TaskGrantError::Claims);
+            grant_claims(&verified.claims, &self.claims.contextual_claims, now_unix).map_err(
+                |error| match error {
+                    ClaimError::Expired => TaskGrantError::Expired,
+                    _ => TaskGrantError::Claims,
+                },
+            );
         let claims =
             serde_json::to_value(&verified.claims).map_err(|_| AuthenticationError::claims())?;
         let claims_object = claims.as_object().ok_or_else(AuthenticationError::claims)?;
@@ -666,41 +672,10 @@ fn jwks_fetch_policy(config: &OidcAuthenticationConfig) -> FetchUrlPolicy {
 }
 
 /// Whether a verification failure was this deployment's key source rather than
-/// the caller's token.
-///
-/// Every known failure is listed rather than folded into the wildcard, which
-/// covers only variants added to the shared verifier after this was written.
-/// Those default to the caller's side: a failure this code has never seen is
-/// one it cannot honestly describe as an unreachable key set, and an operator
-/// misdirected by a confident wrong message is worse off than one who reads
-/// the same `auth.invalid-credential` twice.
+/// the caller's token. The shared verifier owns the classification, so the
+/// operator log line and the `key-source-unavailable` count agree.
 fn is_key_source_failure(error: &OidcError) -> bool {
-    match error {
-        OidcError::Transport(_)
-        | OidcError::BoundedRead(_)
-        | OidcError::FetchUrl(_)
-        | OidcError::HttpStatus(_)
-        | OidcError::InvalidUrl
-        | OidcError::Parse
-        | OidcError::InvalidJwk
-        | OidcError::EmptyKeySet
-        | OidcError::MissingIssuer => true,
-        OidcError::IssuerMismatch { .. }
-        | OidcError::MalformedToken
-        | OidcError::AlgorithmNotAllowed
-        | OidcError::TokenTypeNotAllowed
-        | OidcError::MissingKid
-        | OidcError::KidTooLong
-        | OidcError::UnknownKid
-        | OidcError::TokenExpired
-        | OidcError::TokenNotYetValid
-        | OidcError::AudienceMismatch
-        | OidcError::SignatureInvalid
-        | OidcError::InvalidToken
-        | OidcError::ClientNotAllowed
-        | OidcError::AssertionIssuerNotAllowed => false,
-        _ => false,
-    }
+    error.is_key_source_unavailable()
 }
 
 /// Render an error together with the causes beneath it, bounded.
@@ -1213,6 +1188,44 @@ mod tests {
             })
             .expect("verified product context extracts");
         assert_eq!(context.grant(), Err(TaskGrantError::PrincipalMismatch));
+    }
+
+    #[test]
+    fn an_expired_task_grant_is_kept_apart_from_a_malformed_one() {
+        let now = chrono::Utc::now().timestamp();
+        let claims = |grant_exp: i64| {
+            serde_json::from_value(serde_json::json!({
+                "iss": "https://issuer.invalid",
+                "aud": "evidence-resource",
+                "sub": "institutional-agent",
+                "exp": now + 300,
+                "registry_actor_kind": "agent",
+                "registry_purpose": "eligibility-check",
+                "registry_grant_id": "grant-1",
+                "registry_grant_source_issuer": "https://casework.invalid",
+                "registry_grant_client": "evidence-agent",
+                "registry_grant_resource": "evidence-resource",
+                "registry_grant_exp": grant_exp,
+                "registry_grant_bounds": {"type":"evidence", "requirement":"urn:example:requirement"},
+                "registry_approver": "h:synthetic-approver",
+                "evidence_tags": ["caseworker"],
+                "evidence_audience": "https://relying-party.invalid"
+            }))
+            .expect("claims parse")
+        };
+        let grant_of = |claims| {
+            context_extraction_authenticator("sub")
+                .extract_context(VerifiedToken {
+                    claims,
+                    matched_client: Some("client_id:evidence-agent".to_owned()),
+                    scopes: Vec::new(),
+                })
+                .expect("verified product context extracts")
+                .grant()
+                .map(|grant| grant.is_some())
+        };
+        assert_eq!(grant_of(claims(now - 1)), Err(TaskGrantError::Expired));
+        assert_eq!(grant_of(claims(now + 300)), Ok(true));
     }
 
     #[test]

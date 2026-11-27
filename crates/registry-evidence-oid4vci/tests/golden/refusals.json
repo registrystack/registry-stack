@@ -113,6 +113,18 @@
     },
     "status": 403
   },
+  "offer-key-source-unavailable": {
+    "body": {
+      "error": "temporarily_unavailable",
+      "error_description": "offers cannot be authorized at the moment"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache"
+    },
+    "status": 503
+  },
   "offer-no-header": {
     "body": {
       "error": "invalid_token",

@@ -40,7 +40,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     audit::{AuditFailure, Pending, SessionAudit},
-    auth::{AuthError, TokenAuthenticator},
+    auth::{AuthError, AuthSetupError, TokenAuthenticator},
     client_identifier::RequestIdentity,
     config::{Oid4vpConfig, PolicyConfig},
     metrics::{metrics_app, Event, Metrics},
@@ -96,7 +96,7 @@ impl StartupError {
     fn new(
         code: &'static str,
         pointer: &'static str,
-        message: &'static str,
+        message: impl Into<String>,
         action: &'static str,
     ) -> Self {
         Self {
@@ -205,11 +205,11 @@ impl VerifierService {
         let jwks = (!keys.is_empty()).then(|| json!({ "keys": keys }).to_string());
         let applicants = TokenAuthenticator::build(&config.applicant_tokens, &resolver)
             .await
-            .map_err(|_| issuer_unavailable("/applicantTokens"))?;
+            .map_err(|error| issuer_unavailable("/applicantTokens", &error))?;
         let evidence_credentials =
             TokenAuthenticator::build(&config.evidence_credentials, &resolver)
                 .await
-                .map_err(|_| issuer_unavailable("/evidenceCredentials"))?;
+                .map_err(|error| issuer_unavailable("/evidenceCredentials", &error))?;
 
         let audit_key = resolver
             .resolve_binary_reference(&config.audit.key.hash_key_ref)
@@ -376,12 +376,24 @@ impl VerifierService {
     }
 }
 
-fn issuer_unavailable(pointer: &'static str) -> StartupError {
+fn issuer_unavailable(pointer: &'static str, error: &AuthSetupError) -> StartupError {
+    // A static key set the validator refused says which rule it broke, so the
+    // fix starts at the document rather than at the issuer's reachability.
+    let (message, action) = match error {
+        AuthSetupError::StaticKeySet(refusal) => (
+            refusal.clone(),
+            "Replace the document behind jwksSource.documentRef with a public key set that follows the rule named here.",
+        ),
+        _ => (
+            "the token issuer or its key source could not be set up".to_owned(),
+            "Check the issuer, its key source, and that the service can reach it.",
+        ),
+    };
     StartupError::new(
         "evidence.oid4vp.issuer-unavailable",
         pointer,
-        "the token issuer or its key source could not be set up",
-        "Check the issuer, its key source, and that the service can reach it.",
+        message,
+        action,
     )
 }
 
@@ -619,11 +631,18 @@ async fn ready(State(service): State<Arc<VerifierService>>) -> Response {
     }
 }
 
+/// The `Authorization` header as text. A header that is present but not
+/// readable as text reads as an empty value, which the authenticator refuses as
+/// a malformed credential rather than counting it as absent.
+fn authorization_header(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)
+        .map(|value| value.to_str().unwrap_or_default())
+}
+
 /// Authenticate the applicant, or return the response that refuses them.
 async fn applicant(service: &VerifierService, headers: &HeaderMap) -> Result<Principal, Response> {
-    let authorization = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
+    let authorization = authorization_header(headers);
     match service.applicants.authenticate(authorization).await {
         Ok(principal) => Ok(principal),
         Err(AuthError::KeySource) => {
@@ -1193,9 +1212,7 @@ async fn read_presentation(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let authorization = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
+    let authorization = authorization_header(&headers);
     let reader = match service
         .evidence_credentials
         .authenticate(authorization)

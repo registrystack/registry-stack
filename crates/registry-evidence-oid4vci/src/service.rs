@@ -1523,22 +1523,24 @@ async fn authorize_offer(
         .authorizer
         .authorize(credential)
         .await
-        .map_err(|error| match error {
-            AuthorizationError::Missing => unauthorized(
-                FailedCheck::CredentialMissing,
-                "a bearer access token is required",
-            ),
-            AuthorizationError::Refused(check) => {
-                unauthorized(check, "the presented credential was refused")
-            }
-            AuthorizationError::KeySource => refused(
-                problem(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "temporarily_unavailable",
-                    "offers cannot be authorized at the moment",
+        .map_err(|error| {
+            let check = error.failed_check();
+            match error {
+                AuthorizationError::Missing => {
+                    unauthorized(check, "a bearer access token is required")
+                }
+                AuthorizationError::Refused(_) => {
+                    unauthorized(check, "the presented credential was refused")
+                }
+                AuthorizationError::KeySource => refused(
+                    problem(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "temporarily_unavailable",
+                        "offers cannot be authorized at the moment",
+                    ),
+                    check,
                 ),
-                FailedCheck::KeySourceUnavailable,
-            ),
+            }
         })
 }
 
@@ -1930,6 +1932,16 @@ mod tests {
                 client: Some("adopter-front-end".to_owned()),
                 subject: Some(OFFER_SUBJECT.to_owned()),
             })
+        }
+    }
+
+    /// An authorizer whose issuer key set cannot be reached.
+    struct UnreachableKeySetAuthorizer;
+
+    #[async_trait]
+    impl OfferAuthorizer for UnreachableKeySetAuthorizer {
+        async fn authorize(&self, _: &str) -> Result<AuthorizedOffer, AuthorizationError> {
+            Err(AuthorizationError::KeySource)
         }
     }
 
@@ -5388,6 +5400,16 @@ mod tests {
         (TestServer::new(build_app(Arc::clone(&service))), service)
     }
 
+    fn unreachable_key_set_server(directory: &Path) -> (TestServer, Arc<DeliveryService>) {
+        let service = Arc::new(DeliveryService::with_halves(
+            load_deployment(directory),
+            Arc::new(UnreachableKeySetAuthorizer),
+            Arc::new(RecordingIssuer::new()),
+            test_audit(),
+        ));
+        (TestServer::new(build_app(Arc::clone(&service))), service)
+    }
+
     fn draft13_server(directory: &Path) -> (TestServer, Arc<DeliveryService>) {
         let mut config = load_deployment(directory);
         config.draft13_profile = true;
@@ -5578,10 +5600,24 @@ mod tests {
             offers().await,
         );
 
+        // An issuer key set that cannot be reached.
+        let (unreachable, service) = unreachable_key_set_server(directory.path());
+        services.push(service);
+        current.set(3);
+        put(
+            "offer-key-source-unavailable",
+            Some(FailedCheck::KeySourceUnavailable),
+            unreachable
+                .post(OFFERS_PATH)
+                .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                .json(&offer_body(false))
+                .await,
+        );
+
         // Evidence refusing.
         let (refused_catalog, service) = refusing_server(directory.path(), true);
         services.push(service);
-        current.set(3);
+        current.set(4);
         put(
             "offer-evidence-refused",
             Some(FailedCheck::SourceAuthority),
@@ -5593,7 +5629,7 @@ mod tests {
         );
         let (refused_issue, service) = refusing_server(directory.path(), false);
         services.push(service);
-        current.set(4);
+        current.set(5);
         let token = access_token(&refused_issue).await;
         let nonce = minted_nonce(&refused_issue).await;
         let key = private_jwk("refusal-golden");
@@ -5644,13 +5680,10 @@ mod tests {
     /// it, nothing else is counted, and the log carries fixed lines only.
     #[tokio::test]
     async fn each_refusal_is_counted_and_logged_under_its_check() {
-        let buffer = TestLogBuffer::default();
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(buffer.clone())
-            .finish();
-        let _logging = tracing::subscriber::set_default(subscriber);
+        // The shared capture keeps a parallel test that reaches the refusal
+        // callsite with no subscriber from disabling it for this one.
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let _logging = tracing::dispatcher::set_default(&captured.subscriber());
 
         let (cases, services) = refusal_cases().await;
         for (index, service) in services.iter().enumerate() {
@@ -5674,13 +5707,11 @@ mod tests {
                 );
             }
         }
-        let rendered = String::from_utf8(buffer.0.lock().expect("log buffer lock").clone())
-            .expect("logs are UTF-8");
+        let rendered = captured.text();
         for (name, check, _, _) in &cases {
             let check = check.expect("every case names its check");
             assert!(
-                rendered.contains(&format!("failed_check=\"{}\"", check.as_str()))
-                    || rendered.contains(&format!("failed_check={}", check.as_str())),
+                rendered.contains(&format!("\"failed_check\":\"{}\"", check.as_str())),
                 "{name}: no log line for {}: {rendered}",
                 check.as_str()
             );

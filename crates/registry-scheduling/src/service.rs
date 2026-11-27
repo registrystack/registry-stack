@@ -166,44 +166,7 @@ pub enum CommitmentAnswer<T> {
     Replay { status_code: u16, receipt: Value },
 }
 
-/// The problem codes that refuse a caller's authority. A refusal is built
-/// with the check it failed (`ServiceError::Refused`), never from the bare
-/// code, so the operator's counter and log line can name the check.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RefusalCode {
-    AuthenticationRefused,
-    GrantLifetimeTooLong,
-    OperationNotAuthorized,
-    ProfileNotAuthorized,
-}
-
-impl RefusalCode {
-    /// The problem this refusal answers with.
-    #[must_use]
-    pub const fn problem(self) -> ProblemCode {
-        match self {
-            Self::AuthenticationRefused => ProblemCode::AuthenticationRefused,
-            Self::GrantLifetimeTooLong => ProblemCode::GrantLifetimeTooLong,
-            Self::OperationNotAuthorized => ProblemCode::OperationNotAuthorized,
-            Self::ProfileNotAuthorized => ProblemCode::ProfileNotAuthorized,
-        }
-    }
-
-    /// Sort a problem into a refusal or a plain answer. Every code outside the
-    /// four refusals is plain. The vocabulary test in `http.rs` pins the set,
-    /// so a code added to the vocabulary that refuses authority fails it until
-    /// it is listed here.
-    #[must_use]
-    pub const fn of(problem: ProblemCode) -> Option<Self> {
-        match problem {
-            ProblemCode::AuthenticationRefused => Some(Self::AuthenticationRefused),
-            ProblemCode::GrantLifetimeTooLong => Some(Self::GrantLifetimeTooLong),
-            ProblemCode::OperationNotAuthorized => Some(Self::OperationNotAuthorized),
-            ProblemCode::ProfileNotAuthorized => Some(Self::ProfileNotAuthorized),
-            _ => None,
-        }
-    }
-}
+pub use crate::refusal::RefusalCode;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
@@ -1189,7 +1152,7 @@ impl SchedulingService {
             self.commitment(caller, &actor, &grant, &release_key, &request_hash, now, 0)?;
         commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(
+            .audit_named_request(
                 caller,
                 &grant,
                 HOLD_RELEASE_ACTION,
@@ -1312,7 +1275,7 @@ impl SchedulingService {
         )?;
         commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, operation, now, assisted)
+            .audit_named_request(caller, &grant, operation, now, assisted)
             .await?;
         let outcome = match (&supply, confirmation_request.as_ref()) {
             (ResolvedRequestSupply::Exact(bundle), Some(request)) => {
@@ -1635,9 +1598,21 @@ impl SchedulingService {
                 && claim.is_owned_by(&caller.issuer, &caller.subject) => {}
             None if claim.owner.is_some() => {
                 let offering = self.claim_offering(&claim, now).await?;
-                let grant = self
+                let grant = match self
                     .require_permission(caller, &offering, APPOINTMENT_READ_ACTION)
-                    .await?;
+                    .await
+                {
+                    // A reads-scope caller carries no task grant, and the
+                    // appointment is another caller's: that is an ownership
+                    // refusal, not a missing grant.
+                    Err(ServiceError::Refused {
+                        check: FailedCheck::TaskGrantMissing,
+                        ..
+                    }) if admission == DetailAdmission::ReadsScope => {
+                        return Err(ServiceError::operation_refused(FailedCheck::Ownership));
+                    }
+                    other => other?,
+                };
                 self.require_current_task_grant(caller, &grant, APPOINTMENT_READ_ACTION, now, true)
                     .await?;
             }
@@ -1900,7 +1875,7 @@ impl SchedulingService {
         )?;
         commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(
+            .audit_named_request(
                 caller,
                 &grant,
                 APPOINTMENT_RESCHEDULE_ACTION,
@@ -2009,7 +1984,7 @@ impl SchedulingService {
             0,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, ATTENDANCE_RECORD_ACTION, now, false)
+            .audit_named_request(caller, &grant, ATTENDANCE_RECORD_ACTION, now, false)
             .await?;
         let outcome = self
             .store
@@ -2090,7 +2065,7 @@ impl SchedulingService {
         )?;
         commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(
+            .audit_named_request(
                 caller,
                 &grant,
                 APPOINTMENT_CANCEL_ACTION,
@@ -2356,8 +2331,9 @@ impl SchedulingService {
     /// the bound that failed nor whether a grant was carried at all. The one
     /// later answer that does say a grant was carried is a current-grant
     /// refusal for too much lifetime left, and it is given only after this
-    /// check has passed, so it tells a caller nothing about which services
-    /// and locations a grant reaches.
+    /// check has passed and only on a route that names no existing hold or
+    /// appointment, so it tells a caller nothing about which services and
+    /// locations a grant reaches or which ids exist.
     async fn require_permission(
         &self,
         caller: &Caller,
@@ -2541,6 +2517,30 @@ impl SchedulingService {
                 Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
             }
         }
+    }
+
+    /// `audit_request` for a route that names an existing hold or
+    /// appointment. A grant with too much lifetime left answers
+    /// `operation.not-authorized` there, as an unknown id does, so the answer
+    /// never says whether the id exists (SCHEDULING-DEC-01). The refusal
+    /// still counts under `task-grant-lifetime`.
+    async fn audit_named_request(
+        &self,
+        caller: &Caller,
+        grant: &GrantClaims,
+        operation: &str,
+        now: DateTime<Utc>,
+        online_required: bool,
+    ) -> Result<(Uuid, AuditRequest), ServiceError> {
+        self.audit_request(caller, grant, operation, now, online_required)
+            .await
+            .map_err(|error| match error {
+                ServiceError::Refused {
+                    code: RefusalCode::GrantLifetimeTooLong,
+                    check,
+                } => ServiceError::operation_refused(check),
+                other => other,
+            })
     }
 
     /// Append the `request` entry of one commitment and return the
@@ -2912,7 +2912,9 @@ impl SchedulingService {
                     CommitError::KeyReused | CommitError::KeyExpired => {
                         Unanswered::Unfinished(key_refusal_reason(&error))
                     }
-                    CommitError::Unauthorized => Unanswered::Denied("authorization.refused"),
+                    CommitError::Unauthorized | CommitError::GrantLapsed => {
+                        Unanswered::Denied("authorization.refused")
+                    }
                     CommitError::Refused(_)
                     | CommitError::HoldCeiling
                     | CommitError::RevisionMismatch
@@ -3013,16 +3015,13 @@ impl SchedulingService {
                 };
                 self.record_refusal(correlation, record).await?;
                 Err(match RefusalCode::of(problem) {
-                    // `CommitError::Unauthorized` is the only commit failure
-                    // that refuses authority: the transaction found the grant
-                    // lapsed, or the target not managed by this caller. A
-                    // grant still current at this request's time was not the
-                    // cause.
+                    // `CommitError::Unauthorized` and `CommitError::GrantLapsed`
+                    // are the only commit failures that refuse authority: the
+                    // target is not this caller's to change, or the grant or
+                    // its access token lapsed inside the transaction.
                     Some(code) => ServiceError::Refused {
                         code,
-                        check: if u64::try_from(now.timestamp())
-                            .map_or(true, |observed| observed >= grant.exp())
-                        {
+                        check: if matches!(error, CommitError::GrantLapsed) {
                             FailedCheck::TaskGrantExpired
                         } else {
                             FailedCheck::Ownership
@@ -3879,7 +3878,7 @@ fn problem_of(error: &CommitError) -> ProblemCode {
         CommitError::KeyReused => ProblemCode::IdempotencyKeyReused,
         CommitError::KeyExpired => ProblemCode::IdempotencyExpired,
         CommitError::HoldCeiling => ProblemCode::CapacityExhausted,
-        CommitError::Unauthorized => ProblemCode::OperationNotAuthorized,
+        CommitError::Unauthorized | CommitError::GrantLapsed => ProblemCode::OperationNotAuthorized,
         CommitError::RevisionMismatch => ProblemCode::RevisionMismatch,
         CommitError::ObservationInFuture => ProblemCode::RequestUnprocessable,
         CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed,
@@ -4588,6 +4587,10 @@ mod tests {
         );
         assert_eq!(
             problem_of(&CommitError::Unauthorized),
+            ProblemCode::OperationNotAuthorized
+        );
+        assert_eq!(
+            problem_of(&CommitError::GrantLapsed),
             ProblemCode::OperationNotAuthorized
         );
         assert_eq!(

@@ -249,6 +249,18 @@ async fn answers() -> Value {
     assert_eq!(first.status_code().as_u16(), 400);
     put("response-rate-limited", &form(&server).await);
 
+    let unreachable = Harness::new(&Options {
+        applicant_jwks_uri: Some("http://127.0.0.1:1/jwks"),
+        ..Options::default()
+    })
+    .await;
+    let (down, _) = unreachable.server().await;
+    let down_token = unreachable.applicant_token("portal", "user-1");
+    put(
+        "create-key-source-unavailable",
+        &create(&down, Some(&bearer(&down_token))).await,
+    );
+
     Value::Object(answers)
 }
 

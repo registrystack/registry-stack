@@ -52,6 +52,7 @@ PROBE_SOURCE = "crates/registry-platform-httputil/src/probe.rs"
 ATTENDANCE_SOURCE = "crates/registry-scheduling-core/src/attendance.rs"
 ADMISSION_SOURCE = "crates/registry-scheduling-core/src/admission.rs"
 PROBLEM_SOURCE = "crates/registry-scheduling-core/src/problem.rs"
+REFUSAL_SOURCE = "crates/registry-scheduling/src/refusal.rs"
 HTTPSEC_SOURCE = "crates/registry-platform-httpsec/src/server.rs"
 
 # The committed document `--write` produces and `--check` verifies.
@@ -250,6 +251,9 @@ STORAGE = ["service.unavailable"]
 AUTHORITY = ["operation.not-authorized"]
 # An operation that asks the task grant's own status answers a grant that is
 # unexpired but has more than fifteen minutes left on the offline path.
+# Only a route that names no existing hold or appointment answers it: on an
+# id-addressed route a caller cannot learn whether the id exists
+# (SCHEDULING-DEC-01), so the same grant answers `operation.not-authorized`.
 GRANT_LIFETIME = ["grant.lifetime-too-long"]
 IDEMPOTENCY = ["idempotency.expired", "idempotency.key-reused"]
 # An operation that resolves a caller-named offering against the deployed
@@ -294,25 +298,25 @@ OPERATION_PROBLEMS = {
     + OFFERING + ["service.unavailable"],
     # A release carries no caller-chosen key, so `idempotency.key-reused` is
     # not reachable: the key and the request hash are both the hold's own id.
-    ("DELETE", "/v1/holds/{hold_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + GRANT_LIFETIME
+    ("DELETE", "/v1/holds/{hold_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY
     + ["hold.released", "idempotency.expired", "service.unavailable"],
     ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME
     + OFFERING + ["hold.expired", "hold.released", "service.unavailable"],
     ("POST", "/v1/appointments/receipt"): EDGE + AUTHENTICATION + JSON_BODY + ["receipt.unresolved", "service.unavailable"],
     ("GET", "/v1/appointments"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
-    ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + GRANT_LIFETIME + STORAGE,
+    ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + STORAGE,
     # A reschedule resolves its offering from the appointment rather than from
     # the caller, so an unknown offering is operator state, not a refusal the
     # caller can read.
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): EDGE + AUTHENTICATION + PATH + JSON_BODY
-    + ADMISSION + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME + ["hold.released", "service.unavailable"],
+    + ADMISSION + IDEMPOTENCY + AUTHORITY + ["hold.released", "service.unavailable"],
     # Cancellation is guarded by the observed revision and the cutoff, never by
     # the policy revision, so it answers no admission refusal at all.
     ("POST", "/v1/appointments/{appointment_id}/cancel"): EDGE + AUTHENTICATION + PATH + JSON_BODY
-    + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME
+    + IDEMPOTENCY + AUTHORITY
     + ["cancellation.cutoff-passed", "hold.released", "revision.mismatch", "service.unavailable"],
     ("PUT", "/v1/appointments/{appointment_id}/attendance"): EDGE + AUTHENTICATION + PATH + JSON_BODY
-    + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME + ["revision.mismatch", "service.unavailable"],
+    + IDEMPOTENCY + AUTHORITY + ["revision.mismatch", "service.unavailable"],
     ("GET", "/v1/appointments/{appointment_id}/history"): EDGE + AUTHENTICATION + PATH + AUTHORITY + QUERY
     + CURSOR + STORAGE,
 }
@@ -1570,6 +1574,13 @@ def produced_problem_codes(repository_root: Path, variants: dict[str, str]) -> s
         produced |= {
             variants[name] for name in re.findall(r"ProblemCode::([A-Z][A-Za-z0-9]*)", source)
         }
+    # The refusal codes are answered through `RefusalCode::problem`. The
+    # classification after it names every code and so says nothing about
+    # which are produced.
+    refusals = production_source(repository_root, REFUSAL_SOURCE).split("pub const fn of", 1)[0]
+    produced |= {
+        variants[name] for name in re.findall(r"ProblemCode::([A-Z][A-Za-z0-9]*)", refusals)
+    }
     return produced
 
 
@@ -1880,7 +1891,7 @@ def verify_source(repository_root: Path) -> None:
         "CommitError::KeyReused => ProblemCode::IdempotencyKeyReused",
         "CommitError::KeyExpired => ProblemCode::IdempotencyExpired",
         "CommitError::HoldCeiling => ProblemCode::CapacityExhausted",
-        "CommitError::Unauthorized => ProblemCode::OperationNotAuthorized",
+        "CommitError::Unauthorized | CommitError::GrantLapsed => ProblemCode::OperationNotAuthorized",
         "CommitError::RevisionMismatch => ProblemCode::RevisionMismatch",
         "CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed",
     ):

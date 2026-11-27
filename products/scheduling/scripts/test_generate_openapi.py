@@ -775,19 +775,20 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertIn("hold.create, hold.release, appointment.create, appointment.reschedule, appointment.cancel",
                       self.openapi["components"]["securitySchemes"]["bearerAuth"]["description"])
 
-    def test_a_grant_gated_operation_documents_the_lifetime_refusal_beside_the_bounds_refusal(self) -> None:
-        gated = {
+    def test_only_the_routes_naming_no_existing_id_document_the_lifetime_refusal(self) -> None:
+        # A new hold and a create or confirm answer it. Every route that
+        # addresses an existing hold or appointment answers
+        # operation.not-authorized instead, so an id's existence is not
+        # revealed (SCHEDULING-DEC-01), and the detail read needs a listed
+        # authority, so it never reaches the lifetime check.
+        lifetime = {
             key
             for key in GENERATOR.ROUTE_HANDLERS
-            if operation(self.openapi, key)["x-scheduling-authority"]
-            in ("task-grant", "appointment-detail")
+            if "grant.lifetime-too-long" in GENERATOR.OPERATION_PROBLEMS[key]
         }
-        self.assertEqual(7, len(gated))
-        for key in gated:
-            self.assertIn("grant.lifetime-too-long", GENERATOR.OPERATION_PROBLEMS[key], key)
+        self.assertEqual({("POST", "/v1/holds"), ("POST", "/v1/appointments")}, lifetime)
+        for key in lifetime:
             self.assertIn("operation.not-authorized", GENERATOR.OPERATION_PROBLEMS[key], key)
-        for key in set(GENERATOR.ROUTE_HANDLERS) - gated:
-            self.assertNotIn("grant.lifetime-too-long", GENERATOR.OPERATION_PROBLEMS[key], key)
 
     def test_the_document_carries_no_tag_list_and_no_timestamp(self) -> None:
         self.assertNotIn("tags", self.openapi)

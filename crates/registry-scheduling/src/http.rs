@@ -1401,11 +1401,12 @@ mod tests {
         "task-grant-lifetime",
     ];
 
-    /// Every refusal answer keeps its status, headers and body. The golden
-    /// file holds what each refusal answered before its check was recorded,
-    /// with the trace id removed.
+    /// The renderer answers each refusal code with the status, headers and
+    /// body the golden file holds, with the trace id removed. The cases build
+    /// each error directly, so this pins the rendering. The postgres suite
+    /// pins which code each real path answers.
     #[tokio::test]
-    async fn refusal_answers_match_the_golden_bodies() {
+    async fn the_refusal_renderer_matches_the_golden_bodies() {
         use tracing::instrument::WithSubscriber as _;
         let recorder = Arc::new(RefusalRecorder::new("scheduling").unwrap());
         let mut observed = serde_json::Map::new();

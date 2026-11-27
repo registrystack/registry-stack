@@ -203,6 +203,25 @@ async fn each_refusal_is_counted_and_logged_under_its_check() {
         create(Some("Bearer canary-token-7f3a".to_owned())).into_future(),
     )
     .await;
+    // A credential the server cannot read as text was sent, so it is
+    // malformed rather than missing.
+    expect(
+        s,
+        l,
+        c,
+        FailedCheck::CredentialMalformed,
+        401,
+        server
+            .post("/v1/sessions")
+            .add_header(
+                "authorization",
+                axum::http::HeaderValue::from_bytes(b"Bearer \x80\x81 canary-token-7f3a")
+                    .expect("a byte above 0x7F is a legal header value"),
+            )
+            .json(&json!({"policy": "national-id"}))
+            .into_future(),
+    )
+    .await;
     expect(
         s,
         l,
@@ -300,12 +319,43 @@ async fn each_refusal_is_counted_and_logged_under_its_check() {
     )
     .await;
 
+    expect(
+        s,
+        l,
+        c,
+        FailedCheck::CredentialMalformed,
+        401,
+        create(Some("Bearer  canary-token-7f3a".to_owned())).into_future(),
+    )
+    .await;
+
     // A read of a reference nobody holds is not recorded: the consult maps
     // only another principal's session.
     let before = total(&service);
     let absent = read(Some(bearer(&reader)), "B".repeat(43), "user-1").await;
     assert_eq!(absent.status_code().as_u16(), 404);
     assert_eq!(total(&service), before);
+
+    // An issuer key set that cannot be reached answers 503 and is counted.
+    let unreachable = Harness::new(&Options {
+        applicant_jwks_uri: Some("http://127.0.0.1:1/jwks"),
+        ..Options::default()
+    })
+    .await;
+    let (down, down_service) = unreachable.server().await;
+    let down_token = unreachable.applicant_token("portal", "user-1");
+    expect(
+        &down_service,
+        &logs,
+        &canaries,
+        FailedCheck::KeySourceUnavailable,
+        503,
+        down.post("/v1/sessions")
+            .add_header("authorization", bearer(&down_token))
+            .json(&json!({"policy": "national-id"}))
+            .into_future(),
+    )
+    .await;
 
     // Spent budgets, each in a deployment whose burst is one.
     let limited = Harness::new(&Options {

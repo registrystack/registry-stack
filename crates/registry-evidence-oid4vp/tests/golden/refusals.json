@@ -14,6 +14,21 @@
     },
     "status": 401
   },
+  "create-key-source-unavailable": {
+    "body": {
+      "detail": "the token issuer is unavailable",
+      "status": 503,
+      "title": "Service Unavailable",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/issuer-unavailable"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": "5",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 503
+  },
   "create-no-header": {
     "body": {
       "detail": "a valid bearer token is required",

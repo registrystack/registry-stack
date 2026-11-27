@@ -63,6 +63,7 @@ pub enum AuthorizationError {
 impl AuthorizationError {
     /// The check the request failed.
     #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
     pub const fn failed_check(&self) -> FailedCheck {
         match self {
             Self::Missing => FailedCheck::CredentialMissing,
