@@ -6679,6 +6679,8 @@ dependencies = [
  "registry-caseworkctl",
  "registry-cli-reference",
  "registry-coordinator",
+ "registry-discovery",
+ "registry-discoveryctl",
  "registry-documents",
  "registry-documentsctl",
  "registry-evidence",

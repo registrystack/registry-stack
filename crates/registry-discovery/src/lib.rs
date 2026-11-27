@@ -17,6 +17,8 @@ pub mod build_info {
     include!(concat!(env!("OUT_DIR"), "/product_build_info.rs"));
 }
 
+#[cfg(feature = "server")]
+pub mod cli;
 pub mod model;
 pub mod openapi;
 #[cfg(feature = "server")]
