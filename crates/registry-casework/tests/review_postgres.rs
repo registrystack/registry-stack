@@ -302,6 +302,7 @@ fn project(version: &str) -> CaseworkProject {
                     required_approvals: 1,
                     outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
+                    asks: None,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: false,
                 },
@@ -314,6 +315,7 @@ fn project(version: &str) -> CaseworkProject {
                     required_approvals: 1,
                     outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
+                    asks: None,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
                 },
@@ -369,6 +371,7 @@ fn project(version: &str) -> CaseworkProject {
             subject: "registry-service".to_owned(),
             trusted_initiator_issuer: Some("https://issuer.test".to_owned()),
             initiator_profile: None,
+            reads_asks: false,
             source_namespaces: vec!["registry".to_owned()],
             review_policies: vec!["registry-correction".to_owned()],
             retention: registry_casework_core::ProducerRetention {

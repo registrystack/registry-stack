@@ -891,3 +891,23 @@ fn a_producer_names_its_receipt_retention_in_its_findings() {
         == "casework.review-producer.receipt-retention-exceeds-result-retention"
         && item.path == retention));
 }
+
+#[test]
+fn a_stage_that_asks_needs_every_producer_of_the_policy_to_read_asks() {
+    let mut value = project_value();
+    value["reviewPolicies"]["notice-review"]["stages"][0]["asks"] = json!({});
+    let Err(ConfigLoadError::Refused(report)) =
+        CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+    else {
+        panic!("the project must be refused");
+    };
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|item| item.code == "casework.review-producer.asks-not-read"
+            && item.path == "/trustedProducers/notice-service/readsAsks"));
+
+    value["trustedProducers"]["notice-service"]["readsAsks"] = json!(true);
+    CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+        .expect("a producer that reads asks may submit to a policy that asks");
+}

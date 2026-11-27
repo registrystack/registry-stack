@@ -198,6 +198,8 @@ struct ReviewStagePolicyWire {
     outcomes: Option<Vec<String>>,
     #[serde(default)]
     negative_decisions: registry_casework_core::ReviewNegativeDecisionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    asks: Option<registry_casework_core::ReviewStageAsksPolicy>,
     #[serde(default)]
     exclude_initiator: bool,
     #[serde(default)]

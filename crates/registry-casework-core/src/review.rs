@@ -262,11 +262,22 @@ pub struct ReviewStagePolicy {
     #[serde(default, skip_serializing_if = "ReviewNegativeDecisionMode::is_settle")]
     #[cfg_attr(feature = "schema", schemars(extend("default" = "settle")))]
     pub negative_decisions: ReviewNegativeDecisionMode,
+    /// Lets the reviewer who holds a task at this stage ask the subject's
+    /// owner for more. Omission offers no ask and keeps the policy bytes
+    /// unchanged. Only an approval policy may declare it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asks: Option<ReviewStageAsksPolicy>,
     #[serde(default)]
     pub exclude_initiator: bool,
     #[serde(default)]
     pub exclude_previous_stage_reviewers: bool,
 }
+
+/// The options of a stage's asks. None exist yet: `asks: {}` turns asks on.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewStageAsksPolicy {}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -667,6 +678,21 @@ impl ReviewPolicy {
             }
         }
         tag(ReviewPolicyError::FinalStageAdvisory, advisory_stages);
+
+        let mut asks = Findings::default();
+        if self.purpose == ReviewPurpose::Answer {
+            for (index, stage) in self.stages.iter().enumerate() {
+                if stage.asks.is_some() {
+                    asks.push(
+                        "casework.review-policy.asks-in-answer-policy",
+                        format!("/stages/{index}/asks"),
+                        "an answer review policy cannot let a stage ask the applicant",
+                        "Remove asks, or make the review policy's purpose approval.",
+                    );
+                }
+            }
+        }
+        tag(ReviewPolicyError::StageAsks, asks);
 
         match self.purpose {
             ReviewPurpose::Approval => {
@@ -2018,6 +2044,8 @@ pub enum ReviewPolicyError {
     Stages,
     #[error("the final review stage cannot be advisory")]
     FinalStageAdvisory,
+    #[error("only an approval review policy can let a stage ask the applicant")]
+    StageAsks,
     #[error("review stage identifiers, queues, or deciding profiles are invalid")]
     StageIdentity,
     #[error("review clock identifiers must be unique and bounded")]
@@ -2992,6 +3020,7 @@ mod tests {
             required_approvals,
             outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
+            asks: None,
             exclude_initiator: true,
             exclude_previous_stage_reviewers: true,
         }
@@ -3485,6 +3514,7 @@ mod tests {
                     required_approvals: MAXIMUM_REVIEW_APPROVALS_PER_STAGE,
                     outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
+                    asks: None,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
                 })
@@ -4448,6 +4478,54 @@ mod tests {
             decoded.negative_decisions,
             ReviewNegativeDecisionMode::Settle
         );
+    }
+
+    #[test]
+    fn a_stage_without_asks_keeps_its_policy_bytes_and_digest() {
+        let plain = approval_policy(vec![stage("review", 1)]);
+        let encoded = serde_json::to_value(&plain.stages[0]).unwrap();
+        assert!(encoded.get("asks").is_none());
+
+        let mut asking = plain.clone();
+        asking.stages[0].asks = Some(ReviewStageAsksPolicy {});
+        let encoded = serde_json::to_value(&asking.stages[0]).unwrap();
+        assert_eq!(encoded["asks"], json!({}));
+        let decoded: ReviewStagePolicy = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.asks, Some(ReviewStageAsksPolicy {}));
+
+        let defaults = crate::ReviewPolicyDependencies::default();
+        let plain_digest = plain.digest_with(&defaults).unwrap();
+        assert_ne!(plain_digest, asking.digest_with(&defaults).unwrap());
+        // The same policy without the member decodes and digests as before.
+        let without: ReviewPolicy =
+            serde_json::from_value(serde_json::to_value(&plain).unwrap()).unwrap();
+        assert_eq!(plain_digest, without.digest_with(&defaults).unwrap());
+    }
+
+    #[test]
+    fn asks_take_no_options_yet() {
+        let refused = serde_json::from_value::<ReviewStagePolicy>(json!({
+            "id": "review", "queue": "review", "decidingProfiles": ["reviewer"],
+            "requiredApprovals": 1, "asks": {"dueDays": 3}
+        }));
+        assert!(refused.is_err());
+    }
+
+    #[test]
+    fn only_an_approval_policy_may_declare_asks() {
+        let mut approval = approval_policy(vec![stage("review", 1)]);
+        approval.stages[0].asks = Some(ReviewStageAsksPolicy {});
+        assert_eq!(approval.check(), Ok(()));
+
+        let mut answer = answer_policy();
+        answer.stages[0].asks = Some(ReviewStageAsksPolicy {});
+        assert_eq!(answer.check(), Err(ReviewPolicyError::StageAsks));
+        let finding = answer
+            .findings()
+            .into_iter()
+            .find(|finding| finding.code == "casework.review-policy.asks-in-answer-policy")
+            .expect("an answer policy that asks is reported");
+        assert_eq!(finding.pointer, "/stages/0/asks");
     }
 
     #[test]

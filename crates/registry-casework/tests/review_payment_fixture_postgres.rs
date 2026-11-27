@@ -404,6 +404,7 @@ fn project(issuer: &str) -> CaseworkProject {
                 required_approvals: 1,
                 outcomes: None,
                 negative_decisions: ReviewNegativeDecisionMode::Settle,
+                asks: None,
                 exclude_initiator: false,
                 exclude_previous_stage_reviewers: false,
             }],
@@ -436,6 +437,7 @@ fn project(issuer: &str) -> CaseworkProject {
             subject: "payment-service".to_owned(),
             trusted_initiator_issuer: None,
             initiator_profile: None,
+            reads_asks: false,
             source_namespaces: vec!["payments".to_owned()],
             review_policies: vec!["payment-batch".to_owned()],
             retention: registry_casework_core::ProducerRetention {

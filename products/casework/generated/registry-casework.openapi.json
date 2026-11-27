@@ -3683,6 +3683,11 @@
           "profile": {
             "type": "string"
           },
+          "readsAsks": {
+            "default": false,
+            "description": "Whether this producer reads reviewer asks through the ask feed and\nanswers them. A review policy whose stage declares `asks` needs it\non every producer that submits to the policy.",
+            "type": "boolean"
+          },
           "retention": {
             "$ref": "#/components/schemas/ProducerRetention"
           },
@@ -4111,9 +4116,25 @@
         },
         "type": "object"
       },
+      "ReviewStageAsksPolicy": {
+        "additionalProperties": false,
+        "description": "The options of a stage's asks. None exist yet: `asks: {}` turns asks on.",
+        "type": "object"
+      },
       "ReviewStagePolicy": {
         "additionalProperties": false,
         "properties": {
+          "asks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewStageAsksPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lets the reviewer who holds a task at this stage ask the subject's\nowner for more. Omission offers no ask and keeps the policy bytes\nunchanged. Only an approval policy may declare it."
+          },
           "decidingProfiles": {
             "items": {
               "type": "string"
