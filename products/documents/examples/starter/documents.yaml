@@ -32,7 +32,7 @@ accessProfiles:
     actsAs: represented-principal
   staff:
     principalClaim: sub
-    requiredScopes: [documents:read]
+    requiredScopes: [documents:staff]
     requesterClients: [case-portal]
     actorKind: human
     # recipient: the institution's own staff, named one at a time by a grant.

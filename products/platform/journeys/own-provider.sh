@@ -449,7 +449,7 @@ recipe() {
 		READY_PATH=/readyz CALL_PATH=/v1/locations CLAIMS=registry_actor_kind
 		;;
 	documents)
-		TOOL=documentsctl CLIENT=case-portal AUDIENCE=urn:example:documents SCOPE=documents:read
+		TOOL=documentsctl CLIENT=case-portal AUDIENCE=urn:example:documents SCOPE=documents:staff
 		CALL_PATH=/v1/document-policies
 		;;
 	coordinator)

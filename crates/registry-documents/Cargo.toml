@@ -62,6 +62,11 @@ name = "refusal_key_source"
 path = "tests/refusal_key_source.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "staff_scope_guard"
+path = "tests/staff_scope_guard.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []

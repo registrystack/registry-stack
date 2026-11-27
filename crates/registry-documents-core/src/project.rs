@@ -125,6 +125,15 @@ impl DocumentsProject {
                 }
             }
         }
+        for id in self.profiles_without_own_scope() {
+            findings.push(document.diagnostic_at_value(
+                Severity::Error,
+                "documents.project.profile-without-own-scope",
+                &format!("/accessProfiles/{id}/requiredScopes"),
+                "every scope this access profile requires is also required by another access profile",
+                "Give the profile a requiredScopes entry that no other access profile requires, so a token carrying only another profile's scope is never admitted here.",
+            ));
+        }
         for (id, policy) in &self.document_policies {
             let base = format!("/documentPolicies/{id}");
             let lists = [
@@ -196,6 +205,31 @@ impl DocumentsProject {
             }
         }
         findings
+    }
+
+    /// The profiles, in id order, that share every required scope with
+    /// another profile. A person signs in through any client of the
+    /// deployment, so a profile is selected safely by its client only when
+    /// its scope gate cannot be met by a token meant for another profile.
+    /// A sole profile has no other to share with.
+    fn profiles_without_own_scope(&self) -> Vec<&LocalId> {
+        let mut holders: BTreeMap<&str, usize> = BTreeMap::new();
+        for profile in self.access_profiles.values() {
+            for scope in profile.required_scopes.as_slice() {
+                *holders.entry(scope.as_str()).or_default() += 1;
+            }
+        }
+        self.access_profiles
+            .iter()
+            .filter(|(_, profile)| {
+                profile
+                    .required_scopes
+                    .as_slice()
+                    .iter()
+                    .all(|scope| holders[scope.as_str()] > 1)
+            })
+            .map(|(id, _)| id)
+            .collect()
     }
 
     /// The shared declarations of the project's observer hooks, in
@@ -959,6 +993,54 @@ mod tests {
                 "/accessProfiles/custodian-app/requesterClients/0".to_owned()
             )]
         );
+    }
+
+    #[test]
+    fn a_profile_whose_every_scope_another_profile_also_requires_is_refused() {
+        let text = STARTER.replacen(
+            "requiredScopes: [documents:staff]\n    requesterClients: [case-portal]",
+            "requiredScopes: [documents:own]\n    requesterClients: [case-portal]",
+            1,
+        );
+        assert_ne!(text, STARTER);
+        let refused = refusals(&text);
+        assert!(
+            refused.contains(&(
+                "documents.project.profile-without-own-scope".to_owned(),
+                "/accessProfiles/staff/requiredScopes".to_owned()
+            )),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_profile_with_one_scope_of_its_own_among_shared_ones_is_admitted() {
+        let text = STARTER
+            .replacen(
+                "requiredScopes: [documents:staff]",
+                "requiredScopes: [documents:read, documents:staff]",
+                1,
+            )
+            .replacen(
+                "requiredScopes: [documents:read]",
+                "requiredScopes: [documents:read, documents:partner]",
+                1,
+            );
+        assert_ne!(text, STARTER);
+        DocumentsProject::decode("documents.yaml", text.as_bytes())
+            .expect("one scope of its own is enough");
+    }
+
+    #[test]
+    fn a_sole_profile_with_a_scope_is_admitted() {
+        let project = DocumentsProject::decode("documents.yaml", STARTER.as_bytes())
+            .unwrap()
+            .value;
+        assert!(project.profiles_without_own_scope().is_empty());
+        let id = LocalId::new("custodian-app").unwrap();
+        let mut alone = project;
+        alone.access_profiles.retain(|key, _| *key == id);
+        assert!(alone.profiles_without_own_scope().is_empty());
     }
 
     #[test]
