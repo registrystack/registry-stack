@@ -45,6 +45,11 @@ CONTRACTS = {
         "REGISTRY_CARGO_RUNTIME_LIBRARY_PATH",
         "run-config-conformance.py",
     ),
+    "products/platform/journeys/lib.sh": (
+        "cargo-runtime-library-path.sh",
+        "registry_cargo_build",
+        "REGISTRY_CARGO_RUNTIME_LIBRARY_PATH",
+    ),
     "products/breg/loadtest/up.sh": (
         "cargo-runtime-library-path.sh",
         "registry_cargo_build",
@@ -71,7 +76,7 @@ CONTRACTS = {
 
 class CargoRuntimeScriptContractTests(unittest.TestCase):
     def test_every_reported_gate_keeps_its_runtime_and_override_contract(self):
-        self.assertEqual(len(CONTRACTS), 17)
+        self.assertEqual(len(CONTRACTS), 18)
         for relative, markers in CONTRACTS.items():
             with self.subTest(script=relative):
                 source = (ROOT / relative).read_text(encoding="utf-8")
