@@ -336,6 +336,38 @@
   },
   {
     "body": {
+      "code": "operation.not-authorized",
+      "detail": "Your current Casework authority does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "supervision-list-on-a-staff-profile",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "Your current Casework authority does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "reviewer-list-on-a-requester-profile",
+    "status": 403
+  },
+  {
+    "body": {
       "code": "authentication.refused",
       "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
       "status": 401,

@@ -517,6 +517,11 @@ path = "tests/authentication_refusals.rs"
 required-features = ["runtime"]
 
 [[test]]
+name = "concealment_refusals"
+path = "tests/concealment_refusals.rs"
+required-features = ["runtime"]
+
+[[test]]
 name = "http_read_only"
 path = "tests/http_read_only.rs"
 required-features = ["runtime"]

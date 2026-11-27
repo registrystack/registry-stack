@@ -1,0 +1,171 @@
+{
+  "actor-kind-mismatch": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "missing-scope": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "purpose-not-declared": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "record-id-is-not-a-uuid": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "record-is-absent-or-outside-the-boundary": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "requester-client-not-admitted": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "row-claim-missing": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "schema-of-a-record-type-the-caller-cannot-read": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "select-beyond-the-readable-fields": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "task-grant-bounds-do-not-cover-the-profile": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "task-grant-from-another-issuer": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "task-grant-missing": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  },
+  "unknown-access-profile": {
+    "body": {
+      "code": "resource.not_found",
+      "detail": "The requested resource was not found.",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "status": 404,
+    "wwwAuthenticate": null
+  }
+}

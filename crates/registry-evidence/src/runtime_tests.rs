@@ -82,6 +82,8 @@ use registry_evidence_verifier::model::{
 mod discovery_channel_tests;
 #[path = "evidence_source_tests.rs"]
 mod evidence_source_tests;
+#[path = "refusal_recording_tests.rs"]
+mod refusal_recording_tests;
 #[path = "wallet_channel_tests.rs"]
 mod wallet_channel_tests;
 
@@ -3562,7 +3564,7 @@ async fn admission_gates_refuse_unadmitted_clients_and_missing_scopes() {
             .await
             .expect_err(&format!("{label} was accepted"));
         assert!(
-            matches!(error, AuthenticationError::Verification),
+            matches!(error, AuthenticationError::Verification(_)),
             "{label}: {error:?}"
         );
     }
@@ -3584,7 +3586,7 @@ async fn admission_gates_refuse_unadmitted_clients_and_missing_scopes() {
             .await
             .expect_err(&format!("{label} was accepted"));
         assert!(
-            matches!(error, AuthenticationError::Verification),
+            matches!(error, AuthenticationError::Verification(_)),
             "{label}: {error:?}"
         );
     }

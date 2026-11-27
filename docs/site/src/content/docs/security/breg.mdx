@@ -160,6 +160,19 @@ A request batch audits both items as not available, and the metric still counts 
     declared_existence_disclosure_mode_governs_the_public_collapse,
     a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it. */}
 
+A request that BReg answers `404 resource.not_found` because the caller may not see the target reads the same to the caller whatever the reason.
+The operator can tell the reasons apart.
+`breg_request_refusals_total{check}` counts the request under the rule that refused it, for example `scope`, `purpose`, `requester-client`, `row-boundary`, `task-grant-binding`, `disclosure` or `visibility`, and one `request refused` line names the same `failed_check`.
+A refused write the engine answers with `write.outside-boundary` counts under `row-boundary`, and a Proposal outside the caller's scope counts under `ownership`.
+The counter and the line carry only that fixed name, never a token, claim, client, subject, route parameter or record identifier, and they change nothing the caller receives.
+A `visibility` count is a record that is absent or outside the boundary, and BReg does not say which, so it also counts a caller probing for identifiers.
+The audit journal's `refusalReason` stays the three values it lists below.
+
+{/* Evidence: crates/registry-breg/tests/concealment_refusals.rs,
+    every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wire;
+    crates/registry-breg/src/api/mod.rs, concealed(), refusal_check_tests;
+    crates/registry-breg/src/mutation.rs, MutationError::failed_check. */}
+
 ### Public check export
 
 `bregctl generate evidence-source --public-check` exports the Source of an Evidence [public check](../evidence/#the-public-certificate-check).

@@ -35,9 +35,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use registry_platform_authcommon::validate_compact_access_token;
+use registry_platform_authcommon::{validate_compact_access_token, FailedCheck, RefusalRecorder};
 use registry_platform_oidc::{
-    actor_kind, grant_claims, ClaimNames, JwksFetcher, OidcError, TokenVerifier,
+    actor_kind, grant_claims, ClaimError, ClaimNames, JwksFetcher, OidcError, TokenVerifier,
     TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
 use serde_json::Value;
@@ -63,15 +63,16 @@ pub struct SchedulingAuthenticator {
     busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
     /// Whether the deployment declared any assertion authority at all.
     binds_assertion_issuers: bool,
+    /// Counts and logs every refusal the HTTP edge answers, by failed check.
+    refusals: Arc<RefusalRecorder>,
 }
 
 impl SchedulingAuthenticator {
-    pub(crate) fn record_header_refusal(&self) {
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            registry_platform_oidc::AuthenticationStage::Header,
-            "Scheduling authentication refused"
-        );
+    /// The recorder the HTTP edge reports each refusal to, and whose counter
+    /// the metrics listener exposes.
+    #[must_use]
+    pub fn refusals(&self) -> &Arc<RefusalRecorder> {
+        &self.refusals
     }
 
     #[must_use]
@@ -91,6 +92,9 @@ impl SchedulingAuthenticator {
             appointment_read_profiles: oidc.appointment_read_profiles.clone(),
             busy_import_profiles: oidc.busy_import_profiles.clone(),
             binds_assertion_issuers: !oidc.clients.assertion_issuers.is_empty(),
+            refusals: Arc::new(
+                RefusalRecorder::new("scheduling").expect("the refusal counter is declared once"),
+            ),
         }
     }
 
@@ -135,7 +139,7 @@ impl SchedulingAuthenticator {
         }) {
             return Ok((caller, DetailAdmission::Grant));
         }
-        Err(AuthenticationError::Profile)
+        Err(AuthenticationError::Profile(FailedCheck::Scope))
     }
 
     /// The profile the separately authorized explain path demands: the caller
@@ -146,7 +150,7 @@ impl SchedulingAuthenticator {
     }
 
     /// Admit a verified caller holding `required`, or refuse it as a profile
-    /// miss. Diagnostics name only the fixed stage, never scope or claim values.
+    /// miss. Nothing about the refusal names a scope or claim value.
     fn require_scope(
         &self,
         caller: Caller,
@@ -157,13 +161,7 @@ impl SchedulingAuthenticator {
         if scopes.iter().any(|scope| scope == required) {
             return Ok(caller);
         }
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            registry_platform_oidc::AuthenticationStage::Scope,
-            "Scheduling authentication profile refused",
-            remedy = "check authentication.oidc.scopeClaim and readsScope or explainScope"
-        );
-        Err(AuthenticationError::Profile)
+        Err(AuthenticationError::Profile(FailedCheck::Scope))
     }
 
     /// The profile the commitments demand: no product scope, because the
@@ -183,16 +181,16 @@ impl SchedulingAuthenticator {
         profile_selector: &str,
     ) -> Result<AuthorizedBusySource, AuthenticationError> {
         let (caller, scopes, client) = self.verified_caller(token).await?;
-        let client = client.ok_or(AuthenticationError::Claims)?;
+        let client = client.ok_or(AuthenticationError::Claims(FailedCheck::TokenClient))?;
         let identity = BusySourceIdentity::new(caller.issuer, caller.subject, client)
-            .map_err(|_| AuthenticationError::Profile)?;
+            .map_err(|_| AuthenticationError::Profile(FailedCheck::TokenClaims))?;
         authorize_busy_source(
             &self.busy_import_profiles,
             &scopes,
             Some(profile_selector),
             identity,
         )
-        .map_err(|_| AuthenticationError::Profile)
+        .map_err(|error| AuthenticationError::Profile(error.failed_check()))
     }
 
     /// Verify one token and authorize exactly one opt-in operational profile
@@ -206,9 +204,9 @@ impl SchedulingAuthenticator {
         now: DateTime<Utc>,
     ) -> Result<AuthorizedOperationalRead, AuthenticationError> {
         let (caller, scopes, client) = self.verified_caller(token).await?;
-        let client = client.ok_or(AuthenticationError::Claims)?;
+        let client = client.ok_or(AuthenticationError::Claims(FailedCheck::TokenClient))?;
         let identity = OperationalIdentity::new(caller.issuer, caller.subject, client)
-            .map_err(|_| AuthenticationError::Claims)?;
+            .map_err(|_| AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         authorize_operational_read(
             &self.appointment_read_profiles,
             &scopes,
@@ -217,7 +215,7 @@ impl SchedulingAuthenticator {
             filter,
             now,
         )
-        .map_err(|_| AuthenticationError::Profile)
+        .map_err(|_| AuthenticationError::Profile(FailedCheck::AccessProfile))
     }
 
     /// Verify one credential and resolve its caller. A present grant is bound
@@ -227,18 +225,13 @@ impl SchedulingAuthenticator {
         &self,
         token: &str,
     ) -> Result<(Caller, Vec<String>, Option<String>), AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| {
-            self.record_header_refusal();
-            AuthenticationError::Refused
-        })?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                error.authentication_stage(),
-                "Scheduling authentication refused"
-            );
-            verifier_failure(&error)
-        })?;
+        validate_compact_access_token(token)
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
+        let verified = self
+            .verifier
+            .verify(token)
+            .await
+            .map_err(|error| verifier_failure(&error))?;
         // An exchanged token names the authority whose assertion produced it.
         // The platform applies no rule while the deployment's map is empty, so
         // an empty map would trust every authority the issuer federates.
@@ -247,23 +240,27 @@ impl SchedulingAuthenticator {
         if !self.binds_assertion_issuers
             && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM)
         {
-            tracing::debug!(
-                "an exchanged credential arrived at a deployment that declared no assertion authority"
-            );
-            return Err(AuthenticationError::Profile);
+            return Err(AuthenticationError::Profile(
+                FailedCheck::TokenAssertionIssuer,
+            ));
         }
         let kind = actor_kind(&verified.claims, &self.claim_names)
-            .map_err(|_| AuthenticationError::Claims)?;
-        let grant = grant_claims(&verified.claims, &self.claim_names, unix_now()?)
-            .map_err(|_| AuthenticationError::Claims)?;
+            .map_err(|_| AuthenticationError::Claims(FailedCheck::ActorKind))?;
+        let grant =
+            grant_claims(&verified.claims, &self.claim_names, unix_now()?).map_err(|error| {
+                AuthenticationError::Claims(match error {
+                    ClaimError::Expired => FailedCheck::TaskGrantExpired,
+                    _ => FailedCheck::TaskGrantClaims,
+                })
+            })?;
         if let Some(grant) = &grant {
             grant
                 .verify_context(&verified, &self.audience)
-                .map_err(|_| AuthenticationError::Profile)?;
+                .map_err(|_| AuthenticationError::Profile(FailedCheck::TaskGrantBinding))?;
         }
         let client = verified
             .matched_client_id()
-            .map_err(|_| AuthenticationError::Claims)?
+            .map_err(|_| AuthenticationError::Claims(FailedCheck::TokenClient))?
             .filter(|client| !client.is_empty())
             .map(str::to_owned);
         // A task-grant exchange preserves the subjects its source authority
@@ -287,18 +284,18 @@ impl SchedulingAuthenticator {
             .iss
             .clone()
             .filter(|issuer| !issuer.is_empty())
-            .ok_or(AuthenticationError::Claims)?;
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         let subject = verified
             .claims
             .sub
             .clone()
             .filter(|subject| !subject.is_empty())
-            .ok_or(AuthenticationError::Claims)?;
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         let credential_exp_unix = verified
             .claims
             .exp
             .and_then(|value| u64::try_from(value).ok())
-            .ok_or(AuthenticationError::Claims)?;
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         Ok((
             Caller {
                 actor_kind: kind.as_str().to_owned(),
@@ -330,14 +327,17 @@ impl std::fmt::Debug for SchedulingAuthenticator {
     }
 }
 
+/// Why authentication refused a request. Each refusal carries the check it
+/// failed, which only the operator sees: the answer to the caller is the same
+/// for every check of one kind.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum AuthenticationError {
     #[error("the bearer credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the verified identity claims are invalid")]
-    Claims,
+    Claims(FailedCheck),
     #[error("the caller's authentication profile is not authorized for this request")]
-    Profile,
+    Profile(FailedCheck),
     /// The verifier could not reach a verdict at all.
     #[error("the credential could not be verified because this verifier cannot answer")]
     Unavailable,
@@ -368,8 +368,9 @@ fn verifier_failure(error: &OidcError) -> AuthenticationError {
         // signal, not an outage, and answering 503 there would let a caller
         // probe the key set. A variant added to the platform later is read as
         // a credential refusal until it is classified here, so a new outcome
-        // can never widen the door.
-        _ => AuthenticationError::Refused,
+        // can never widen the door. The check the refusal records is the
+        // shared verifier's own map.
+        _ => AuthenticationError::Refused(error.failed_check()),
     }
 }
 
@@ -641,7 +642,7 @@ mod tests {
         assert_eq!(admission, DetailAdmission::Grant);
         assert!(matches!(
             authenticator.authenticate_read(&credential).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(FailedCheck::Scope))
         ));
 
         let without_action = token(merged("scheduling-explain", grant_claims_value(AUDIENCE)));
@@ -649,7 +650,7 @@ mod tests {
             authenticator
                 .authenticate_appointment_detail(&without_action)
                 .await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(FailedCheck::Scope))
         ));
     }
 
@@ -664,7 +665,7 @@ mod tests {
         let authenticator = authenticator();
         assert!(matches!(
             authenticator.authenticate_read(&credential).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(FailedCheck::Scope))
         ));
         // Mutating routes demand no product scope: their authority is the
         // task grant, checked per offering in the service.
@@ -692,7 +693,7 @@ mod tests {
                     Utc::now(),
                 )
                 .await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(FailedCheck::AccessProfile))
         );
 
         let grant_only = token(merged("", grant_claims_value(AUDIENCE)));
@@ -700,7 +701,7 @@ mod tests {
             authenticator
                 .authenticate_operational_read(&grant_only, None, operational_filter(), Utc::now(),)
                 .await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(FailedCheck::AccessProfile))
         );
 
         let two_roles = token(json!({
@@ -713,7 +714,7 @@ mod tests {
             authenticator
                 .authenticate_operational_read(&two_roles, None, operational_filter(), Utc::now(),)
                 .await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(FailedCheck::AccessProfile))
         );
         let authorized = authenticator
             .authenticate_operational_read(
@@ -738,7 +739,7 @@ mod tests {
         }));
         assert!(matches!(
             authenticator.authenticate_explain(&reader).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(FailedCheck::Scope))
         ));
         let explainer = token(json!({
             "sub": "principal-2",
@@ -799,7 +800,7 @@ mod tests {
         ));
         assert!(matches!(
             authenticator().authenticate_mutate(&credential).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(FailedCheck::TaskGrantBinding))
         ));
     }
 
@@ -812,7 +813,7 @@ mod tests {
         let credential = token(merged("scheduling-read", grant));
         assert!(matches!(
             authenticator().authenticate_mutate(&credential).await,
-            Err(AuthenticationError::Claims)
+            Err(AuthenticationError::Claims(FailedCheck::TaskGrantClaims))
         ));
     }
 
@@ -826,7 +827,7 @@ mod tests {
         }));
         assert!(matches!(
             authenticator().authenticate_read(&credential).await,
-            Err(AuthenticationError::Claims)
+            Err(AuthenticationError::Claims(FailedCheck::ActorKind))
         ));
     }
 
@@ -843,7 +844,9 @@ mod tests {
         assert!(
             matches!(
                 authenticator().authenticate_read(&credential).await,
-                Err(AuthenticationError::Profile)
+                Err(AuthenticationError::Profile(
+                    FailedCheck::TokenAssertionIssuer
+                ))
             ),
             "an exchanged token was accepted by a deployment that declared no assertion authority"
         );
@@ -867,7 +870,9 @@ mod tests {
         }));
         assert!(matches!(
             authenticator_with(declared).authenticate_read(&other).await,
-            Err(AuthenticationError::Refused)
+            Err(AuthenticationError::Refused(
+                FailedCheck::TokenAssertionIssuer
+            ))
         ));
     }
 
@@ -985,7 +990,7 @@ mod tests {
         ] {
             assert_eq!(
                 verifier_failure(&refusal),
-                AuthenticationError::Refused,
+                AuthenticationError::Refused(refusal.failed_check()),
                 "{refusal} was excused as an outage"
             );
         }
@@ -1016,40 +1021,21 @@ mod tests {
         .unwrap();
         assert!(matches!(
             authenticator().authenticate_read(&forged).await,
-            Err(AuthenticationError::Refused)
+            Err(AuthenticationError::Refused(FailedCheck::TokenSignature))
         ));
     }
     #[tokio::test]
-    async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
-        use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
-        use tracing::instrument::WithSubscriber;
-        let captured = CapturedDiagnosticLogs::default();
-        let subscriber = captured.subscriber();
-        let tokens = malformed_access_token_fixtures();
+    async fn malformed_compact_tokens_are_refused_as_malformed_credentials() {
+        let tokens = registry_platform_testing::malformed_access_token_fixtures();
         let auth = authenticator();
-        for _ in 0..3 {
-            for token in &tokens {
-                assert!(matches!(
-                    auth.authenticate_read(token)
-                        .with_subscriber(subscriber.clone())
-                        .await,
-                    Err(AuthenticationError::Refused)
-                ));
-                assert!(matches!(
-                    auth.authenticate_explain(token)
-                        .with_subscriber(subscriber.clone())
-                        .await,
-                    Err(AuthenticationError::Refused)
-                ));
-                assert!(matches!(
-                    auth.authenticate_mutate(token)
-                        .with_subscriber(subscriber.clone())
-                        .await,
-                    Err(AuthenticationError::Refused)
-                ));
-            }
+        for token in &tokens {
+            let malformed = Some(AuthenticationError::Refused(
+                FailedCheck::CredentialMalformed,
+            ));
+            assert_eq!(auth.authenticate_read(token).await.err(), malformed);
+            assert_eq!(auth.authenticate_explain(token).await.err(), malformed);
+            assert_eq!(auth.authenticate_mutate(token).await.err(), malformed);
         }
-        captured.assert_one_value_free_header_diagnostic(&tokens);
     }
 
     #[tokio::test]
@@ -1084,7 +1070,7 @@ mod tests {
                     let auth = &auth;
                     async move { auth.authenticate_read(&token).await }
                 },
-                |error| matches!(error, AuthenticationError::Refused),
+                |error| matches!(error, AuthenticationError::Refused(_)),
             )
             .await;
             // A valid symmetric JWT is outside the asymmetric production baseline.
@@ -1093,21 +1079,21 @@ mod tests {
             );
             assert!(matches!(
                 auth.authenticate_read(&token).await,
-                Err(AuthenticationError::Refused)
+                Err(AuthenticationError::Refused(_))
             ));
             let mut wrong_actor = claims.clone();
             wrong_actor["registry_actor_kind"] = json!("canary-invalid-actor");
             let token = sign(wrong_actor, "at+jwt");
             assert!(matches!(
                 auth.authenticate_read(&token).await,
-                Err(AuthenticationError::Claims)
+                Err(AuthenticationError::Claims(FailedCheck::ActorKind))
             ));
             let mut missing = claims.clone();
             missing["registry_scopes"] = json!("");
             let token = sign(missing, "at+jwt");
             assert!(matches!(
                 auth.authenticate_read(&token).await,
-                Err(AuthenticationError::Profile)
+                Err(AuthenticationError::Profile(FailedCheck::Scope))
             ));
         }
     }

@@ -354,7 +354,8 @@ Dead-lettered and expired deliveries do not set it, because they stay counted un
 
 `casework_request_refusals_total` counts every request the API listener refused, by the check that
 refused it, since the process started: a missing or refused credential or token, an unreachable
-key source, a refused delegated reviewer, and a review the caller may not act on or see. Each
+key source, a refused delegated reviewer, and a review, directory, clock or task-grant request the
+caller may not act on or see. Each
 refusal also writes one `request refused` line with `failed_check` and the request's trace id, at
 most five lines per check per minute across the process. The next line for that check carries
 `suppressed`, the number the minute counted but did not log, so alert on the counter, not the log.

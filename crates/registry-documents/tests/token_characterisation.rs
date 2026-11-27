@@ -252,13 +252,13 @@ destinations:
     let token = case.token.expose();
     match authenticator.authenticate(token).await {
         Ok(caller) => Outcome::Admitted(Some(caller.kind.as_str().to_owned())),
-        Err(AuthenticationError::Claims) => refusal("claims"),
+        Err(AuthenticationError::Claims(_)) => refusal("claims"),
         Err(AuthenticationError::Unavailable) => refusal("unavailable"),
-        Err(error @ (AuthenticationError::Refused | AuthenticationError::Profile)) => {
+        Err(error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_))) => {
             let reference = TokenVerifier::new(config.verifier_profile(), keys);
             match reference.verify(token).await {
                 Err(failure) => refusal(failure.authentication_stage().label()),
-                Ok(verified) if error == AuthenticationError::Profile => {
+                Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
                     if verified.scopes.iter().any(|held| held == &scope) {
                         refusal("profile")
                     } else {

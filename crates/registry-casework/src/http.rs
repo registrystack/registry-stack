@@ -841,7 +841,7 @@ async fn get_review_result(
         Ok(ReviewResultRead::Available(result)) => Ok(Json(result).into_response()),
         Ok(ReviewResultRead::Pending) => Ok(StatusCode::ACCEPTED.into_response()),
         Ok(ReviewResultRead::Expired) => Ok(StatusCode::GONE.into_response()),
-        Err(ReviewRuntimeError::NotFound) => Ok(StatusCode::NOT_FOUND.into_response()),
+        Err(ReviewRuntimeError::NotFound) => Ok(bare_not_found()),
         Err(error) => Err(HttpError::from(error)),
     }
 }
@@ -963,6 +963,15 @@ async fn delegate_review_task(
     ))
 }
 
+/// A 404 with no body, counted as a concealed target.
+fn bare_not_found() -> Response {
+    let mut response = StatusCode::NOT_FOUND.into_response();
+    response
+        .extensions_mut()
+        .insert(RefusalNote::new(FailedCheck::Visibility));
+    response
+}
+
 async fn get_review_task_draft(
     RequestState(state): RequestState,
     headers: HeaderMap,
@@ -976,6 +985,8 @@ async fn get_review_task_draft(
         .await?
     {
         Some(draft) => Ok(Json(draft).into_response()),
+        // No saved draft on a task the reviewer may read is absence, not a
+        // refusal, so it is not counted.
         None => Ok(StatusCode::NOT_FOUND.into_response()),
     }
 }
@@ -1715,9 +1726,9 @@ pub enum HttpError {
     Internal,
     Validation(ReviewValidationError),
 }
-// Store, service and review errors do not yet carry their own check: a refused
-// operation is recorded as `operation`, and an absent or concealed target as
-// `visibility`.
+// A refused operation carries the check its producer named. An absent or
+// concealed target is recorded as `visibility`, unless the producer named the
+// check that hid it.
 impl From<StoreError> for HttpError {
     fn from(e: StoreError) -> Self {
         match e {
@@ -1726,7 +1737,7 @@ impl From<StoreError> for HttpError {
             StoreError::CursorInvalid => Self::CursorInvalid,
             StoreError::IdempotencyExpired => Self::IdempotencyExpired,
             StoreError::NotFound => Self::NotFound(FailedCheck::Visibility),
-            StoreError::Forbidden => Self::Forbidden(FailedCheck::Operation),
+            StoreError::Forbidden(check) => Self::Forbidden(check),
             StoreError::Conflict => Self::PreconditionFailed,
             StoreError::AlreadyClaimed | StoreError::NotHolder => Self::ReviewTaskNotHeld,
             StoreError::IdempotencyConflict => Self::IdempotencyKeyReused,
@@ -1745,8 +1756,8 @@ impl From<ServiceError> for HttpError {
     fn from(e: ServiceError) -> Self {
         match e {
             ServiceError::Store(e) => e.into(),
-            ServiceError::NotFound => Self::NotFound(FailedCheck::Visibility),
-            ServiceError::Forbidden => Self::Forbidden(FailedCheck::Operation),
+            ServiceError::NotFound(check) => Self::NotFound(check),
+            ServiceError::Forbidden(check) => Self::Forbidden(check),
             ServiceError::ReviewValidation(e) => Self::Validation(e),
             ServiceError::Configuration => Self::Internal,
             ServiceError::Context(ReviewContextError::VersionMismatch) => {
@@ -1767,7 +1778,8 @@ impl From<ReviewRuntimeError> for HttpError {
     fn from(e: ReviewRuntimeError) -> Self {
         match e {
             ReviewRuntimeError::NotFound => Self::NotFound(FailedCheck::Visibility),
-            ReviewRuntimeError::Forbidden => Self::Forbidden(FailedCheck::Operation),
+            ReviewRuntimeError::NotHeldByReader => Self::NotFound(FailedCheck::Ownership),
+            ReviewRuntimeError::Forbidden(check) => Self::Forbidden(check),
             ReviewRuntimeError::SubmissionConflict => Self::ReviewSubmissionConflict,
             ReviewRuntimeError::ResultExpired => Self::ReviewResultExpired,
             ReviewRuntimeError::TaskNotHeld => Self::ReviewTaskNotHeld,
@@ -2864,6 +2876,63 @@ mod tests {
 
     fn recorder() -> Arc<RefusalRecorder> {
         Arc::new(RefusalRecorder::new("casework").expect("the casework recorder"))
+    }
+
+    #[test]
+    fn store_service_and_review_refusals_keep_the_check_their_producer_named() {
+        for check in [
+            FailedCheck::Operation,
+            FailedCheck::AccessProfile,
+            FailedCheck::SeparationOfDuties,
+            FailedCheck::TaskGrantExpired,
+            FailedCheck::TaskGrantStatus,
+            FailedCheck::RequesterClient,
+        ] {
+            assert_eq!(
+                HttpError::from(StoreError::Forbidden(check)).failed_check(),
+                Some(check)
+            );
+            assert_eq!(
+                HttpError::from(ServiceError::Forbidden(check)).failed_check(),
+                Some(check)
+            );
+            assert_eq!(
+                HttpError::from(ReviewRuntimeError::Forbidden(check)).failed_check(),
+                Some(check)
+            );
+        }
+        for check in [FailedCheck::TaskGrantBinding, FailedCheck::AccessProfile] {
+            assert_eq!(
+                HttpError::from(ServiceError::NotFound(check)).failed_check(),
+                Some(check)
+            );
+        }
+        assert_eq!(
+            HttpError::from(ReviewRuntimeError::NotHeldByReader).failed_check(),
+            Some(FailedCheck::Ownership)
+        );
+        assert_eq!(
+            HttpError::from(ReviewRuntimeError::NotFound).failed_check(),
+            Some(FailedCheck::Visibility)
+        );
+        assert_eq!(
+            HttpError::from(ReviewRuntimeError::NotHeldByReader).problem(),
+            ProblemCode::RequestNotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bare_not_found_is_empty_and_counted_as_concealed() {
+        let response = bare_not_found();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.extensions().get::<RefusalNote>().map(|n| n.check),
+            Some(FailedCheck::Visibility)
+        );
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert!(body.is_empty());
     }
 
     #[tokio::test]

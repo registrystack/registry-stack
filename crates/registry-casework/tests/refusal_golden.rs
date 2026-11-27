@@ -283,6 +283,23 @@ fn cases(idp: &MockIdp) -> Vec<Case> {
             ],
         ),
         case(
+            "supervision-list-on-a-staff-profile",
+            "operation",
+            "GET",
+            "/v1/review-tasks/supervision",
+            as_staff(&staff),
+        ),
+        case(
+            "reviewer-list-on-a-requester-profile",
+            "operation",
+            "GET",
+            list,
+            vec![
+                ("authorization", bearer(&requester)),
+                (PROFILE_HEADER, "requester".to_owned()),
+            ],
+        ),
+        case(
             "source-bearer-with-two-tokens",
             "credential-malformed",
             "GET",

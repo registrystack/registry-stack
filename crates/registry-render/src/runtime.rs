@@ -3239,6 +3239,8 @@ mod tests {
             "http://127.0.0.1:3161/tsr",
             "http://127.0.0.2:3161/tsr",
             "http://[::1]:3161/tsr",
+            // An IPv4-mapped form of 127.0.0.0/8 is loopback by the shared rule.
+            "http://[::ffff:127.0.0.1]/tsr",
             "https://tsa.example.test/tsr",
         ] {
             let seal = SEAL.replace("https://tsa.example.test/tsr", url);
@@ -3251,7 +3253,7 @@ mod tests {
             "http://10.0.0.5/tsr",
             "http://localhost.example.test/",
             "http://localhost./tsr",
-            "http://[::ffff:127.0.0.1]/tsr",
+            "http://[::ffff:10.0.0.5]/tsr",
         ] {
             let seal = SEAL.replace("https://tsa.example.test/tsr", url);
             let problem = refused(&home, &signing_text(&home, &seal));

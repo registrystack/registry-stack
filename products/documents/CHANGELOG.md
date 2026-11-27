@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The Document Store counts every refused request by the check that refused
+  it, in `documents_request_refusals_total{check}` on the metrics listener,
+  published at zero for every check. Each refusal writes one `request refused`
+  line with `failed_check`, at most five lines per check per minute. That line
+  replaces the scope refusal line, which named the claim, the scope and the
+  access profile; a scope refusal now carries a fixed remedy that names
+  `authentication.oidc.scopeClaim`. Refusal statuses, headers and bodies are
+  unchanged.
+- A static key set with a private key member or a repeated member name is
+  refused at startup, and the error names the rule it broke and the key's
+  position, never a key value.
+
 - The Rust Documents client accepts a `/health` answer with an empty body or a
   JSON object body of at most 4096 bytes, and ignores the object's members. A
   larger body, or a body that is not a JSON object, is still a body protocol

@@ -127,7 +127,7 @@ impl crate::CaseworkService {
                     Err(error) => Err(error),
                 }
             }
-            Ok(_) => Err(crate::ReviewRuntimeError::NotFound),
+            Ok(_) => Err(crate::ReviewRuntimeError::NotHeldByReader),
             Err(error) => Err(error),
         };
         let terminal = delegated_audit_outcome(&outcome);
@@ -142,8 +142,9 @@ fn delegated_audit_outcome<T>(
     match outcome {
         Ok(_) => crate::audit::AuditOutcome::Succeeded,
         Err(
-            crate::ReviewRuntimeError::Forbidden
+            crate::ReviewRuntimeError::Forbidden(_)
             | crate::ReviewRuntimeError::NotFound
+            | crate::ReviewRuntimeError::NotHeldByReader
             | crate::ReviewRuntimeError::SourceProfileRequired
             | crate::ReviewRuntimeError::ResultExpired
             | crate::ReviewRuntimeError::Invalid,
@@ -159,7 +160,7 @@ fn delegated_recheck(
         Ok(true) => Ok(()),
         Ok(false)
         | Err(
-            crate::ReviewRuntimeError::Forbidden
+            crate::ReviewRuntimeError::Forbidden(_)
             | crate::ReviewRuntimeError::NotFound
             | crate::ReviewRuntimeError::ResultExpired,
         ) => Err(crate::ReviewRuntimeError::NotFound),
@@ -346,12 +347,14 @@ mod tests {
     use super::{delegated_audit_outcome, delegated_recheck};
     use crate::audit::AuditOutcome;
     use crate::{ReviewRuntimeError, StoreError};
+    use registry_platform_authcommon::FailedCheck;
 
     #[test]
     fn delegated_caller_refusals_are_not_audited_as_runtime_failures() {
         for error in [
-            ReviewRuntimeError::Forbidden,
+            ReviewRuntimeError::Forbidden(FailedCheck::Operation),
             ReviewRuntimeError::NotFound,
+            ReviewRuntimeError::NotHeldByReader,
             ReviewRuntimeError::SourceProfileRequired,
             ReviewRuntimeError::ResultExpired,
             ReviewRuntimeError::Invalid,
@@ -377,7 +380,7 @@ mod tests {
             Err(ReviewRuntimeError::NotFound)
         ));
         assert!(matches!(
-            delegated_recheck(Err(ReviewRuntimeError::Forbidden)),
+            delegated_recheck(Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))),
             Err(ReviewRuntimeError::NotFound)
         ));
         assert!(matches!(

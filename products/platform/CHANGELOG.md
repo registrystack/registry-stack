@@ -114,6 +114,17 @@
   the new `OidcError::SubjectMismatch` (`token-claims`). Each of these was
   `InvalidToken` (`credential-malformed`) before.
 
+- The MCP edge counts every refusal by the check that refused it and writes
+  one `request refused` line with `failed_check`, at most five lines per check
+  per minute. The edge has no metrics listener, so the line is the operator's
+  signal there. Refusal statuses, headers and bodies are unchanged. Gateways
+  built on the edge (`registry-mcp`, `registry-breg-mcp`) and the BReg review
+  page accept the loopback spellings of the shared definition under
+  `development-loopback` (for example `127.0.0.2` and `[::ffff:127.0.0.1]`),
+  and still refuse `localhost.` and `*.localhost`. A refused static key set
+  now says why: `registry-mcp` names the refusal in its startup message, and
+  `registry-breg-mcp` logs it, with its startup code unchanged.
+
 ## 0.48.0 - 2026-11-23
 
 - No user-visible product changes in this release.

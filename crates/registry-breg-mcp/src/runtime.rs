@@ -77,6 +77,16 @@ fn resource_server_failure(error: ResourceServerError) -> StartupError {
     StartupError::ResourceServer(description)
 }
 
+/// Reads the static key document. The refusal text names what the document
+/// got wrong and carries no key material, so it goes to the operator's log.
+fn static_key_fetcher(document: &[u8]) -> Result<JwksFetcher, StartupError> {
+    let keys = parse_static_jwks(document).map_err(|error| {
+        tracing::error!(%error, "the static key set was refused");
+        StartupError::Key("resourceServer.jwksSource.documentRef")
+    })?;
+    Ok(JwksFetcher::new_static(keys, JwksFetcherConfig::defaults()))
+}
+
 fn resolver(config: &RuntimeConfig) -> Result<SecretResolver, StartupError> {
     config.secret_providers.resolver().map_err(|error| {
         StartupError::Secret(describe_secret_failure(
@@ -150,9 +160,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
                 "resourceServer.jwksSource.documentRef",
                 document_ref,
             )?;
-            let keys = parse_static_jwks(document.expose_secret())
-                .map_err(|_| StartupError::Key("resourceServer.jwksSource.documentRef"))?;
-            JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())
+            static_key_fetcher(document.expose_secret())?
         }
     };
     let resource_options = ResourceServerOptions {
@@ -273,6 +281,41 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A public EC key as a provider publishes it, with members the verifier
+    /// does not read.
+    fn provider_key_set(extra: &str) -> Vec<u8> {
+        format!(
+            r#"{{"keys":[{{"kty":"EC","crv":"P-256","kid":"key-1","use":"sig","alg":"ES256","ext":true,"x5c":["MIIB"],"x5t":"abc","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"{extra}}}]}}"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_static_key_set_with_unknown_public_members_loads() {
+        static_key_fetcher(&provider_key_set(""))
+            .expect("a provider key set with ext and x5c members loads");
+    }
+
+    #[test]
+    fn a_static_key_set_with_a_private_member_keeps_its_code_and_logs_the_validator_text() {
+        let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let error = tracing::dispatcher::with_default(&logs.subscriber(), || {
+            let Err(error) = static_key_fetcher(&provider_key_set(r#","d":"CANARY-PRIVATE""#))
+            else {
+                panic!("a private member is refused");
+            };
+            error
+        });
+        assert!(matches!(
+            error,
+            StartupError::Key("resourceServer.jwksSource.documentRef")
+        ));
+        let text = logs.text();
+        assert!(text.contains("private-key member"), "{text}");
+        assert!(!text.contains("CANARY-PRIVATE"), "{text}");
+        assert!(!error.to_string().contains("CANARY-PRIVATE"));
+    }
 
     #[test]
     fn neutral_principal_rate_limit_uses_breg_public_name() {

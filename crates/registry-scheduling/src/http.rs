@@ -32,7 +32,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use registry_platform_authcommon::parse_bearer_token;
+use registry_platform_authcommon::{
+    parse_bearer_token, record_refusal, BearerParseError, FailedCheck, RefusalNote, RefusalRecorder,
+};
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
     FrameworkRejection, ProblemBody, TraceContext,
@@ -53,7 +55,9 @@ use uuid::Uuid;
 
 use crate::auth::{AuthenticationError, SchedulingAuthenticator};
 use crate::metrics::{serve_metrics, Metrics, MetricsState, METRICS_PATH};
-use crate::service::{Caller, CommitmentAnswer, DetailAdmission, SchedulingService, ServiceError};
+use crate::service::{
+    Caller, CommitmentAnswer, DetailAdmission, RefusalCode, SchedulingService, ServiceError,
+};
 use crate::source_busy::{
     validate_busy_reconciliation_request, BusyReconciliationRequest, BusyRequestError,
     BUSY_SOURCE_APPLY_PATH, BUSY_SOURCE_PREVIEW_PATH,
@@ -87,7 +91,8 @@ pub fn metrics_router(metrics: Arc<Metrics>, store: PostgresStore) -> Router {
 }
 
 pub fn router(state: HttpState) -> Router {
-    http_edge(
+    let refusals = Arc::clone(state.authenticator.refusals());
+    http_edge(with_refusal_recording(
         Router::new()
             .route(HEALTH_PATH, get(health))
             .route(READY_PATH, get(ready))
@@ -117,7 +122,8 @@ pub fn router(state: HttpState) -> Router {
             .route(APPOINTMENT_CANCEL_ROUTE, post(cancel_appointment))
             .route(APPOINTMENT_HISTORY_ROUTE, get(appointment_history))
             .route(APPOINTMENT_ATTENDANCE_ROUTE, put(record_attendance)),
-    )
+        refusals,
+    ))
     .with_state(state)
 }
 
@@ -167,10 +173,9 @@ async fn authenticate_busy_source(
     profile: &str,
 ) -> Result<crate::source_busy::AuthorizedBusySource, HttpError> {
     if !valid_identifier(profile) {
-        return Err(HttpError(ProblemCode::RequestInvalid));
+        return Err(HttpError::plain(ProblemCode::RequestInvalid));
     }
-    let token =
-        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
+    let token = bearer_token(headers)?;
     state
         .authenticator
         .authenticate_busy_source(token, profile)
@@ -180,26 +185,28 @@ async fn authenticate_busy_source(
 
 fn busy_request_problem(error: BusyRequestError) -> HttpError {
     match error {
-        BusyRequestError::Authority => HttpError(ProblemCode::ProfileNotAuthorized),
+        BusyRequestError::Authority => {
+            HttpError::refused(RefusalCode::ProfileNotAuthorized, FailedCheck::Operation)
+        }
         BusyRequestError::Invalid | BusyRequestError::Bound => {
-            HttpError(ProblemCode::RequestInvalid)
+            HttpError::plain(ProblemCode::RequestInvalid)
         }
     }
 }
 
 fn busy_store_problem(error: BusyStoreError) -> HttpError {
     match error {
-        BusyStoreError::RevisionMismatch { .. } => HttpError(ProblemCode::RevisionMismatch),
+        BusyStoreError::RevisionMismatch { .. } => HttpError::plain(ProblemCode::RevisionMismatch),
         BusyStoreError::CoverageBoundary | BusyStoreError::ObservationConflict => {
-            HttpError(ProblemCode::PreconditionFailed)
+            HttpError::plain(ProblemCode::PreconditionFailed)
         }
-        BusyStoreError::ResourceMissing => HttpError(ProblemCode::ResourceUnavailable),
+        BusyStoreError::ResourceMissing => HttpError::plain(ProblemCode::ResourceUnavailable),
         BusyStoreError::AuditUnavailable
         | BusyStoreError::RecoveryUnavailable
         | BusyStoreError::Query(_)
         | BusyStoreError::Store(_) => {
             tracing::error!(%error, "the source-busy operation failed");
-            HttpError(ProblemCode::ServiceUnavailable)
+            HttpError::plain(ProblemCode::ServiceUnavailable)
         }
     }
 }
@@ -267,7 +274,7 @@ async fn ready(State(state): State<HttpState>) -> Result<Response, HttpError> {
     if state.service.ready().await.is_ok() {
         Ok(probe_response(READY_BODY))
     } else {
-        Err(HttpError(ProblemCode::ServiceUnavailable))
+        Err(HttpError::plain(ProblemCode::ServiceUnavailable))
     }
 }
 
@@ -282,7 +289,7 @@ async fn readyz(State(state): State<HttpState>) -> Result<StatusCode, HttpError>
     if state.service.ready().await.is_ok() {
         Ok(StatusCode::OK)
     } else {
-        Err(HttpError(ProblemCode::ServiceUnavailable))
+        Err(HttpError::plain(ProblemCode::ServiceUnavailable))
     }
 }
 
@@ -618,13 +625,13 @@ async fn list_operational_appointments(
             record_type,
             identifier,
         }),
-        _ => return Err(HttpError(ProblemCode::RequestInvalid)),
+        _ => return Err(HttpError::plain(ProblemCode::RequestInvalid)),
     };
     if profile
         .as_deref()
         .is_some_and(|profile| !valid_identifier(profile))
     {
-        return Err(HttpError(ProblemCode::RequestInvalid));
+        return Err(HttpError::plain(ProblemCode::RequestInvalid));
     }
     let filter = crate::operational::OperationalReadFilter::with_optional_filters(
         service,
@@ -637,9 +644,8 @@ async fn list_operational_appointments(
         start,
         end,
     )
-    .map_err(|_| HttpError(ProblemCode::RequestInvalid))?;
-    let token =
-        bearer_token(&headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
+    .map_err(|_| HttpError::plain(ProblemCode::RequestInvalid))?;
+    let token = bearer_token(&headers)?;
     let authority = state
         .authenticator
         .authenticate_operational_read(
@@ -852,7 +858,7 @@ fn bounded_selection(
     if duration_minutes.is_some_and(|value| {
         !(1..=registry_scheduling_core::MAXIMUM_BOOKING_DURATION_MINUTES).contains(&value)
     }) {
-        return Err(HttpError(ProblemCode::RequestInvalid));
+        return Err(HttpError::plain(ProblemCode::RequestInvalid));
     }
     if let Some(resource) = &resource {
         bounded_identifier(resource)?;
@@ -873,21 +879,19 @@ struct ExplainQuery {
 }
 
 async fn authenticate_read(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
-    let token =
-        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
+    let token = bearer_token(headers)?;
     state
         .authenticator
         .authenticate_read(token)
         .await
-        .map_err(authentication_problem)
+        .map_err(|error| authentication_problem(error).with_scope_remedy())
 }
 
 async fn authenticate_appointment_detail(
     state: &HttpState,
     headers: &HeaderMap,
 ) -> Result<(Caller, DetailAdmission), HttpError> {
-    let token =
-        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
+    let token = bearer_token(headers)?;
     state
         .authenticator
         .authenticate_appointment_detail(token)
@@ -896,18 +900,16 @@ async fn authenticate_appointment_detail(
 }
 
 async fn authenticate_explain(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
-    let token =
-        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
+    let token = bearer_token(headers)?;
     state
         .authenticator
         .authenticate_explain(token)
         .await
-        .map_err(authentication_problem)
+        .map_err(|error| authentication_problem(error).with_scope_remedy())
 }
 
 async fn authenticate_mutate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
-    let token =
-        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
+    let token = bearer_token(headers)?;
     state
         .authenticator
         .authenticate_mutate(token)
@@ -916,24 +918,36 @@ async fn authenticate_mutate(state: &HttpState, headers: &HeaderMap) -> Result<C
 }
 
 fn bearer_token(headers: &HeaderMap) -> Result<&str, HttpError> {
+    let refused = |check| HttpError::refused(RefusalCode::AuthenticationRefused, check);
     let authorization = headers
         .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .ok_or(HttpError(ProblemCode::AuthenticationRefused))?;
-    parse_bearer_token(authorization).map_err(|_| HttpError(ProblemCode::AuthenticationRefused))
+        .ok_or_else(|| refused(FailedCheck::CredentialMissing))?
+        .to_str()
+        .map_err(|_| refused(FailedCheck::CredentialMalformed))?;
+    parse_bearer_token(authorization).map_err(|error| {
+        refused(match error {
+            // Another scheme is a credential this route does not take.
+            BearerParseError::InvalidScheme => FailedCheck::CredentialMissing,
+            _ => FailedCheck::CredentialMalformed,
+        })
+    })
 }
 
 fn authentication_problem(error: AuthenticationError) -> HttpError {
     match error {
-        AuthenticationError::Refused | AuthenticationError::Claims => {
-            HttpError(ProblemCode::AuthenticationRefused)
+        AuthenticationError::Refused(check) | AuthenticationError::Claims(check) => {
+            HttpError::refused(RefusalCode::AuthenticationRefused, check)
         }
-        AuthenticationError::Profile => HttpError(ProblemCode::ProfileNotAuthorized),
+        AuthenticationError::Profile(check) => {
+            HttpError::refused(RefusalCode::ProfileNotAuthorized, check)
+        }
         // The verifier reached no verdict, so the credential is not what is
         // wrong. Answering 401 here would challenge a caller holding a good
         // token and invite it to rotate one during an outage that is ours;
         // `service.unavailable` carries `Retry-After` instead.
-        AuthenticationError::Unavailable => HttpError(ProblemCode::ServiceUnavailable),
+        AuthenticationError::Unavailable => {
+            HttpError::unavailable(FailedCheck::KeySourceUnavailable)
+        }
     }
 }
 
@@ -966,7 +980,7 @@ fn bounded_admission(request: &AdmissionRequest) -> Result<(), HttpError> {
     bounded_references(&request.capabilities)?;
     bounded_references(&request.prerequisites)?;
     if request.external_references.len() > MAXIMUM_COLLECTION_ENTRIES {
-        return Err(HttpError(ProblemCode::RequestInvalid));
+        return Err(HttpError::plain(ProblemCode::RequestInvalid));
     }
     let mut unique = BTreeSet::new();
     for reference in &request.external_references {
@@ -976,11 +990,11 @@ fn bounded_admission(request: &AdmissionRequest) -> Result<(), HttpError> {
             reference.record_type.as_str(),
             reference.identifier.as_str(),
         )) {
-            return Err(HttpError(ProblemCode::RequestInvalid));
+            return Err(HttpError::plain(ProblemCode::RequestInvalid));
         }
     }
     if request.party_references.len() > registry_scheduling_core::MAXIMUM_PARTY_REFERENCES {
-        return Err(HttpError(ProblemCode::RequestInvalid));
+        return Err(HttpError::plain(ProblemCode::RequestInvalid));
     }
     let mut unique_parties = BTreeSet::new();
     for party in &request.party_references {
@@ -991,7 +1005,7 @@ fn bounded_admission(request: &AdmissionRequest) -> Result<(), HttpError> {
             party.reference.record_type.as_str(),
             party.reference.identifier.as_str(),
         )) {
-            return Err(HttpError(ProblemCode::RequestInvalid));
+            return Err(HttpError::plain(ProblemCode::RequestInvalid));
         }
     }
     Ok(())
@@ -1007,20 +1021,20 @@ fn bounded_external_reference(reference: &ExternalReference) -> Result<(), HttpE
 fn bounded_identifier(value: &str) -> Result<(), HttpError> {
     valid_identifier(value)
         .then_some(())
-        .ok_or(HttpError(ProblemCode::RequestInvalid))
+        .ok_or(HttpError::plain(ProblemCode::RequestInvalid))
 }
 
 /// One scoped reference as the authored grammar admits it.
 fn bounded_reference(value: &str) -> Result<(), HttpError> {
     valid_reference(value)
         .then_some(())
-        .ok_or(HttpError(ProblemCode::RequestInvalid))
+        .ok_or(HttpError::plain(ProblemCode::RequestInvalid))
 }
 
 /// A list of scoped references, no longer than a policy collection may be.
 fn bounded_references(values: &[String]) -> Result<(), HttpError> {
     if values.len() > MAXIMUM_COLLECTION_ENTRIES {
-        return Err(HttpError(ProblemCode::RequestInvalid));
+        return Err(HttpError::plain(ProblemCode::RequestInvalid));
     }
     values.iter().try_for_each(|value| bounded_reference(value))
 }
@@ -1029,7 +1043,7 @@ fn bounded_references(values: &[String]) -> Result<(), HttpError> {
 fn bounded_reason(reason: Option<&str>) -> Result<(), HttpError> {
     match reason {
         Some(reason) if reason.len() > MAXIMUM_CANCELLATION_REASON_BYTES => {
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError::plain(ProblemCode::RequestInvalid))
         }
         _ => Ok(()),
     }
@@ -1042,33 +1056,118 @@ fn idempotency_key(headers: &HeaderMap) -> Result<&str, HttpError> {
         .get(IDEMPOTENCY_KEY_HEADER)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
-        .ok_or(HttpError(ProblemCode::RequestInvalid))?;
+        .ok_or(HttpError::plain(ProblemCode::RequestInvalid))?;
     if value.len() > MAXIMUM_IDEMPOTENCY_KEY_BYTES
         || !value.bytes().all(|byte| byte.is_ascii_graphic())
     {
-        return Err(HttpError(ProblemCode::RequestInvalid));
+        return Err(HttpError::plain(ProblemCode::RequestInvalid));
     }
     Ok(value)
 }
 
-/// One refusal from the closed vocabulary, as an HTTP answer: every product
+/// One answer from the closed vocabulary, as an HTTP answer: every product
 /// decision and every request-edge rejection renders through the same pinned
-/// document.
+/// document. A refusal of authority also carries the check it failed, which
+/// reaches the operator's counter and log line through the response
+/// extensions and never the caller's body.
 #[derive(Debug)]
-pub struct HttpError(pub ProblemCode);
+pub struct HttpError {
+    problem: ProblemCode,
+    note: Option<RefusalNote>,
+}
+
+impl HttpError {
+    /// An answer that is not a refusal of authority. A refusal code is built
+    /// with [`HttpError::refused`] so it names its check.
+    pub(crate) fn plain(problem: ProblemCode) -> Self {
+        if RefusalCode::of(problem).is_some() {
+            debug_assert!(false, "a refusal was built without its failed check");
+            tracing::error!(
+                code = problem.code(),
+                "a refusal was answered without its failed check"
+            );
+        }
+        Self {
+            problem,
+            note: None,
+        }
+    }
+
+    /// A refusal of authority, with the check it failed.
+    pub(crate) fn refused(code: RefusalCode, check: FailedCheck) -> Self {
+        Self {
+            problem: code.problem(),
+            note: Some(RefusalNote::new(check)),
+        }
+    }
+
+    /// `service.unavailable`, counted under the check that could not be made.
+    pub(crate) fn unavailable(check: FailedCheck) -> Self {
+        Self {
+            problem: ProblemCode::ServiceUnavailable,
+            note: Some(RefusalNote::new(check)),
+        }
+    }
+
+    /// Name the setting the operator checks when this is a scope refusal of
+    /// a read or explain route.
+    fn with_scope_remedy(mut self) -> Self {
+        self.note = self.note.map(|note| {
+            if note.check == FailedCheck::Scope {
+                note.with_remedy(SCOPE_REMEDY)
+            } else {
+                note
+            }
+        });
+        self
+    }
+}
+
+/// The fixed operator hint on a read or explain scope refusal.
+const SCOPE_REMEDY: &str = "check authentication.oidc.scopeClaim and readsScope or explainScope";
 
 impl From<ServiceError> for HttpError {
     fn from(error: ServiceError) -> Self {
         match error {
-            ServiceError::Problem(problem) => Self(problem),
+            ServiceError::Problem(problem) => Self::plain(problem),
+            ServiceError::Refused { code, check } => Self::refused(code, check),
         }
     }
 }
 
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
-        problem_response(self.0)
+        let mut response = problem_response(self.problem);
+        if let Some(note) = self.note {
+            response.extensions_mut().insert(note);
+        }
+        response
     }
+}
+
+/// Record the refusals the routes answer. The edge layers wrap this one, so
+/// the request's trace is in scope when a refusal is recorded.
+fn with_refusal_recording<S>(routes: Router<S>, recorder: Arc<RefusalRecorder>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    routes.layer(middleware::from_fn_with_state(recorder, record_refusals))
+}
+
+/// Count and log every refusal an answer carries, once, after the route has
+/// answered. The note rides in the response extensions, which are never
+/// serialized, so recording cannot change a byte of the answer.
+async fn record_refusals(
+    State(recorder): State<Arc<RefusalRecorder>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
+        let trace = current_trace();
+        record_refusal!(recorder, note, trace_id = &trace.trace_id);
+    }
+    response
 }
 
 fn current_trace() -> TraceContext {
@@ -1225,6 +1324,246 @@ mod tests {
                 .route(HOLD_ROUTE, delete(identified))
                 .route(APPOINTMENT_ROUTE, get(identified)),
         )
+    }
+
+    /// The refusals a request can meet, by case name, as the handlers build
+    /// them: one route that answers each one under the recording layer.
+    fn refusal_case(case: &str) -> HttpError {
+        match case {
+            "credential-missing" => bearer_token(&HeaderMap::new()).unwrap_err(),
+            "credential-malformed" => {
+                bearer_token(&headers_with(AUTHORIZATION, "Bearer a b")).unwrap_err()
+            }
+            "token-signature" => {
+                authentication_problem(AuthenticationError::Refused(FailedCheck::TokenSignature))
+            }
+            "scope" => authentication_problem(AuthenticationError::Profile(FailedCheck::Scope))
+                .with_scope_remedy(),
+            "operation" => {
+                HttpError::refused(RefusalCode::ProfileNotAuthorized, FailedCheck::Operation)
+            }
+            "task-grant-missing" => ServiceError::Refused {
+                code: RefusalCode::OperationNotAuthorized,
+                check: FailedCheck::TaskGrantMissing,
+            }
+            .into(),
+            "visibility" => ServiceError::Refused {
+                code: RefusalCode::OperationNotAuthorized,
+                check: FailedCheck::Visibility,
+            }
+            .into(),
+            "task-grant-lifetime" => HttpError::refused(
+                RefusalCode::GrantLifetimeTooLong,
+                FailedCheck::TaskGrantLifetime,
+            ),
+            "key-source-unavailable" => authentication_problem(AuthenticationError::Unavailable),
+            "plain" => HttpError::plain(ProblemCode::RequestInvalid),
+            other => unreachable!("no refusal case named {other}"),
+        }
+    }
+
+    fn refusal_router(recorder: Arc<RefusalRecorder>) -> Router {
+        async fn refuse(Path(case): Path<String>) -> HttpError {
+            refusal_case(&case)
+        }
+        http_edge(with_refusal_recording(
+            Router::new().route("/refuse/{case}", get(refuse)),
+            recorder,
+        ))
+    }
+
+    fn refusal_exposition(recorder: &RefusalRecorder) -> String {
+        let mut out = registry_platform_metrics::Exposition::new();
+        recorder
+            .counter()
+            .write(&mut out)
+            .expect("the counter writes");
+        out.finish()
+    }
+
+    fn refusal_lines(captured: &registry_platform_testing::CapturedDiagnosticLogs) -> Vec<Value> {
+        captured
+            .text()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
+            .filter(|event| event["fields"]["message"] == "request refused")
+            .collect()
+    }
+
+    const REFUSAL_CASES: [&str; 8] = [
+        "credential-missing",
+        "credential-malformed",
+        "token-signature",
+        "scope",
+        "operation",
+        "task-grant-missing",
+        "visibility",
+        "task-grant-lifetime",
+    ];
+
+    /// Every refusal answer keeps its status, headers and body. The golden
+    /// file holds what each refusal answered before its check was recorded,
+    /// with the trace id removed.
+    #[tokio::test]
+    async fn refusal_answers_match_the_golden_bodies() {
+        use tracing::instrument::WithSubscriber as _;
+        let recorder = Arc::new(RefusalRecorder::new("scheduling").unwrap());
+        let mut observed = serde_json::Map::new();
+        for case in REFUSAL_CASES.into_iter().chain(["key-source-unavailable"]) {
+            let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+            let response = refusal_router(Arc::clone(&recorder))
+                .oneshot(traced_request("GET", &format!("/refuse/{case}")))
+                .with_subscriber(captured.subscriber())
+                .await
+                .expect("an in-process request always answers");
+            let header = |name: &str| {
+                response
+                    .headers()
+                    .get(name)
+                    .map(|value| value.to_str().expect("an ASCII header").to_owned())
+            };
+            let mut entry = serde_json::json!({
+                "status": response.status().as_u16(),
+                "contentType": header("content-type"),
+                "wwwAuthenticate": header("www-authenticate"),
+                "retryAfter": header("retry-after"),
+                "cacheControl": header("cache-control"),
+            });
+            let mut body = body_json(response).await;
+            assert_eq!(body["traceId"], TRACE_ID, "{case}");
+            body.as_object_mut().unwrap().remove("traceId");
+            entry["body"] = body;
+            observed.insert(case.to_owned(), entry);
+        }
+        let golden: Value =
+            serde_json::from_str(include_str!("../tests/golden/refusal-answers.json"))
+                .expect("the golden file is JSON");
+        assert_eq!(Value::Object(observed), golden);
+    }
+
+    #[tokio::test]
+    async fn each_refusal_is_counted_and_logged_once_under_its_check() {
+        use tracing::instrument::WithSubscriber as _;
+        for (case, check) in [
+            ("credential-missing", "credential-missing"),
+            ("credential-malformed", "credential-malformed"),
+            ("token-signature", "token-signature"),
+            ("scope", "scope"),
+            ("operation", "operation"),
+            ("task-grant-missing", "task-grant-missing"),
+            ("visibility", "visibility"),
+            ("task-grant-lifetime", "task-grant-lifetime"),
+            ("key-source-unavailable", "key-source-unavailable"),
+        ] {
+            let recorder = Arc::new(RefusalRecorder::new("scheduling").unwrap());
+            let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+            let request = Request::builder()
+                .uri(format!("/refuse/{case}"))
+                .header("traceparent", TRACEPARENT)
+                .header("authorization", "Bearer canary-credential-value")
+                .header("x-canary", "canary-header-value")
+                .body(Body::empty())
+                .unwrap();
+            refusal_router(Arc::clone(&recorder))
+                .oneshot(request)
+                .with_subscriber(captured.subscriber())
+                .await
+                .expect("an in-process request always answers");
+            let exposition = refusal_exposition(&recorder);
+            assert!(
+                exposition.contains(&format!(
+                    "scheduling_request_refusals_total{{check=\"{check}\"}} 1"
+                )),
+                "{case}: {exposition}"
+            );
+            assert_eq!(
+                exposition.matches("} 1\n").count(),
+                1,
+                "{case} counted under one check only"
+            );
+            let lines = refusal_lines(&captured);
+            assert_eq!(lines.len(), 1, "{case}");
+            assert_eq!(lines[0]["fields"]["failed_check"], check, "{case}");
+            assert_eq!(lines[0]["fields"]["decision"], "refused", "{case}");
+            assert_eq!(lines[0]["fields"]["trace_id"], TRACE_ID, "{case}");
+            let rendered = captured.text();
+            assert!(!rendered.contains("canary"), "{case}: {rendered}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scope_refusal_names_the_settings_to_check() {
+        use tracing::instrument::WithSubscriber as _;
+        let recorder = Arc::new(RefusalRecorder::new("scheduling").unwrap());
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        refusal_router(recorder)
+            .oneshot(traced_request("GET", "/refuse/scope"))
+            .with_subscriber(captured.subscriber())
+            .await
+            .unwrap();
+        let lines = refusal_lines(&captured);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["fields"]["remedy"], SCOPE_REMEDY);
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_is_not_a_refusal_records_nothing() {
+        use tracing::instrument::WithSubscriber as _;
+        let recorder = Arc::new(RefusalRecorder::new("scheduling").unwrap());
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let response = refusal_router(Arc::clone(&recorder))
+            .oneshot(traced_request("GET", "/refuse/plain"))
+            .with_subscriber(captured.subscriber())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(!refusal_exposition(&recorder).contains("} 1\n"));
+        assert!(refusal_lines(&captured).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_one_refusal_is_counted_in_full_and_logged_in_part() {
+        use tracing::instrument::WithSubscriber as _;
+        let recorder = Arc::new(RefusalRecorder::new("scheduling").unwrap());
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let router = refusal_router(Arc::clone(&recorder));
+        for _ in 0..50 {
+            router
+                .clone()
+                .oneshot(traced_request("GET", "/refuse/token-signature"))
+                .with_subscriber(captured.subscriber())
+                .await
+                .unwrap();
+        }
+        assert!(refusal_exposition(&recorder)
+            .contains("scheduling_request_refusals_total{check=\"token-signature\"} 50"));
+        assert_eq!(
+            refusal_lines(&captured).len(),
+            registry_platform_authcommon::REFUSAL_LOG_LINES_PER_WINDOW as usize
+        );
+    }
+
+    #[test]
+    fn a_problem_code_is_a_refusal_exactly_when_it_refuses_authority() {
+        let refusals: Vec<_> = ProblemCode::ALL
+            .iter()
+            .filter(|problem| RefusalCode::of(**problem).is_some())
+            .map(|problem| problem.code())
+            .collect();
+        assert_eq!(
+            refusals,
+            [
+                "authentication.refused",
+                "grant.lifetime-too-long",
+                "operation.not-authorized",
+                "profile.not-authorized"
+            ]
+        );
+        for problem in ProblemCode::ALL {
+            if let Some(code) = RefusalCode::of(*problem) {
+                assert_eq!(code.problem(), *problem);
+            }
+        }
     }
 
     #[tokio::test]
@@ -1471,11 +1810,14 @@ mod tests {
         let problem = authentication_problem(AuthenticationError::Unavailable);
         assert!(matches!(
             problem,
-            HttpError(ProblemCode::ServiceUnavailable)
+            HttpError {
+                problem: ProblemCode::ServiceUnavailable,
+                ..
+            }
         ));
         let response = REQUEST_TRACE
             .scope(TraceContext::server_created(), async {
-                problem_response(problem.0)
+                problem_response(problem.problem)
             })
             .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -1487,15 +1829,24 @@ mod tests {
 
     #[test]
     fn a_refused_credential_still_answers_a_challenge() {
-        for refusal in [AuthenticationError::Refused, AuthenticationError::Claims] {
+        for refusal in [
+            AuthenticationError::Refused(FailedCheck::TokenSignature),
+            AuthenticationError::Claims(FailedCheck::TokenClaims),
+        ] {
             assert!(matches!(
                 authentication_problem(refusal),
-                HttpError(ProblemCode::AuthenticationRefused)
+                HttpError {
+                    problem: ProblemCode::AuthenticationRefused,
+                    ..
+                }
             ));
         }
         assert!(matches!(
-            authentication_problem(AuthenticationError::Profile),
-            HttpError(ProblemCode::ProfileNotAuthorized)
+            authentication_problem(AuthenticationError::Profile(FailedCheck::Scope)),
+            HttpError {
+                problem: ProblemCode::ProfileNotAuthorized,
+                ..
+            }
         ));
     }
 
@@ -1656,7 +2007,10 @@ mod tests {
             assert!(
                 matches!(
                     bounded_admission(&request),
-                    Err(HttpError(ProblemCode::RequestInvalid))
+                    Err(HttpError {
+                        problem: ProblemCode::RequestInvalid,
+                        ..
+                    })
                 ),
                 "an unbounded caller string reached the store: {request:?}"
             );
@@ -1672,7 +2026,10 @@ mod tests {
                 external_references: vec![duplicate.clone(), duplicate],
                 ..admission()
             }),
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError {
+                problem: ProblemCode::RequestInvalid,
+                ..
+            })
         ));
     }
 
@@ -1686,7 +2043,10 @@ mod tests {
         // the service is down for a request only the caller can fix.
         assert!(matches!(
             bounded_reason(Some(&"r".repeat(MAXIMUM_CANCELLATION_REASON_BYTES + 1))),
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError {
+                problem: ProblemCode::RequestInvalid,
+                ..
+            })
         ));
     }
 
@@ -1695,7 +2055,10 @@ mod tests {
         bounded_identifier("registry-update-30").expect("an authored offering reads");
         assert!(matches!(
             bounded_identifier(&"o".repeat(65)),
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError {
+                problem: ProblemCode::RequestInvalid,
+                ..
+            })
         ));
     }
 
@@ -1712,7 +2075,10 @@ mod tests {
                 Some(registry_scheduling_core::MAXIMUM_BOOKING_DURATION_MINUTES + 1),
                 None
             ),
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError {
+                problem: ProblemCode::RequestInvalid,
+                ..
+            })
         ));
     }
 
@@ -1726,20 +2092,32 @@ mod tests {
     fn the_idempotency_key_is_present_bounded_and_graphical() {
         assert!(matches!(
             idempotency_key(&HeaderMap::new()),
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError {
+                problem: ProblemCode::RequestInvalid,
+                ..
+            })
         ));
         assert!(matches!(
             idempotency_key(&headers_with(IDEMPOTENCY_KEY_HEADER, "")),
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError {
+                problem: ProblemCode::RequestInvalid,
+                ..
+            })
         ));
         assert!(matches!(
             idempotency_key(&headers_with(IDEMPOTENCY_KEY_HEADER, "a key with spaces")),
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError {
+                problem: ProblemCode::RequestInvalid,
+                ..
+            })
         ));
         let oversized = "k".repeat(MAXIMUM_IDEMPOTENCY_KEY_BYTES + 1);
         assert!(matches!(
             idempotency_key(&headers_with(IDEMPOTENCY_KEY_HEADER, &oversized)),
-            Err(HttpError(ProblemCode::RequestInvalid))
+            Err(HttpError {
+                problem: ProblemCode::RequestInvalid,
+                ..
+            })
         ));
         assert_eq!(
             idempotency_key(&headers_with(IDEMPOTENCY_KEY_HEADER, "hold-7")).unwrap(),
@@ -1764,11 +2142,17 @@ mod tests {
         );
         assert!(matches!(
             bearer_token(&headers_with(AUTHORIZATION, "Basic dXNlcjpwYXNz")),
-            Err(HttpError(ProblemCode::AuthenticationRefused))
+            Err(HttpError {
+                problem: ProblemCode::AuthenticationRefused,
+                ..
+            })
         ));
         assert!(matches!(
             bearer_token(&HeaderMap::new()),
-            Err(HttpError(ProblemCode::AuthenticationRefused))
+            Err(HttpError {
+                problem: ProblemCode::AuthenticationRefused,
+                ..
+            })
         ));
     }
 }

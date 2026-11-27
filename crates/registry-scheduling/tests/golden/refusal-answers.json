@@ -1,0 +1,128 @@
+{
+  "credential-malformed": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "credential-missing": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "key-source-unavailable": {
+    "body": {
+      "code": "service.unavailable",
+      "detail": "Scheduling storage is unavailable. Try again after the service recovers.",
+      "status": 503,
+      "title": "Scheduling service unavailable",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/service/unavailable"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": "5",
+    "status": 503,
+    "wwwAuthenticate": null
+  },
+  "operation": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The selected Scheduling profile does not authorize this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/profile/not-authorized"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 403,
+    "wwwAuthenticate": null
+  },
+  "scope": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The selected Scheduling profile does not authorize this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/profile/not-authorized"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 403,
+    "wwwAuthenticate": null
+  },
+  "task-grant-lifetime": {
+    "body": {
+      "code": "grant.lifetime-too-long",
+      "detail": "The task grant has more than 900 seconds left before it expires. Present a task grant that expires within 900 seconds.",
+      "status": 403,
+      "title": "Task grant lifetime too long",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/grant/lifetime-too-long"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 403,
+    "wwwAuthenticate": null
+  },
+  "task-grant-missing": {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "Your current Scheduling authority does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/operation/not-authorized"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 403,
+    "wwwAuthenticate": null
+  },
+  "token-signature": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "visibility": {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "Your current Scheduling authority does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-scheduling/operation/not-authorized"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 403,
+    "wwwAuthenticate": null
+  }
+}

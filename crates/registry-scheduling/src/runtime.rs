@@ -301,7 +301,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
 
     let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
     let mut workers = Vec::new();
-    let metrics = Arc::new(Metrics::default());
+    let metrics = Arc::new(Metrics::default().with_refusals(Arc::clone(authenticator.refusals())));
 
     let expiry_store = store.clone();
     let expiry_metrics = Arc::clone(&metrics);

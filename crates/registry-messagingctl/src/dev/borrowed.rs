@@ -18,8 +18,8 @@ use registry_messaging_core::{AccessProfile, ActorKind, Caller};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 use registry_platform_oidc::{
-    access_token_typ_set, parse_static_jwks, JwksFetcher, JwksFetcherConfig, TokenVerifier,
-    TokenVerifierConfig,
+    access_token_typ_set, parse_static_jwks, JwksFetcher, JwksFetcherConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -139,6 +139,17 @@ struct Export {
 
 fn refusal() -> super::DevFailure {
     refused("the borrowed client could not authenticate with the Messaging profile; check the owner's client, resource, scopes and claims, then restart messagingctl dev".to_owned())
+}
+
+/// The refusal of the owner's key document. A document that breaks the shared
+/// public-key rule says which rule, in words that carry no key value.
+fn static_key_refusal(error: OidcError) -> super::DevFailure {
+    match error {
+        OidcError::StaticKeySet(rule) => refused(format!(
+            "the borrowed owner's secrets/jwks.json is not a usable static key set: {rule}"
+        )),
+        _ => refusal(),
+    }
 }
 
 fn runtime() -> DevResult<tokio::runtime::Runtime> {
@@ -378,7 +389,7 @@ pub(super) async fn verify(
     let bytes =
         private::read(&root.join("secrets/jwks.json"), 256 * 1024).map_err(|_| refusal())?;
     let keys = Arc::new(JwksFetcher::new_static(
-        parse_static_jwks(&bytes).map_err(|_| refusal())?,
+        parse_static_jwks(&bytes).map_err(static_key_refusal)?,
         JwksFetcherConfig::defaults(),
     ));
     let verifier = TokenVerifierConfig::access_token_profile(

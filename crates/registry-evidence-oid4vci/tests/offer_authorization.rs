@@ -28,6 +28,7 @@ use registry_evidence_oid4vci::{
     config::{AccessTokenAlgorithm, OfferAuthorizationConfig, Restriction},
 };
 use registry_platform_audit::AuditWriter;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
 use registry_thunderid_tooling::{
@@ -134,7 +135,7 @@ async fn a_token_without_the_required_offer_scope_is_refused() {
     config.required_scopes = Restriction::Listed(vec!["oid4vci:offer".to_owned()]);
     assert_eq!(
         resource_server(&config, &key_set).authorize(&issued).await,
-        Err(AuthorizationError::Refused),
+        Err(AuthorizationError::Refused(FailedCheck::Scope)),
         "a correctly signed audience-matching token with no offer scope authorized an offer"
     );
 
@@ -295,7 +296,7 @@ async fn an_offer_token_without_a_nonempty_client_or_subject_is_refused() {
         let (token, keys) = signed_offer_fixture(identities);
         assert_eq!(
             resource_server(&config, &keys).authorize(&token).await,
-            Err(AuthorizationError::Refused)
+            Err(AuthorizationError::Refused(FailedCheck::TokenClient))
         );
     }
 }
@@ -321,13 +322,13 @@ async fn task_bound_and_partial_grants_cannot_create_deferred_wallet_offers() {
     };
     assert_eq!(
         resource_server(&config, &keys).authorize(&task_bound).await,
-        Err(AuthorizationError::Refused)
+        Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims))
     );
 
     let (partial, keys) = signed_offer_fixture(json!({"registry_grant_id":"grant-a"}));
     assert_eq!(
         resource_server(&config, &keys).authorize(&partial).await,
-        Err(AuthorizationError::Refused)
+        Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims))
     );
 }
 
@@ -362,7 +363,7 @@ async fn a_token_issued_for_another_resource_server_is_refused() {
         )
         .authorize(&token)
         .await,
-        Err(AuthorizationError::Refused)
+        Err(AuthorizationError::Refused(FailedCheck::TokenAudience))
     );
 }
 
@@ -378,11 +379,13 @@ async fn a_token_this_issuer_did_not_sign_is_refused() {
     let forged = format!("{}.{}", parts.join("."), URL_SAFE_NO_PAD.encode([0_u8; 64]));
     assert_eq!(
         server.authorize(&forged).await,
-        Err(AuthorizationError::Refused)
+        Err(AuthorizationError::Refused(FailedCheck::TokenSignature))
     );
     assert_eq!(
         server.authorize("not-a-token").await,
-        Err(AuthorizationError::Refused)
+        Err(AuthorizationError::Refused(
+            FailedCheck::CredentialMalformed
+        ))
     );
     assert_eq!(server.authorize("").await, Err(AuthorizationError::Missing));
 }

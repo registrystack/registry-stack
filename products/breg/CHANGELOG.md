@@ -7,7 +7,17 @@
   the first scrape. Each refusal writes one `request refused` line with
   `failed_check` and the request's trace id, at most five lines per check per
   minute. That line replaces the authentication refusal line that carried a
-  `stage` field. Refusal statuses, headers and bodies are unchanged.
+  `stage` field. A request answered `404 resource.not_found` because the caller
+  may not see the target counts under the rule that hid it, and so does a write
+  refused as outside the caller's boundary. Refusal statuses, headers and bodies
+  are unchanged.
+
+- The BReg MCP gateway and the review page read loopback the way every
+  other service does. Under `development-loopback`, plain HTTP to
+  `127.0.0.2`, `[::1]` or `[::ffff:127.0.0.1]` is accepted as well as
+  `127.0.0.1` and `localhost`. `localhost.` and `*.localhost` stay refused. A
+  static key set the BReg MCP gateway refuses is logged with the reason, and
+  its startup code is unchanged.
 
 - The Rust BReg client decodes `/health` and `/ready` answers that carry
   members besides `status`, and ignores them. `status` is still required and

@@ -1,0 +1,416 @@
+{
+  "batch-without-credential": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "client-not-admitted": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "discovery-with-wrong-issuer": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": null,
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "discovery-without-credential": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": null,
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "double-space-separator": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "evidence-audience-claim-is-not-a-url": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "expired-token": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "no-authorization-header": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "no-entitlement-for-the-requester": {
+    "body": {
+      "code": "evidence.denied",
+      "detail": "the Evidence request is not permitted",
+      "status": 403,
+      "title": "Evidence request is not permitted",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": null
+    },
+    "status": 403
+  },
+  "non-bearer-scheme": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "not-a-compact-token": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "purpose-not-permitted": {
+    "body": {
+      "code": "evidence.denied",
+      "detail": "the Evidence request is not permitted",
+      "status": 403,
+      "title": "Evidence request is not permitted",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": null
+    },
+    "status": 403
+  },
+  "repeated-authorization-header": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "requester-tags-claim-absent": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "response-format-not-permitted": {
+    "body": {
+      "code": "evidence.denied",
+      "detail": "the Evidence request is not permitted",
+      "status": 403,
+      "title": "Evidence request is not permitted",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": null
+    },
+    "status": 403
+  },
+  "revision-pin-mismatch": {
+    "body": {
+      "code": "evidence.denied",
+      "detail": "the Evidence request is not permitted",
+      "status": 403,
+      "title": "Evidence request is not permitted",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": null
+    },
+    "status": 403
+  },
+  "selector-profile-not-granted": {
+    "body": {
+      "code": "evidence.denied",
+      "detail": "the Evidence request is not permitted",
+      "status": 403,
+      "title": "Evidence request is not permitted",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": null
+    },
+    "status": 403
+  },
+  "sender-constrained-token": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "tampered-signature": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "unknown-actor-kind": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "unknown-key": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "wrong-audience": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  },
+  "wrong-issuer": {
+    "body": {
+      "code": "auth.invalid-credential",
+      "detail": "bearer access token validation failed",
+      "status": 401,
+      "title": "Bearer access token is invalid",
+      "traceId": "<trace>",
+      "type": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "vary": "Accept",
+      "www-authenticate": "Bearer realm=\"registry-evidence\", resource_metadata=\"https://evidence.invalid/.well-known/oauth-protected-resource\""
+    },
+    "status": 401
+  }
+}

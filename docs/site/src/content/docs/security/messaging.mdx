@@ -42,8 +42,21 @@ when `assertionIssuers` declares no authority) is `403 profile.not-authorized`.
 A verifier that cannot reach a verdict, because the issuer's discovery document or key set cannot be
 fetched, read or used, is `503 service.unavailable` with `Retry-After: 5`; the credential is not what
 is wrong, so a caller should retry rather than rotate it.
-Causes inside each status are told apart only by value-free metric reasons and rate-limited log
-stage labels.
+Causes inside each status are told apart only by operator-side signals, never in the response.
+Every refused request is counted in `messaging_request_refusals_total{check}` on the private metrics
+listener. The `check` label is a closed set of 45 names such as `token-signature`, `scope`,
+`actor-kind`, `access-profile`, `delivery-signature` and `visibility`, and no caller value becomes a
+label. Each refusal also writes one `request refused` log line that names the check and the
+request's trace id. The runtime writes at most five such lines per check per minute and reports how
+many it held back in `suppressed`. Where an operator can fix the cause in configuration, the line
+carries a fixed remedy that names the setting, for example `accessProfiles` for `access-profile` or
+`authentication.oidc.scopeClaim` for `scope`. A verifier that cannot reach its key source counts
+under `key-source-unavailable`.
+A static key set (`jwksSource: static`) holds public keys only. The runtime refuses to start on a
+set that carries a private member (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth` or `k`), a symmetric key,
+a repeated member name, or a key without a unique `kid`, and the startup error names the rule and
+the key's position, never a key value. Members it does not know, such as `x5c` or `ext`, are
+ignored.
 A client listed in two access profiles is refused when the package loads, and a profile must state
 its scopes or write `unrestricted`.
 (MESSAGING-SEC-01, MESSAGING-SEC-04)
@@ -51,7 +64,12 @@ its scopes or write `unrestricted`.
 {/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-01,
     MESSAGING-SEC-04;
     crates/registry-messaging/src/http.rs
-    only_the_sender_role_submits_and_only_through_what_its_profile_lists;
+    only_the_sender_role_submits_and_only_through_what_its_profile_lists,
+    each_refusal_is_counted_and_logged_under_the_check_that_failed,
+    each_callback_refusal_is_counted_and_logged_under_the_check_that_failed,
+    refusal_answers_match_the_golden_file;
+    crates/registry-messaging/src/config.rs
+    a_static_key_set_that_holds_a_private_member_is_refused_with_the_rule;
     crates/registry-messaging/tests/postgres_messages.rs
     a_message_is_visible_to_its_submitter_and_an_operator_only. */}
 
@@ -82,6 +100,9 @@ Each is authenticated by the verifier its provider's runtime configuration names
 Every cause of refusal answers `403 callback.unverified`, so the route does not reveal which
 providers receive callbacks.
 It is 403 rather than 401 because a provider cannot answer a challenge.
+The runtime tells the causes apart for the operator only: `delivery-binding` (a path that names no
+receiving provider, or a token on the wrong route), `delivery-signature` (a missing, malformed or
+wrong signature) and `shared-secret` (a missing or wrong path token).
 A callback changes a message only forward, and only for the message whose provider reference the
 accepting attempt stored, scoped to that provider.
 (MESSAGING-SEC-07)
@@ -102,8 +123,11 @@ no `import`, `eval`, `print` or `debug`.
 SMTP requires `STARTTLS` or implicit TLS, verifies the certificate against the configured host
 name, sends no credential to a relay that does not offer `STARTTLS`, and cannot have a header line
 opened from template data.
-Plain `http` and `development-loopback` SMTP are limited to loopback; a production listener posture
-refuses plaintext SMTP at `messagingctl check` and at startup.
+Plain `http` and `development-loopback` SMTP are limited to loopback, which means an address in
+`127.0.0.0/8`, `::1`, an IPv4-mapped form of a `127.0.0.0/8` address, or the exact name `localhost`.
+No other name is loopback, so `localhost.` and `gateway.localhost` are refused. SMTP connects only
+to the loopback address it checked.
+A production listener posture refuses plaintext SMTP at `messagingctl check` and at startup.
 (MESSAGING-SEC-03)
 
 {/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-03;
@@ -157,6 +181,8 @@ Metric labels are closed sets fixed in code, and `MESSAGING_LOG` accepts only `e
 Authentication and access-profile refusals, duplicate or no-op callbacks and reads (the status
 route, `messagingctl messages list` and `show`) are not journaled: a refusal is counted on the
 private metrics listener, and a message view releases no contact, part or data.
+The refusal counters and log lines carry the failed check only, so they hold no principal, client,
+scope, route parameter or address.
 (MESSAGING-SEC-08)
 
 {/* Evidence: products/messaging/contracts/security-invariant-matrix.yaml MESSAGING-SEC-08;
@@ -277,8 +303,9 @@ The boundaries hold only if your deployment does the following.
    it observes an original receipt.
    Other profiles keep the configured principal ownership rule.
 9. Name `scopeClaim` explicitly if your issuer puts different scopes in `scope` and another claim.
-   Messaging reads exactly one claim, `scope` by default, and a scope refusal logs the configured
-   claim, the first missing scope and the access profile, never token contents.
+   Messaging reads exactly one claim, `scope` by default, and a scope refusal logs
+   `failed_check="scope"` with a fixed remedy that names `authentication.oidc.scopeClaim` and
+   `accessProfiles` `requiredScopes`, never a claim, scope or profile value.
 10. Set `allowedPrivateCidrs` only for relays and providers you run, and treat
     `allowInsecureHttp: true` as a loopback or test setting; startup warns when it is set.
     With it, an attacker on the network path to the issuer can substitute keys.

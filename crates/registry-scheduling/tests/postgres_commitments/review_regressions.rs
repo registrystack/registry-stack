@@ -279,14 +279,153 @@ async fn header_refusals_on_detail_busy_and_operational_routes_log_one_value_fre
             .expect("an in-process request always answers");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
         let rendered = captured.text();
-        let diagnostics = rendered
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
-            .filter(|event| event["fields"]["message"] == "Scheduling authentication refused")
-            .collect::<Vec<_>>();
+        let diagnostics = refusal_lines(&rendered);
         assert_eq!(diagnostics.len(), 1, "{uri}");
-        assert_eq!(diagnostics[0]["fields"]["stage"], "header", "{uri}");
+        // Another scheme is a credential this route does not take.
+        assert_eq!(
+            diagnostics[0]["fields"]["failed_check"], "credential-missing",
+            "{uri}"
+        );
         assert!(!rendered.contains("canary"), "{uri}");
         assert!(!rendered.contains("Basic"), "{uri}");
+    }
+}
+
+/// The refusal lines of one captured run: the one fixed message the HTTP
+/// edge writes for every refusal.
+fn refusal_lines(rendered: &str) -> Vec<Value> {
+    rendered
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
+        .filter(|event| event["fields"]["message"] == "request refused")
+        .collect()
+}
+
+/// A refusal decided inside the service names the check that refused, in
+/// the operator's log line and nowhere in the answer: the same 403 answers a
+/// hold that does not exist and a hold the caller holds no task grant for.
+#[tokio::test]
+async fn service_refusals_log_the_check_that_refused_and_answer_alike() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "hold-for-refusal-checks",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().unwrap().to_owned();
+
+    let mut answers = Vec::new();
+    for (uri, expected) in [
+        (format!("/v1/holds/{}", Uuid::new_v4()), "visibility"),
+        (format!("/v1/holds/{hold_id}"), "task-grant-missing"),
+    ] {
+        let captured = CapturedDiagnosticLogs::default();
+        let (status, answer) = fx
+            .delete(&uri, &fx.reader)
+            .with_subscriber(captured.subscriber())
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
+        assert_eq!(answer["code"], "operation.not-authorized", "{uri}");
+        let rendered = captured.text();
+        let lines = refusal_lines(&rendered);
+        assert_eq!(lines.len(), 1, "{uri}: {rendered}");
+        assert_eq!(lines[0]["fields"]["failed_check"], expected, "{uri}");
+        assert!(!rendered.contains(&hold_id), "{uri}");
+        let mut answer = answer;
+        answer
+            .as_object_mut()
+            .expect("a problem body")
+            .remove("traceId");
+        answers.push(answer);
+    }
+    assert_eq!(
+        answers[0], answers[1],
+        "the check never reaches the caller: a missing and an unreachable hold answer alike"
+    );
+}
+
+/// The check a foreign caller's refusal names says why it was refused: a
+/// reschedule, a cancellation, and a release of another caller's target are
+/// ownership refusals, and a read it holds no grant action for is a grant
+/// scope refusal. The answers are the same 403 `operation.not-authorized`.
+#[tokio::test]
+async fn a_foreign_callers_refusals_name_ownership_and_grant_scope() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, created) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "foreign-checks-appointment",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let appointment_id = created["appointmentId"].as_str().unwrap().to_owned();
+    let held = first_slot(&fx, OFFERING, 480, 620).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "foreign-checks-hold",
+            admission(&fx, OFFERING, held),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().unwrap().to_owned();
+    let stranger = agent_token_for("principal-stranger");
+    let other = first_slot(&fx, OFFERING, 640, 700).await;
+    for (method, uri, key, body, expected) in [
+        (
+            "POST",
+            format!("/v1/appointments/{appointment_id}/reschedule"),
+            Some("foreign-checks-reschedule"),
+            Some(json!({"observedRevision": 0, "admission": admission(&fx, OFFERING, other)})),
+            "ownership",
+        ),
+        (
+            "POST",
+            format!("/v1/appointments/{appointment_id}/cancel"),
+            Some("foreign-checks-cancel"),
+            Some(json!({"observedRevision": 0, "reason": null})),
+            "ownership",
+        ),
+        (
+            "DELETE",
+            format!("/v1/holds/{hold_id}"),
+            None,
+            None,
+            "ownership",
+        ),
+        (
+            "GET",
+            format!("/v1/appointments/{appointment_id}"),
+            None,
+            None,
+            "task-grant-scope",
+        ),
+    ] {
+        let captured = CapturedDiagnosticLogs::default();
+        let (status, answer) = fx
+            .request(method, &uri, &stranger, key, body)
+            .with_subscriber(captured.subscriber())
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        assert_eq!(answer["code"], "operation.not-authorized", "{method} {uri}");
+        let lines = refusal_lines(&captured.text());
+        assert_eq!(lines.len(), 1, "{method} {uri}");
+        assert_eq!(
+            lines[0]["fields"]["failed_check"], expected,
+            "{method} {uri}"
+        );
     }
 }

@@ -2,6 +2,7 @@
 use crate::{PostgresStore, StoreError};
 use chrono::{DateTime, Utc};
 use registry_casework_core::*;
+use registry_platform_authcommon::FailedCheck;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
@@ -273,7 +274,7 @@ impl PostgresStore {
             .await?
             .ok_or(StoreError::NotFound)?;
         if !template_active(&transaction, &grant.template).await? {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         // The revision-agnostic eligibility call confirms the caller's current
         // authority without binding it to the retry's original revision.
@@ -287,7 +288,7 @@ impl PostgresStore {
             )
             .await?
         else {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::AccessProfile));
         };
         let mut request = json!({
             "reviewTaskId": grant.task_id,
@@ -372,7 +373,8 @@ impl PostgresStore {
         if serde_json::to_vec(&record)?.len() > 65_536 {
             return Err(StoreError::Invalid);
         }
-        let role = membership_kind(actor.role).ok_or(StoreError::Forbidden)?;
+        let role =
+            membership_kind(actor.role).ok_or(StoreError::Forbidden(FailedCheck::Operation))?;
         transaction
             .execute(
                 "INSERT INTO casework_review_task_grants(
@@ -591,7 +593,7 @@ impl PostgresStore {
         let grant: ReviewTaskGrant = serde_json::from_value(row.get(0))?;
         if let Some(actor) = actor {
             let Some(kind) = membership_kind(actor.role) else {
-                return Err(StoreError::Forbidden);
+                return Err(StoreError::Forbidden(FailedCheck::Operation));
             };
             if !template_active(&transaction, &grant.template).await?
                 || !grant.template.eligible_profiles.contains(&actor.profile_id)
@@ -625,7 +627,7 @@ impl PostgresStore {
                     .await?
                     .get::<_, bool>(0)
             {
-                return Err(StoreError::Forbidden);
+                return Err(StoreError::Forbidden(FailedCheck::AccessProfile));
             }
         }
         let first_invalidation = transaction
@@ -799,7 +801,7 @@ impl TaskAuthority {
     ) -> Result<TaskAssertionResponse, StoreError> {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
         if now >= grant_expires_at {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::TaskGrantExpired));
         }
         // Evidence checks only the grant deadline and no grant status, so an
         // Evidence grant is never signed under the deferred window.
@@ -809,7 +811,7 @@ impl TaskAuthority {
                 registry_casework_core::TaskGrantBounds::Evidence { .. }
             )
         {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         let expires = grant_expires_at.min(
             now.checked_add(registry_casework_core::TASK_ASSERTION_LIFETIME_SECONDS)
@@ -851,7 +853,7 @@ impl crate::CaseworkService {
     pub(crate) fn task_jwks(&self) -> Result<Value, crate::ServiceError> {
         self.task_authority
             .as_ref()
-            .ok_or(crate::ServiceError::NotFound)?
+            .ok_or(crate::ServiceError::NotFound(FailedCheck::Visibility))?
             .jwks()
             .map_err(Into::into)
     }
@@ -955,7 +957,7 @@ impl crate::CaseworkService {
         let authority = self
             .task_authority
             .as_ref()
-            .ok_or(crate::ServiceError::Forbidden)?;
+            .ok_or(crate::ServiceError::Forbidden(FailedCheck::Operation))?;
         let template = self
             .project
             .task_templates
@@ -965,13 +967,13 @@ impl crate::CaseworkService {
                     && template.id == request.template_id
                     && template.version == request.template_version
             })
-            .ok_or(crate::ServiceError::Forbidden)?;
+            .ok_or(crate::ServiceError::Forbidden(FailedCheck::Operation))?;
         let Some((request_id, current_revision, subject, assignment_generation)) = self
             .store
             .eligible_review_task_template(actor, task_id, template)
             .await?
         else {
-            return Err(crate::ServiceError::Forbidden);
+            return Err(crate::ServiceError::Forbidden(FailedCheck::AccessProfile));
         };
         if current_revision != revision {
             return Err(StoreError::Conflict.into());
@@ -988,7 +990,7 @@ impl crate::CaseworkService {
         let values = self.review_grant_fields(task_id, revision, &fields).await?;
         let subjects = template
             .disclosed_subjects(&values)
-            .map_err(|_| crate::ServiceError::Forbidden)?;
+            .map_err(|_| crate::ServiceError::Forbidden(FailedCheck::Operation))?;
         let now = now_seconds()?;
         let grant = ReviewTaskGrant {
             id: Uuid::new_v4(),
@@ -1027,7 +1029,7 @@ impl crate::CaseworkService {
             .preview_review_task_templates(actor, task_id, source_profile, token)
             .await?;
         if previews.task_revision == 0 {
-            return Err(crate::ServiceError::NotFound);
+            return Err(crate::ServiceError::NotFound(FailedCheck::Visibility));
         }
         let grants = self.store.review_task_grants_for_task(task_id).await?;
         let mut eligible = false;
@@ -1048,7 +1050,7 @@ impl crate::CaseworkService {
             }
         }
         if !eligible {
-            return Err(crate::ServiceError::NotFound);
+            return Err(crate::ServiceError::NotFound(FailedCheck::AccessProfile));
         }
         Ok(TaskGrantList {
             grants: grants.iter().map(review_grant_view).collect(),
@@ -1063,7 +1065,7 @@ impl crate::CaseworkService {
     ) -> Result<TaskGrantRevocation, crate::ServiceError> {
         let stored = self.store.review_task_grant(id).await?;
         if stored.grant.task_id != task_id {
-            return Err(crate::ServiceError::NotFound);
+            return Err(crate::ServiceError::NotFound(FailedCheck::TaskGrantBinding));
         }
         self.store
             .invalidate_review_task_grant(id, "revoked", Some(actor))
@@ -1079,8 +1081,13 @@ impl crate::CaseworkService {
         id: Uuid,
     ) -> Result<StoredReviewTaskGrant, crate::ServiceError> {
         let stored = self.store.review_task_grant(id).await?;
-        if stored.invalidated || now_seconds()? >= stored.grant.expires_at {
-            return Err(crate::ServiceError::Forbidden);
+        if stored.invalidated {
+            return Err(crate::ServiceError::Forbidden(FailedCheck::TaskGrantStatus));
+        }
+        if now_seconds()? >= stored.grant.expires_at {
+            return Err(crate::ServiceError::Forbidden(
+                FailedCheck::TaskGrantExpired,
+            ));
         }
         let grant = &stored.grant;
         let Some(template) = self.project.task_templates.iter().find(|template| {
@@ -1090,7 +1097,7 @@ impl crate::CaseworkService {
             self.store
                 .invalidate_review_task_grant(id, "template", None)
                 .await?;
-            return Err(crate::ServiceError::Forbidden);
+            return Err(crate::ServiceError::Forbidden(FailedCheck::TaskGrantStatus));
         };
         let configured_approver_role = self
             .project
@@ -1103,7 +1110,7 @@ impl crate::CaseworkService {
             .check_review_task_grant_eligibility(grant, template, configured_approver_role)
             .await?
         {
-            return Err(crate::ServiceError::Forbidden);
+            return Err(crate::ServiceError::Forbidden(FailedCheck::AccessProfile));
         }
         let fields = template
             .subjects
@@ -1137,15 +1144,19 @@ impl crate::CaseworkService {
             self.store
                 .invalidate_review_task_grant(id, "source", None)
                 .await?;
-            return Err(crate::ServiceError::Forbidden);
+            return Err(crate::ServiceError::Forbidden(FailedCheck::TaskGrantStatus));
         }
         if !self
             .store
             .check_review_task_grant_eligibility(grant, template, configured_approver_role)
             .await?
-            || now_seconds()? >= grant.expires_at
         {
-            return Err(crate::ServiceError::Forbidden);
+            return Err(crate::ServiceError::Forbidden(FailedCheck::AccessProfile));
+        }
+        if now_seconds()? >= grant.expires_at {
+            return Err(crate::ServiceError::Forbidden(
+                FailedCheck::TaskGrantExpired,
+            ));
         }
         Ok(stored)
     }
@@ -1157,7 +1168,7 @@ impl crate::CaseworkService {
         let authority = self
             .task_authority
             .as_ref()
-            .ok_or(crate::ServiceError::Forbidden)?;
+            .ok_or(crate::ServiceError::Forbidden(FailedCheck::Operation))?;
         let stored = self.store.review_task_grant(id).await?;
         require_grant_client(client, &stored.grant.template)?;
         let stored = self.active_review_task(id).await?;
@@ -1174,20 +1185,20 @@ impl crate::CaseworkService {
         let authority = self
             .task_authority
             .as_ref()
-            .ok_or(crate::ServiceError::Forbidden)?;
+            .ok_or(crate::ServiceError::Forbidden(FailedCheck::Operation))?;
         let client = client
             .matched_client_id()
             .ok()
             .flatten()
-            .ok_or(crate::ServiceError::Forbidden)?;
+            .ok_or(crate::ServiceError::Forbidden(FailedCheck::RequesterClient))?;
         let resource = authority
             .config
             .status_clients
             .get(client)
-            .ok_or(crate::ServiceError::Forbidden)?;
+            .ok_or(crate::ServiceError::Forbidden(FailedCheck::RequesterClient))?;
         let stored = self.store.review_task_grant(id).await?;
         if stored.grant.template.resource != *resource {
-            return Err(crate::ServiceError::NotFound);
+            return Err(crate::ServiceError::NotFound(FailedCheck::RequesterClient));
         }
         match self.active_review_task(id).await {
             Ok(stored) => Ok(active_grant_status(
@@ -1197,7 +1208,7 @@ impl crate::CaseworkService {
                 stored.grant.subjects,
                 stored.grant.expires_at,
             )),
-            Err(crate::ServiceError::Forbidden) => Ok(inactive_grant_status()),
+            Err(crate::ServiceError::Forbidden(_)) => Ok(inactive_grant_status()),
             Err(error) => Err(error),
         }
     }
@@ -1211,7 +1222,7 @@ fn require_grant_client(
         || client.claims.sub.as_deref() != Some(template.agent.subject.as_str())
         || client.claims.iss.as_deref() != Some(template.agent.issuer.as_str())
     {
-        return Err(crate::ServiceError::NotFound);
+        return Err(crate::ServiceError::NotFound(FailedCheck::TaskGrantBinding));
     }
     Ok(())
 }
@@ -1362,7 +1373,7 @@ mod evidence_assertion_tests {
         template.authorization_mode = registry_casework_core::TaskAuthorizationMode::Deferred;
         assert!(matches!(
             authority.assertion_for(Uuid::new_v4(), &template, &holder, &fields, 1000, 200),
-            Err(StoreError::Forbidden)
+            Err(StoreError::Forbidden(FailedCheck::Operation))
         ));
     }
     #[test]
@@ -1394,7 +1405,7 @@ mod evidence_assertion_tests {
         assert!(payload.get("registry_grant_authority").is_none());
         assert!(matches!(
             authority.assertion_for(Uuid::new_v4(), &template(), &holder, &fields, 200, 200),
-            Err(StoreError::Forbidden)
+            Err(StoreError::Forbidden(FailedCheck::TaskGrantExpired))
         ));
     }
 }

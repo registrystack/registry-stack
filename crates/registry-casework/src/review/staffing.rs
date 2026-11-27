@@ -140,7 +140,7 @@ impl CaseworkService {
             match tokio::time::timeout_at(until, check).await {
                 Ok(Ok(())) => {}
                 Ok(Err(
-                    ReviewRuntimeError::Forbidden
+                    ReviewRuntimeError::Forbidden(_)
                     | ReviewRuntimeError::NotFound
                     | ReviewRuntimeError::SourceProfileRequired
                     | ReviewRuntimeError::SourceProfileNotApplicable,
@@ -232,7 +232,7 @@ impl CaseworkService {
                             skipped_without_source_profile = true;
                             continue;
                         }
-                        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound) => {
+                        Err(ReviewRuntimeError::Forbidden(_) | ReviewRuntimeError::NotFound) => {
                             continue
                         }
                         Err(error) => return Err(error),
@@ -366,7 +366,7 @@ impl CaseworkService {
     ) -> Result<ReviewCaseloadPreview, ReviewRuntimeError> {
         request.check().map_err(|_| ReviewRuntimeError::Invalid)?;
         if actor.role != CaseworkActsAs::Supervisor {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         let client = self.store.client().await?;
         let rows=client.query("SELECT task_id FROM casework_review_tasks WHERE state='claimed' AND holder_issuer=$1 AND holder_subject=$2 AND ($3::text IS NULL OR queue_id=$3) ORDER BY task_id LIMIT 101",&[&request.from.issuer,&request.from.subject,&request.queue]).await?;
@@ -421,7 +421,7 @@ impl CaseworkService {
     ) -> Result<ReviewCaseloadResult, ReviewRuntimeError> {
         request.check().map_err(|_| ReviewRuntimeError::Invalid)?;
         if actor.role != CaseworkActsAs::Supervisor {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         let (movement, tasks, directory_revision) = self
             .store
@@ -559,7 +559,9 @@ async fn validate_caseload_set(
         let stage_index =
             u16::try_from(row.get::<_, i32>(1)).map_err(|_| ReviewRuntimeError::Corrupt)?;
         if !selected_stages.insert((request_id, stage_index)) {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(
+                FailedCheck::SeparationOfDuties,
+            ));
         }
         let queue: String = row.get(2);
         if record.lifecycle != ReviewRequestLifecycle::Reviewing
@@ -601,7 +603,7 @@ async fn validate_caseload_set(
             .await?
             .is_empty()
         {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         ensure_review_identity_eligible(
             tx,
@@ -613,7 +615,7 @@ async fn validate_caseload_set(
             &membership_kinds,
         )
         .await?;
-        if tx.query_opt("SELECT 1 FROM casework_review_tasks WHERE request_id=$1 AND stage_index=$2 AND task_id<>$3 AND holder_issuer=$4 AND holder_subject=$5 AND state IN('open','claimed')",&[&request_id,&i32::from(stage_index),&task.task_id,&movement.to.issuer,&movement.to.subject]).await?.is_some(){return Err(ReviewRuntimeError::Forbidden)}
+        if tx.query_opt("SELECT 1 FROM casework_review_tasks WHERE request_id=$1 AND stage_index=$2 AND task_id<>$3 AND holder_issuer=$4 AND holder_subject=$5 AND state IN('open','claimed')",&[&request_id,&i32::from(stage_index),&task.task_id,&movement.to.issuer,&movement.to.subject]).await?.is_some(){return Err(ReviewRuntimeError::Forbidden(FailedCheck::SeparationOfDuties))}
     }
     Ok(())
 }
@@ -647,7 +649,7 @@ impl CaseworkService {
     ) -> Result<ReviewClockRecomputePreview, ReviewRuntimeError> {
         request.check().map_err(|_| ReviewRuntimeError::Invalid)?;
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         for id in &request.task_ids {
             let record = self.store.review_request_for_task(*id).await?;
@@ -707,7 +709,7 @@ impl CaseworkService {
     ) -> Result<ReviewClockRecomputeResult, ReviewRuntimeError> {
         request.check().map_err(|_| ReviewRuntimeError::Invalid)?;
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         let (inputs, tasks, directory_revision) = self
             .store

@@ -33,7 +33,8 @@ use registry_platform_config::{
 };
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifierConfig,
 };
 use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
@@ -939,8 +940,19 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let jwks = parse_static_jwks(document.expose_secret()).map_err(|error| {
+                    match error {
+                        // The document is the operator's own file, so its text names the
+                        // rule it breaks and never a key value.
+                        OidcError::StaticKeySet(refused) => {
+                            RuntimeConfigError::OidcJwksSecret(format!(
+                                "the document authentication.oidc.jwksSource.documentRef names \
+                                 is not a usable static key set: {refused}"
+                            ))
+                        }
+                        _ => RuntimeConfigError::Oidc,
+                    }
+                })?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -1904,6 +1916,92 @@ pub(crate) mod tests {
 
         assert_unsafe_runtime(
             result.expect_err("a runtime below a group-writable directory is refused"),
+        );
+    }
+
+    /// Load a runtime whose static key source names `document`, and build the
+    /// key source from it.
+    #[cfg(unix)]
+    async fn static_key_source(document: &str) -> Result<(), RuntimeConfigError> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let secrets = root.path().join("secrets");
+        std::fs::create_dir(&secrets).unwrap();
+        std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let file = secrets.join("issuer-jwks");
+        std::fs::write(&file, document).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut runtime = runtime_value(root.path());
+        runtime["authentication"]["oidc"]["jwksSource"] =
+            json!({"type": "static", "documentRef": "secret:file/issuer-jwks"});
+        let path = write_project(root.path(), &runtime, &package_value());
+        let config = RuntimeConfig::load_with_environment(path, &no_environment)?;
+        let resolver = config.secret_resolver()?;
+        config.jwks_fetcher(&resolver).await.map(|_| ())
+    }
+
+    fn static_key(extra: Value) -> Value {
+        let mut key = json!({
+            "kty": "RSA",
+            "kid": "issuer-key-1",
+            "use": "sig",
+            "alg": "RS256",
+            "n": "sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4Dy1WlUzewbgBHod5pcM9H95GQRV3JDXboIRROSBigeC5yjU1hGzHHyXss8UDprecbAYxknTcQkhslANGRUZmdTOQ5qTRsLAt6BTYuyvVRdhS8exSZEy_c4gs_7svlJJQ4H9_NxsiIoLwAEk7-Q3UXERGYw_75IDrGA84-lA_-Ct4eTlXHBIY2EaV7t7LjJaynVJCpkv4LKjTTAumiGUIuQhrNhZLuF_RJLqHpM2kgWFLU7-VTdL1VbC2tejvcI2BlMkEpk1BzBZI0KQB0GaDWFLN-aEAw3vRw",
+            "e": "AQAB",
+        });
+        for (name, value) in extra.as_object().unwrap() {
+            key[name] = value.clone();
+        }
+        key
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_static_key_set_with_members_it_does_not_know_loads() {
+        let key = static_key(
+            json!({"ext": true, "x5t": "abc", "x5u": "https://identity.example.test/cert"}),
+        );
+        let document = json!({"keys": [key], "issuer": "https://identity.example.test"});
+        static_key_source(&document.to_string())
+            .await
+            .expect("a public key set with unknown members loads");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_static_key_set_that_holds_a_private_member_is_refused_with_the_rule() {
+        for member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            let key = static_key(json!({ member: "canary-private-value" }));
+            let document = json!({"keys": [key]});
+            let error = static_key_source(&document.to_string())
+                .await
+                .expect_err(member);
+            assert!(
+                matches!(error, RuntimeConfigError::OidcJwksSecret(_)),
+                "{member}: {error}"
+            );
+            assert_eq!(error.code(), "messaging.runtime.unreadable-jwks-secret");
+            let text = error.to_string();
+            assert!(
+                text.contains(&format!("private-key member \"{member}\"")),
+                "{member}: {text}"
+            );
+            assert!(!text.contains("canary-private-value"), "{text}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_static_key_set_that_repeats_a_member_name_is_refused() {
+        let document = r#"{"keys":[{"kty":"RSA","kid":"a","kid":"b","n":"AQAB","e":"AQAB"}]}"#;
+        let error = static_key_source(document)
+            .await
+            .expect_err("a repeated member");
+        assert_eq!(error.code(), "messaging.runtime.unreadable-jwks-secret");
+        assert!(
+            error.to_string().contains("repeats a member name"),
+            "{error}"
         );
     }
 

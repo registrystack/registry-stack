@@ -162,6 +162,20 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
       separate_human_source_credentials_bind_before_empty_inbox_and_guard_mutations;
       crates/registry-casework/src/http/source_credentials.rs,
       verified_provider_handles_do_not_forward_casework_or_mix_invocations. */}
+- Refusals the caller cannot tell apart are told apart in the operator's counter. A review or
+  administration request refused for its role, its profile's stage eligibility, an earlier
+  decision by the same person (separation of duties), a task the caller does not hold, a task
+  grant that is expired, invalidated or bound to another client, or a source that declines to
+  disclose, counts once under its own check in `casework_request_refusals_total`
+  ([metrics](../../operate/casework/#scrape-metrics-and-the-running-version)).
+  A target concealed as not found counts under `visibility`, or under the check that hid it.
+  The caller's answer is the same `operation.not-authorized` or `request.not-found` body as
+  before, so the counter is for the operator and tells the caller nothing.
+  {/* Evidence: crates/registry-casework/src/http.rs, impl From<ReviewRuntimeError> for HttpError;
+      crates/registry-casework/src/review.rs,
+      a_reviewer_who_already_acted_is_refused_for_separation_of_duties,
+      only_staff_and_supervisors_pass_the_human_reviewer_check;
+      crates/registry-casework/tests/refusal_golden.rs. */}
 
 ## Operator obligations
 

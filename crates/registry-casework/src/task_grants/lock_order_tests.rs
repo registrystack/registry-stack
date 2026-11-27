@@ -287,7 +287,7 @@ async fn grant_approval_and_decision_lock_request_before_task_without_deadlock()
         .expect("lock-order interleaving task");
     let approval_outcome = match &approval_result {
         Ok(_) => "approved".to_owned(),
-        Err(StoreError::Forbidden) => "forbidden".to_owned(),
+        Err(StoreError::Forbidden(_)) => "forbidden".to_owned(),
         Err(StoreError::Postgres(error))
             if error.code() == Some(&SqlState::T_R_DEADLOCK_DETECTED) =>
         {
@@ -303,7 +303,7 @@ async fn grant_approval_and_decision_lock_request_before_task_without_deadlock()
     );
     assert_eq!(decision_status, StatusCode::NO_CONTENT);
     assert!(
-        matches!(approval_result, Err(StoreError::Forbidden)),
+        matches!(approval_result, Err(StoreError::Forbidden(_))),
         "the queued approval must recheck and refuse the terminal task"
     );
 }

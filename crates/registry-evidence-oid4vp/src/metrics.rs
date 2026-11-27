@@ -13,6 +13,7 @@ use axum::{
     routing::get,
     Router,
 };
+use registry_platform_authcommon::RefusalRecorder;
 use registry_platform_metrics::{
     CounterVec, Exposition, LabelSpace, MetricKind, MetricsError, CONTENT_TYPE as METRICS_TYPE,
 };
@@ -115,6 +116,7 @@ impl Event {
 /// The service's counters.
 pub struct Metrics {
     events: CounterVec,
+    refusals: Arc<RefusalRecorder>,
 }
 
 impl Metrics {
@@ -127,7 +129,15 @@ impl Metrics {
                 "Presentation session, request, response, and read events by outcome.",
                 LabelSpace::closed_zero_filled(&["event"], &declared)?,
             )?,
+            refusals: Arc::new(RefusalRecorder::new("evidence_oid4vp")?),
         })
+    }
+
+    /// The recorder that counts each refused request under its check and
+    /// admits a bounded number of log lines.
+    #[must_use]
+    pub const fn refusal_recorder(&self) -> &Arc<RefusalRecorder> {
+        &self.refusals
     }
 
     pub fn record(&self, event: Event) {
@@ -145,6 +155,7 @@ impl Metrics {
     pub fn render(&self, store: &SessionStore) -> Result<String, MetricsError> {
         let mut out = Exposition::new();
         self.events.write(&mut out)?;
+        self.refusals.counter().write(&mut out)?;
         out.header(
             "evidence_oid4vp_sessions",
             Some("Presentation sessions held in memory, expired ones not yet cleaned up included."),

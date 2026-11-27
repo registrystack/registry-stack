@@ -23,6 +23,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
+use registry_platform_authcommon::{FailedCheck, RefusalNote, RefusalRecorder};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit, security_headers, CspBuilder,
@@ -412,6 +413,7 @@ pub fn build_app(service: Arc<VerifierService>) -> Router {
         .route(RESPONSE_PATH, post(receive_response))
         .layer(DefaultBodyLimit::max(response::MAX_BODY_BYTES))
         .layer(request_body_limit(response::MAX_BODY_BYTES));
+    let refusals = Arc::clone(service.metrics.refusal_recorder());
     general
         .merge(responses)
         .fallback(unknown_route)
@@ -421,6 +423,7 @@ pub fn build_app(service: Arc<VerifierService>) -> Router {
         .layer(from_fn(normalize_rejections))
         .layer(security_headers(CspBuilder::deny_by_default()))
         .layer(from_fn(apply_trace_context))
+        .layer(from_fn_with_state(refusals, record_refusals))
 }
 
 /// The outermost layer: every response, whichever layer or handler produced
@@ -500,6 +503,60 @@ fn retry_after(mut response: Response, seconds: u64) -> Response {
     response
 }
 
+/// The answer carrying the check that refused the caller in its response
+/// extensions, which are never serialized. The recording layer reads it.
+fn refused(mut response: Response, check: FailedCheck) -> Response {
+    response.extensions_mut().insert(RefusalNote::new(check));
+    response
+}
+
+/// The 401 a caller without an acceptable bearer credential receives.
+fn unauthorized(check: FailedCheck) -> Response {
+    let mut response = problem(
+        ProblemCode::Unauthorized,
+        "a valid bearer token is required",
+    );
+    response
+        .headers_mut()
+        .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    refused(response, check)
+}
+
+/// The 503 a caller receives when the issuer's key set cannot be used.
+fn issuer_unavailable_answer() -> Response {
+    refused(
+        retry_after(
+            problem(
+                ProblemCode::IssuerUnavailable,
+                "the token issuer is unavailable",
+            ),
+            5,
+        ),
+        FailedCheck::KeySourceUnavailable,
+    )
+}
+
+/// Count each refusal answer under its check and write the admitted log line.
+/// The trace id is the one the answer carries.
+async fn record_refusals(
+    State(refusals): State<Arc<RefusalRecorder>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        match registry_platform_httpsec::response_trace_id(response.headers()) {
+            Ok(trace) => {
+                registry_platform_authcommon::record_refusal!(refusals, *note, trace_id = trace);
+            }
+            Err(_) => {
+                registry_platform_authcommon::record_refusal!(refusals, *note);
+            }
+        }
+    }
+    response
+}
+
 async fn unknown_route() -> Response {
     problem(ProblemCode::NotFound, "no such route")
 }
@@ -571,24 +628,11 @@ async fn applicant(service: &VerifierService, headers: &HeaderMap) -> Result<Pri
         Ok(principal) => Ok(principal),
         Err(AuthError::KeySource) => {
             service.metrics.record(Event::SessionRefusedUnavailable);
-            Err(retry_after(
-                problem(
-                    ProblemCode::IssuerUnavailable,
-                    "the token issuer is unavailable",
-                ),
-                5,
-            ))
+            Err(issuer_unavailable_answer())
         }
-        Err(AuthError::Missing | AuthError::Refused) => {
+        Err(AuthError::Refused(check)) => {
             service.metrics.record(Event::SessionRefusedAuthentication);
-            let mut response = problem(
-                ProblemCode::Unauthorized,
-                "a valid bearer token is required",
-            );
-            response
-                .headers_mut()
-                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-            Err(response)
+            Err(unauthorized(check))
         }
     }
 }
@@ -769,7 +813,10 @@ async fn session_status(
         }
         None => {
             service.metrics.record(Event::StatusNotFound);
-            problem(ProblemCode::SessionNotFound, "no such session")
+            refused(
+                problem(ProblemCode::SessionNotFound, "no such session"),
+                FailedCheck::Visibility,
+            )
         }
     }
 }
@@ -869,9 +916,12 @@ fn response_unavailable(wait_seconds: u64) -> Response {
 async fn admit_response(limiter: &TokenBucketLimiter, key: &str) -> Result<(), Response> {
     match limiter.check(key, 1).await {
         Ok(()) => Ok(()),
-        Err(TokenBucketError::Exceeded { retry_after: wait }) => Err(retry_after(
-            oauth_error(StatusCode::TOO_MANY_REQUESTS, "temporarily_unavailable"),
-            wait.as_secs() + 1,
+        Err(TokenBucketError::Exceeded { retry_after: wait }) => Err(refused(
+            retry_after(
+                oauth_error(StatusCode::TOO_MANY_REQUESTS, "temporarily_unavailable"),
+                wait.as_secs() + 1,
+            ),
+            FailedCheck::RateLimit,
         )),
         Err(_) => Err(response_unavailable(CAPACITY_RETRY_SECONDS)),
     }
@@ -1154,24 +1204,11 @@ async fn read_presentation(
         Ok(reader) => reader,
         Err(AuthError::KeySource) => {
             service.metrics.record(Event::ReadUnavailable);
-            return retry_after(
-                problem(
-                    ProblemCode::IssuerUnavailable,
-                    "the token issuer is unavailable",
-                ),
-                5,
-            );
+            return issuer_unavailable_answer();
         }
-        Err(AuthError::Missing | AuthError::Refused) => {
+        Err(AuthError::Refused(check)) => {
             service.metrics.record(Event::ReadRefusedAuthentication);
-            let mut response = problem(
-                ProblemCode::Unauthorized,
-                "a valid bearer token is required",
-            );
-            response
-                .headers_mut()
-                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-            return response;
+            return unauthorized(check);
         }
     };
     if let Err(response) = admit(
@@ -1251,9 +1288,16 @@ async fn read_presentation(
     match verdict {
         // A principal that is not the creator reads exactly as an unknown
         // reference.
-        ReadVerdict::NotFound | ReadVerdict::PrincipalMismatch => {
+        ReadVerdict::NotFound => {
             service.metrics.record(Event::ReadNotFound);
             problem(ProblemCode::SessionNotFound, "no such session")
+        }
+        ReadVerdict::PrincipalMismatch => {
+            service.metrics.record(Event::ReadNotFound);
+            refused(
+                problem(ProblemCode::SessionNotFound, "no such session"),
+                FailedCheck::Ownership,
+            )
         }
         ReadVerdict::Pending => {
             service.metrics.record(Event::ReadPending);
@@ -1331,19 +1375,22 @@ async fn admit(
     limiter: &TokenBucketLimiter,
     key: &str,
     metrics: &Metrics,
-    refused: Event,
+    event: Event,
 ) -> Result<(), Response> {
     match limiter.check(key, 1).await {
         Ok(()) => Ok(()),
         Err(TokenBucketError::Exceeded { retry_after: wait }) => {
-            metrics.record(refused);
-            Err(retry_after(
-                problem(ProblemCode::RateLimited, "too many requests; retry later"),
-                wait.as_secs() + 1,
+            metrics.record(event);
+            Err(refused(
+                retry_after(
+                    problem(ProblemCode::RateLimited, "too many requests; retry later"),
+                    wait.as_secs() + 1,
+                ),
+                FailedCheck::RateLimit,
             ))
         }
         Err(_) => {
-            metrics.record(refused);
+            metrics.record(event);
             Err(retry_after(
                 problem(ProblemCode::Capacity, "the service is at capacity"),
                 CAPACITY_RETRY_SECONDS,

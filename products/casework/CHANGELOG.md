@@ -7,7 +7,9 @@
   at zero for every check. Each refusal writes one `request refused` line with
   `failed_check` and the request's trace id, at most five lines per check per
   minute. That line replaces the authentication refusal line that carried a
-  `stage` field. Refusal statuses, headers and bodies are unchanged.
+  `stage` field. The count covers review, directory, clock and task-grant
+  refusals, each under the check its producer names. Refusal statuses, headers
+  and bodies are unchanged.
 - A static key set with a private key member or a repeated member name is
   refused at startup under `casework.runtime.unreadable-jwks-secret`, with the
   rule it broke and the key's position, in place of

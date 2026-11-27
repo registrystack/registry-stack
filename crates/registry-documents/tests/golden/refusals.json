@@ -1,0 +1,475 @@
+{
+  "agent-actor-kind": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "another-actor-kind": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "another-scheme": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "download-by-a-stranger": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "download-by-the-reserving-system": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "empty-bearer": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "erasure-by-a-stranger": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "erasure-by-the-reserving-system": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "exchanged-token": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "expired": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "foreign-audience": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "foreign-issuer": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "forged-signature": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "grant-issued-by-a-stranger": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "grant-issued-by-the-reserving-system": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "grant-on-another-version": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "grants-listed-by-a-stranger": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "grants-listed-by-the-reserving-system": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "malformed-actor-kind": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "missing-scope": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "no-authorization-header": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "not-a-compact-token": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "principal-outside-its-grammar": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "read-by-a-stranger": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "read-of-a-malformed-id": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "read-of-an-absent-document": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "reservation-by-a-recipient-profile": {
+    "body": {
+      "code": "custody.not-permitted",
+      "detail": "The caller's access profile may not place a document in this custody, or the request names an issuing institution other than the profile's.",
+      "status": 403,
+      "title": "Custody not permitted",
+      "type": "https://id.registrystack.org/problems/registry-documents/custody/not-permitted"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "reservation-for-another-custodian-by-a-person": {
+    "body": {
+      "code": "custody.not-permitted",
+      "detail": "The caller's access profile may not place a document in this custody, or the request names an issuing institution other than the profile's.",
+      "status": 403,
+      "title": "Custody not permitted",
+      "type": "https://id.registrystack.org/problems/registry-documents/custody/not-permitted"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "reservation-outside-the-custody-profiles": {
+    "body": {
+      "code": "custody.not-permitted",
+      "detail": "The caller's access profile may not place a document in this custody, or the request names an issuing institution other than the profile's.",
+      "status": 403,
+      "title": "Custody not permitted",
+      "type": "https://id.registrystack.org/problems/registry-documents/custody/not-permitted"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "revoke-of-an-absent-grant": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "unadmitted-client": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-documents/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "upload-by-another-caller": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  },
+  "upload-to-an-absent-reservation": {
+    "body": {
+      "code": "resource.not-found",
+      "detail": "The requested resource does not exist or is not available to the caller.",
+      "status": 404,
+      "title": "Not found",
+      "type": "https://id.registrystack.org/problems/registry-documents/resource/not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 404
+  }
+}

@@ -9,7 +9,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use registry_platform_authcommon::parse_bearer_token;
+use registry_platform_authcommon::{parse_bearer_token, BearerParseError, FailedCheck};
 use registry_platform_config::{JwksSource, SecretResolver};
 use registry_platform_oidc::{
     parse_static_jwks, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
@@ -24,12 +24,22 @@ const ACCESS_TOKEN_TYPES: [&str; 2] = ["at+jwt", "application/at+jwt"];
 /// Why a request was not authenticated.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum AuthError {
-    #[error("the request carried no bearer credential")]
-    Missing,
+    /// The caller's credential was refused, under the check that refused it.
     #[error("the presented credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the issuer key set is unavailable")]
     KeySource,
+}
+
+impl AuthError {
+    /// The check the request failed.
+    #[must_use]
+    pub const fn failed_check(&self) -> FailedCheck {
+        match self {
+            Self::Refused(check) => *check,
+            Self::KeySource => FailedCheck::KeySourceUnavailable,
+        }
+    }
 }
 
 /// Why an authenticator could not be built at startup.
@@ -133,18 +143,15 @@ impl TokenAuthenticator {
 
     /// Authenticate the value of an `Authorization` header.
     pub async fn authenticate(&self, authorization: Option<&str>) -> Result<Principal, AuthError> {
-        let header = authorization.ok_or(AuthError::Missing)?;
-        let token = parse_bearer_token(header).map_err(|_| AuthError::Missing)?;
+        let header = authorization.ok_or(AuthError::Refused(FailedCheck::CredentialMissing))?;
+        let token = parse_bearer_token(header).map_err(|error| match error {
+            BearerParseError::InvalidScheme => AuthError::Refused(FailedCheck::CredentialMissing),
+            _ => AuthError::Refused(FailedCheck::CredentialMalformed),
+        })?;
         let verified = match self.verifier.verify(token).await {
             Ok(verified) => verified,
-            Err(error) if is_key_source_failure(&error) => {
-                tracing::warn!(
-                    target: "registry_evidence_oid4vp::auth",
-                    "the issuer key set is unavailable"
-                );
-                return Err(AuthError::KeySource);
-            }
-            Err(_) => return Err(AuthError::Refused),
+            Err(error) if is_key_source_failure(&error) => return Err(AuthError::KeySource),
+            Err(error) => return Err(AuthError::Refused(error.failed_check())),
         };
         // The scope gate runs on the verified token's scope set: a correctly
         // signed token for this audience without the scope grants nothing.
@@ -153,7 +160,7 @@ impl TokenAuthenticator {
             .iter()
             .any(|scope| scope == &self.required_scope)
         {
-            return Err(AuthError::Refused);
+            return Err(AuthError::Refused(FailedCheck::Scope));
         }
         let client = match verified.matched_client_id() {
             Ok(Some(client)) => Some(client.to_owned()),
@@ -162,12 +169,12 @@ impl TokenAuthenticator {
                 .azp
                 .clone()
                 .or_else(|| verified.claims.client_id.clone()),
-            Err(_) => return Err(AuthError::Refused),
+            Err(_) => return Err(AuthError::Refused(FailedCheck::TokenClient)),
         }
         .filter(|client| !client.is_empty());
         let subject = verified.claims.sub.clone().filter(|sub| !sub.is_empty());
         if client.is_none() && subject.is_none() {
-            return Err(AuthError::Refused);
+            return Err(AuthError::Refused(FailedCheck::TokenClient));
         }
         Ok(Principal {
             issuer: verified

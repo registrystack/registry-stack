@@ -33,7 +33,8 @@ use registry_platform_config::{
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifierConfig,
 };
 use registry_platform_yaml::{BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId, Report};
 use serde::Deserialize;
@@ -510,6 +511,18 @@ pub enum RuntimeConfigError {
     OidcJwksSecret(String),
 }
 
+/// The static key set the operator pinned. A document that breaks a key set
+/// rule is the operator's to fix, so the refusal says which rule: it never
+/// holds a key value.
+fn parse_static_key_set(document: &[u8]) -> Result<jsonwebtoken::jwk::JwkSet, RuntimeConfigError> {
+    parse_static_jwks(document).map_err(|error| match error {
+        OidcError::StaticKeySet(refusal) => RuntimeConfigError::OidcJwksSecret(format!(
+            "the document at authentication.oidc.jwksSource.documentRef was refused: {refusal}"
+        )),
+        _ => RuntimeConfigError::Oidc,
+    })
+}
+
 fn refused(findings: &[Finding]) -> String {
     match findings {
         [] => "the runtime configuration was refused".to_owned(),
@@ -596,8 +609,7 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let jwks = parse_static_key_set(document.expose_secret())?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -1153,6 +1165,46 @@ pub(crate) mod tests {
         assert_unsafe_runtime(
             result.expect_err("a runtime below a group-writable directory is refused"),
         );
+    }
+
+    const PUBLIC_KEY: &str = r#"{"kty":"EC","crv":"P-256","kid":"k1","alg":"ES256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}"#;
+
+    fn key_set(extra: &str) -> String {
+        let key = if extra.is_empty() {
+            PUBLIC_KEY.to_owned()
+        } else {
+            PUBLIC_KEY.replacen('}', &format!(",{extra}}}"), 1)
+        };
+        format!(r#"{{"keys":[{key}]}}"#)
+    }
+
+    #[test]
+    fn a_static_key_set_with_unknown_public_members_loads() {
+        let document = key_set(r#""ext":true,"x5t":"abc","x5c":["AAAA"]"#);
+        let jwks = parse_static_key_set(document.as_bytes()).expect("unknown public members load");
+        assert_eq!(jwks.keys.len(), 1);
+    }
+
+    #[test]
+    fn a_static_key_set_that_holds_a_private_member_is_refused_by_rule_and_not_by_value() {
+        let secret = "private-canary-value";
+        let document = key_set(&format!(r#""d":"{secret}""#));
+        let RuntimeConfigError::OidcJwksSecret(message) =
+            parse_static_key_set(document.as_bytes()).expect_err("a private member is refused")
+        else {
+            panic!("a refused key set is not an issuer outage");
+        };
+        assert!(message.contains(r#"private-key member "d""#), "{message}");
+        assert!(message.contains("authentication.oidc.jwksSource.documentRef"));
+        assert!(!message.contains(secret), "{message}");
+    }
+
+    #[test]
+    fn a_static_key_set_that_is_not_json_is_not_an_issuer_outage() {
+        assert!(matches!(
+            parse_static_key_set(b"not json"),
+            Err(RuntimeConfigError::OidcJwksSecret(_))
+        ));
     }
 
     #[test]

@@ -122,6 +122,7 @@ The signals show a failing dependency instead.
   Outcomes other than `success` are failures, for example `timeout`, `transport`, `credential`, and `rate-limited`.
 - `evidence_signer_requests_total{signer,outcome}` does the same for the signer.
 - `evidence_source_shape_drift_total{source}` rises when a source starts answering in a shape the bundle does not describe.
+- `evidence_request_refusals_total{check}` counts requests refused with `401`, `403` or `429`, by the check that failed. A rise under `key-source-unavailable` means the issuer's key set cannot be reached.
 - `evidence_rate_limiter_tracked_keys` rises toward its ceiling of 100,000 keys.
 - With OID4VCI enabled, `evidence_oid4vci_store_entries` approaches `evidence_oid4vci_store_capacity`, and `evidence_oid4vci_outcomes_total{outcome}` counts `store-saturated` and `store-fault`.
 - `evidencectl doctor --runtime-config` is a preflight of the runtime file and, with `--require-audit-under`, of the audit path.
@@ -138,7 +139,7 @@ Use the metrics.
 **Read more.** [Preflight the audit path](../evidence-audit/), [OID4VCI metrics](../../configure/evidence-oid4vci/#metrics).
 
 {/* Evidence: crates/registry-evidence/src/observability/golden-scrape.txt;
-    crates/registry-evidence/src/observability.rs, evidence_source_shape_drift_total;
+    crates/registry-evidence/src/observability.rs, evidence_source_shape_drift_total and evidence_request_refusals_total;
     crates/registry-evidence-oid4vci/src/observability.rs, evidence_oid4vci_store_capacity;
     crates/registry-evidencectl/src/runtime.rs, DoctorArgs. */}
 
@@ -340,6 +341,7 @@ Readiness also fails when the audit writer has stopped.
 Render can also publish metrics on an optional `metricsListener`, which is off by default and must bind a private address.
 
 - `render_documents_total{operation,result}` counts calls, with `operation` of `render` or `seal` and `result` of `ok`, `refused`, or `failed`.
+- `render_request_refusals_total{check}` counts requests refused to a caller, by the check that failed.
 - `render_audit_write_failures_total` counts failed audit writes.
 - `render_seal_certificate_expiry_seconds{seal}` is the time until each seal certificate stops being valid, negative once it has.
 

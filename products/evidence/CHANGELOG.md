@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Evidence counts every `401`, `403` and `429` answer by the check that failed
+  in `evidence_request_refusals_total{check}` on the private metrics listener,
+  and writes one `request refused` log line with the check and the request's
+  trace id, at most five per check per minute. No response status, header or
+  body changes.
+- Evidence OID4VCI and Evidence OID4VP count each refused request in
+  `evidence_oid4vci_request_refusals_total{check}` and
+  `evidence_oid4vp_request_refusals_total{check}`, published at zero for every
+  check, and log it once as `request refused` with the failed check, at most
+  five lines per check per minute. This bounded `INFO` line replaces the
+  key-source `WARN` line of both services: alert on the counter under
+  `key-source-unavailable` instead. Responses are unchanged.
+
 - BREAKING (experimental surface): `evidencectl check` and `evidencectl package`
   refuse a `publicCheck` definition whose Source facts schema states more than
   types (`public-check-facts-content`). A bound, a pattern, a vocabulary or a

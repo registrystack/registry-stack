@@ -1866,7 +1866,7 @@ def verify_source(repository_root: Path) -> None:
         "pub async fn authenticate_explain",
         "pub async fn authenticate_mutate",
         "grant_claims(&verified.claims",
-        "Err(AuthenticationError::Profile)",
+        "Err(AuthenticationError::Profile(FailedCheck::Scope))",
     ):
         marker(auth_source, text, "auth")
     for text in (

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Scheduling counts every refused request by the check that refused it, in
+  `scheduling_request_refusals_total{check}` on the metrics listener,
+  published at zero for every check. Each refusal writes one
+  `request refused` line with `failed_check` and the request's trace id, at
+  most five lines per check per minute. That line replaces the
+  authentication refusal line that carried a `stage` field. Refusal statuses,
+  headers and bodies are unchanged.
+- A static key set with a private key member or a repeated member name is
+  refused at startup under `scheduling.runtime.unreadable-jwks-secret`, with
+  the rule it broke, in place of `scheduling.runtime-dependency.unavailable`.
+- A reminder or hook destination in plain `http` accepts any loopback host by
+  the shared rule: an address of `127.0.0.0/8`, `::1`, an IPv4-mapped form of
+  `127.0.0.0/8`, or `localhost` in any case. `localhost.` and `*.localhost`
+  stay refused.
+
 - Add `GET /health` and `GET /ready`, answering `{"status":"ok"}` and
   `{"status":"ready"}` as `application/json` with no token, as the other
   services do. `/healthz` and `/readyz` keep answering an empty 200.

@@ -675,3 +675,27 @@ fn a_stop_request_during_the_export_stops_bregctl() {
     assert!(fixture.exported_files().is_empty());
     assert!(!fixture.snapshot().exists());
 }
+
+#[test]
+fn a_key_document_that_breaks_the_public_key_rule_names_the_rule() {
+    let error = parse_static_jwks(
+        br#"{"keys":[{"kty":"RSA","kid":"a","n":"AQAB","e":"AQAB","d":"canary-private-value"}]}"#,
+    )
+    .expect_err("a private member is refused");
+    let failure = static_key_refusal(error);
+    assert_eq!(failure.code, "dev.refused");
+    assert!(
+        failure.message.contains("private-key member \"d\""),
+        "{}",
+        failure.message
+    );
+    assert!(!failure.message.contains("canary-private-value"));
+}
+
+#[test]
+fn any_other_key_document_refusal_keeps_the_generic_message() {
+    assert_eq!(
+        static_key_refusal(registry_platform_oidc::OidcError::Parse).message,
+        refusal().message
+    );
+}

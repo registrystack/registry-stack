@@ -343,7 +343,10 @@ with one of the `breg.external-refresh.*` codes in [Troubleshooting](#troublesho
 `breg_request_refusals_total{check}` counts every request BReg refused, by the check that refused
 it, since the process started. Every `check` value is published from the first scrape at zero, so a
 rate needs no `absent()` guard. A missing or refused credential, a refused token, an unreachable
-key source and a refused review completion callback all count.
+key source and a refused review completion callback all count. So does a request answered
+`404 resource.not_found` because the caller may not see the target (a missing scope or purpose, a
+row outside the caller's boundary, a refused task grant, a field beyond the profile), and a write
+refused as outside the caller's boundary.
 
 Each refusal also writes one `request refused` line with `failed_check` and the request's trace id,
 at most five lines per check per minute across the process. The next line for that check carries
@@ -360,6 +363,8 @@ keys; check the issuer before the callers.
     the_refusal_counter_declares_every_check_and_publishes_it_at_zero;
     crates/registry-breg/tests/authentication_refusals.rs,
     every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wire;
+    crates/registry-breg/tests/concealment_refusals.rs,
+    every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wire;
     crates/registry-platform-authcommon/src/refusal.rs, the recorder's per-check window. */}
 
 ## Read audit records

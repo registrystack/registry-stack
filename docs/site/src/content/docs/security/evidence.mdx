@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -40,6 +40,41 @@ that audit fails, the caller receives the generic `503`.
 A failed authentication, a malformed request, an invalid selector, and a rate
 limit write no native audit entry, even when Evidence decides them after
 authorisation. Watch for them in operational logs and metrics instead.
+
+Evidence counts every `401`, `403` and `429` answer by the check that failed, in
+`evidence_request_refusals_total{check}` on the private metrics listener. The `check` label is a
+closed set of 45 names such as `credential-missing`, `token-signature`, `scope`, `access-profile`,
+`purpose`, `revision-pin` and `rate-limit`, and no caller value becomes a label. Each refusal also
+writes one `request refused` log line that names the check and the request's trace id. The runtime
+writes at most five such lines per check per minute and reports how many it held back in
+`suppressed`. The counter and the line carry only a fixed check name, never a token, claim, client,
+selector value or requirement. The check is operator-side only: the response a caller receives is
+the same closed `401`, `403` or `429` it always was. An issuer key set that cannot be reached
+still answers `401`, and counts under `key-source-unavailable`.
+
+{/* Evidence: crates/registry-evidence/src/observability.rs, record_refusal and Metrics::render;
+    crates/registry-evidence/src/refusal_recording_tests.rs,
+    every_refusal_is_counted_logged_once_by_its_check_and_answered_as_before;
+    crates/registry-evidence/tests/golden/refusal_answers.json. */}
+
+The wallet-facing services record every refused request the same way. Evidence OID4VCI counts each
+one in `evidence_oid4vci_request_refusals_total{check}` and Evidence OID4VP in
+`evidence_oid4vp_request_refusals_total{check}`, and each writes one bounded `request refused` log
+line that carries only the check name. The checks cover a missing or malformed bearer credential, a
+token that fails verification, a missing scope or client, an unusable single-use code or access
+token, an Evidence refusal, a session read that belongs to another principal, an unknown or foreign
+session status, and a spent request budget. Capacity answers, unknown routes and malformed requests
+are not recorded. The answers a caller receives are unchanged.
+
+{/* Evidence: crates/registry-evidence-oid4vci/src/observability.rs, observe and record_refusal;
+    crates/registry-evidence-oid4vci/src/service.rs, unauthorized, store_response,
+    issuance_response and limiter_refusal;
+    crates/registry-evidence-oid4vci/src/authorizer.rs, AuthorizationError::Refused;
+    crates/registry-evidence-oid4vp/src/service.rs, record_refusals, unauthorized and admit;
+    crates/registry-evidence-oid4vp/src/auth.rs;
+    registry-evidence-oid4vci service::tests::refusal_answers_match_the_golden and
+    each_refusal_is_counted_and_logged_under_its_check;
+    crates/registry-evidence-oid4vp/tests/refusal_golden.rs and tests/refusal_recording.rs. */}
 
 An agent acts only inside its task grant. For an institutional agent task,
 Evidence consumes a complete signed grant context issued by an external task

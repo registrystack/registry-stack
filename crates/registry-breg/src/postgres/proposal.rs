@@ -1471,7 +1471,7 @@ impl PostgresRecordMutationService {
                 {
                     Ok(()) => {}
                     Err(
-                        MutationError::AuthorizationRefused | MutationError::PreconditionFailed,
+                        MutationError::AuthorizationRefused(_) | MutationError::PreconditionFailed,
                     ) => {
                         guarded
                             .rollback()
@@ -1641,7 +1641,9 @@ impl PostgresRecordMutationService {
 fn link_readable(outcome: Result<(), MutationError>) -> Result<bool, MutationError> {
     match outcome {
         Ok(()) => Ok(true),
-        Err(MutationError::AuthorizationRefused | MutationError::PreconditionFailed) => Ok(false),
+        Err(MutationError::AuthorizationRefused(_) | MutationError::PreconditionFailed) => {
+            Ok(false)
+        }
         Err(error) => Err(error),
     }
 }
@@ -1654,7 +1656,9 @@ mod tests {
     fn a_link_check_omits_only_a_refusal_and_fails_on_anything_else() {
         assert_eq!(link_readable(Ok(())), Ok(true));
         for refusal in [
-            MutationError::AuthorizationRefused,
+            MutationError::AuthorizationRefused(
+                registry_platform_authcommon::FailedCheck::Ownership,
+            ),
             MutationError::PreconditionFailed,
         ] {
             assert_eq!(link_readable(Err(refusal)), Ok(false));

@@ -1,0 +1,325 @@
+[
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-messaging/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": "Bearer"
+    },
+    "name": "no credential",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-messaging/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": "Bearer"
+    },
+    "name": "not the bearer scheme",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-messaging/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": "Bearer"
+    },
+    "name": "not a compact token",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-messaging/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": "Bearer"
+    },
+    "name": "forged signature",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-messaging/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": "Bearer"
+    },
+    "name": "other audience",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-messaging/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": "Bearer"
+    },
+    "name": "client the verifier does not admit",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "No Messaging access profile authorizes this caller for this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "client with no access profile",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "No Messaging access profile authorizes this caller for this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "scope the profile requires is missing",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "No Messaging access profile authorizes this caller for this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "actor kind the profile does not admit",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-messaging/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": "Bearer"
+    },
+    "name": "malformed actor kind",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-messaging/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": "Bearer"
+    },
+    "name": "no principal",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "No Messaging access profile authorizes this caller for this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "exchanged token with no declared authority",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "message.not-visible",
+      "detail": "No message with this identifier is visible to the caller.",
+      "status": 404,
+      "title": "Message not visible",
+      "type": "https://id.registrystack.org/problems/registry-messaging/message/not-visible"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "a message id no message can carry",
+    "status": 404
+  },
+  {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "Your Messaging access profile does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-messaging/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "operator submits",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "Your Messaging access profile does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-messaging/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "operator previews",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "No Messaging access profile authorizes this caller for this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-messaging/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "sender previews a template its profile does not list",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "callback.unverified",
+      "detail": "The callback did not verify for a provider this deployment accepts callbacks from.",
+      "status": 403,
+      "title": "Callback not verified",
+      "type": "https://id.registrystack.org/problems/registry-messaging/callback/unverified"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": null,
+      "www-authenticate": null
+    },
+    "name": "callback for a provider that receives none",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "rate-limit.exceeded",
+      "detail": "The request rate accepted from this caller is exceeded. Try again after the time in Retry-After.",
+      "status": 429,
+      "title": "Request rate exceeded",
+      "type": "https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": "1",
+      "www-authenticate": null
+    },
+    "name": "callback past the rate",
+    "status": 429
+  },
+  {
+    "body": {
+      "code": "service.unavailable",
+      "detail": "Messaging is unavailable. Try again after the service recovers.",
+      "status": 503,
+      "title": "Messaging service unavailable",
+      "type": "https://id.registrystack.org/problems/registry-messaging/service/unavailable"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": "5",
+      "www-authenticate": null
+    },
+    "name": "key endpoint outage",
+    "status": 503
+  }
+]
