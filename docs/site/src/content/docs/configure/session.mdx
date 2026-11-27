@@ -132,6 +132,25 @@ Products still decide what the person may read or change.
     crates/registry-session/src/offline.rs receipt_findings;
     crates/registry-session/README.md. */}
 
+Module and page prefixes support two forms:
+
+- A prefix ending in `/` covers paths starting with that prefix.
+  For example, `/api/functions/` covers `/api/functions/renew` but does not cover `/api/functions`.
+- Without a trailing slash, the prefix covers its exact path and descendants at a segment boundary.
+  For example, `/api/functions/renew` covers that path and `/api/functions/renew/x`, but not `/api/functions/renewal`.
+  Envoy matches this form with `path_separated_prefix`.
+
+You cannot declare both `/a/b` and `/a/b/`: the runtime treats them as one prefix.
+Module and page prefixes at `/session` or beneath it are refused.
+A sibling such as `/sessions` is allowed.
+
+{/* Evidence: crates/registry-session/src/config.rs prefix_holds, clean_prefix, route_findings,
+    a_prefix_and_the_same_path_with_a_slash_are_refused_as_one_prefix,
+    a_prefix_under_the_session_routes_is_refused,
+    a_prefix_without_a_slash_holds_its_path_and_the_paths_below_it;
+    crates/registry-session/src/gateway.rs a_prefix_without_a_slash_is_matched_at_a_segment_boundary;
+    crates/registry-session/src/schema.rs route_prefix_schema. */}
+
 Store the client secret and audit hash key in the files their references name.
 Declare the file provider root and keep the files accessible only to the service account.
 Startup resolves the references and opens the audit destination before listening.
@@ -223,7 +242,8 @@ Splice the fragments into your static Envoy configuration:
 2. Put `routes.yaml` first in a virtual host whose only domain is `app.example.org`.
    Define the `registry` and `pages` upstream clusters that the runtime names.
 3. Add `clusters.yaml` to the host's cluster list.
-4. Put the mapper from `local-reply.yaml` first in the connection manager's `local_reply_config.mappers`.
+4. Put both mappers from `local-reply.yaml` first in the connection manager's `local_reply_config.mappers`.
+   Keep their generated order: failed check first, unreachable `/session/` route second.
 
 Remove `registry-session-answer` from responses on every host route outside the generated routes.
 Set `strip_trailing_host_dot: true`.
@@ -290,15 +310,25 @@ The request must also carry an `Origin` matching `publicOrigin` and, when presen
     crates/registry-session/src/gateway.rs routes. */}
 
 A module call without a live session answers 401 `session.expired`.
-A rejected route or origin answers 403 `session.refused`.
+The session check answers 403 `session.refused` when it rejects a route or origin.
 An unavailable check answers 503 `session.unavailable`, including the gateway's local reply when the check cannot be reached.
+If the gateway cannot reach the service on a `/session/` route, its generated local reply answers the same marked 503 problem.
+The generated mappers leave a host route's 503 untouched.
 A page must recognise a session problem by both `registry-session-answer: 1` and its `type` URI.
 The URI starts with `https://id.registrystack.org/problems/registry-platform/session/` and ends with the problem suffix.
 A product answer with the same status is still a product answer.
 
 {/* Evidence: crates/registry-session/src/check.rs Decision;
-    crates/registry-session/src/gateway.rs local_reply, marker_removal_lines;
+    crates/registry-session/src/gateway.rs local_reply, unavailable_mapper, marker_removal_lines,
+    the_local_reply_marks_an_unreachable_session_route_and_no_other;
     crates/registry-session/src/wire.rs ProblemKind, ANSWER_MARKER_HEADER. */}
+
+The generated CSRF filter answers a plain 403 when a write's `Origin` names another site or is missing.
+That response has neither a `registry-session-answer` marker nor a problem body.
+Treat it as a forged or misrouted request, rather than an expired session to restore.
+
+{/* Evidence: crates/registry-session/src/gateway.rs http_filters, csrf_on;
+    crates/registry-session/README.md. */}
 
 An invalid return path answers 400 `session.return-refused`.
 Rate limiting answers 429 `session.rate-limited`.

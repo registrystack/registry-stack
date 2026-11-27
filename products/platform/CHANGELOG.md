@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- The session runtime schema accepts module and page prefixes without a
+  trailing slash. Such a prefix covers its exact path and descendants at a
+  segment boundary: `/api/functions/renew` covers
+  `/api/functions/renew/x`, but not `/api/functions/renewal`.
+  Prefixes ending in `/` keep their existing meaning.
+  The runtime refuses `/a/b` and `/a/b/` as one prefix and reserves
+  `/session` and its descendants at segment boundaries.
+- The generated Envoy local reply answers 503 `session.unavailable` with
+  `registry-session-answer: 1` when the service cannot be reached on its
+  own `/session/` routes. A host route's 503 is unchanged.
+  Splice both generated local-reply mappers first, in their generated order,
+  and rerun `gateway envoy --verify-assembled`.
+
 - Add `registry-session`, a source-build-only supporting service beside an
   Envoy gateway. It holds a person's access and refresh tokens on the server,
   gives the browser an opaque HttpOnly cookie and answers the gateway's
