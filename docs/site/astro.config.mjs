@@ -1055,7 +1055,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'reference' },
             { label: 'Errors and status codes', slug: 'reference/errors' },
-            { label: 'Signed hook deliveries', slug: 'reference/delivery-signing' },
+            { label: 'Receive signed deliveries', slug: 'reference/delivery-signing' },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Configuration files', slug: 'reference/configuration-files' },
             { label: 'API overview', slug: 'reference/apis' },
