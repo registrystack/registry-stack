@@ -23,7 +23,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
-use registry_platform_authcommon::{FailedCheck, RefusalNote, RefusalRecorder};
+use registry_platform_authcommon::{DeclaredScope, FailedCheck, RefusalNote, RefusalRecorder};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit, security_headers, CspBuilder,
@@ -500,7 +500,30 @@ async fn normalize_rejections(request: Request, next: Next) -> Response {
     response
 }
 
+/// Whether the answer to this problem is an authentication or authorization
+/// refusal, which names the check that failed.
+fn is_refusal(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
+/// A problem answer that is not an authentication or authorization refusal.
+/// Those are built by [`unauthorized`], which takes the failed check.
 fn problem(code: ProblemCode, detail: &str) -> Response {
+    let response = problem_answer(code, detail);
+    if is_refusal(response.status()) {
+        tracing::error!(
+            target: "registry_evidence_oid4vp::service",
+            "a refusal was built without naming its failed check"
+        );
+        debug_assert!(
+            false,
+            "a refusal is built with `unauthorized`, which names its check"
+        );
+    }
+    response
+}
+
+fn problem_answer(code: ProblemCode, detail: &str) -> Response {
     let status =
         StatusCode::from_u16(code.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     Problem::new(&code.type_uri(), code.title(), status)
@@ -524,7 +547,7 @@ fn refused(mut response: Response, check: FailedCheck) -> Response {
 
 /// The 401 a caller without an acceptable bearer credential receives.
 fn unauthorized(check: FailedCheck) -> Response {
-    let mut response = problem(
+    let mut response = problem_answer(
         ProblemCode::Unauthorized,
         "a valid bearer token is required",
     );
@@ -532,6 +555,18 @@ fn unauthorized(check: FailedCheck) -> Response {
         .headers_mut()
         .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
     refused(response, check)
+}
+
+/// The 401 for a caller the authenticator refused. A scope refusal also
+/// carries the gate's configured values for the operator's log line.
+fn refused_by(check: FailedCheck, authenticator: &TokenAuthenticator) -> Response {
+    let mut response = unauthorized(check);
+    if check == FailedCheck::Scope {
+        response
+            .extensions_mut()
+            .insert(authenticator.declared_scope());
+    }
+    response
 }
 
 /// The 503 a caller receives when the issuer's key set cannot be used.
@@ -557,12 +592,18 @@ async fn record_refusals(
 ) -> Response {
     let response = next.run(request).await;
     if let Some(note) = response.extensions().get::<RefusalNote>() {
+        let declared = response.extensions().get::<DeclaredScope>();
         match registry_platform_httpsec::response_trace_id(response.headers()) {
             Ok(trace) => {
-                registry_platform_authcommon::record_refusal!(refusals, *note, trace_id = trace);
+                registry_platform_authcommon::record_refusal!(
+                    refusals,
+                    *note,
+                    trace_id = trace,
+                    declared = declared
+                );
             }
             Err(_) => {
-                registry_platform_authcommon::record_refusal!(refusals, *note);
+                registry_platform_authcommon::record_refusal!(refusals, *note, declared = declared);
             }
         }
     }
@@ -651,7 +692,7 @@ async fn applicant(service: &VerifierService, headers: &HeaderMap) -> Result<Pri
         }
         Err(AuthError::Refused(check)) => {
             service.metrics.record(Event::SessionRefusedAuthentication);
-            Err(unauthorized(check))
+            Err(refused_by(check, &service.applicants))
         }
     }
 }
@@ -1225,7 +1266,7 @@ async fn read_presentation(
         }
         Err(AuthError::Refused(check)) => {
             service.metrics.record(Event::ReadRefusedAuthentication);
-            return unauthorized(check);
+            return refused_by(check, &service.evidence_credentials);
         }
     };
     if let Err(response) = admit(
@@ -1501,5 +1542,39 @@ async fn wait_for_stop(mut stopped: watch::Receiver<bool>) {
         if stopped.changed().await.is_err() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unauthorized_answer_carries_its_failed_check() {
+        let response = unauthorized(FailedCheck::CredentialMissing);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.extensions().get::<RefusalNote>().is_some());
+    }
+
+    #[test]
+    fn every_problem_code_answered_as_a_refusal_is_built_by_unauthorized() {
+        for &code in ProblemCode::ALL {
+            let status = problem_answer(code, "detail").status();
+            assert_eq!(
+                is_refusal(status),
+                code == ProblemCode::Unauthorized,
+                "{code:?} answers {status}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal is built with `unauthorized`")]
+    fn a_refusal_built_without_a_failed_check_is_caught() {
+        let _ = problem(
+            ProblemCode::Unauthorized,
+            "a valid bearer token is required",
+        );
     }
 }

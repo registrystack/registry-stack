@@ -1643,7 +1643,8 @@ fn credential_issuer_findings(issuer: &str, findings: &mut Vec<Finding>) {
     }
 }
 
-/// Accept a plain loopback HTTP endpoint, with an optional path and nothing
+/// Accept a plain HTTP endpoint on exactly `127.0.0.1`, the address a
+/// supervised development service binds, with an optional path and nothing
 /// else that could vary between what is configured and what is reached.
 fn is_supervised_local_endpoint(origin: &Url) -> bool {
     let url = origin.to_url();

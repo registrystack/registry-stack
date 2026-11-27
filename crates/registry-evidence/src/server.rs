@@ -157,6 +157,7 @@ fn build_app_with_tracker_at(
     // use, on the separate opt-in metrics listener.
     let rate_limiter = runtime.rate_limiter();
     let source_diagnostics = runtime.source_diagnostics();
+    let declared_scope = runtime.declared_scope();
     let state = Arc::new(ServerState {
         runtime,
         maximum_request_bytes,
@@ -212,7 +213,9 @@ fn build_app_with_tracker_at(
             authentication_challenge,
             attach_authentication_challenge,
         ));
-    let metrics = Arc::new(Metrics::new(rate_limiter, source_diagnostics));
+    let metrics = Arc::new(
+        Metrics::new(rate_limiter, source_diagnostics).with_declared_scope(declared_scope),
+    );
     (
         response_layers(routes, Arc::clone(&metrics)),
         evaluations,
@@ -1155,22 +1158,30 @@ fn parse_evidence_request_batch(bytes: &[u8]) -> Result<EvidenceRequestBatch, Pr
 
 /// The bearer token the request carries, or the check its header failed: no
 /// header, or one that is not a bearer credential, is a missing credential. A
-/// repeated, unreadable or misshapen one is a malformed credential.
+/// repeated, unreadable or misshapen one is a malformed credential. A value too
+/// short to carry the scheme is misshapen only when it is the start of
+/// `Bearer`, and otherwise names some other scheme.
 fn bearer_token(headers: &HeaderMap) -> Result<&str, FailedCheck> {
     let mut values = headers.get_all(AUTHORIZATION).iter();
     let value = values.next().ok_or(FailedCheck::CredentialMissing)?;
     if values.next().is_some() {
         return Err(FailedCheck::CredentialMalformed);
     }
-    parse_bearer_token(
-        value
-            .to_str()
-            .map_err(|_| FailedCheck::CredentialMalformed)?,
-    )
-    .map_err(|error| match error {
+    let value = value
+        .to_str()
+        .map_err(|_| FailedCheck::CredentialMalformed)?;
+    parse_bearer_token(value).map_err(|error| match error {
         BearerParseError::InvalidScheme => FailedCheck::CredentialMissing,
+        BearerParseError::Malformed if !is_scheme_prefix(value) => FailedCheck::CredentialMissing,
         _ => FailedCheck::CredentialMalformed,
     })
+}
+
+/// Whether the value is the start of the `Bearer` scheme name, compared ASCII
+/// case-insensitively.
+fn is_scheme_prefix(value: &str) -> bool {
+    const SCHEME: &[u8] = b"Bearer";
+    value.len() <= SCHEME.len() && SCHEME[..value.len()].eq_ignore_ascii_case(value.as_bytes())
 }
 
 fn has_exact_content_type(headers: &HeaderMap, expected: &str) -> bool {
@@ -1392,6 +1403,9 @@ mod tests {
 
         for (invalid, check) in [
             ("Basic three.parts.value", FailedCheck::CredentialMissing),
+            ("Basic", FailedCheck::CredentialMissing),
+            ("Bear", FailedCheck::CredentialMalformed),
+            ("bearer", FailedCheck::CredentialMalformed),
             ("Bearer", FailedCheck::CredentialMalformed),
             (
                 "Bearer  three.parts.value",

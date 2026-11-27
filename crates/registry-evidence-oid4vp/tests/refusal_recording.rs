@@ -420,4 +420,15 @@ async fn each_refusal_is_counted_and_logged_under_its_check() {
         form(&server).into_future(),
     )
     .await;
+
+    // A scope refusal names the claim and the scopes the configuration
+    // declares for each gate, and none of the scopes the tokens held.
+    let text = logs.text();
+    assert!(text.contains("scope_claim=\"scope\""), "{text}");
+    assert!(
+        text.contains("required_scope=\"oid4vp:read-result\""),
+        "{text}"
+    );
+    assert!(text.contains("required_scope=\"oid4vp:session\""), "{text}");
+    assert!(!text.contains("something:else"), "{text}");
 }

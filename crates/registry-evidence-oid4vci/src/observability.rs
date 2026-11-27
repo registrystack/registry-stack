@@ -23,7 +23,7 @@ use axum::{
     Router,
 };
 
-use registry_platform_authcommon::{RefusalNote, RefusalRecorder};
+use registry_platform_authcommon::{DeclaredScope, RefusalNote, RefusalRecorder};
 use registry_platform_metrics::{
     Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_MEDIA_TYPE,
 };
@@ -141,6 +141,8 @@ pub(crate) struct Metrics {
     store_capacity: usize,
     cleanup_expired: AtomicU64,
     refusals: RefusalRecorder,
+    /// The configured values a scope refusal's log line names.
+    declared_scope: Option<DeclaredScope>,
 }
 
 impl Metrics {
@@ -152,13 +154,24 @@ impl Metrics {
             store_capacity,
             cleanup_expired: AtomicU64::new(0),
             refusals: RefusalRecorder::new("evidence_oid4vci").expect(DECLARATION),
+            declared_scope: None,
         }
+    }
+
+    /// Name the configured values a scope refusal's log line carries.
+    pub(crate) fn with_declared_scope(mut self, declared_scope: Option<DeclaredScope>) -> Self {
+        self.declared_scope = declared_scope;
+        self
     }
 
     /// Count a refused request under its check and write the admitted log
     /// line.
     fn record_refusal(&self, note: RefusalNote) {
-        registry_platform_authcommon::record_refusal!(self.refusals, note);
+        registry_platform_authcommon::record_refusal!(
+            self.refusals,
+            note,
+            declared = self.declared_scope.as_ref()
+        );
     }
 
     /// The recorder that counts each refused request under its check.
