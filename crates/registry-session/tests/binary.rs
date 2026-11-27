@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use serde_json::json;
-use support::{Harness, CASEWORK_AUDIENCE, PERSON_AUDIENCE};
+use support::{Harness, Options, CASEWORK_AUDIENCE, PERSON_AUDIENCE};
 
 fn runtime_file(harness: &Harness) -> PathBuf {
     harness
@@ -84,6 +84,70 @@ async fn a_receipt_that_matches_passes_and_a_typo_fails_naming_the_kind() {
     assert_eq!(code, 1);
     assert!(stderr.contains("audience-set-mismatch"), "{stderr}");
     assert!(stderr.contains("staff"), "{stderr}");
+}
+
+#[tokio::test]
+async fn a_person_module_that_is_not_a_member_product_fails_the_receipt_check() {
+    // `scheduling` and `documents` both ride the person audience, and the
+    // receipt lists only `breg` as a member of it.
+    let harness = Harness::start_with(Options {
+        edit: Box::new(|document| document.replace("- id: breg\n", "- id: scheduling\n")),
+        ..Options::default()
+    })
+    .await;
+    let directory = tempfile::tempdir().expect("directory");
+    let path = directory.path().join("identity-receipt.json");
+    std::fs::write(
+        &path,
+        json!({
+            "personAudience": {"audience": PERSON_AUDIENCE, "products": ["breg"]},
+            "sessionApps": {
+                "citizen-app": {"products": ["breg"], "audiences": [PERSON_AUDIENCE]},
+                "staff-app": {
+                    "products": ["breg", "casework"],
+                    "audiences": [PERSON_AUDIENCE, CASEWORK_AUDIENCE]
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write receipt");
+    let (code, _, stderr) = run(
+        &runtime_file(&harness),
+        &["--identity-receipt", path.to_str().expect("utf-8")],
+    );
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("person-module-not-a-member"), "{stderr}");
+    assert!(stderr.contains("scheduling"), "{stderr}");
+    assert!(stderr.contains("documents"), "{stderr}");
+}
+
+#[tokio::test]
+async fn a_receipt_entry_that_is_not_a_string_fails_the_receipt_check() {
+    let harness = Harness::start().await;
+    let directory = tempfile::tempdir().expect("directory");
+    let path = directory.path().join("identity-receipt.json");
+    std::fs::write(
+        &path,
+        json!({
+            "personAudience": {"audience": PERSON_AUDIENCE, "products": ["breg", "documents"]},
+            "sessionApps": {
+                "citizen-app": {"products": ["breg"], "audiences": [PERSON_AUDIENCE, 7]},
+                "staff-app": {
+                    "products": ["breg", "casework"],
+                    "audiences": [PERSON_AUDIENCE, CASEWORK_AUDIENCE]
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write receipt");
+    let (code, _, stderr) = run(
+        &runtime_file(&harness),
+        &["--identity-receipt", path.to_str().expect("utf-8")],
+    );
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("receipt-malformed"), "{stderr}");
 }
 
 #[tokio::test]

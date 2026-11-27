@@ -575,6 +575,14 @@ fn routes(config: &RuntimeConfig, authority: &str, guarded: &[GuardedRoute<'_>])
     );
     out.push_str("  direct_response:\n    status: 404\n");
     marker_removal_lines(&mut out);
+    // A host filter must never refuse or alter an answer under the service's
+    // own prefix, the 404 included.
+    if !host_filters.is_empty() {
+        out.push_str("  typed_per_filter_config:\n");
+        for filter in &host_filters {
+            switch_off(&mut out, filter);
+        }
+    }
     for route in guarded {
         out.push_str(&format!("- name: {}\n", quoted(&route.name)));
         match_lines(
@@ -1441,6 +1449,16 @@ mod tests {
         assert!(reserved.contains("prefix: \"/session/\""), "{reserved}");
         assert!(reserved.contains("status: 404"), "{reserved}");
         assert!(!reserved.contains("cluster:"), "{reserved}");
+        for filter in [
+            "\"envoy.filters.http.cors\":",
+            "\"envoy.filters.http.basic_auth\":",
+            "\"envoy.filters.http.rbac\":",
+        ] {
+            assert!(
+                reserved.contains(filter),
+                "{filter} is switched off on the catch-all: {reserved}"
+            );
+        }
     }
 
     #[test]
@@ -2111,6 +2129,26 @@ mod tests {
         let mut document = assembled();
         manager(&mut document)["route_config"]["virtual_hosts"][0]["domains"] = json!(["*"]);
         verified_against(FIXTURE, &document).expect("passes");
+    }
+
+    #[test]
+    fn a_session_route_that_leaves_a_host_filter_on_fails() {
+        for name in [
+            "registry-session.sign-in",
+            "registry-session.callback",
+            "registry-session.sign-out",
+            "registry-session.me",
+            "registry-session.signed-out",
+            "registry-session.reserved",
+        ] {
+            let mut document = assembled();
+            route(&mut document, name)["typed_per_filter_config"]
+                .as_object_mut()
+                .expect("per-filter config")
+                .remove("envoy.filters.http.rbac")
+                .expect("the host filter is switched off in the generated route");
+            refuses(&document, name);
+        }
     }
 
     #[test]

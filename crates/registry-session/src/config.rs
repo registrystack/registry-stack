@@ -429,17 +429,22 @@ pub struct RateLimitConfig {
 
 /// The service's own request limits. It reads neither peer addresses nor
 /// forwarded headers, so it cannot tell one browser from another before
-/// sign-in: a per-client limit belongs at the gateway.
+/// sign-in: a per-address limit on the sign-in routes belongs at the gateway.
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RateLimitsConfig {
-    /// One limit for each signed-in person, shared by all their sessions, on
-    /// every request that presents a session. Default: 120 a minute, burst
-    /// 30.
+    /// One limit for each signed-in person, shared by all their sessions. It
+    /// covers the sign-in that names the person (once, when the first hop
+    /// returns) and `GET /session/me`. It does not cover sign-out, which
+    /// always ends the session, or the gateway check, which leaves limits on
+    /// module calls to the modules and the gateway. Default: 120 a minute,
+    /// burst 30.
     #[serde(default = "default_per_person")]
     pub per_person: RateLimitConfig,
-    /// One limit shared by everyone on the unauthenticated sign-in routes.
-    /// Default: 600 a minute, burst 120.
+    /// One limit shared by everyone starting a sign-in. A start is charged
+    /// only once its return path is accepted. A callback is never charged,
+    /// because it needs the pending sign-in a charged start created. Default:
+    /// 900 a minute, burst 300.
     #[serde(default = "default_global_sign_in")]
     pub global_sign_in: RateLimitConfig,
 }
@@ -466,7 +471,7 @@ fn default_per_person() -> RateLimitConfig {
 }
 
 fn default_global_sign_in() -> RateLimitConfig {
-    rate(600, 120)
+    rate(900, 300)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -1816,7 +1821,11 @@ audit:
         assert_eq!(config.session.renew_before_seconds.get(), 60);
         assert_eq!(config.session.sign_in_lifetime_seconds.get(), 600);
         assert_eq!(config.rate_limits.per_person.requests_per_minute.get(), 120);
-        assert_eq!(config.rate_limits.global_sign_in.burst.get(), 120);
+        assert_eq!(config.rate_limits.global_sign_in.burst.get(), 300);
+        assert_eq!(
+            config.rate_limits.global_sign_in.requests_per_minute.get(),
+            900
+        );
         assert_eq!(
             config.who_am_i.claim_names(),
             ["sub", "name", "email", "email_verified"]

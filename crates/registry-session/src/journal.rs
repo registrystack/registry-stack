@@ -10,6 +10,18 @@ use std::collections::HashMap;
 use registry_platform_audit::{AuditKeyHasher, AuditRequest, AuditUnavailable, AuditWriter};
 use serde_json::{json, Value};
 
+/// Why a record could not be written. Either way the operation it audits
+/// must not go ahead.
+#[derive(Debug, thiserror::Error)]
+pub enum JournalError {
+    #[error(transparent)]
+    Unavailable(#[from] AuditUnavailable),
+    #[error("the operating system random source failed")]
+    Random,
+    #[error("the kind of sign-in has no audit client")]
+    UnknownKind,
+}
+
 const AUDIT_SCHEMA: &str = "registry-session-audit/v1";
 const PRINCIPAL_CLASS: &str = "session-principal-v1";
 const CLIENT_CLASS: &str = "session-client-v1";
@@ -114,14 +126,19 @@ impl Journal {
         action: Action,
         kind: &str,
         person: Option<&str>,
-    ) -> Result<Operation, AuditUnavailable> {
-        let client = self.clients.get(kind).cloned().unwrap_or_default();
+    ) -> Result<Operation, JournalError> {
+        let client = self
+            .clients
+            .get(kind)
+            .cloned()
+            .ok_or(JournalError::UnknownKind)?;
         let person = person.map(str::to_owned);
+        let correlation = crate::store::random_token().map_err(|_| JournalError::Random)?;
         let request = self
             .writer
             .begin(
                 AUDIT_SCHEMA,
-                crate::store::random_token().unwrap_or_default(),
+                correlation,
                 record(action, None, kind, &client, person.as_deref()),
                 record(action, Some("unfinished"), kind, &client, person.as_deref()),
             )
@@ -142,7 +159,7 @@ impl Journal {
         kind: &str,
         person: Option<&str>,
         outcome: Outcome,
-    ) -> Result<(), AuditUnavailable> {
+    ) -> Result<(), JournalError> {
         self.begin(action, kind, person)
             .await?
             .finish(outcome, None)
@@ -157,11 +174,7 @@ impl Journal {
 impl Operation {
     /// Append the terminal response before the protected result is released.
     /// `person` supplies the principal learned during sign-in.
-    pub async fn finish(
-        self,
-        outcome: Outcome,
-        person: Option<&str>,
-    ) -> Result<(), AuditUnavailable> {
+    pub async fn finish(self, outcome: Outcome, person: Option<&str>) -> Result<(), JournalError> {
         let person = person.or(self.person.as_deref());
         let response = record(
             self.action,
@@ -170,7 +183,10 @@ impl Operation {
             &self.client,
             person,
         );
-        self.request.finish(response).await
+        self.request
+            .finish(response)
+            .await
+            .map_err(JournalError::from)
     }
 }
 

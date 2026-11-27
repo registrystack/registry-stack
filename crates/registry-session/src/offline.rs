@@ -275,6 +275,30 @@ fn receipt_order(person: Option<&str>, audiences: &[&str]) -> Vec<String> {
     ordered
 }
 
+/// The strings of a receipt list. An absent list is empty. A list with an
+/// entry that is not a string is `None`: dropping the entry would make
+/// `[person, 7]` equal `[person]`.
+fn strings(value: &serde_json::Value) -> Option<Vec<&str>> {
+    match value {
+        serde_json::Value::Null => Some(Vec::new()),
+        serde_json::Value::Array(entries) => strings_of(entries),
+        _ => None,
+    }
+}
+
+fn strings_of(entries: &[serde_json::Value]) -> Option<Vec<&str>> {
+    entries.iter().map(serde_json::Value::as_str).collect()
+}
+
+fn malformed_entry(pointer: &str) -> Diagnostic {
+    receipt_diagnostic(
+        "platform.session-check.receipt-malformed",
+        pointer,
+        "the identity receipt lists an entry that is not a string",
+        "Regenerate the receipt with the identity tooling.",
+    )
+}
+
 /// Every difference between the runtime file's audiences and the receipt's.
 /// The receipt states the person audience first and the others sorted, so the
 /// runtime file's derived set is compared in that order: the order modules are
@@ -301,19 +325,21 @@ pub(crate) fn receipt_findings(
             "Make the runtime file's personAudience the one the identity deployment declares.",
         ));
     }
-    let members: Vec<&str> = receipt["personAudience"]["products"]
-        .as_array()
-        .map(|products| {
-            products
-                .iter()
-                .filter_map(|product| product.as_str())
-                .collect()
-        })
-        .unwrap_or_default();
-    for (index, module) in config.modules.iter().enumerate() {
-        if module.audience == crate::config::ModuleAudience::Person
-            && !members.contains(&module.id.as_str())
-        {
+    let members = strings(&receipt["personAudience"]["products"]);
+    if members.is_none() {
+        findings.push(malformed_entry("/personAudience/products"));
+    }
+    // Without a readable member list every person module would be reported as
+    // not a member: the malformed list is the finding.
+    let person_modules = config
+        .modules
+        .iter()
+        .enumerate()
+        .filter(|(_, module)| module.audience == crate::config::ModuleAudience::Person)
+        .filter(|_| members.is_some());
+    for (index, module) in person_modules {
+        let members = members.as_deref().unwrap_or_default();
+        if !members.contains(&module.id.as_str()) {
             findings.push(receipt_diagnostic(
                 "platform.session-check.person-module-not-a-member",
                 &format!("/modules/{index}"),
@@ -344,10 +370,13 @@ pub(crate) fn receipt_findings(
             ));
             continue;
         };
-        let stated: Vec<String> = stated
-            .iter()
-            .filter_map(|audience| audience.as_str().map(str::to_owned))
-            .collect();
+        let Some(stated) = strings_of(stated) else {
+            findings.push(malformed_entry(&format!(
+                "/sessionApps/{client_id}/audiences"
+            )));
+            continue;
+        };
+        let stated: Vec<String> = stated.into_iter().map(str::to_owned).collect();
         if derived != stated {
             findings.push(receipt_diagnostic(
                 "platform.session-check.audience-set-mismatch",
@@ -481,6 +510,19 @@ mod tests {
                 "platform.session-check.person-module-not-a-member",
                 "platform.session-check.person-module-not-a-member"
             ]
+        );
+    }
+
+    #[test]
+    fn a_receipt_entry_that_is_not_a_string_is_refused_not_dropped() {
+        let mut other = receipt();
+        other["sessionApps"]["citizen-app"]["audiences"] = json!(["https://api.example/person", 7]);
+        assert_eq!(codes(&other), ["platform.session-check.receipt-malformed"]);
+        let mut products = receipt();
+        products["personAudience"]["products"] = json!(["breg", 7, "documents"]);
+        assert_eq!(
+            codes(&products),
+            ["platform.session-check.receipt-malformed"]
         );
     }
 

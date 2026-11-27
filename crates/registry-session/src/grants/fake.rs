@@ -157,6 +157,11 @@ impl Grants for FakeIssuer {
     async fn revoke(&self, _kind: &str, refresh_token: &RefreshToken) -> Result<(), GrantError> {
         self.revocations.fetch_add(1, Ordering::SeqCst);
         let mut state = self.state.lock().expect("state");
+        // RFC 7009 lets an issuer ignore a token it already spent: revoking
+        // one revokes nothing, so only the current token of a family ends it.
+        if state.used.contains(refresh_token.expose()) {
+            return Ok(());
+        }
         if let Some(&family) = state.family_of.get(refresh_token.expose()) {
             state.revoked_families.insert(family);
         }
@@ -225,6 +230,18 @@ mod tests {
             .refresh("k", &first, "api")
             .await
             .expect("a transport failure consumed nothing");
+    }
+
+    #[tokio::test]
+    async fn revoking_a_spent_token_revokes_nothing_and_the_current_token_ends_the_family() {
+        let issuer = issuer();
+        let (_, _, first) = issuer.sign_in("api");
+        let renewed = issuer.refresh("k", &first, "api").await.expect("first use");
+        let second = renewed.refresh_token.expect("rotated");
+        issuer.revoke("k", &first).await.expect("accepted");
+        assert!(!issuer.family_revoked(&second));
+        issuer.revoke("k", &second).await.expect("revoked");
+        assert!(issuer.family_revoked(&second));
     }
 
     #[tokio::test]

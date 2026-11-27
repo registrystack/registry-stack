@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 
 use crate::check::{session_cookie, single_header};
 use crate::config::RuntimeConfig;
-use crate::grants::{Grants, Redeemer, RefreshToken};
+use crate::grants::{Grants, Redeemer};
 use crate::journal::{Action, Journal, Outcome};
 use crate::pages;
 use crate::signin;
@@ -79,21 +79,6 @@ impl<G> App<G> {
 
     pub(crate) async fn admit_sign_in(&self) -> Result<(), Duration> {
         Self::admit(&self.global_sign_in, GLOBAL_SIGN_IN_KEY).await
-    }
-}
-
-impl<G: Grants> App<G> {
-    /// Revoke `tokens` at the issuer with the client of `kind`. Returns
-    /// whether every revocation succeeded; a failure is logged in fixed text.
-    pub(crate) async fn revoke_all(&self, kind: &str, tokens: &[RefreshToken]) -> bool {
-        let mut all = true;
-        for token in tokens {
-            if self.grants.revoke(kind, token).await.is_err() {
-                tracing::warn!("a refresh token could not be revoked at the issuer");
-                all = false;
-            }
-        }
-        all
     }
 }
 
@@ -220,7 +205,11 @@ fn redirect(status: StatusCode, location: &str) -> Response {
     response
 }
 
-/// `POST /session/sign-out`: end the session here and at the issuer.
+/// `POST /session/sign-out`: end the session here at once and at the issuer.
+/// The session is removed, audited and its cookie cleared before any issuer
+/// call: the refresh tokens go to the revocation queue, so a slow issuer
+/// cannot hold the sign-out or leave the session alive. Sign-out is never
+/// rate limited.
 async fn sign_out<G: Grants + Redeemer>(
     State(app): State<Arc<App<G>>>,
     headers: HeaderMap,
@@ -229,43 +218,30 @@ async fn sign_out<G: Grants + Redeemer>(
         return problem(ProblemKind::Refused, StatusCode::FORBIDDEN);
     }
     let name = app.config.session_cookie();
-    let cookie = session_cookie(&headers, name);
-    let live = cookie.and_then(|cookie| app.store.live(cookie).map(|live| (cookie, live)));
-    let mut response = match live {
-        Some((cookie, live)) => {
+    let ended = session_cookie(&headers, name).and_then(|cookie| app.store.remove(cookie));
+    let mut response = match ended {
+        Some(session) => {
             let person = app
+                .journal
+                .person_at(session.issuer(), session.subject())
+                .ok();
+            let queued = app
                 .store
-                .person(cookie)
-                .and_then(|(issuer, subject)| app.journal.person_at(&issuer, &subject).ok());
-            if let Some(person) = &person {
-                if let Err(wait) = App::<G>::admit(&app.per_person, person).await {
-                    return rate_limited(wait);
-                }
+                .revoke_later(session.kind(), session.refresh_tokens());
+            let outcome = if queued {
+                Outcome::Ok
+            } else {
+                Outcome::RevocationFailed
+            };
+            if let Err(error) = app
+                .journal
+                .record(Action::SignOut, session.kind(), person.as_deref(), outcome)
+                .await
+            {
+                tracing::error!(%error, "a sign-out could not be audited");
             }
-            // No renewal can run while the session is being ended.
-            let _held = live.renewal.clone().lock_owned().await;
-            match app.store.remove(cookie) {
-                Some(session) => {
-                    let revoked = app
-                        .revoke_all(session.kind(), &session.refresh_tokens())
-                        .await;
-                    let outcome = if revoked {
-                        Outcome::Ok
-                    } else {
-                        Outcome::RevocationFailed
-                    };
-                    if let Err(error) = app
-                        .journal
-                        .record(Action::SignOut, session.kind(), person.as_deref(), outcome)
-                        .await
-                    {
-                        tracing::error!(%error, "a sign-out could not be audited");
-                    }
-                    redirect(
-                        StatusCode::SEE_OTHER,
-                        &end_session_location(&app, session.kind()),
-                    )
-                }
+            match end_session_location(&app, session.kind()) {
+                Some(location) => redirect(StatusCode::SEE_OTHER, &location),
                 None => redirect(StatusCode::SEE_OTHER, "/session/signed-out"),
             }
         }
@@ -278,23 +254,24 @@ async fn sign_out<G: Grants + Redeemer>(
 }
 
 /// The issuer's end-session endpoint with the kind's client and the page to
-/// return to. No `id_token_hint`: the service keeps no ID token.
-fn end_session_location<G>(app: &App<G>, kind: &str) -> String {
+/// return to. No `id_token_hint`: the service keeps no ID token. A kind the
+/// configuration does not know has no client to name, so the person lands on
+/// the signed-out page instead.
+fn end_session_location<G>(app: &App<G>, kind: &str) -> Option<String> {
+    let Some(sign_in) = app.config.sign_in(kind) else {
+        tracing::error!("a session names a kind of sign-in the configuration lacks");
+        return None;
+    };
     let mut location = url::Url::parse(app.config.issuer.end_session.as_str())
         .expect("the configuration validated the end-session endpoint");
-    let client_id = app
-        .config
-        .sign_in(kind)
-        .map(|sign_in| sign_in.client_id.as_str().to_owned())
-        .unwrap_or_default();
     location
         .query_pairs_mut()
-        .append_pair("client_id", &client_id)
+        .append_pair("client_id", sign_in.client_id.as_str())
         .append_pair(
             "post_logout_redirect_uri",
             &format!("{}/session/signed-out", app.config.origin()),
         );
-    location.to_string()
+    Some(location.to_string())
 }
 
 async fn signed_out() -> Response {

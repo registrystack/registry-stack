@@ -116,6 +116,15 @@ impl PendingSignIn {
         }
     }
 
+    /// The refresh tokens the finished hops obtained.
+    #[must_use]
+    pub fn refresh_tokens(&self) -> Vec<RefreshToken> {
+        self.grants
+            .iter()
+            .filter_map(|grant| grant.refresh_token.clone())
+            .collect()
+    }
+
     /// The audience of the hop in flight.
     #[must_use]
     pub fn audience(&self) -> Option<&str> {
@@ -423,9 +432,7 @@ impl Store {
     /// Queue the refresh tokens of `session`, which ended without a sign-out,
     /// for revocation at the issuer.
     pub fn release(&self, session: &Session) {
-        if let Some(ended) = &self.ended {
-            ended.revoke(&session.kind, session.refresh_tokens());
-        }
+        self.revoke_later(&session.kind, session.refresh_tokens());
     }
 
     /// The store's own reading of the clock.
@@ -442,7 +449,30 @@ impl Store {
                 .is_some_and(|idle| now.saturating_duration_since(session.last_seen) >= idle)
     }
 
-    /// Hold `pending` under `cookie` for `lifetime`.
+    /// Queue `tokens`, issued to a client of `kind`, for revocation at the
+    /// issuer, off the request path. Returns whether they were queued: a full
+    /// queue drops them, and the drop is logged and counted.
+    pub fn revoke_later(&self, kind: &str, tokens: Vec<RefreshToken>) -> bool {
+        if tokens.is_empty() {
+            return true;
+        }
+        match &self.ended {
+            Some(ended) => ended.revoke(kind, tokens),
+            None => {
+                tracing::error!("no revocation queue is attached to the session store");
+                false
+            }
+        }
+    }
+
+    /// Queue the refresh tokens the finished hops of `pending` obtained.
+    pub fn release_pending(&self, pending: &PendingSignIn) {
+        self.revoke_later(&pending.kind, pending.refresh_tokens());
+    }
+
+    /// Hold `pending` under `cookie` for `lifetime`. Sign-ins that expired
+    /// while the store was full are dropped and their refresh tokens queued
+    /// for revocation.
     pub fn begin_sign_in(
         &self,
         cookie: &str,
@@ -453,25 +483,88 @@ impl Store {
         let now = self.now();
         pending.expires_at = Some(now + lifetime);
         let mut entries = lock(&self.pending);
+        let mut dropped = Vec::new();
         if entries.len() >= self.maximum_pending {
-            entries.retain(|_, entry| entry.expires_at.is_some_and(|end| end > now));
+            Self::take_expired_pending(&mut entries, now, &mut dropped);
         }
-        if entries.len() >= self.maximum_pending {
-            return Err(Exhausted);
+        let outcome = if entries.len() >= self.maximum_pending {
+            Err(Exhausted)
+        } else {
+            entries.insert(digest(cookie), pending);
+            Ok(())
+        };
+        drop(entries);
+        for entry in &dropped {
+            self.release_pending(entry);
         }
-        entries.insert(digest(cookie), pending);
-        Ok(())
+        outcome
+    }
+
+    fn take_expired_pending(
+        entries: &mut HashMap<[u8; 32], PendingSignIn>,
+        now: Instant,
+        taken: &mut Vec<PendingSignIn>,
+    ) {
+        let expired: Vec<[u8; 32]> = entries
+            .iter()
+            .filter(|(_, entry)| entry.expires_at.is_none_or(|end| end <= now))
+            .map(|(key, _)| *key)
+            .collect();
+        taken.extend(expired.iter().filter_map(|key| entries.remove(key)));
     }
 
     /// Remove and return the pending sign-in behind `cookie`. A sign-in
-    /// cookie is good for one callback, whatever that callback carries.
+    /// cookie is good for one callback, whatever that callback carries. One
+    /// that expired is not returned: its refresh tokens are queued for
+    /// revocation.
     pub fn finish_sign_in(&self, cookie: &str) -> Option<PendingSignIn> {
         let pending = lock(&self.pending).remove(&digest(cookie))?;
         let now = self.now();
-        pending
-            .expires_at
-            .is_some_and(|end| end > now)
-            .then_some(pending)
+        if pending.expires_at.is_some_and(|end| end > now) {
+            Some(pending)
+        } else {
+            self.release_pending(&pending);
+            None
+        }
+    }
+
+    /// Remove the pending sign-in behind `cookie`, live or expired, and queue
+    /// its refresh tokens for revocation.
+    pub fn abandon_sign_in(&self, cookie: &str) {
+        let pending = lock(&self.pending).remove(&digest(cookie));
+        if let Some(pending) = pending {
+            self.release_pending(&pending);
+        }
+    }
+
+    /// Remove every sign-in and session that is over, and queue their refresh
+    /// tokens for revocation. Called on a timer, so tokens of sign-ins nobody
+    /// returns to, and of sessions nobody presents again, do not wait for the
+    /// store to fill. Returns how many sign-ins and sessions ended.
+    pub fn reap(&self) -> (usize, usize) {
+        let now = self.now();
+        let mut expired_sign_ins = Vec::new();
+        Self::take_expired_pending(&mut lock(&self.pending), now, &mut expired_sign_ins);
+        for entry in &expired_sign_ins {
+            self.release_pending(entry);
+        }
+        let ended = {
+            let mut sessions = lock(&self.sessions);
+            sessions.last_sweep = Some(now);
+            let over: Vec<Key> = sessions
+                .entries
+                .iter()
+                .filter(|(_, held)| self.over(held, now))
+                .map(|(key, _)| *key)
+                .collect();
+            over.iter()
+                .filter_map(|key| sessions.take(key))
+                .collect::<Vec<_>>()
+        };
+        for session in &ended {
+            self.release(session);
+        }
+        (expired_sign_ins.len(), ended.len())
     }
 
     /// Remove every session that is over from a full store, at most once per
@@ -1202,5 +1295,122 @@ mod tests {
         .expect("the evicted session's family was revoked");
         assert_eq!(ended.failed(), 0);
         assert_eq!(ended.dropped(), 0);
+    }
+
+    /// A store whose ended sign-ins reach a fake issuer, and a pending
+    /// sign-in holding the refresh token of a finished hop.
+    fn with_issuer() -> (
+        Arc<ManualClock>,
+        Arc<crate::grants::fake::FakeIssuer>,
+        Store,
+        impl Fn() -> (PendingSignIn, RefreshToken),
+    ) {
+        let clock = Arc::new(ManualClock::new());
+        let issuer = crate::grants::fake::FakeIssuer::new(clock.clone());
+        let (ended, revoker) = crate::revoker::channel(8);
+        tokio::spawn(revoker.run(issuer.clone()));
+        let store = Store::new(clock.clone(), 4, 1).with_ended_sessions(ended);
+        let make = {
+            let (issuer, clock) = (issuer.clone(), clock.clone());
+            move || {
+                let (access_token, expires_at, refresh) = issuer.sign_in("urn:person");
+                let mut pending = pending();
+                pending.grants.push(AudienceGrant {
+                    audience: "urn:person".to_owned(),
+                    access_token,
+                    expires_at,
+                    issued_at: clock.now(),
+                    refresh_token: Some(refresh.clone()),
+                });
+                (pending, refresh)
+            }
+        };
+        (clock, issuer, store, make)
+    }
+
+    async fn until_revoked(issuer: &crate::grants::fake::FakeIssuer, token: &RefreshToken) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !issuer.family_revoked(token) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the family was revoked");
+    }
+
+    #[tokio::test]
+    async fn the_hops_tokens_of_an_expired_pending_sign_in_are_revoked_when_it_returns() {
+        let (clock, issuer, store, make) = with_issuer();
+        let (held, refresh) = make();
+        store
+            .begin_sign_in("a", held, Duration::from_secs(60))
+            .expect("room");
+        clock.advance(Duration::from_secs(61));
+        assert!(store.finish_sign_in("a").is_none());
+        until_revoked(&issuer, &refresh).await;
+    }
+
+    #[tokio::test]
+    async fn the_hops_tokens_of_a_pending_sign_in_evicted_for_room_are_revoked() {
+        let (clock, issuer, store, make) = with_issuer();
+        let (held, refresh) = make();
+        store
+            .begin_sign_in("a", held, Duration::from_secs(60))
+            .expect("room");
+        clock.advance(Duration::from_secs(61));
+        let (newcomer, newcomer_refresh) = make();
+        store
+            .begin_sign_in("b", newcomer, Duration::from_secs(60))
+            .expect("the expired entry made room");
+        until_revoked(&issuer, &refresh).await;
+        assert!(!issuer.family_revoked(&newcomer_refresh));
+    }
+
+    #[tokio::test]
+    async fn a_reap_revokes_expired_sign_ins_and_sessions_and_spares_live_ones() {
+        let (clock, issuer, store, make) = with_issuer();
+        let (held, refresh) = make();
+        store
+            .begin_sign_in("a", held, Duration::from_secs(60))
+            .expect("room");
+        let (access_token, expires_at, session_refresh) = issuer.sign_in("urn:person");
+        let mut session = session_for(&clock, "https://id.example", "p1");
+        session.audiences = vec![AudienceGrant {
+            audience: "urn:person".to_owned(),
+            access_token,
+            expires_at,
+            issued_at: clock.now(),
+            refresh_token: Some(session_refresh.clone()),
+        }];
+        let _ = store.insert("s", session).expect("room");
+        assert_eq!(store.reap(), (0, 0));
+        clock.advance(Duration::from_secs(61));
+        assert_eq!(store.reap(), (1, 0), "the session is not over");
+        until_revoked(&issuer, &refresh).await;
+        assert!(!issuer.family_revoked(&session_refresh));
+        clock.advance(Duration::from_secs(3600));
+        assert_eq!(store.reap(), (0, 1));
+        until_revoked(&issuer, &session_refresh).await;
+        assert_eq!(store.session_count(), 0);
+        assert_eq!(lock(&store.sessions).by_person.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn abandoning_a_live_sign_in_revokes_its_tokens() {
+        let (_clock, issuer, store, make) = with_issuer();
+        let (held, refresh) = make();
+        store
+            .begin_sign_in("a", held, Duration::from_secs(60))
+            .expect("room");
+        store.abandon_sign_in("a");
+        until_revoked(&issuer, &refresh).await;
+        assert!(store.finish_sign_in("a").is_none());
+    }
+
+    #[test]
+    fn a_store_without_a_queue_reports_that_nothing_was_queued() {
+        let (_clock, store) = store(1, 1);
+        assert!(!store.revoke_later("citizen", vec![RefreshToken::new("r").expect("token")]));
+        assert!(store.revoke_later("citizen", Vec::new()));
     }
 }

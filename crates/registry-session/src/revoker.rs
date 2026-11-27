@@ -58,22 +58,24 @@ pub fn channel(capacity: usize) -> (EndedSessions, Revoker) {
 
 impl EndedSessions {
     /// Queue `tokens`, issued to a client of `kind`, for revocation. Never
-    /// waits: a full queue drops them and counts the drop.
-    pub fn revoke(&self, kind: &str, tokens: Vec<RefreshToken>) {
+    /// waits: a full queue drops them and counts the drop. Returns whether
+    /// they were queued.
+    pub fn revoke(&self, kind: &str, tokens: Vec<RefreshToken>) -> bool {
         if tokens.is_empty() {
-            return;
+            return true;
         }
         let ended = Ended {
             kind: kind.to_owned(),
             tokens,
         };
         match self.sender.try_send(ended) {
-            Ok(()) => {}
+            Ok(()) => true,
             Err(TrySendError::Full(_) | TrySendError::Closed(_)) => {
                 self.counts.dropped.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(
                     "an ended session's refresh tokens could not be queued for revocation"
                 );
+                false
             }
         }
     }

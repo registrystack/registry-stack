@@ -13,7 +13,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::check::{check_router, Checker};
-use crate::clock::SystemClock;
+use crate::clock::{Clock, SystemClock};
 use crate::config::{describe_secret_failure, RateLimitConfig, RuntimeConfig};
 use crate::issuer::HttpIssuer;
 use crate::journal::Journal;
@@ -42,7 +42,13 @@ pub enum RuntimeError {
 pub struct Service {
     pub public: Router,
     pub check: Router,
+    /// The session store both routers share.
+    pub store: Arc<Store>,
 }
+
+/// How often sign-ins and sessions that are over are reaped and their refresh
+/// tokens queued for revocation.
+const REAP_INTERVAL: Duration = Duration::from_secs(15);
 
 fn limiter(rate: RateLimitConfig) -> Result<TokenBucketLimiter, RuntimeError> {
     TokenBucketLimiter::new(TokenBucketConfig {
@@ -58,6 +64,15 @@ impl Service {
     pub async fn build(
         config: RuntimeConfig,
         writer: Option<AuditWriter>,
+    ) -> Result<Self, RuntimeError> {
+        Self::build_with_clock(config, writer, Arc::new(SystemClock)).await
+    }
+
+    /// [`Service::build`] with every expiry read from `clock`.
+    pub async fn build_with_clock(
+        config: RuntimeConfig,
+        writer: Option<AuditWriter>,
+        clock: Arc<dyn Clock>,
     ) -> Result<Self, RuntimeError> {
         let secrets = config.secret_providers.resolver().map_err(|error| {
             RuntimeError::Secret(describe_secret_failure(
@@ -112,26 +127,35 @@ impl Service {
         tokio::spawn(revoker.run(issuer.clone()));
         let store = Arc::new(
             Store::new(
-                Arc::new(SystemClock),
+                clock,
                 config.session.sessions(),
                 config.session.pending_sign_ins(),
             )
             .with_idle_lifetime(Duration::from_secs(config.session.idle_lifetime_seconds()))
             .with_ended_sessions(ended),
         );
+        let reaper = store.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(REAP_INTERVAL);
+            loop {
+                ticker.tick().await;
+                reaper.reap();
+            }
+        });
         let checker = Checker::new(config.clone(), store.clone(), issuer.clone())
             .with_journal(journal.clone());
         let app = Arc::new(App {
             global_sign_in: limiter(config.rate_limits.global_sign_in)?,
             per_person: limiter(config.rate_limits.per_person)?,
             config,
-            store,
+            store: store.clone(),
             grants: issuer,
             journal,
         });
         Ok(Self {
             public: public::router(app),
             check: check_router(checker),
+            store,
         })
     }
 }

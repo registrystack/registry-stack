@@ -153,13 +153,24 @@ fn authorize_redirect<G>(app: &App<G>, location: &str, flow_cookie: &str) -> Res
 pub(crate) async fn start<G: Grants + Redeemer>(
     State(app): State<Arc<App<G>>>,
     RawQuery(query): RawQuery,
+    headers: HeaderMap,
 ) -> Response {
-    if let Err(wait) = app.admit_sign_in().await {
-        return rate_limited(wait);
-    }
+    // The shared sign-in limit is charged only for a start that names a page
+    // the service can send the person back to, so requests that are refused
+    // anyway do not drain it. Callbacks are not charged: a callback needs the
+    // pending sign-in a charged start created.
     let Some((return_to, kind)) = return_target(&app, query.as_deref()) else {
         return problem(ProblemKind::ReturnRefused, StatusCode::BAD_REQUEST);
     };
+    if let Err(wait) = app.admit_sign_in().await {
+        return rate_limited(wait);
+    }
+    // A flow cookie the browser already presents belongs to a sign-in it
+    // walked away from: that sign-in ends here, and the refresh tokens of the
+    // hops it finished are revoked.
+    if let Some(abandoned) = session_cookie(&headers, app.config.flow_cookie()) {
+        app.store.abandon_sign_in(abandoned);
+    }
     let audiences: Vec<String> = app
         .config
         .audience_set(&kind)
@@ -212,13 +223,29 @@ enum Step {
 /// `GET /session/callback`: redeem the code, verify the ID token, and either
 /// ask for the next audience or open the session. The flow cookie is cleared
 /// whatever the outcome, unless a further hop refreshes it.
+///
+/// The work runs in its own task, so a request the gateway or the browser
+/// gives up on cannot stop it halfway and drop refresh tokens the issuer
+/// already issued. When nobody is left to receive the answer, a session it
+/// opened is ended and its tokens revoked.
 pub(crate) async fn callback<G: Grants + Redeemer>(
     State(app): State<Arc<App<G>>>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
     let flow_name = app.config.flow_cookie();
-    let step = complete(&app, query.as_deref(), &headers).await;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let worker = app.clone();
+    tokio::spawn(async move {
+        let step = complete(&worker, query.as_deref(), &headers).await;
+        if let Err(unheard) = sender.send(step) {
+            discard(&worker, unheard).await;
+        }
+    });
+    let Ok(step) = receiver.await else {
+        tracing::error!("a sign-in callback task ended without an answer");
+        return problem(ProblemKind::Internal, StatusCode::INTERNAL_SERVER_ERROR);
+    };
     let mut response = match step {
         Step::Next {
             location,
@@ -258,37 +285,72 @@ pub(crate) async fn callback<G: Grants + Redeemer>(
     response
 }
 
-/// End a sign-in that cannot finish: revoke every refresh token it holds,
-/// including `extra`, and audit the refusal.
+/// What to do with a step nobody will read: a session it opened never reaches
+/// the browser, so it ends and its tokens are revoked. A further hop's pending
+/// sign-in stays in the store until it expires and is reaped.
+async fn discard<G: Grants>(app: &App<G>, step: Step) {
+    if let Step::Done { session_cookie, .. } = step {
+        tracing::warn!("a sign-in finished after its request was given up on");
+        if let Some(session) = app.store.remove(&session_cookie) {
+            end_audited(app, &session).await;
+        }
+    }
+}
+
+/// Queue the refresh tokens of a session that ended without a sign-out and
+/// audit its end.
+async fn end_audited<G>(app: &App<G>, session: &Session) {
+    app.store.release(session);
+    let Ok(person) = app.journal.person_at(session.issuer(), session.subject()) else {
+        tracing::error!("a person pseudonym could not be derived");
+        return;
+    };
+    if let Err(error) = app
+        .journal
+        .record(
+            Action::SessionEnded,
+            session.kind(),
+            Some(&person),
+            Outcome::Ok,
+        )
+        .await
+    {
+        tracing::error!(%error, "a session end could not be audited");
+    }
+}
+
+/// Audit a sign-in the service refused after it had a valid pending sign-in.
+async fn audit_refusal<G>(app: &App<G>, kind: &str, subject: Option<&str>) {
+    let person = subject.and_then(|subject| app.journal.person(subject).ok());
+    if let Err(error) = app
+        .journal
+        .record(Action::SignIn, kind, person.as_deref(), Outcome::Refused)
+        .await
+    {
+        tracing::error!(%error, "a refused sign-in could not be audited");
+    }
+}
+
+/// End a sign-in that cannot finish: queue every refresh token it holds,
+/// including `extra`, for revocation, and audit the refusal.
 async fn abandon<G: Grants>(
     app: &App<G>,
     pending: PendingSignIn,
     extra: Vec<RefreshToken>,
     failure: Failure,
 ) -> Step {
-    let mut tokens: Vec<RefreshToken> = pending
-        .grants
-        .iter()
-        .filter_map(|grant| grant.refresh_token.clone())
-        .collect();
+    let mut tokens = pending.refresh_tokens();
     tokens.extend(extra);
-    app.revoke_all(&pending.kind, &tokens).await;
-    let person = pending
-        .person
-        .as_ref()
-        .and_then(|person| app.journal.person(&person.subject).ok());
-    if let Err(error) = app
-        .journal
-        .record(
-            Action::SignIn,
-            &pending.kind,
-            person.as_deref(),
-            Outcome::Refused,
-        )
-        .await
-    {
-        tracing::error!(%error, "a refused sign-in could not be audited");
-    }
+    app.store.revoke_later(&pending.kind, tokens);
+    audit_refusal(
+        app,
+        &pending.kind,
+        pending
+            .person
+            .as_ref()
+            .map(|person| person.subject.as_str()),
+    )
+    .await;
     Step::Failed {
         failure,
         return_to: Some(pending.return_to),
@@ -311,24 +373,9 @@ async fn complete<G: Grants + Redeemer>(
     headers: &HeaderMap,
 ) -> Step {
     // Taking the pending sign-in consumes it, so a replayed callback finds
-    // nothing, whatever it carries. It is taken before the limit admits the
-    // callback, so a throttled callback ends its flow too.
+    // nothing, whatever it carries.
     let pending = session_cookie(headers, app.config.flow_cookie())
         .and_then(|cookie| app.store.finish_sign_in(cookie));
-    if let Err(_wait) = app.admit_sign_in().await {
-        if let Some(pending) = pending {
-            let tokens: Vec<RefreshToken> = pending
-                .grants
-                .iter()
-                .filter_map(|grant| grant.refresh_token.clone())
-                .collect();
-            app.revoke_all(&pending.kind, &tokens).await;
-        }
-        return Step::Failed {
-            failure: Failure::RateLimited,
-            return_to: None,
-        };
-    }
     let Some(mut pending) = pending else {
         return Step::Failed {
             failure: Failure::Refused,
@@ -426,7 +473,8 @@ async fn complete<G: Grants + Redeemer>(
     if !pending.is_last_hop() {
         return next_hop(app, pending, grant).await;
     }
-    open_session(app, pending, grant).await
+    let previous = session_cookie(headers, app.config.session_cookie());
+    open_session(app, pending, grant, previous).await
 }
 
 /// Put the pending sign-in back for the next audience under a fresh flow
@@ -453,17 +501,15 @@ async fn next_hop<G: Grants + Redeemer>(
         return abandon(app, pending, Vec::new(), Failure::Refused).await;
     };
     let (kind, return_to) = (pending.kind.clone(), pending.return_to.clone());
-    let tokens: Vec<RefreshToken> = pending
-        .grants
-        .iter()
-        .filter_map(|grant| grant.refresh_token.clone())
-        .collect();
+    let subject = pending.person.as_ref().map(|person| person.subject.clone());
+    let tokens = pending.refresh_tokens();
     if app
         .store
         .begin_sign_in(&secrets.cookie, pending, lifetime(app))
         .is_err()
     {
-        app.revoke_all(&kind, &tokens).await;
+        app.store.revoke_later(&kind, tokens);
+        audit_refusal(app, &kind, subject.as_deref()).await;
         return Step::Failed {
             failure: Failure::Busy,
             return_to: Some(return_to),
@@ -475,11 +521,14 @@ async fn next_hop<G: Grants + Redeemer>(
     }
 }
 
-/// Audit the sign-in, open the session, and release the cookie.
+/// Audit the sign-in, open the session, and release the cookie. A session the
+/// browser already presents (`previous`) ends: whoever signs in through a
+/// browser replaces whoever was signed in there.
 async fn open_session<G: Grants + Redeemer>(
     app: &App<G>,
     mut pending: PendingSignIn,
     last: AudienceGrant,
+    previous: Option<&str>,
 ) -> Step {
     pending.grants.push(last);
     let Some(person) = pending.person.take() else {
@@ -510,33 +559,277 @@ async fn open_session<G: Grants + Redeemer>(
         .await
     {
         tracing::error!(%error, "the sign-in could not be audited");
-        app.revoke_all(&kind, &tokens).await;
+        app.store.revoke_later(&kind, tokens);
         return Step::Failed {
             failure: Failure::AuditUnavailable,
             return_to: Some(return_to),
         };
     }
     let Ok(replaced) = app.store.insert(&cookie, session) else {
-        app.revoke_all(&kind, &tokens).await;
-        if let Err(error) = app
-            .journal
-            .record(Action::SignIn, &kind, Some(&pseudonym), Outcome::Refused)
-            .await
-        {
-            tracing::error!(%error, "a refused sign-in could not be audited");
-        }
+        app.store.revoke_later(&kind, tokens);
+        audit_refusal(app, &kind, Some(&person.subject)).await;
         return Step::Failed {
             failure: Failure::Busy,
             return_to: Some(return_to),
         };
     };
-    // The person's oldest sessions ended to make room: their tokens go too.
+    // The person's oldest sessions ended to make room, and the session this
+    // browser held: their tokens go too.
     for ended in replaced.sessions() {
-        app.revoke_all(ended.kind(), &ended.refresh_tokens()).await;
+        end_audited(app, ended).await;
+    }
+    if let Some(held) = previous.and_then(|held| app.store.remove(held)) {
+        end_audited(app, &held).await;
     }
     Step::Done {
         session_cookie: cookie,
         return_to,
         max_age: absolute.as_secs(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::Router;
+    use registry_platform_audit::{AuditProfile, AuditWriter};
+    use registry_platform_httputil::BearerToken;
+    use registry_platform_ratelimit::token_bucket::{TokenBucketConfig, TokenBucketLimiter};
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::clock::SystemClock;
+    use crate::grants::{GrantError, Redeemed, Renewed};
+    use crate::journal::Journal;
+    use crate::public::router;
+    use crate::store::Store;
+
+    /// An issuer double for the production posture, whose plain-HTTP token
+    /// endpoint the real client could not reach.
+    struct Issuer {
+        redemptions: AtomicUsize,
+        /// Fills the pending store while a redemption is in flight, so the
+        /// next hop finds it full.
+        crowd: Option<Arc<Store>>,
+    }
+
+    impl Redeemer for Issuer {
+        async fn redeem(&self, _redemption: &Redemption<'_>) -> Result<Redeemed, GrantError> {
+            let count = self.redemptions.fetch_add(1, Ordering::SeqCst);
+            if let Some(store) = &self.crowd {
+                let crowded = PendingSignIn::new(
+                    "citizen".to_owned(),
+                    "/apply/".to_owned(),
+                    vec!["urn:x".to_owned()],
+                    "s".to_owned(),
+                    "n".to_owned(),
+                    "v".to_owned(),
+                );
+                store
+                    .begin_sign_in("crowd", crowded, Duration::from_secs(60))
+                    .expect("room for the crowd");
+            }
+            Ok(Redeemed {
+                access_token: BearerToken::new(format!("access-{count}")).expect("token"),
+                expires_at: Instant::now() + Duration::from_secs(300),
+                refresh_token: Some(RefreshToken::new(format!("refresh-{count}")).expect("token")),
+                subject: "person-1".to_owned(),
+                claims: Map::new(),
+            })
+        }
+    }
+
+    impl Grants for Issuer {
+        async fn refresh(
+            &self,
+            _kind: &str,
+            _refresh_token: &RefreshToken,
+            _resource: &str,
+        ) -> Result<Renewed, GrantError> {
+            Err(GrantError::Refused)
+        }
+
+        async fn revoke(&self, _kind: &str, _token: &RefreshToken) -> Result<(), GrantError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("sink").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The production runtime file served over a double issuer.
+    fn production(crowd_the_store: bool) -> (Router, Arc<Store>, Sink) {
+        let config = Arc::new(
+            crate::config::tests::load(&crate::config::tests::document())
+                .expect("the production document loads"),
+        );
+        let store = Arc::new(Store::new(
+            Arc::new(SystemClock),
+            config.session.sessions(),
+            if crowd_the_store {
+                1
+            } else {
+                config.session.pending_sign_ins()
+            },
+        ));
+        let sink = Sink::default();
+        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![7; 32]))
+            .expect("audit profile");
+        let journal = Arc::new(
+            Journal::new(
+                AuditWriter::from_line_sink_without_posture(Box::new(sink.clone())),
+                profile.key_hasher(),
+                config.issuer.id.as_str(),
+                config
+                    .sign_ins
+                    .iter()
+                    .map(|sign_in| (sign_in.id.as_str(), sign_in.client_id.as_str())),
+            )
+            .expect("journal"),
+        );
+        let limiter = |requests_per_minute, burst| {
+            TokenBucketLimiter::new(TokenBucketConfig {
+                requests_per_minute,
+                burst,
+            })
+            .expect("limiter")
+        };
+        let issuer = Issuer {
+            redemptions: AtomicUsize::new(0),
+            crowd: crowd_the_store.then(|| store.clone()),
+        };
+        let app = Arc::new(App {
+            config,
+            store: store.clone(),
+            grants: issuer,
+            journal,
+            global_sign_in: limiter(6000, 600),
+            per_person: limiter(6000, 600),
+        });
+        (router(app), store, sink)
+    }
+
+    async fn send(router: &Router, request: Request<Body>) -> axum::response::Response {
+        router.clone().oneshot(request).await.expect("a response")
+    }
+
+    fn set_cookies(response: &axum::response::Response) -> Vec<String> {
+        response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().expect("ascii").to_owned())
+            .collect()
+    }
+
+    fn cookie_named(response: &axum::response::Response, name: &str) -> String {
+        set_cookies(response)
+            .into_iter()
+            .find(|cookie| cookie.starts_with(&format!("{name}=")))
+            .unwrap_or_else(|| panic!("a {name} cookie"))
+    }
+
+    fn pair(cookie: &str) -> String {
+        cookie.split(';').next().expect("a pair").to_owned()
+    }
+
+    fn state_of(response: &axum::response::Response) -> String {
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .expect("a location")
+            .to_str()
+            .expect("ascii");
+        url::Url::parse(location)
+            .expect("url")
+            .query_pairs()
+            .find(|(name, _)| name == "state")
+            .map(|(_, value)| value.into_owned())
+            .expect("a state")
+    }
+
+    fn get(path: &str, cookie: Option<&str>) -> Request<Body> {
+        let mut request = Request::get(path);
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        request.body(Body::empty()).expect("request")
+    }
+
+    fn callback_path(state: &str) -> String {
+        format!("/session/callback?code=c&state={state}&iss=https%3A%2F%2Fid.example")
+    }
+
+    /// Every attribute of the cookies a production service sets, end to end:
+    /// the `__Host-` names, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/` and
+    /// no `Domain`, at sign-in, at the callback and at sign-out.
+    #[tokio::test]
+    async fn production_cookies_are_host_prefixed_secure_host_only_and_small() {
+        let (router, _store, _sink) = production(false);
+        let started = send(&router, get("/session/sign-in?return=%2Fapply%2F", None)).await;
+        assert_eq!(started.status(), StatusCode::FOUND);
+        let flow = cookie_named(&started, crate::config::FLOW_COOKIE);
+        let state = state_of(&started);
+
+        let done = send(&router, get(&callback_path(&state), Some(&pair(&flow)))).await;
+        assert_eq!(done.status(), StatusCode::OK);
+        let session = cookie_named(&done, crate::config::SESSION_COOKIE);
+        let cleared_flow = cookie_named(&done, crate::config::FLOW_COOKIE);
+        let sign_out = Request::post("/session/sign-out")
+            .header(header::COOKIE, pair(&session))
+            .header("origin", "https://app.example")
+            .body(Body::empty())
+            .expect("request");
+        let out = send(&router, sign_out).await;
+        assert_eq!(out.status(), StatusCode::SEE_OTHER);
+        let cleared_session = cookie_named(&out, crate::config::SESSION_COOKIE);
+
+        for cookie in [&flow, &session, &cleared_flow, &cleared_session] {
+            for attribute in ["; Path=/", "; HttpOnly", "; SameSite=Lax", "; Secure"] {
+                assert!(cookie.contains(attribute), "{attribute} is missing");
+            }
+            assert!(cookie.starts_with("__Host-"), "the name is host-prefixed");
+            assert!(!cookie.contains("Domain"), "the cookie is host-only");
+        }
+        assert!(session.contains("Max-Age=28800"));
+        assert!(cleared_flow.contains("Max-Age=0"));
+        assert!(cleared_session.contains("Max-Age=0"));
+
+        // The browser sends both names back on every call: the whole header
+        // stays well inside the limits proxies and servers apply.
+        let header = format!("{}; {}", pair(&session), pair(&flow));
+        assert!(header.len() <= 150, "{} bytes", header.len());
+    }
+
+    #[tokio::test]
+    async fn a_refusal_between_hops_is_audited_and_revokes_the_first_hops_token() {
+        let (router, store, sink) = production(true);
+        let started = send(&router, get("/session/sign-in?return=%2Fstaff%2F", None)).await;
+        assert_eq!(started.status(), StatusCode::FOUND);
+        let flow = cookie_named(&started, crate::config::FLOW_COOKIE);
+        let state = state_of(&started);
+
+        // The first hop returns while another sign-in took the only slot.
+        let refused = send(&router, get(&callback_path(&state), Some(&pair(&flow)))).await;
+        assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let audit = String::from_utf8(sink.0.lock().expect("sink").clone()).expect("utf-8");
+        assert!(audit.contains("\"action\":\"sign-in\""), "{audit}");
+        assert!(audit.contains("refused"), "{audit}");
+        assert_eq!(store.session_count(), 0);
     }
 }

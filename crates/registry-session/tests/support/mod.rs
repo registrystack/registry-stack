@@ -23,6 +23,7 @@ use registry_platform_testing::fixtures;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+use tokio::sync::watch;
 
 pub const PERSON_AUDIENCE: &str = "https://api.example/person";
 pub const CASEWORK_AUDIENCE: &str = "https://casework.example/api";
@@ -89,6 +90,43 @@ struct Inner {
     end_session_visits: Vec<Vec<String>>,
 }
 
+/// What the fake gets wrong, for tests that need a bad token.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fault {
+    WrongNonce,
+    WrongIssuer,
+    WrongAudience,
+    TwoAudiencesWithoutAuthorizedParty,
+    WrongAuthorizedParty,
+    Expired,
+    UnlistedAlgorithm,
+    BadSignature,
+    AccessTokenType,
+    UnknownKey,
+    NoIdToken,
+    NoExpiresIn,
+    /// The access token names another audience than the `resource` asked for.
+    WrongAccessAudience,
+}
+
+/// A point the fake can hold a request at until a test opens it.
+struct Gate(watch::Sender<bool>);
+
+impl Gate {
+    fn open() -> Self {
+        Self(watch::channel(true).0)
+    }
+
+    fn set(&self, open: bool) {
+        self.0.send_replace(open);
+    }
+
+    async fn pass(&self) {
+        let mut receiver = self.0.subscribe();
+        receiver.wait_for(|open| *open).await.expect("gate");
+    }
+}
+
 struct Shared {
     origin: String,
     redirect_uri: String,
@@ -102,6 +140,14 @@ struct Shared {
     /// The lifetime in seconds of the next access tokens.
     access_lifetime: AtomicU64,
     omit_refresh_token: AtomicBool,
+    fault: Mutex<Option<Fault>>,
+    /// Holds the token endpoint before it redeems a code.
+    code_gate: Gate,
+    /// Holds the token endpoint after it rotated a refresh token and before
+    /// it answers.
+    refresh_response_gate: Gate,
+    /// Holds the revocation endpoint before it revokes.
+    revoke_gate: Gate,
 }
 
 /// An OpenID provider that behaves like the real one where it matters:
@@ -134,6 +180,10 @@ impl FakeIssuer {
             revoke_calls: AtomicU64::new(0),
             access_lifetime: AtomicU64::new(600),
             omit_refresh_token: AtomicBool::new(false),
+            fault: Mutex::new(None),
+            code_gate: Gate::open(),
+            refresh_response_gate: Gate::open(),
+            revoke_gate: Gate::open(),
         });
         let app = Router::new()
             .route("/authorize", get(authorize))
@@ -178,6 +228,53 @@ impl FakeIssuer {
         self.shared
             .omit_refresh_token
             .store(omit, Ordering::Release);
+    }
+
+    pub fn set_fault(&self, fault: Option<Fault>) {
+        *self.shared.fault.lock().expect("lock") = fault;
+    }
+
+    /// Hold every redemption of a code until [`FakeIssuer::release_codes`].
+    pub fn hold_codes(&self) {
+        self.shared.code_gate.set(false);
+    }
+
+    pub fn release_codes(&self) {
+        self.shared.code_gate.set(true);
+    }
+
+    /// Hold every refresh answer, after the token rotated, until released.
+    pub fn hold_refresh_answers(&self) {
+        self.shared.refresh_response_gate.set(false);
+    }
+
+    pub fn release_refresh_answers(&self) {
+        self.shared.refresh_response_gate.set(true);
+    }
+
+    /// Hold every revocation until [`FakeIssuer::release_revocations`].
+    pub fn hold_revocations(&self) {
+        self.shared.revoke_gate.set(false);
+    }
+
+    pub fn release_revocations(&self) {
+        self.shared.revoke_gate.set(true);
+    }
+
+    /// Wait until exactly `count` refresh token families are live. Revocation
+    /// runs off the request path, so a test waits for it.
+    pub async fn wait_live_families(&self, count: usize) {
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while self.live_families() != count {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            waited.is_ok(),
+            "{} refresh token families stayed live, expected {count}",
+            self.live_families()
+        );
     }
 
     /// The query parameters of each authorization request, in order.
@@ -306,6 +403,11 @@ async fn authorize(State(shared): State<Arc<Shared>>, RawQuery(query): RawQuery)
 
 fn access_token(shared: &Shared, client: &str, subject: &str, resource: &str) -> String {
     let now = unix_now();
+    let resource = if *shared.fault.lock().expect("lock") == Some(Fault::WrongAccessAudience) {
+        "https://other.example/api"
+    } else {
+        resource
+    };
     let lifetime = i64::try_from(shared.access_lifetime.load(Ordering::Acquire)).expect("fits");
     registry_platform_testing::sign_ed25519_compact_jwt_with_key(
         &shared.key,
@@ -325,23 +427,64 @@ fn access_token(shared: &Shared, client: &str, subject: &str, resource: &str) ->
 
 fn id_token(shared: &Shared, client: &str, subject: &str, nonce: &str) -> String {
     let now = unix_now();
-    registry_platform_testing::sign_ed25519_compact_jwt_with_key(
+    let fault = *shared.fault.lock().expect("lock");
+    let mut claims = json!({
+        "iss": shared.origin,
+        "sub": subject,
+        "aud": client,
+        "azp": client,
+        "iat": now,
+        "exp": now + 300,
+        "nonce": nonce,
+        "name": format!("Name of {subject}"),
+        "email": format!("{subject}@example.org"),
+        "email_verified": true,
+    });
+    let mut typ = "JWT";
+    let mut kid = "registry-platform-testing-ed25519-1";
+    match fault {
+        Some(Fault::WrongNonce) => claims["nonce"] = json!("another-nonce"),
+        Some(Fault::WrongIssuer) => claims["iss"] = json!("https://evil.example"),
+        Some(Fault::WrongAudience) => {
+            claims["aud"] = json!("another-client");
+            claims["azp"] = json!("another-client");
+        }
+        Some(Fault::TwoAudiencesWithoutAuthorizedParty) => {
+            claims["aud"] = json!([client, "another-client"]);
+            claims.as_object_mut().expect("claims").remove("azp");
+        }
+        Some(Fault::WrongAuthorizedParty) => claims["azp"] = json!("another-client"),
+        Some(Fault::Expired) => {
+            claims["iat"] = json!(now - 7200);
+            claims["exp"] = json!(now - 3600);
+        }
+        Some(Fault::AccessTokenType) => typ = "at+jwt",
+        Some(Fault::UnknownKey) => kid = "an-unpublished-key",
+        _ => {}
+    }
+    let signed = registry_platform_testing::sign_ed25519_compact_jwt_with_key(
         &shared.key,
-        "JWT",
-        "registry-platform-testing-ed25519-1",
-        json!({
-            "iss": shared.origin,
-            "sub": subject,
-            "aud": client,
-            "azp": client,
-            "iat": now,
-            "exp": now + 300,
-            "nonce": nonce,
-            "name": format!("Name of {subject}"),
-            "email": format!("{subject}@example.org"),
-            "email_verified": true,
-        }),
-    )
+        typ,
+        kid,
+        claims.clone(),
+    );
+    match fault {
+        Some(Fault::BadSignature) => {
+            let (signed_part, signature) = signed.rsplit_once('.').expect("a compact JWT");
+            let first = if signature.starts_with('A') { 'B' } else { 'A' };
+            format!("{signed_part}.{first}{}", &signature[1..])
+        }
+        Some(Fault::UnlistedAlgorithm) => {
+            let header = json!({"alg": "HS256", "typ": "JWT", "kid": kid});
+            format!(
+                "{}.{}.{}",
+                URL_SAFE_NO_PAD.encode(header.to_string()),
+                URL_SAFE_NO_PAD.encode(claims.to_string()),
+                URL_SAFE_NO_PAD.encode([7u8; 32])
+            )
+        }
+        _ => signed,
+    }
 }
 
 fn authenticated(shared: &Shared, form: &HashMap<String, String>) -> Option<String> {
@@ -388,6 +531,8 @@ async fn token(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
     let lifetime = shared.access_lifetime.load(Ordering::Acquire);
     match form.get("grant_type").map(String::as_str) {
         Some("authorization_code") => {
+            shared.code_gate.pass().await;
+            let fault = *shared.fault.lock().expect("lock");
             let mut inner = shared.inner.lock().expect("lock");
             let Some(code) = form.get("code").and_then(|code| inner.codes.remove(code)) else {
                 return oauth_error("invalid_grant");
@@ -421,39 +566,54 @@ async fn token(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
             if let Some(refresh) = refresh {
                 answer["refresh_token"] = json!(refresh);
             }
+            let object = answer.as_object_mut().expect("an object");
+            match fault {
+                Some(Fault::NoIdToken) => {
+                    object.remove("id_token");
+                }
+                Some(Fault::NoExpiresIn) => {
+                    object.remove("expires_in");
+                }
+                _ => {}
+            }
             json_response(StatusCode::OK, &answer)
         }
         Some("refresh_token") => {
             shared.refresh_calls.fetch_add(1, Ordering::AcqRel);
-            let mut inner = shared.inner.lock().expect("lock");
-            let presented = form.get("refresh_token").cloned().unwrap_or_default();
-            let Some(record) = inner.refresh.get_mut(&presented) else {
-                return oauth_error("invalid_grant");
+            let answer = {
+                let mut inner = shared.inner.lock().expect("lock");
+                let presented = form.get("refresh_token").cloned().unwrap_or_default();
+                let Some(record) = inner.refresh.get_mut(&presented) else {
+                    return oauth_error("invalid_grant");
+                };
+                let (family, reused) = (record.family, record.used);
+                if record.client != client || inner.revoked_families.contains(&family) {
+                    return oauth_error("invalid_grant");
+                }
+                if reused {
+                    inner.revoked_families.insert(family);
+                    return oauth_error("invalid_grant");
+                }
+                let record = inner.refresh.get_mut(&presented).expect("present");
+                record.used = true;
+                let resource = form
+                    .get("resource")
+                    .cloned()
+                    .unwrap_or_else(|| record.resource.clone());
+                let subject = record.subject.clone();
+                let refresh =
+                    issue_refresh(&shared, &mut inner, family, &client, &resource, &subject);
+                let mut answer = json!({
+                    "access_token": access_token(&shared, &client, &subject, &resource),
+                    "token_type": "Bearer",
+                    "expires_in": lifetime,
+                });
+                if let Some(refresh) = refresh {
+                    answer["refresh_token"] = json!(refresh);
+                }
+                answer
             };
-            let (family, reused) = (record.family, record.used);
-            if record.client != client || inner.revoked_families.contains(&family) {
-                return oauth_error("invalid_grant");
-            }
-            if reused {
-                inner.revoked_families.insert(family);
-                return oauth_error("invalid_grant");
-            }
-            let record = inner.refresh.get_mut(&presented).expect("present");
-            record.used = true;
-            let resource = form
-                .get("resource")
-                .cloned()
-                .unwrap_or_else(|| record.resource.clone());
-            let subject = record.subject.clone();
-            let refresh = issue_refresh(&shared, &mut inner, family, &client, &resource, &subject);
-            let mut answer = json!({
-                "access_token": access_token(&shared, &client, &subject, &resource),
-                "token_type": "Bearer",
-                "expires_in": lifetime,
-            });
-            if let Some(refresh) = refresh {
-                answer["refresh_token"] = json!(refresh);
-            }
+            shared.refresh_response_gate.pass().await;
             json_response(StatusCode::OK, &answer)
         }
         _ => oauth_error("unsupported_grant_type"),
@@ -462,6 +622,7 @@ async fn token(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
 
 async fn revoke(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
     shared.revoke_calls.fetch_add(1, Ordering::AcqRel);
+    shared.revoke_gate.pass().await;
     let form = form(&body);
     if authenticated(&shared, &form).is_none() {
         return json_response(
@@ -470,9 +631,12 @@ async fn revoke(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
         );
     }
     let mut inner = shared.inner.lock().expect("lock");
+    // RFC 7009 lets an issuer ignore a token it already spent: only the
+    // current token of a family ends it.
     let family = form
         .get("token")
         .and_then(|token| inner.refresh.get(token))
+        .filter(|record| !record.used)
         .map(|record| record.family);
     if let Some(family) = family {
         inner.revoked_families.insert(family);
@@ -556,12 +720,39 @@ impl std::io::Write for AuditSink {
     }
 }
 
+/// A clock that moves only when a test advances it.
+pub struct TestClock {
+    start: std::time::Instant,
+    elapsed: Mutex<std::time::Duration>,
+}
+
+impl TestClock {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            start: std::time::Instant::now(),
+            elapsed: Mutex::new(std::time::Duration::ZERO),
+        })
+    }
+
+    pub fn advance(&self, by: std::time::Duration) {
+        *self.elapsed.lock().expect("lock") += by;
+    }
+}
+
+impl registry_session::clock::Clock for TestClock {
+    fn now(&self) -> std::time::Instant {
+        self.start + *self.elapsed.lock().expect("lock")
+    }
+}
+
 pub struct Options {
     /// Rewrites the runtime document before it is written.
     pub edit: Box<dyn Fn(String) -> String>,
     pub audit_sink: Option<AuditSink>,
     /// Appended to the runtime document, such as a `rateLimits` block.
     pub extra_document: String,
+    /// The clock every expiry reads. The system clock when absent.
+    pub clock: Option<Arc<dyn registry_session::clock::Clock>>,
 }
 
 impl Default for Options {
@@ -570,6 +761,7 @@ impl Default for Options {
             edit: Box::new(|document| document),
             audit_sink: None,
             extra_document: String::new(),
+            clock: None,
         }
     }
 }
@@ -664,6 +856,7 @@ pub struct SignedIn {
 /// A running service and the browser that drives it.
 pub struct Harness {
     pub issuer: FakeIssuer,
+    pub store: Arc<registry_session::store::Store>,
     pub public: String,
     pub check: String,
     pub http: reqwest::Client,
@@ -759,9 +952,13 @@ impl Harness {
         let writer = options.audit_sink.map(|sink| {
             registry_platform_audit::AuditWriter::from_line_sink_without_posture(Box::new(sink))
         });
-        let service = registry_session::runtime::Service::build(config, writer)
+        let clock = options
+            .clock
+            .unwrap_or_else(|| Arc::new(registry_session::clock::SystemClock));
+        let service = registry_session::runtime::Service::build_with_clock(config, writer, clock)
             .await
             .expect("service starts");
+        let store = service.store.clone();
         tokio::spawn(registry_session::runtime::serve_until(
             public_listener,
             service.public,
@@ -774,6 +971,7 @@ impl Harness {
         ));
         Self {
             issuer,
+            store,
             public,
             check: format!("http://{check_address}"),
             http: browser(),

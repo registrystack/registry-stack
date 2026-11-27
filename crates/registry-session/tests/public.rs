@@ -174,7 +174,7 @@ async fn a_later_hop_naming_another_subject_opens_no_session_and_revokes_the_fir
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
     assert!(refused.set_cookie(SESSION_COOKIE).is_none());
     assert!(refused.marked());
-    assert_eq!(harness.issuer.live_families(), 0);
+    harness.issuer.wait_live_families(0).await;
     assert!(harness.issuer.revoke_calls() >= 2);
     let flow_cleared = refused.set_cookie(FLOW_COOKIE).expect("flow cleared");
     assert!(flow_cleared.contains("Max-Age=0"));
@@ -285,7 +285,7 @@ async fn sign_out_revokes_every_token_and_ends_the_session() {
         .expect("cleared")
         .contains("Max-Age=0"));
 
-    assert_eq!(harness.issuer.live_families(), 0);
+    harness.issuer.wait_live_families(0).await;
     for (client, token) in issued {
         assert_eq!(client, STAFF_CLIENT);
         assert_eq!(
@@ -459,7 +459,11 @@ async fn five_parallel_checks_in_the_renewal_window_make_one_refresh_and_later_r
 async fn the_browsers_cookie_header_stays_small() {
     let harness = Harness::start().await;
     let staff = harness.sign_in("/staff/", "staff-a").await;
-    assert!(staff.cookie.len() < 200, "{}", staff.cookie.len());
+    let another = harness.start_sign_in("/staff/").await;
+    let flow = another.cookie_pair(FLOW_COOKIE).expect("a flow cookie");
+    // Both cookies travel on every call, names included.
+    let header = format!("{}; {flow}", staff.cookie);
+    assert!(header.len() <= 130, "{} bytes", header.len());
 }
 
 fn long_base64url_run(text: &str) -> bool {
@@ -520,7 +524,7 @@ async fn an_audit_write_failure_at_sign_in_leaves_no_session() {
     let refused = harness.sign_in_attempt("/apply/", "citizen-a").await;
     assert_eq!(refused.status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(refused.set_cookie(SESSION_COOKIE).is_none());
-    assert_eq!(harness.issuer.live_families(), 0);
+    harness.issuer.wait_live_families(0).await;
 }
 
 #[tokio::test]

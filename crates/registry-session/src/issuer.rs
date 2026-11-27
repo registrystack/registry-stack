@@ -8,11 +8,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use jsonwebtoken::Algorithm;
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::client::{
     ClientSecretClient, ClientSecretConfig, OAuthErrorCode, TokenError,
 };
+use registry_platform_httputil::BearerToken;
 use registry_platform_oidc::{
     IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
     TokenVerifierConfig,
@@ -120,6 +123,93 @@ fn redeem_failure(error: &TokenError) -> GrantError {
     }
 }
 
+/// Why an ID token was refused, in fixed text: the error's own text can carry
+/// what the token claimed, which the log never repeats.
+fn refusal_reason(error: &OidcError) -> &'static str {
+    match error {
+        OidcError::IssuerMismatch { .. } => "the issuer does not match",
+        OidcError::AudienceMismatch => "the audience does not match",
+        OidcError::ClientNotAllowed => "the authorized party is not the client",
+        OidcError::TokenExpired => "the token is expired",
+        OidcError::TokenNotYetValid => "the token is not yet valid",
+        OidcError::InvalidTimeClaims => "the time claims are missing or out of range",
+        OidcError::SignatureInvalid => "the signature is invalid",
+        OidcError::AlgorithmNotAllowed => "the algorithm is not allowed",
+        OidcError::TokenTypeNotAllowed => "the token type is not allowed",
+        OidcError::MissingKid | OidcError::KidTooLong | OidcError::UnknownKid => {
+            "the signing key cannot be identified"
+        }
+        OidcError::MalformedToken | OidcError::InvalidToken => "the token is malformed",
+        _ => "the token failed verification",
+    }
+}
+
+/// What an access token's `aud` says about the resource a hop asked for.
+#[derive(Debug, Eq, PartialEq)]
+enum AudienceCheck {
+    Matches,
+    Mismatch,
+    /// The token is not a JWT with a readable `aud`: only the issuer can say
+    /// whom it is for.
+    Unreadable,
+}
+
+/// Read the audience from the payload of `token`, a token the issuer's token
+/// endpoint returned over the authenticated connection. The signature is not
+/// checked: the check is a guard against an issuer that ignores the resource
+/// the request named, not a verification of the token.
+fn audience_check(token: &BearerToken, resource: &str) -> AudienceCheck {
+    let header = token.authorization_header_value();
+    let Some(text) = header
+        .to_str()
+        .ok()
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return AudienceCheck::Unreadable;
+    };
+    let mut parts = text.split('.');
+    let (Some(_), Some(payload), Some(_), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return AudienceCheck::Unreadable;
+    };
+    let Some(claims) = URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    else {
+        return AudienceCheck::Unreadable;
+    };
+    match claims.get("aud") {
+        Some(Value::String(audience)) if audience == resource => AudienceCheck::Matches,
+        Some(Value::Array(audiences))
+            if audiences
+                .iter()
+                .any(|audience| audience.as_str() == Some(resource)) =>
+        {
+            AudienceCheck::Matches
+        }
+        Some(Value::String(_) | Value::Array(_)) => AudienceCheck::Mismatch,
+        _ => AudienceCheck::Unreadable,
+    }
+}
+
+/// Whether the access token an issuer returned may be kept for `resource`. An
+/// unreadable token is kept, and the gap is logged.
+fn audience_accepted(token: &BearerToken, resource: &str) -> bool {
+    match audience_check(token, resource) {
+        AudienceCheck::Matches => true,
+        AudienceCheck::Mismatch => {
+            tracing::warn!("the issuer returned an access token for another audience");
+            false
+        }
+        AudienceCheck::Unreadable => {
+            tracing::warn!("an access token's audience could not be read, so it is not checked");
+            true
+        }
+    }
+}
+
 fn verification_failure(error: &OidcError) -> GrantError {
     match error {
         OidcError::Transport(_)
@@ -159,7 +249,7 @@ impl Redeemer for HttpIssuer {
         let verified = match kind.verifier.verify_related_token(id_token).await {
             Ok(verified) => verified,
             Err(error) => {
-                tracing::warn!(%error, "the ID token was refused");
+                tracing::warn!(reason = refusal_reason(&error), "the ID token was refused");
                 revoke_quietly(kind, parts.refresh_token.as_ref()).await;
                 return Err(verification_failure(&error));
             }
@@ -172,6 +262,10 @@ impl Redeemer for HttpIssuer {
             .unwrap_or_default();
         if !crate::store::tokens_match(nonce, redemption.nonce) {
             tracing::warn!("the ID token carried the wrong nonce");
+            revoke_quietly(kind, parts.refresh_token.as_ref()).await;
+            return Err(GrantError::Refused);
+        }
+        if !audience_accepted(&parts.access_token, redemption.resource) {
             revoke_quietly(kind, parts.refresh_token.as_ref()).await;
             return Err(GrantError::Refused);
         }
@@ -225,6 +319,12 @@ impl Grants for HttpIssuer {
             tracing::warn!("a renewed access token has no stated lifetime");
             return Err(GrantError::Unavailable);
         };
+        // The rotated refresh token is revoked with the session the caller
+        // ends on this refusal: nothing else holds it.
+        if !audience_accepted(&parts.access_token, resource) {
+            revoke_quietly(kind, parts.refresh_token.as_ref()).await;
+            return Err(GrantError::Refused);
+        }
         Ok(Renewed {
             access_token: parts.access_token,
             expires_at,
@@ -241,5 +341,76 @@ impl Grants for HttpIssuer {
                 tracing::warn!(kind = error.kind(), "a token revocation failed");
                 GrantError::Unavailable
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn jwt(claims: &Value) -> BearerToken {
+        let part = |value: &Value| URL_SAFE_NO_PAD.encode(value.to_string());
+        BearerToken::new(format!(
+            "{}.{}.c2lnbmF0dXJl",
+            part(&json!({"alg": "EdDSA"})),
+            part(claims)
+        ))
+        .expect("token")
+    }
+
+    #[test]
+    fn an_access_token_is_checked_against_the_resource_the_hop_asked_for() {
+        let resource = "https://api.example/person";
+        let check = |claims: Value| audience_check(&jwt(&claims), resource);
+        assert_eq!(check(json!({"aud": resource})), AudienceCheck::Matches);
+        assert_eq!(
+            check(json!({"aud": ["https://other.example", resource]})),
+            AudienceCheck::Matches
+        );
+        assert_eq!(
+            check(json!({"aud": "https://other.example"})),
+            AudienceCheck::Mismatch
+        );
+        assert_eq!(
+            check(json!({"aud": ["https://other.example"]})),
+            AudienceCheck::Mismatch
+        );
+        assert_eq!(
+            check(json!({"aud": format!("{resource}/")})),
+            AudienceCheck::Mismatch,
+            "an audience is compared exactly"
+        );
+        assert_eq!(check(json!({"sub": "x"})), AudienceCheck::Unreadable);
+        assert_eq!(check(json!({"aud": 7})), AudienceCheck::Unreadable);
+    }
+
+    #[test]
+    fn a_token_that_is_not_a_jwt_cannot_be_checked_and_is_logged_as_such() {
+        let opaque = BearerToken::new("opaque-token-value").expect("token");
+        assert_eq!(audience_check(&opaque, "r"), AudienceCheck::Unreadable);
+        let not_json = BearerToken::new("a.bm90IGpzb24.c").expect("token");
+        assert_eq!(audience_check(&not_json, "r"), AudienceCheck::Unreadable);
+        let four_parts = BearerToken::new("a.e30.c.d").expect("token");
+        assert_eq!(audience_check(&four_parts, "r"), AudienceCheck::Unreadable);
+        assert!(audience_accepted(&opaque, "r"));
+    }
+
+    #[test]
+    fn a_refusal_reason_is_fixed_text_that_repeats_nothing_the_token_claimed() {
+        let reason = refusal_reason(&OidcError::IssuerMismatch {
+            expected: "https://id.example".to_owned(),
+            actual: "https://evil.example".to_owned(),
+        });
+        assert_eq!(reason, "the issuer does not match");
+        for error in [
+            OidcError::AudienceMismatch,
+            OidcError::TokenExpired,
+            OidcError::SignatureInvalid,
+            OidcError::UnknownKid,
+        ] {
+            assert!(!refusal_reason(&error).is_empty());
+        }
     }
 }

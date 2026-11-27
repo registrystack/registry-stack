@@ -171,9 +171,9 @@ impl<G: Grants> Checker<G> {
     /// call this before the checker is cloned.
     #[must_use]
     pub fn with_refresh_limit(mut self, limit: usize) -> Self {
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
-            inner.refresh_permits = Semaphore::new(limit);
-        }
+        Arc::get_mut(&mut self.inner)
+            .expect("a checker is configured before it is cloned")
+            .refresh_permits = Semaphore::new(limit);
         self
     }
 
@@ -181,9 +181,9 @@ impl<G: Grants> Checker<G> {
     /// Only call this before the checker is cloned.
     #[must_use]
     pub fn with_journal(mut self, journal: Arc<Journal>) -> Self {
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
-            inner.journal = Some(journal);
-        }
+        Arc::get_mut(&mut self.inner)
+            .expect("a checker is configured before it is cloned")
+            .journal = Some(journal);
         self
     }
 
