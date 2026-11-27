@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `GET /health` and `GET /ready` carry the `status` member the other
+  services answer: `{"live":true,"status":"ok"}` and
+  `{"ready":true,"status":"ready"}`. The `live` and `ready` members stay, and
+  the 503 body is unchanged.
+
 - Add native Adapter payment collection operations: request a collection from
   an authoritative bill id and version, read its typed state, and record a
   verified receipt under a separate idempotent command. Collection requests

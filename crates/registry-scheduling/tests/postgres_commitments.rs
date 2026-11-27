@@ -23,6 +23,7 @@ use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
 use registry_platform_oidc::{
     task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry},
     JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
@@ -5890,6 +5891,38 @@ async fn an_allowed_commitment_writes_its_request_before_and_its_response_after(
     }
 }
 
+/// The shared probe routes answer their fixed bodies with no token. The
+/// older `/healthz` and `/readyz` spellings keep answering an empty 200.
+#[tokio::test]
+async fn probe_routes_answer_the_shared_bodies_and_the_older_spellings_still_answer() {
+    let fx = fixture().await;
+    for (path, expected) in [
+        (HEALTH_PATH, Some(HEALTH_BODY)),
+        (READY_PATH, Some(READY_BODY)),
+        ("/healthz", None),
+        ("/readyz", None),
+    ] {
+        let response = fx
+            .http
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .expect("an in-process request always answers");
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let content_type = response.headers().get("content-type").cloned();
+        let body = to_bytes(response.into_body(), 1024)
+            .await
+            .expect("a bounded test body");
+        match expected {
+            Some(expected) => {
+                assert_eq!(content_type.unwrap(), "application/json", "{path}");
+                assert_eq!(body.as_ref(), expected.as_bytes(), "{path}");
+            }
+            None => assert!(body.is_empty(), "{path}"),
+        }
+    }
+}
+
 /// SCHEDULING-SEC-14: a commitment whose request entry the destination
 /// refuses never opens its capacity transaction. No claim is taken, no
 /// receipt is stored, and the caller is told the service is unavailable.
@@ -5919,6 +5952,12 @@ async fn a_refused_request_entry_opens_no_capacity_transaction() {
         status,
         StatusCode::SERVICE_UNAVAILABLE,
         "readiness follows the audit destination"
+    );
+    let (status, _) = fx.get(READY_PATH, &fx.reader).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the shared readiness route follows the audit destination"
     );
 }
 

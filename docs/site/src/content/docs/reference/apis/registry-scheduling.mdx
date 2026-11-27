@@ -296,12 +296,16 @@ checked per route.
 | Holds | `/v1/holds`, `/v1/holds/{holdId}` | Commitment |
 | Appointments | `/v1/appointments`, `/v1/appointments/{appointmentId}`, its `reschedule`, `cancel`, and `history` | Commitment for the mutations; Catalogue read for the reads |
 | Appointment receipt observation | `/v1/appointments/receipt` | Catalogue read, matching the exact original owner, key, and creation request |
-| Liveness and readiness | `/healthz`, `/readyz` | Any caller, without a token |
+| Liveness and readiness | `/health`, `/ready`, and the older `/healthz`, `/readyz` | Any caller, without a token |
 
-`/readyz` answers `service.unavailable` while PostgreSQL is unreachable, while the schema is not
-the one this release expects, and while the audit writer is not ready.
+`/health` answers `{"status":"ok"}` and `/ready` answers `{"status":"ready"}`, both as
+`application/json`. `/healthz` and `/readyz` keep answering an empty 200 for deployments that already
+probe them.
 
-{/* Evidence: crates/registry-scheduling/src/http.rs, router() and readyz();
+`/ready` and `/readyz` answer `service.unavailable` while PostgreSQL is unreachable, while the schema
+is not the one this release expects, and while the audit writer is not ready.
+
+{/* Evidence: crates/registry-scheduling/src/http.rs, router(), health(), ready() and readyz();
     crates/registry-scheduling-core/src/naming.rs, SCHEDULING_PATH, SERVICES_PATH, OFFERINGS_PATH,
     RESOURCES_PATH, LOCATIONS_PATH, AVAILABILITY_PATH, AVAILABILITY_EXPLAIN_PATH, HOLDS_PATH, and
     APPOINTMENTS_PATH and APPOINTMENT_RECEIPT_PATH; crates/registry-scheduling/src/store.rs,

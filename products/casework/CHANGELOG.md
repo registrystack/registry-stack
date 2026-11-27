@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `GET /health` answers `{"status":"ok"}` and `GET /ready` answers
+  `{"status":"ready"}` as `application/json`, in place of an empty 200. Both
+  still need no token, and a service that is not ready still answers 503.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: `caseworkctl provider add` prints the BReg project fragments it

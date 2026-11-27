@@ -17,6 +17,7 @@ use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
     FrameworkRejection, ProblemBody, TraceContext,
 };
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
 use serde_json::error::Category;
 use uuid::Uuid;
 
@@ -91,8 +92,8 @@ pub fn router(state: HttpState) -> Router {
             post(cancel_review_request),
         );
     let app = Router::new()
-        .route("/health", get(health))
-        .route("/ready", get(ready))
+        .route(HEALTH_PATH, get(health))
+        .route(READY_PATH, get(ready))
         .route("/v1/casework", get(description))
         .route("/.well-known/jwks.json", get(task_jwks))
         .route("/v1/task-grants/{grant_id}/assertion", post(task_assertion))
@@ -468,13 +469,17 @@ async fn method_not_allowed() -> Response {
     problem_response(ProblemCode::RequestMethodNotAllowed, None, None)
 }
 
-async fn health() -> StatusCode {
-    StatusCode::OK
+fn probe_response(body: &'static str) -> Response {
+    ([(CONTENT_TYPE, "application/json")], body).into_response()
 }
 
-async fn ready(RequestState(state): RequestState) -> Result<StatusCode, HttpError> {
+async fn health() -> Response {
+    probe_response(HEALTH_BODY)
+}
+
+async fn ready(RequestState(state): RequestState) -> Result<Response, HttpError> {
     if state.service.ready().await.is_ok() {
-        Ok(StatusCode::OK)
+        Ok(probe_response(READY_BODY))
     } else {
         Err(HttpError::ServiceUnavailable)
     }

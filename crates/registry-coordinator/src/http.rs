@@ -28,6 +28,7 @@ use axum::{
 use registry_platform_httpsec::{
     normalize_framework_rejection, FrameworkRejection, ProblemBody, TraceContext,
 };
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 use std::{future::Future, sync::Arc, time::Duration};
@@ -121,9 +122,9 @@ pub fn router(state: HttpState) -> Router {
     let ready_state = state.clone();
     let ready_bindings = Arc::new(BindingReadiness::default());
     let routes = Router::new()
-        .route("/health", get(|| async { Json(json!({"live":true})) }))
+        .route(HEALTH_PATH, get(|| async { Json(live_body()) }))
         .route(
-            "/ready",
+            READY_PATH,
             get(move || ready(ready_state.clone(), ready_bindings.clone())),
         )
         .route("/v1/workflows/{workflow}", get(workflow_contract))
@@ -331,6 +332,18 @@ async fn authenticated_caller(s: &HttpState, headers: &HeaderMap) -> Result<Call
         })?;
     s.authenticator.authenticate(token).await
 }
+/// The shared probe object with the member this service has always answered.
+fn probe_body(shared: &str, member: &str) -> Value {
+    let mut body: Value = serde_json::from_str(shared).expect("shared probe bodies are JSON");
+    body[member] = json!(true);
+    body
+}
+fn live_body() -> Value {
+    probe_body(HEALTH_BODY, "live")
+}
+fn ready_body() -> Value {
+    probe_body(READY_BODY, "ready")
+}
 async fn ready(s: HttpState, bindings: Arc<BindingReadiness>) -> Response {
     if !s.recovery_only
         && deployment::check(&s.store, &s.runtime, s.workflows.digest())
@@ -341,7 +354,7 @@ async fn ready(s: HttpState, bindings: Arc<BindingReadiness>) -> Response {
             .check(|| s.store.check_runtime_bindings(&s.runtime))
             .await
     {
-        (StatusCode::OK, Json(json!({"ready":true}))).into_response()
+        (StatusCode::OK, Json(ready_body())).into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -773,6 +786,31 @@ mod problem_tests {
             .unwrap()
             .values()
             .flat_map(|path| path.as_object().unwrap().iter())
+    }
+
+    #[test]
+    fn probe_bodies_keep_their_own_member_and_add_the_shared_status() {
+        assert_eq!(live_body(), json!({"live":true,"status":"ok"}));
+        assert_eq!(ready_body(), json!({"ready":true,"status":"ready"}));
+    }
+
+    #[test]
+    fn probe_routes_use_the_shared_paths() {
+        let document = openapi();
+        for (path, key, word) in [
+            (registry_platform_httputil::probe::HEALTH_PATH, "live", "ok"),
+            (
+                registry_platform_httputil::probe::READY_PATH,
+                "ready",
+                "ready",
+            ),
+        ] {
+            let schema = &document["paths"][path]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"];
+            assert_eq!(schema["required"], json!([key, "status"]), "{path}");
+            assert_eq!(schema["properties"][key]["type"], "boolean", "{path}");
+            assert_eq!(schema["properties"]["status"]["const"], word, "{path}");
+        }
     }
 
     #[test]
@@ -1789,9 +1827,9 @@ pub fn openapi() -> Value {
     );
     paths[registry_review_protocol::REVIEW_COMPLETIONS_PATH]["post"]["responses"] =
         Value::Object(responses);
-    for (path, key) in [("/health", "live"), ("/ready", "ready")] {
+    for (path, key, word) in [(HEALTH_PATH, "live", "ok"), (READY_PATH, "ready", "ready")] {
         let mut responses = problem_responses(&[ProblemCode::RequestMethodNotAllowed]);
-        responses.insert("200".into(), json!({"description":"Health result","content":{"application/json":{"schema":{"type":"object","required":[key],"properties":{key:{"type":"boolean"}}}}}}));
+        responses.insert("200".into(), json!({"description":"Health result","content":{"application/json":{"schema":{"type":"object","required":[key,"status"],"properties":{key:{"type":"boolean"},"status":{"const":word}}}}}}));
         responses.insert(
             "503".into(),
             json!({"description":"Deployment unavailable or in recovery hold"}),

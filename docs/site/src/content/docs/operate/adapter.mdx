@@ -806,6 +806,26 @@ The stop report prints the same fix as its `next` step.
 {/* TODO[evidence]: no test names adapter.job.page-bytes-bound or the maximumRowsPerPage times
     maximumRowBytes memory ceiling; only the code that raises the stop is cited. */}
 
+## Probe health and readiness
+
+The facade listener answers two probes without authentication, for load balancers and
+orchestrators:
+
+- `GET /health` answers 200 `{"status":"ok"}` and does no work.
+- `GET /ready` answers 200 `{"status":"ready"}` when the journal migrations match the binary
+  and the runtime role holds its journal privileges, and 503 `{"status":"not-ready"}` otherwise.
+  It reads the journal store and never contacts a source.
+
+The bodies are fixed and do not vary with the project. They tell a caller that an Adapter is
+listening and whether its journal is usable, and nothing more. Because `/health` and `/ready`
+belong to the listener, a project operation whose path is one of them is unserved, with the
+reason code `adapter.operation.reserved-facade-path` in the effective contract.
+
+{/* Evidence: crates/registry-adapter/src/facade.rs;
+    crates/registry-adapter/src/journal.rs ready;
+    crates/registry-adapter/tests/health_routes.rs;
+    crates/registry-adapter-engine/src/load.rs ReservedFacadePath. */}
+
 ## Scrape metrics
 
 Neither the facade listener nor the hook ingress serves metrics. Set `metricsListener.bind` in the

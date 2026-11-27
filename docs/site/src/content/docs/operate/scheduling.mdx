@@ -303,16 +303,16 @@ versions, a package that was not applied, and a database that names another `dat
 route instead:
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8105/readyz
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8105/ready
 ```
 
 ```text
 200
 ```
 
-`/readyz` answers unavailable while PostgreSQL is unreachable, while the schema is not the one
+`/ready` answers unavailable while PostgreSQL is unreachable, while the schema is not the one
 this release expects, and while the audit destination refuses writes, because no booking proceeds
-without its audit entry.
+without its audit entry. `/readyz` answers the same way with an empty body.
 
 ## Read the deployment
 
@@ -445,7 +445,7 @@ to a new, empty database; the old ledger is not carried over.
 {/* Evidence: crates/registry-schedulingctl/src/{activation,records,intents}.rs;
     crates/registry-scheduling/src/store/activation.rs, publication and PolicyInUse;
     crates/registry-scheduling/src/runtime.rs, startup ready() and check_active_package(), workers
-    and retention; crates/registry-scheduling/src/http.rs, readyz();
+    and retention; crates/registry-scheduling/src/http.rs, ready() and readyz();
     crates/registry-schedulingctl/src/project.rs, package(); crates/registry-platform-config/src/loader.rs,
     validate_absolute_lexical_path(); crates/registry-scheduling/src/config.rs. Success lines observed with scheduling 0.42.0-dev against
     PostgreSQL 17, the standalone-exact-time project, and single-role credentials. */}

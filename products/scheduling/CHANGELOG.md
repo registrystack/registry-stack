@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `GET /health` and `GET /ready`, answering `{"status":"ok"}` and
+  `{"status":"ready"}` as `application/json` with no token, as the other
+  services do. `/healthz` and `/readyz` keep answering an empty 200.
+
 - A task grant with more than 900 seconds left on the offline path
   (`taskGrantStatus: unchecked-final-fifteen-minutes`) now answers 403
   `grant.lifetime-too-long` in place of `operation.not-authorized`, so the

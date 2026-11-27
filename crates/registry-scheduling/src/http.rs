@@ -37,6 +37,7 @@ use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
     FrameworkRejection, ProblemBody, TraceContext,
 };
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, AvailabilityPreviewRequest,
     CancelAppointmentRequest, CreateAppointmentRequest, ExternalReference, ProblemCode,
@@ -88,6 +89,8 @@ pub fn metrics_router(metrics: Arc<Metrics>, store: PostgresStore) -> Router {
 pub fn router(state: HttpState) -> Router {
     http_edge(
         Router::new()
+            .route(HEALTH_PATH, get(health))
+            .route(READY_PATH, get(ready))
             .route("/healthz", get(healthz))
             .route("/readyz", get(readyz))
             .route(SCHEDULING_PATH, get(scheduling))
@@ -249,6 +252,23 @@ async fn route_not_found() -> Response {
 
 async fn method_not_allowed() -> Response {
     problem_response(ProblemCode::RequestMethodNotAllowed)
+}
+
+fn probe_response(body: &'static str) -> Response {
+    ([(CONTENT_TYPE, "application/json")], body).into_response()
+}
+
+async fn health() -> Response {
+    probe_response(HEALTH_BODY)
+}
+
+/// Ready on the same terms as `readyz`.
+async fn ready(State(state): State<HttpState>) -> Result<Response, HttpError> {
+    if state.service.ready().await.is_ok() {
+        Ok(probe_response(READY_BODY))
+    } else {
+        Err(HttpError(ProblemCode::ServiceUnavailable))
+    }
 }
 
 async fn healthz() -> StatusCode {

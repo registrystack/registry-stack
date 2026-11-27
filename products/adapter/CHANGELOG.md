@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The facade listener answers `GET /health` and `GET /ready` without
+  authentication. `/health` answers `{"status":"ok"}`. `/ready` answers
+  `{"status":"ready"}` when the journal migrations match the binary and the
+  runtime role holds its journal privileges, and a constant 503
+  `{"status":"not-ready"}` otherwise. The bodies never vary with the
+  project. A project operation whose facade path is `/health` or `/ready` is
+  unserved under `adapter.operation.reserved-facade-path`.
 - `adapter serve` grants the runtime database role the table privileges its
   deployment needs, after it migrates and before it listens, when the runtime
   and migration sessions run as different roles. The grantee is the role the

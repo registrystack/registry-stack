@@ -57,6 +57,8 @@ use crate::engine::route::{
     run_async_status_poll, run_served_route_until, AsyncStatusPollKind, RouteContext, RouteFailure,
     EXCHANGE_DEADLINE,
 };
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
+
 use crate::govstack::consultation::{CAPABILITIES_PATH, MOUNT_PATH};
 use crate::govstack::correlation::RequestCorrelation;
 use crate::idempotent::{
@@ -335,6 +337,20 @@ pub fn router(state: Arc<FacadeState>) -> Router {
             }
         }),
     );
+    let ready = Arc::clone(&state);
+    router = router
+        .route(
+            HEALTH_PATH,
+            get(|| async { probe_response(StatusCode::OK, HEALTH_BODY) }).fallback(probe_refusal),
+        )
+        .route(
+            READY_PATH,
+            get(move || {
+                let shared = Arc::clone(&ready);
+                async move { readiness(shared).await }
+            })
+            .fallback(probe_refusal),
+        );
     let unmatched = Arc::clone(&state);
     let metrics = Arc::clone(&state.metrics);
     router
@@ -943,6 +959,47 @@ async fn answer_async_status(
                 }
             }
         }
+    }
+}
+
+/// Body of a readiness probe that finds the journal unusable. It is a
+/// constant: it names no project, source, client or database error.
+const NOT_READY_BODY: &str = r#"{"status":"not-ready"}"#;
+
+/// A probe answer: a constant JSON body, no request id, no journal event.
+fn probe_response(status: StatusCode, body: &'static str) -> Response {
+    let mut response = (status, body).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    no_store(response)
+}
+
+/// A probe path called with a method other than GET. The answer is empty so
+/// it does not vary with the project's problem document.
+async fn probe_refusal() -> Response {
+    let mut response = no_store(StatusCode::METHOD_NOT_ALLOWED.into_response());
+    response
+        .headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static("GET"));
+    response
+}
+
+/// Unauthenticated readiness: whether the journal migration set is exactly
+/// the set this binary supports and the runtime role holds its privileges.
+/// It touches no source, appends no journal event, and answers a constant
+/// body whatever the project or the cause of a failure.
+async fn readiness(state: Arc<FacadeState>) -> Response {
+    let journal_ready = match state.journal.get().await {
+        Ok(client) => journal::ready(&client).await.unwrap_or(false),
+        Err(_) => false,
+    };
+    if journal_ready {
+        probe_response(StatusCode::OK, READY_BODY)
+    } else {
+        tracing::error!("the readiness probe found the journal unusable");
+        probe_response(StatusCode::SERVICE_UNAVAILABLE, NOT_READY_BODY)
     }
 }
 

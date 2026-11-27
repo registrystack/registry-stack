@@ -68,13 +68,13 @@ after the transaction ends.
 If either entry is refused, the caller gets `service.unavailable` instead of an unaudited answer.
 A refused `request` entry opens no transaction; a refused `response` entry after the commit answers
 `service.unavailable` with the commitment in place.
-`/readyz` follows the audit writer.
+`/ready` and `/readyz` follow the audit writer.
 
 {/* Evidence: crates/registry-scheduling/tests/postgres_commitments.rs
     a_refused_request_entry_opens_no_capacity_transaction,
     a_failed_capacity_transaction_pairs_its_request_entry,
     a_replayed_receipt_is_released_only_after_its_response_entry_is_accepted;
-    crates/registry-scheduling/src/http.rs readyz;
+    crates/registry-scheduling/src/http.rs ready and readyz;
     crates/registry-scheduling/src/service.rs audit_ready. */}
 
 ## Operator obligations
