@@ -698,9 +698,11 @@
     },
     "ReminderDestinationConfig": {
       "additionalProperties": false,
+      "description": "Fallback destination for reminder delivery.",
       "properties": {
         "hmacSha256KeyRef": {
-          "$ref": "#/$defs/SecretReference"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Reference to 32 to 64 exact key bytes used only for this destination."
         },
         "previousHmacSha256KeyRef": {
           "$ref": "#/$defs/SecretReference",
@@ -723,9 +725,11 @@
     },
     "ReminderPurposeDestinationConfig": {
       "additionalProperties": false,
+      "description": "Destination for reminder delivery of one configured purpose.",
       "properties": {
         "hmacSha256KeyRef": {
-          "$ref": "#/$defs/SecretReference"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Reference to 32 to 64 exact key bytes used only for this destination."
         },
         "previousHmacSha256KeyRef": {
           "$ref": "#/$defs/SecretReference",
@@ -743,6 +747,7 @@
     },
     "ReminderPurposes": {
       "additionalProperties": false,
+      "description": "Optional reminder destinations that override the fallback by purpose.",
       "properties": {
         "cancellation": {
           "$ref": "#/$defs/ReminderPurposeDestinationConfig"

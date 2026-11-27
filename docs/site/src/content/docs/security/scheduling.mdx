@@ -275,7 +275,9 @@ it is listed with them.
   One worker serves each runtime process.
 - Operator mitigation: deduplicate by `webhook-id`, which is the outbox id for reminders, and
   treat reminders as advisory. Configure a distinct signing key for each reminder and hook
-  destination, including each configured reminder purpose. Keep previous keys distinct as well.
+  destination, including each configured reminder purpose. See the
+  [delivery signing guide](../../reference/delivery-signing/) for destination key isolation,
+  key generation without trailing newlines, and rotation.
 - Related: SCHEDULING-SEC-24, SCHEDULING-SEC-38.
 
 {/* Evidence: products/scheduling/contracts/security-invariant-matrix.yaml SCHEDULING-SEC-24,

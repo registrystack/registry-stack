@@ -23,8 +23,8 @@ use registry_platform_audit::AuditWriter;
 use registry_platform_config::SecretResolver;
 use registry_scheduling::audit::{with_event_id, SchedulingAudit};
 use registry_scheduling::config::RuntimeConfig;
-use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
-use registry_scheduling::runtime::open_audit;
+use registry_scheduling::hooks::{ActivatedHooks, HookActivationError, HookRuntimeIdentity};
+use registry_scheduling::runtime::{activate_reminder_delivery, open_audit};
 use registry_scheduling::store::{
     Activation, ActivationRequest, DeployedPolicy, PostgresStore, RoleMode, StoreError,
     SINGLE_ROLE_STATEMENT,
@@ -109,6 +109,9 @@ fn hook_payload_retention(config: &RuntimeConfig) -> Duration {
 /// The closed code of a candidate whose hook destinations cannot run, which
 /// apply refuses before it writes anything.
 pub(crate) const HOOK_DESTINATIONS_CODE: &str = "schedulingctl.activation.hook-destinations";
+const REMINDER_DESTINATIONS_CODE: &str = "schedulingctl.activation.reminder-destinations";
+pub(crate) const HOOK_DESTINATIONS_ACTION: &str =
+    "Bind every destination the policy hooks name under destinations.hooks. Give each destination its own key by writing 32 new random bytes to another secret and referencing it there.";
 
 /// Activate the candidate policy's hooks under one identity. Every
 /// destination and its signing material is resolved here, so a candidate
@@ -293,24 +296,30 @@ pub fn plan(config_path: &Path) -> Result<Value> {
         .iter()
         .map(|refusal| json!({"code": refusal_code(refusal), "message": refusal.to_string()}))
         .collect::<Vec<_>>();
-    // Apply resolves the candidate's hook destinations and signing material
-    // before it writes anything, so plan reports the same refusal. A key is
-    // resolved only to learn that it exists at a usable size, then dropped.
-    let hook_refusal = ActivatedHooks::check_destinations(
+    // Validate the candidate's signing inventory without changing the
+    // deployment. Use the same reminder activation as the serving runtime.
+    let delivery_refusal = match ActivatedHooks::activate_destination_bindings(
         &loaded.policy.hook_declarations(),
         &loaded.config.destinations.hooks,
         &loaded.resolver,
-    )
-    .err();
-    if let Some(error) = &hook_refusal {
-        refusals.push(json!({
-            "code": HOOK_DESTINATIONS_CODE,
-            "message": format!(
-                "{error}; bind every destination the policy hooks name under destinations.hooks, \
-                 with an hmacSha256KeyRef that resolves to a key of 32 to 64 bytes, distinct across destinations, then plan again"
-            ),
-        }));
-    }
+    ) {
+        Ok(hooks) => activate_reminder_delivery(
+            loaded.config.destinations.reminders.as_ref(),
+            &hooks,
+            &loaded.resolver,
+        )
+        .err()
+        .map(|message| json!({"code": REMINDER_DESTINATIONS_CODE, "message": message})),
+        Err(error) => {
+            let message = match error {
+                HookActivationError::SigningMaterial(message) => message,
+                _ => format!("{error}. {HOOK_DESTINATIONS_ACTION}"),
+            };
+            Some(json!({"code": HOOK_DESTINATIONS_CODE, "message": message}))
+        }
+    };
+    let delivery_ready = delivery_refusal.is_none();
+    refusals.extend(delivery_refusal);
     Ok(json!({
         "ok": true,
         "command": "plan",
@@ -337,7 +346,7 @@ pub fn plan(config_path: &Path) -> Result<Value> {
         "retainedHookBindings": retained_hook_bindings,
         "runtimeRole": plan.runtime_role,
         "effectiveRoleMode": plan.effective_role_mode.map(RoleMode::as_str),
-        "changesPending": plan.changes_pending && hook_refusal.is_none(),
+        "changesPending": plan.changes_pending && delivery_ready,
         "refusals": refusals,
     }))
 }

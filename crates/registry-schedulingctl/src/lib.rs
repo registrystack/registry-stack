@@ -816,7 +816,7 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
                 "artifact": "runtime-configuration",
                 "path": "destinations.hooks",
                 "message": format!("{error:#}"),
-                "suggestedAction": "Bind every destination the policy hooks name under destinations.hooks, with an hmacSha256KeyRef that resolves to a key of 32 to 64 bytes, distinct across destinations, then retry.",
+                "suggestedAction": activation::HOOK_DESTINATIONS_ACTION,
             }),
         );
     }
@@ -1384,10 +1384,10 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("destinations.hooks.appointment-events.hmacSha256KeyRef has 65 bytes"));
-        assert!(diagnostic["suggestedAction"]
-            .as_str()
-            .unwrap()
-            .contains("a key of 32 to 64 bytes, distinct across destinations"));
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            activation::HOOK_DESTINATIONS_ACTION
+        );
     }
 
     #[test]

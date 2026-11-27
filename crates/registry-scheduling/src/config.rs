@@ -521,6 +521,7 @@ pub struct DestinationsConfig {
     pub hooks: BTreeMap<String, UrlHookDestinationConfig>,
 }
 
+/// Fallback destination for reminder delivery.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -530,6 +531,7 @@ pub struct ReminderDestinationConfig {
     #[serde(deserialize_with = "registry_scheduling_core::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub url: String,
+    /// Reference to 32 to 64 exact key bytes used only for this destination.
     pub hmac_sha256_key_ref: SecretReference,
     /// Previous signing key during rotation.
     #[serde(default, deserialize_with = "present_reminder_key_reference")]
@@ -540,6 +542,7 @@ pub struct ReminderDestinationConfig {
     pub purposes: ReminderPurposes,
 }
 
+/// Destination for reminder delivery of one configured purpose.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -547,6 +550,7 @@ pub struct ReminderPurposeDestinationConfig {
     #[serde(deserialize_with = "registry_scheduling_core::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub url: String,
+    /// Reference to 32 to 64 exact key bytes used only for this destination.
     pub hmac_sha256_key_ref: SecretReference,
     /// Previous signing key during rotation.
     #[serde(default, deserialize_with = "present_reminder_key_reference")]
@@ -554,6 +558,7 @@ pub struct ReminderPurposeDestinationConfig {
     pub previous_hmac_sha256_key_ref: Option<SecretReference>,
 }
 
+/// Optional reminder destinations that override the fallback by purpose.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

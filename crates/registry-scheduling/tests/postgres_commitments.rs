@@ -2242,7 +2242,7 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
         request.body, *payload,
         "the stored canonical bytes are sent"
     );
-    let content = signed_webhook_content(request);
+    let content = signed_webhook_content(&request.headers, &request.body);
     assert_eq!(content.id, envelope.id);
     verify(
         &webhook_keys(b"0123456789abcdef0123456789abcdef"),
@@ -4917,13 +4917,17 @@ const REMINDER_TEST_KEY: &str = "reminder-delivery-signing-key-0123456789abcdef"
 
 /// A frozen transport to a destination this test controls.
 fn transport_to(destination: &MockServer) -> Arc<ReminderTransport> {
+    transport_to_origin(&destination.uri())
+}
+
+fn transport_to_origin(origin: &str) -> Arc<ReminderTransport> {
     let secret_name =
         format!("SCHEDULING_REMINDER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     std::env::set_var(&secret_name, REMINDER_TEST_KEY);
     let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
         .expect("the reminder test secret resolver");
     let config: ReminderDestinationConfig = serde_json::from_value(json!({
-        "url": format!("{}/events", destination.uri()),
+        "url": format!("{origin}/events"),
         "hmacSha256KeyRef": format!("secret:env/{secret_name}")
     }))
     .expect("the reminder destination configuration");
@@ -6897,24 +6901,25 @@ fn webhook_keys(bytes: &[u8]) -> DeliveryKeys {
     DeliveryKeys::new(DeliveryKey::new(bytes).unwrap(), None).unwrap()
 }
 
-fn signed_webhook_content(request: &wiremock::Request) -> SignedContent<'_> {
+fn signed_webhook_content<'a>(
+    headers: &'a axum::http::HeaderMap,
+    body: &'a [u8],
+) -> SignedContent<'a> {
     let header = |name: &str| {
-        request
-            .headers
+        headers
             .get(name)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_else(|| panic!("missing valid {name} header"))
     };
     // The HTTP client supplies host and framing.
-    let mut headers = request
-        .headers
+    let mut names = headers
         .keys()
         .map(|name| name.as_str())
         .filter(|name| !matches!(*name, "host" | "content-length"))
         .collect::<Vec<_>>();
-    headers.sort_unstable();
+    names.sort_unstable();
     assert_eq!(
-        headers,
+        names,
         [
             "accept",
             "content-type",
@@ -6929,68 +6934,89 @@ fn signed_webhook_content(request: &wiremock::Request) -> SignedContent<'_> {
         id: header("webhook-id"),
         timestamp: header("webhook-timestamp"),
         signature: header("webhook-signature"),
-        body: &request.body,
+        body,
     }
 }
 
 #[tokio::test]
 async fn a_signed_reminder_uses_the_standard_webhooks_delivery_contract() {
-    let destination = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/events"))
-        .respond_with(ResponseTemplate::new(202).set_delay(Duration::from_secs(2)))
-        .mount(&destination)
-        .await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let transport = transport_to_origin(&format!("http://{}", listener.local_addr().unwrap()));
+    let (captured, mut requests) = tokio::sync::mpsc::channel(1);
+    let receiver = Router::new().route(
+        "/events",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                let (respond, release) = tokio::sync::oneshot::channel();
+                captured.send((headers, body, respond)).await.unwrap();
+                release.await.unwrap()
+            },
+        ),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, receiver).await.unwrap() });
     let fx = fixture().await;
     let (appointment, _) = booked(&fx, 90, 200, "dispatch-signed").await;
     let outbox_id = intent_of(&fx, &appointment, "confirmation").await;
-    make_intent_due(&fx, outbox_id).await;
-    let transport = transport_to(&destination);
-    let store = fx.store.clone();
-    let running =
-        tokio::spawn(
-            async move { dispatch_due_intents(&store, SCHEDULING_ID, Some(transport)).await },
-        );
+    let keys = webhook_keys(REMINDER_TEST_KEY.as_bytes());
+    let mut attempts = Vec::new();
 
-    let requests = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let requests = destination.received_requests().await.unwrap();
-            if !requests.is_empty() {
-                break requests;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    for response in [StatusCode::SERVICE_UNAVAILABLE, StatusCode::ACCEPTED] {
+        make_intent_due(&fx, outbox_id).await;
+        let store = fx.store.clone();
+        let transport = Arc::clone(&transport);
+        let running = tokio::spawn(async move {
+            dispatch_due_intents(&store, SCHEDULING_ID, Some(transport)).await
+        });
+
+        let (headers, body, respond) =
+            tokio::time::timeout(Duration::from_secs(5), requests.recv())
+                .await
+                .expect("the signed reminder reaches the receiver")
+                .unwrap();
+        let lease_time: DateTime<Utc> = fx
+            .admin
+            .query_one(
+                "SELECT attempt_started_at FROM scheduling_outbox WHERE outbox_id = $1 AND state = 'leased'",
+                &[&outbox_id],
+            )
+            .await
+            .expect("read the lease during delivery")
+            .get(0);
+        respond.send(response).unwrap();
+
+        let event: Value = serde_json::from_slice(&body).expect("the canonical reminder event");
+        let content = signed_webhook_content(&headers, &body);
+        assert_eq!(content.id, outbox_id.to_string());
+        assert_eq!(content.id, event["id"]);
+        assert_eq!(content.timestamp, lease_time.timestamp().to_string());
+        verify(&keys, content, lease_time.into(), DELIVERY_TOLERANCE)
+            .expect("the captured reminder verifies");
+        attempts.push((content.id.to_owned(), body, lease_time.timestamp()));
+
+        running
+            .await
+            .unwrap()
+            .expect("the signed dispatch pass runs");
+        if response == StatusCode::SERVICE_UNAVAILABLE {
+            // Ensure a reused timestamp would fail on the second attempt.
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-    })
-    .await
-    .expect("the signed reminder reaches the receiver");
-    let lease_time: DateTime<Utc> = fx
+    }
+
+    assert_eq!(attempts[0].0, attempts[1].0);
+    assert_eq!(attempts[0].1, attempts[1].1);
+    assert!(attempts[0].2 < attempts[1].2);
+    let state: String = fx
         .admin
         .query_one(
-            "SELECT attempt_started_at FROM scheduling_outbox WHERE outbox_id = $1",
+            "SELECT state FROM scheduling_outbox WHERE outbox_id = $1",
             &[&outbox_id],
         )
         .await
-        .expect("read the lease during delivery")
-        .get(0);
-    running
-        .await
         .unwrap()
-        .expect("the signed dispatch pass runs");
-
-    assert_eq!(requests.len(), 1);
-    let request = &requests[0];
-    let event: Value = serde_json::from_slice(&request.body).expect("the canonical reminder event");
-    let content = signed_webhook_content(request);
-    assert_eq!(content.id, outbox_id.to_string());
-    assert_eq!(content.id, event["id"]);
-    assert_eq!(content.timestamp, lease_time.timestamp().to_string());
-    verify(
-        &webhook_keys(REMINDER_TEST_KEY.as_bytes()),
-        content,
-        lease_time.into(),
-        DELIVERY_TOLERANCE,
-    )
-    .expect("the captured reminder verifies");
+        .get(0);
+    assert_eq!(state, "delivered");
+    server.abort();
 }
 
 /// A receiver can accept an event before the dispatcher loses the database

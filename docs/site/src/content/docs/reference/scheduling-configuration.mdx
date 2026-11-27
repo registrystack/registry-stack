@@ -585,7 +585,8 @@ The fallback `url` and every destination in `purposes` require an `hmacSha256Key
 resolves to 32 to 64 exact key bytes. An optional `previousHmacSha256KeyRef` adds a second
 signature after the current key's signature during rotation. Omit the previous reference when
 there is no previous key. Every current and previous key must be distinct across reminder and
-hook destinations.
+hook destinations. See [Signed hook deliveries](../delivery-signing/) for the key generation
+command, the trailing-newline warning, and the rotation procedure.
 
 The optional `purposes` block accepts `confirmation`, `change`, `cancellation`, and `reminder`.
 Every entry requires its own `url` with the fallback's scheme, host, and effective port.
@@ -639,9 +640,8 @@ Each entry requires `url` and `hmacSha256KeyRef`.
 `attemptTimeoutMilliseconds` defaults to 5000 and is bounded from 100 through 10000, while
 `maximumAttempts` defaults to 8 and is bounded from 1 through 20.
 URLs use the same HTTPS and explicit-loopback rules as the reminder destination.
-A signing key contains 32 to 64 exact bytes. An optional `previousHmacSha256KeyRef` adds a
-second Standard Webhooks signature during rotation. Current and previous keys must be distinct
-across all hook and reminder destinations.
+The key size, rotation field, and distinct-key requirement are the same as for the
+[reminder destination](#reminder-destination).
 
 Every destination the current policy names must be configured.
 Explicit extra bindings are allowed so retained events captured under an earlier policy can finish

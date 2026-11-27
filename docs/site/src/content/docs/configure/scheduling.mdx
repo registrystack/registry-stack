@@ -324,9 +324,9 @@ lease time in Unix seconds carried in `webhook-timestamp`. The receiver reads th
 `destinations.reminders.url` is the fallback for every purpose. The optional `purposes` block
 configures separate destinations for `confirmation`, `change`, `cancellation`, or `reminder`.
 Each must share the fallback URL's origin and use its own signing key. Configure the matching
-trusted source and key at the receiver for each URL. During rotation, set
-`previousHmacSha256KeyRef` to send a second signature after the current one. Use distinct keys
-across all reminder and hook destinations.
+trusted source and key at the receiver for each URL. Follow the
+[delivery signing guide](../../reference/delivery-signing/) to generate exact key bytes without a
+trailing newline and rotate keys with `previousHmacSha256KeyRef`.
 
 ### Appointment observers
 
