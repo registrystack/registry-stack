@@ -348,6 +348,28 @@ The link has these known limits:
     an_applied_proposal_stays_bounded_by_a_record_whose_revision_was_erased;
     products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-217. */}
 
+### Supporting files during Proposal review
+
+BReg admits an addition through the independent `add` operation and the declared slot's `writableAttachments` grant.
+BReg accepts it only while the current submission's review is pending or retrying.
+The upload holds the Proposal lock and changes its workflow revision.
+The idempotency binding covers the slot and the exact file identity.
+
+Additions remain separate from the frozen attachment manifest and effect digest.
+BReg's Apply check continues to compare the frozen manifest with its original attachment references.
+An addition grants no authority over the effects that Apply writes.
+
+Ordinary downloads require Get and the slot's `readableAttachments` grant.
+Reviewer downloads instead require the declared review-context field and its exact submission and schema binding.
+BReg rechecks current disclosure before releasing verified bytes under the reviewer's own token.
+Proposal detail erasure counts and erases addition references with attachment references.
+The shared blob store retains bytes while either kind of live reference needs them.
+
+{/* Evidence: crates/registry-breg/src/mutation/proposal.rs ensure_additions_open;
+    crates/registry-breg/src/postgres/proposal.rs proposal_attachment_download;
+    crates/registry-breg/src/attachment_store.rs;
+    crates/registry-breg/tests/support/proposal_additions.rs. */}
+
 ### One-call writes
 
 An immediate Action that patches an existing Record normally asks the caller for a condition:

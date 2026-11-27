@@ -648,6 +648,68 @@ The facility template combines supporting-document display with current Record a
 {/* Evidence: crates/registry-breg/tests/postgres_facility_proposal.rs supporting-document;
     crates/registry-breg/src/compiler/review_context.rs review_context. */}
 
+## Accept supporting files during review
+
+Declare `additions` when your applicant or an authorised officer needs to supply files after Submit.
+BReg keeps these files beside the current submission.
+An addition changes the Proposal revision and ETag while preserving its submission version and frozen effect digest.
+
+```yaml
+execution:
+  mode: proposal
+  proposal:
+    additions:
+      id: other-documents
+      contentTypes: [application/pdf]
+      maximumBytes: 1048576
+      maximumCount: 8
+      classification: restricted
+```
+
+You can declare one additions slot with a limit of 1 to 32 files per submission.
+Give it an ID distinct from every attachment slot.
+The byte and media-type rules match attachment slots.
+
+Grant `add` and list the slot in `writableAttachments` to allow uploads.
+Grant `get` and list it in `readableAttachments` to disclose its files and download links.
+These grants remain independent.
+BReg records the authenticated actor who added each file.
+
+Follow `additions.<slotId>.links.add` and send the file as the raw request body.
+Use the declared media type and the link's `ifMatch` value.
+Choose an idempotency key and retain the exact request for uncertain-outcome recovery.
+The response contains the full Proposal and its changed ETag.
+Refetch before adding another file from a second tab.
+
+BReg accepts additions only while the current submission's review is pending or retrying.
+BReg closes the slot when review ends or the Proposal leaves `submitted`.
+A blocked Proposal also refuses additions.
+The descriptor retains an unavailable Add link when you have write authority.
+At the file limit, its reason is `limit-reached` and its recovery is `receipt-only`.
+
+To show the files to your reviewer, declare a review-context field:
+
+```yaml
+reviewContext:
+  id: supporting-review
+  fields:
+    otherDocuments:
+      type: additions
+      slot: other-documents
+```
+
+BReg serves an array of verified document descriptors for the bound submission.
+Each download link uses the reviewer's own authority and carries the exact review-context binding.
+Additions follow Proposal detail retention and share attachment byte verification and cleanup.
+Revise starts a submission version with no additions.
+Use the `added` hook transition to observe the value-free `proposal.added` event.
+
+{/* Evidence: crates/registry-breg/src/contract.rs AdditionSlotSource;
+    crates/registry-breg/src/mutation/proposal/additions.rs append_additions;
+    crates/registry-breg/src/mutation/proposal/context_projection.rs;
+    crates/registry-breg/tests/support/proposal_additions.rs;
+    crates/registry-breg/src/proposal_retention.rs. */}
+
 ## Keep a supporting document on the record
 
 A Proposal file can stay with the record that the Proposal writes.

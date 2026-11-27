@@ -604,6 +604,30 @@ exact content digest; changed content needs a new submission and fresh review.
     crates/registry-breg-client/src/proposal.rs;
     products/breg/examples/facility/registry.yaml. */}
 
+### Proposal additions
+
+Follow the Add link at `additions.<slotId>.links.add` to upload a supporting file during an open review.
+`POST /v1/proposals/{proposal_id}/additions/{slot_id}` takes the raw bytes with their `Content-Type`.
+You must send `Idempotency-Key` and `If-Match`.
+BReg returns 200 with the full Proposal and its changed ETag.
+The submission version and frozen effect digest stay unchanged.
+
+The slot descriptor carries its byte limit and accepted media types.
+It also carries `maximumCount` and the current submission's `items`.
+Each readable item has a download link when verification permits content release.
+`GET /v1/proposals/{proposal_id}/additions/{addition_id}` uses the link's submission-version query and the caller's current authority.
+
+BReg answers an unsupported media type with `415 attachment.content-type`.
+An oversized file gets `413 attachment.too-large`.
+An empty body gets `400 request.invalid`.
+A full slot gets `409 attachment.limit-reached`.
+The [Proposal configuration](../../configure/breg-proposals/#accept-supporting-files-during-review) explains the slot grants and reviewer field.
+
+{/* Evidence: crates/registry-breg/src/api/attachments.rs;
+    crates/registry-breg/src/proposal_artifacts.rs;
+    crates/registry-breg/src/problem.rs;
+    crates/registry-breg/tests/support/proposal_additions.rs. */}
+
 ## Immediate actions
 
 An Action with `execution.mode: immediate` runs one atomic plan at `POST /v1/actions/{action}` with

@@ -276,3 +276,7 @@ traceability:
   # Compile rules refuse a revision guard, a caller value and a missing falsifiable guard: crates/registry-breg/tests/immediate_action_requirements.rs::current_revision_needs_a_guard_the_write_falsifies
   # A missing and a hidden record answer identically: crates/registry-breg/tests/postgres_immediate_actions.rs::a_current_revision_action_does_not_tell_a_hidden_record_from_a_missing_one
   - {"id": "BREG-SEC-224", "state": "enforced", "negativeId": "BREG-NEG-224", "negativeTest": {"path": "crates/registry-breg/tests/postgres_immediate_actions.rs", "name": "two_concurrent_current_revision_invocations_commit_exactly_once"}}
+  # Submitted additions and exact ETag/idempotency admission: crates/registry-breg/tests/support/proposal_additions.rs::additions_keep_the_submission_and_digest_but_fence_tabs_and_replay
+  # Live review additions retain exact context disclosure: crates/registry-breg/tests/support/proposal_additions.rs::additions_reviewer_reads_live_files_under_the_exact_context_binding
+  # Shared addition references survive until exact detail erasure: crates/registry-breg/tests/support/proposal_additions.rs::additions_keep_shared_blobs_live_until_their_retention_erases_them
+  # Added event, hook selection and minimized audit: crates/registry-breg/tests/support/proposal_additions.rs::additions_emit_a_value_free_event_and_enqueue_the_selected_hook

@@ -51,6 +51,12 @@
   refused. To migrate, write the store's or verifier's own IPv4 or native
   IPv6 address, or a name that answers one.
 
+- Proposal Actions can declare one bounded `additions` slot for supporting files
+  during an open review. The independent `add` grant uses `writableAttachments`.
+  Get uses `readableAttachments`. Each addition changes the Proposal ETag while
+  keeping the submission version and frozen effects unchanged. Review context
+  can project an `additions` field, and hooks can observe `proposal.added`.
+
 - BREAKING: the compiler refuses a Proposal grant that holds `edit`, `revise`
   or `rebase` unless its `readableInputs` cover every input it may write
   (`writableInputs`, or every declared input when absent), with

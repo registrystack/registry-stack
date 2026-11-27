@@ -2144,6 +2144,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::AttachmentDigestMismatch => {
             "The file content does not match its declared SHA-256 digest."
         }
+        Code::AttachmentLimitReached => {
+            "The supporting document slot has reached its file limit."
+        }
         Code::AttachmentSlotWriteOnce => {
             "The record attachment slot already holds a file and is write-once."
         }
