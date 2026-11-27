@@ -29,6 +29,9 @@ pub const REVIEW_COMPLETIONS_PATH: &str = "/v1/review-completions";
 pub const REVIEW_ASKS_FEED_PATH: &str = "/v1/review-asks";
 /// Upper bound on the kinds of reply one ask can request.
 pub const MAXIMUM_ASK_WANTS: usize = 8;
+/// The problem code of the 409 a provider returns when an ask is no longer
+/// open. Any other 409 on the answer call is a different refusal.
+pub const REVIEW_ASK_NOT_OPEN_PROBLEM: &str = "review.ask-not-open";
 /// Authenticated producer identity on successful create/recovery responses.
 /// One ASCII identifier of at most 128 bytes; never an identity inferred from a digest.
 pub const REVIEW_PRODUCER_HEADER: &str = "registry-review-producer";
@@ -684,7 +687,10 @@ pub struct ReviewAsk {
     pub subject: SubjectBinding,
     #[cfg_attr(feature="schema",schemars(length(min=1,max=MAXIMUM_PUBLIC_REASON_BYTES),extend("x-maximum-utf8-bytes"=MAXIMUM_PUBLIC_REASON_BYTES)))]
     pub text: String,
-    #[cfg_attr(feature = "schema", schemars(length(max = MAXIMUM_ASK_WANTS)))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAXIMUM_ASK_WANTS), extend("uniqueItems" = true))
+    )]
     pub wants: Vec<ReviewAskWant>,
     pub asked_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -720,6 +726,20 @@ impl ReviewAsk {
         {
             return Err(ProtocolError::AskTimes);
         }
+        if self
+            .answered_at
+            .into_iter()
+            .chain(self.closed_at)
+            .any(|at| at < self.asked_at)
+        {
+            return Err(ProtocolError::AskTimes);
+        }
+        // An ask expires only once its due time has passed.
+        if self.state == ReviewAskState::Expired
+            && !matches!((self.due_at, self.closed_at), (Some(due), Some(closed)) if closed >= due)
+        {
+            return Err(ProtocolError::AskTimes);
+        }
         Ok(())
     }
 }
@@ -746,8 +766,9 @@ pub struct ReviewAskFeedPage {
 }
 
 /// The producer's report that the subject's owner answered an ask. It carries
-/// the time the answer was committed and nothing else, so it cannot carry
-/// the answer itself.
+/// the subject binding and the time the answer was committed, so it cannot
+/// carry the answer itself. The provider judges the answer by that time, at
+/// microsecond precision.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -758,7 +779,15 @@ pub struct ReviewAskAnswer {
 
 impl ReviewAskAnswer {
     pub fn check(&self) -> Result<(), ProtocolError> {
-        self.subject.check()
+        self.subject.check()?;
+        if !self
+            .answered_at
+            .timestamp_subsec_nanos()
+            .is_multiple_of(1_000)
+        {
+            return Err(ProtocolError::AskTimes);
+        }
+        Ok(())
     }
 }
 
@@ -878,7 +907,7 @@ pub enum ProtocolError {
     #[error("the terminal status does not permit the supplied outcome or result")]
     TerminalPayload,
     #[error(
-        "publicReason must be non-blank text of at most 2000 UTF-8 bytes without control characters"
+        "reviewer-facing text must be non-blank text of at most 2000 UTF-8 bytes without control characters"
     )]
     PublicReason,
     #[error("result availability must end after completion")]
@@ -889,7 +918,9 @@ pub enum ProtocolError {
     UnexpectedResultStatus,
     #[error("an ask lists at most eight distinct wants")]
     AskWants,
-    #[error("ask times must be ordered and match the ask state")]
+    #[error(
+        "ask times must be ordered, match the ask state and have at most microsecond precision"
+    )]
     AskTimes,
 }
 
@@ -1654,6 +1685,57 @@ mod ask_tests {
     }
 
     #[test]
+    fn ask_times_are_ordered() {
+        // Answered before it was asked.
+        let mut ask = open_ask();
+        ask.state = ReviewAskState::Answered;
+        ask.answered_at = Some(at(0));
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+        ask.answered_at = Some(ask.asked_at);
+        assert_eq!(ask.check(), Ok(()));
+        // Closed or expired before it was asked.
+        for state in [ReviewAskState::Expired, ReviewAskState::Closed] {
+            let mut ask = open_ask();
+            ask.state = state;
+            ask.closed_at = Some(at(0));
+            assert_eq!(ask.check(), Err(ProtocolError::AskTimes), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn an_expired_ask_has_a_due_time_that_has_passed() {
+        let mut ask = open_ask();
+        ask.state = ReviewAskState::Expired;
+        ask.due_at = None;
+        ask.closed_at = Some(at(3));
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+        ask.due_at = Some(at(4));
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+        ask.due_at = Some(at(3));
+        assert_eq!(ask.check(), Ok(()));
+        // A closed ask may close before its due time.
+        ask.state = ReviewAskState::Closed;
+        ask.due_at = Some(at(4));
+        assert_eq!(ask.check(), Ok(()));
+    }
+
+    #[test]
+    fn the_answer_time_has_at_most_microsecond_precision() {
+        let mut answer = ReviewAskAnswer {
+            subject: subject(),
+            answered_at: at(2) + chrono::Duration::microseconds(123_456),
+        };
+        assert_eq!(answer.check(), Ok(()));
+        answer.answered_at += chrono::Duration::nanoseconds(1);
+        assert_eq!(answer.check(), Err(ProtocolError::AskTimes));
+    }
+
+    #[test]
+    fn the_not_open_problem_code_is_fixed() {
+        assert_eq!(REVIEW_ASK_NOT_OPEN_PROBLEM, "review.ask-not-open");
+    }
+
+    #[test]
     fn wire_names_are_fixed() {
         let mut ask = open_ask();
         ask.state = ReviewAskState::Answered;
@@ -1761,6 +1843,7 @@ mod ask_tests {
             json!(["open", "answered", "expired", "closed"])
         );
         assert_eq!(ask["properties"]["wants"]["maxItems"], 8);
+        assert_eq!(ask["properties"]["wants"]["uniqueItems"], true);
         let answer = serde_json::to_value(schemars::schema_for!(ReviewAskAnswer)).unwrap();
         assert_eq!(answer["additionalProperties"], false);
         assert_eq!(answer["properties"].as_object().unwrap().len(), 2);

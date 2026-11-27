@@ -174,7 +174,7 @@ impl ReviewClientError {
         Self::InvalidRequest { reason }
     }
 
-    /// Classify a create or cancellation failure without guessing whether the
+    /// Classify a create, cancellation or ask answer failure without guessing whether the
     /// service committed a mutation before the failure became observable.
     #[must_use]
     pub fn mutation_class(&self) -> ReviewMutationErrorClass {

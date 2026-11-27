@@ -51,7 +51,41 @@ owns it. The producer finds it through the ask feed (`GET /v1/review-asks`,
 announcements of ids and times only), reads it at
 `/v1/review-requests/{requestId}/asks/{askId}`, and reports it answered with
 `POST .../answer`. `ReviewAsk` carries reviewer text bounded like a public
-reason, up to eight distinct `wants` (`answer`, `document`), an absolute `dueAt`
-and a state (`open`, `answered`, `expired`, `closed`) whose times must agree.
-`ReviewAskAnswer` holds only the subject binding and the answer time, so it
-cannot carry the answer itself.
+reason, up to eight distinct `wants` (`answer`, `document`), an optional
+absolute `dueAt` and a state (`open`, `answered`, `expired`, `closed`).
+`askedAt` comes first: `dueAt`, `answeredAt` and `closedAt` are never before it.
+`answeredAt` is present exactly when the ask is answered, and `closedAt` exactly
+when it is expired or closed. An expired ask has a `dueAt`, and its `closedAt`
+is not before it. `ReviewAskAnswer` holds only the subject binding and the
+answer time, so it cannot carry the answer itself. The answer time has at most
+microsecond precision, so the producer stores and replays exactly the value the
+provider keeps.
+
+Rules for the provider:
+
+- A provider judges an answer by its `answeredAt`, not by when it arrives. An
+  answer whose `answeredAt` is at or before `dueAt` is accepted even if the ask
+  already reads `expired`, and the ask then reads `answered`. A delivery delay
+  never makes an on-time answer late.
+- Only a not-open ask refuses an answer with 409 and the problem code
+  `review.ask-not-open` (`REVIEW_ASK_NOT_OPEN_PROBLEM`). Every other 409, such
+  as a reused idempotency key, carries its own code.
+- A concealed or unknown ask is an empty 404, as for the result read.
+- A provider sends only want kinds the producer's protocol version knows. An
+  unknown kind is refused when the ask is decoded, so a producer on an older
+  version cannot read the ask at all. The limit of eight wants stays for kinds
+  that may repeat.
+- A provider validates an ask with `ReviewAsk::check` before it stores it.
+
+Rules for the producer:
+
+- Never stall the feed on one bad ask. For a deterministic refusal (a
+  protocol failure on the ask, or a not-found), record it and move on. For a
+  transient failure (transport, 5xx), stop the page and retry from the same
+  cursor.
+- A stored copy of an ask only moves forward: `open` becomes exactly one of
+  `answered`, `expired` or `closed`, never back. Two readers of the same ask
+  must not store an older copy over a newer one.
+- After a `NotOpen` outcome, read the ask to learn which state it is in.
+- Use one idempotency key per ask, and store it with the `answeredAt` that was
+  sent, so a retry after an ambiguous failure replays the same body.

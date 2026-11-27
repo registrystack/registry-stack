@@ -15,8 +15,9 @@ use registry_review_protocol::{
     ReviewCancelRequest, ReviewCancelResponse, ReviewCreateRequest, ReviewProgressCode,
     ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
     ReviewResultFeedPage, ReviewResultStatus, SubjectBinding, SubmissionDigest,
-    REVIEW_ASKS_FEED_PATH, REVIEW_PRODUCER_HEADER, REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH,
-    REVIEW_RESULTS_FEED_PATH, REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
+    REVIEW_ASKS_FEED_PATH, REVIEW_ASK_NOT_OPEN_PROBLEM, REVIEW_PRODUCER_HEADER,
+    REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH,
+    REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -689,15 +690,16 @@ impl ReviewClient {
         Ok(complete)
     }
 
-    /// Reads one ask. The response must be the requested ask for the
-    /// subject binding the caller holds.
+    /// Reads one ask of the accepted request. The response must be the
+    /// requested ask for the accepted subject.
     pub async fn ask(
         &self,
         auth: ReviewAuth<'_>,
-        request_id: Uuid,
+        expected: &ReviewRequestAccepted,
         ask_id: Uuid,
-        expected_subject: &SubjectBinding,
     ) -> Result<ReviewAskResponse, ReviewClientError> {
+        let request_id = expected.request_id;
+        let expected_subject = &expected.subject;
         check_ask_input(request_id, ask_id, expected_subject)?;
         let url = self.url_from_constant(&review_ask_path(request_id, ask_id))?;
         let response = self
@@ -723,7 +725,8 @@ impl ReviewClient {
                 })))
             }
             StatusCode::NOT_FOUND => {
-                self.refusal_status(response, status, &trace_id).await?;
+                self.require_bare_not_found(response, status, &trace_id)
+                    .await?;
                 Ok(ReviewAskResponse::ConcealedOrUnknown { trace_id })
             }
             _ => Err(self.problem_or_status(response, Some(trace_id)).await),
@@ -738,11 +741,17 @@ impl ReviewClient {
         &self,
         auth: ReviewAuth<'_>,
         idempotency_key: &str,
-        request_id: Uuid,
+        expected: &ReviewRequestAccepted,
         ask_id: Uuid,
         answer: &ReviewAskAnswer,
     ) -> Result<ReviewAskAnswerResponse, ReviewClientError> {
-        check_ask_input(request_id, ask_id, &answer.subject)?;
+        let request_id = expected.request_id;
+        check_ask_input(request_id, ask_id, &expected.subject)?;
+        if answer.subject != expected.subject {
+            return Err(ReviewClientError::invalid_request(
+                "the ask answer subject differs from the accepted request",
+            ));
+        }
         answer
             .check()
             .map_err(|_| ReviewClientError::invalid_request("the ask answer is invalid"))?;
@@ -768,7 +777,9 @@ impl ReviewClient {
                         &answer.subject,
                     )
                     .await?;
-                if ask.state != ReviewAskState::Answered {
+                if ask.state != ReviewAskState::Answered
+                    || ask.answered_at != Some(answer.answered_at)
+                {
                     return Err(protocol(
                         status,
                         ReviewProtocolFailure::Body,
@@ -782,14 +793,22 @@ impl ReviewClient {
                     },
                 )))
             }
-            StatusCode::NOT_FOUND | StatusCode::CONFLICT => {
-                self.refusal_status(response, status, &trace_id).await?;
-                Ok(if status == StatusCode::NOT_FOUND {
-                    ReviewAskAnswerResponse::ConcealedOrUnknown { trace_id }
-                } else {
-                    ReviewAskAnswerResponse::NotOpen { trace_id }
-                })
+            StatusCode::NOT_FOUND => {
+                self.require_bare_not_found(response, status, &trace_id)
+                    .await?;
+                Ok(ReviewAskAnswerResponse::ConcealedOrUnknown { trace_id })
             }
+            StatusCode::CONFLICT => match self
+                .problem_or_status(response, Some(trace_id.clone()))
+                .await
+            {
+                ReviewClientError::Problem { problem, .. }
+                    if problem.code.as_str() == REVIEW_ASK_NOT_OPEN_PROBLEM =>
+                {
+                    Ok(ReviewAskAnswerResponse::NotOpen { trace_id })
+                }
+                error => Err(error),
+            },
             _ => Err(self.problem_or_status(response, Some(trace_id)).await),
         }
     }
@@ -825,24 +844,20 @@ impl ReviewClient {
         Ok(ask)
     }
 
-    /// Accepts a defined refusal status as either an empty response or a
-    /// well-formed problem document carrying the same status.
-    async fn refusal_status(
+    /// Accepts a 404 only as a bare, empty response, as the result read does.
+    /// A 404 problem document, such as a route miss, stays a `Problem`.
+    async fn require_bare_not_found(
         &self,
         response: Response,
         status: StatusCode,
         trace_id: &str,
     ) -> Result<(), ReviewClientError> {
-        if !response.headers().contains_key(CONTENT_TYPE) {
-            return self.require_empty(response, status, trace_id).await;
+        if response.headers().contains_key(CONTENT_TYPE) {
+            return Err(self
+                .problem_or_status(response, Some(trace_id.to_owned()))
+                .await);
         }
-        match self
-            .problem_or_status(response, Some(trace_id.to_owned()))
-            .await
-        {
-            ReviewClientError::Problem { status: seen, .. } if seen == status.as_u16() => Ok(()),
-            error => Err(error),
-        }
+        self.require_empty(response, status, trace_id).await
     }
 
     fn authorized(
