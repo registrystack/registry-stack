@@ -447,7 +447,13 @@ fn identity() -> HookRuntimeIdentity {
 /// pinned: a change to the digest shape is a breaking change.
 #[test]
 fn hook_destination_binding_digests_are_pinned() {
-    let (_directory, secrets) = file_secrets();
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let (directory, secrets) = file_secrets();
+    let mirror_key = directory.path().join("mirror-key");
+    std::fs::write(&mirror_key, [0x6b; 32]).expect("write the mirror key");
+    std::fs::set_permissions(&mirror_key, std::fs::Permissions::from_mode(0o600))
+        .expect("restrict the mirror key");
     let configured = configured(json!({
         "owning-system-events": {
             "url": "https://events.example.test/documents",
@@ -455,7 +461,7 @@ fn hook_destination_binding_digests_are_pinned() {
         },
         "audit-mirror": {
             "url": "http://127.0.0.1:8080/hooks",
-            "hmacSha256KeyRef": "secret:file/hook-key",
+            "hmacSha256KeyRef": "secret:file/mirror-key",
             "attemptTimeoutMilliseconds": 250,
             "maximumAttempts": 3,
         },
@@ -466,16 +472,16 @@ fn hook_destination_binding_digests_are_pinned() {
         .expect("the pinned hook destinations activate");
 
     assert_eq!(
-        activated.binding_digest,
-        "sha256:dc81f68b54c313d5cc310258dbefd0743b5e35e7e53f65ad2a0b89dc93f5b40f"
-    );
-    assert_eq!(
-        activated.bindings["owning-system-events"].binding_digest(),
-        "sha256:cd4da816b206e19dfa0a04a81c09b9fee12cac3edd1efaaffdecfa55c8e76a58"
-    );
-    assert_eq!(
-        activated.bindings["audit-mirror"].binding_digest(),
-        "sha256:545d6c1a305c7a38085da5520df5e1ba8db18c0eb5a2b234a919eeae8055550e"
+        [
+            activated.binding_digest.as_str(),
+            activated.bindings["owning-system-events"].binding_digest(),
+            activated.bindings["audit-mirror"].binding_digest(),
+        ],
+        [
+            "sha256:4ede0d0a045d99392472f146bf4f4f78d0cf15f1abd1a5f37625c99e5200d12b",
+            "sha256:cd4da816b206e19dfa0a04a81c09b9fee12cac3edd1efaaffdecfa55c8e76a58",
+            "sha256:13cbbd8ac10dba6e6f99b245e9e485b9f6c924ac18408d7bb6d929197d0d7229",
+        ]
     );
 }
 
@@ -527,7 +533,16 @@ fn activation_refuses_a_signing_secret_it_cannot_resolve() {
         Duration::from_secs(7 * 24 * 60 * 60),
     )
     .expect_err("an unresolvable signing secret is refused");
-    assert_eq!(error, HookActivationError::InvalidSigningMaterial);
+    assert!(matches!(
+        error,
+        HookActivationError::InvalidSigningMaterial(
+            UrlHookActivationError::SigningKeyUnavailable { .. }
+        )
+    ));
+    let message = error.to_string();
+    assert!(message.contains("owning-system-events"), "{message}");
+    assert!(message.contains("hmacSha256KeyRef"), "{message}");
+    assert!(!message.contains("secret:file/hook-key"));
 }
 
 #[test]

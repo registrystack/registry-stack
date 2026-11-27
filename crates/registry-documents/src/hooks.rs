@@ -73,7 +73,7 @@ const MAXIMUM_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const _: () = assert!(MAXIMUM_PAYLOAD_BYTES <= MAX_DESTINATION_REQUEST_BODY_BYTES);
 
 /// Value-free refusal from hook compilation or deployment activation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HookActivationError {
     #[error("the Document Store hook declaration is invalid")]
     InvalidDeclaration,
@@ -100,8 +100,8 @@ pub enum HookActivationError {
     InvalidDestination,
     #[error("a Document Store hook destination widens the fixed delivery budget")]
     DeliveryBudgetWidening,
-    #[error("a Document Store hook signing secret is unavailable or invalid")]
-    InvalidSigningMaterial,
+    #[error(transparent)]
+    InvalidSigningMaterial(UrlHookActivationError),
     #[error("the Document Store hook runtime identity is invalid")]
     InvalidIdentity,
 }
@@ -726,7 +726,7 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
         UrlHookActivationError::SigningKeyUnavailable { .. }
         | UrlHookActivationError::InvalidSigningKey { .. }
         | UrlHookActivationError::RepeatedSigningKey { .. } => {
-            HookActivationError::InvalidSigningMaterial
+            HookActivationError::InvalidSigningMaterial(error)
         }
     }
 }
@@ -885,6 +885,18 @@ pub struct HookDeliveryService {
 impl HookDeliveryService {
     pub async fn deliver_once(&self) -> Result<DeliveryOutcome, DeliveryError> {
         self.inner.deliver_once().await
+    }
+
+    #[cfg(feature = "postgres-test")]
+    pub(crate) async fn replay_for_test(
+        &self,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+        generation: i64,
+    ) -> Result<i64, DeliveryError> {
+        self.inner
+            .replay(event_id, compiled_delivery_id, generation)
+            .await
     }
 
     pub async fn verify_retained_bindings(&self) -> Result<(), DeliveryError> {

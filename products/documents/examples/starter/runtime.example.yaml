@@ -102,6 +102,7 @@ destinations:
     owning-system-events:
       url: https://civil-registry.example.test/document-events
       hmacSha256KeyRef: secret:file/owning-system-events-hmac
+      # previousHmacSha256KeyRef: secret:file/owning-system-events-previous-hmac
       attemptTimeoutMilliseconds: 5000
       maximumAttempts: 8
 retention:

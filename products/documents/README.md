@@ -320,7 +320,11 @@ A project may declare `hooks`: after-commit URL observers of three event
 families. Each hook names a trigger, the document policies whose
 documents it hears about, the fields it projects, and a destination id; the
 runtime configuration binds that id under `destinations.hooks` to a URL and
-an HMAC signing key. The project file never carries an endpoint or a secret.
+a current HMAC signing key under `hmacSha256KeyRef`. Use distinct key bytes across
+destinations. Each key contains 32 to 64 exact bytes. Generate a 64-byte file
+with `openssl rand -hex 32 | tr -d '\n' > key`. The optional
+`previousHmacSha256KeyRef` adds a second signature during rotation, with the
+current signature first. The project file never carries an endpoint or a secret.
 
 `policies` is required and lists at least one policy the project declares,
 each once. A hook hears only about documents held under a policy it names,
@@ -363,7 +367,11 @@ request report nothing.
 Delivery runs after commit: each attempt is a signed Version 1 hook envelope
 whose `source` is `urn:registrystack:documents:<project id>`, whose `type`
 is the hook id, and whose `dataschema` names the family's published schema
-under `generated/events/`. A failed attempt is retried with backoff from 30
+under `generated/events/`. The HTTP POST carries `accept`, `content-type`,
+`webhook-id`, `webhook-timestamp`, and `webhook-signature`. The id matches the
+envelope and stays stable on retries. The receiver verifies the signature
+over the id, attempt timestamp, and exact body bytes, checks freshness,
+and compares the header id with the authenticated envelope id. A failed attempt is retried with backoff from 30
 seconds to an hour until the destination's `maximumAttempts` are spent, then
 dead-lettered; delivery never delays or undoes a transition. An observer may
 not answer with a proposal: every proposal is refused and recorded as
