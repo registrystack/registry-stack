@@ -3572,6 +3572,69 @@ fn start_without_binaries(project: &Path) -> Result<Value> {
 }
 
 #[test]
+fn reclaimed_successor_with_missing_inbox_key_starts_a_fresh_session() {
+    let (_temporary, state) = retained_inbox_session(2);
+    let root = state.root();
+    fs::remove_file(config::inbox_key_path(&root, "local-hook")).unwrap();
+    let refused = start_without_binaries(&state.project)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(refused, "This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
+
+    // A successful empty Docker listing models a manually removed container.
+    stop(&state.project, true, Some(Path::new("/bin/true"))).unwrap();
+    let refusal = start_without_binaries(&state.project).unwrap_err();
+    assert!(!refusal.to_string().contains("stop --remove"), "{refusal}");
+    let fresh = read_state(&root).unwrap();
+    assert_eq!(fresh.sequence, 1);
+    assert_ne!(fresh.owner, state.owner);
+    events::check_destination_keys(&root).unwrap();
+}
+
+#[test]
+fn stop_remove_reclaims_an_uncompilable_captured_inbox_project() {
+    let (_temporary, state) = retained_inbox_session(1);
+    let root = state.root();
+    fs::write(root.join("project/registry.yaml"), "not a registry").unwrap();
+    let report = stop(&state.project, true, Some(Path::new("/bin/true"))).unwrap();
+    assert_eq!(report["status"], "stopped");
+    let removed = read_state(&root).unwrap();
+    assert!(removed.container_id.is_none());
+    assert!(!removed.activated);
+    let refusal = start_without_binaries(&state.project).unwrap_err();
+    assert!(
+        !refusal.to_string().contains("no longer compiles"),
+        "{refusal}"
+    );
+    let fresh = read_state(&root).unwrap();
+    assert_ne!(fresh.owner, state.owner);
+    events::check_destination_keys(&root).unwrap();
+}
+
+fn retained_inbox_session(sequence: u64) -> (tempfile::TempDir, State) {
+    let (temporary, project) = write_retained_project();
+    let file = project.join("registry.yaml");
+    let mut source: Value = serde_norway::from_slice(&fs::read(&file).unwrap()).unwrap();
+    source["recordTypes"]["record"]["hooks"] = json!([
+        {"phase":"after","id":"record-created-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"local-hook"}}
+    ]);
+    fs::write(&file, serde_norway::to_string(&source).unwrap()).unwrap();
+    let mut state = retained_session(&project, Some("c".repeat(64)));
+    let ports = unused_ports();
+    state.breg_port = ports[0];
+    state.issuer_port = ports[1];
+    state.database_port = ports[2];
+    state.webhook_port = Some(receiver_port(&state).unwrap());
+    state.sequence = sequence;
+    if sequence > 1 {
+        state.baseline_runtime = Some(state.root().join("baseline-1/runtime.yaml"));
+    }
+    state.save().unwrap();
+    config::repair_inbox(&state.root(), state.webhook_port.unwrap()).unwrap();
+    (temporary, state)
+}
+
+#[test]
 fn a_first_start_reads_the_projects_dev_clients_without_a_flag() {
     let (_temporary, project) = write_retained_project();
     let expected = fs::canonicalize(project.join("dev-clients.yaml")).unwrap();
@@ -4164,24 +4227,25 @@ fn export_client_reuses_readable_nonexecutable_credentials_only() {
 }
 
 #[test]
-fn removed_successor_database_is_refused_before_any_prerequisite_or_recreation() {
+fn removed_successor_database_restarts_from_an_initial_package() {
     let (_temporary, project) = write_retained_project();
     let mut state = retained_session(&project, Some("a".repeat(64)));
+    let ports = unused_ports();
+    state.breg_port = ports[0];
+    state.issuer_port = ports[1];
+    state.database_port = ports[2];
     state.sequence = 2;
     state.baseline_runtime = Some(state.root().join("baseline-1/runtime.yaml"));
     reclaimed(&mut state);
     state.save().unwrap();
-    let before = private::read(&state.root().join("state.json"), MAX_BYTES).unwrap();
+
     let error = start_without_binaries(&project).unwrap_err().to_string();
-    assert!(
-        error.contains("successor database was explicitly removed"),
-        "{error}"
-    );
-    assert_eq!(
-        private::read(&state.root().join("state.json"), MAX_BYTES).unwrap(),
-        before
-    );
-    assert!(read_state(&state.root()).unwrap().container_id.is_none());
+    assert!(!error.contains("successor database"), "{error}");
+    let fresh = read_state(&state.root()).unwrap();
+    assert_ne!(fresh.owner, state.owner);
+    assert_eq!(fresh.sequence, 1);
+    assert!(fresh.baseline_runtime.is_none());
+    assert!(fresh.container_id.is_none());
 }
 
 #[test]

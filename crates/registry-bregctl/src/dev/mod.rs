@@ -1194,13 +1194,22 @@ fn start(args: StartArgs) -> Result<Value> {
         source_revision,
     } = capture(&project, &client_bytes)?;
     bind_journey_profiles(&files["tests/journeys.yaml"], &clients)?;
-    // The source pin protects the records a session retains. Once `dev stop
-    // --remove` has discarded them, changed inputs start a fresh session on
-    // the ports and clients file the previous one used.
+    // The source pin protects retained records. Once `dev stop --remove`
+    // discards a successor database, the next start builds an initial package
+    // from the current project. A successor cannot initialize an empty database.
     let mut previous = None;
     let existing = match existing {
         Some(state)
-            if digest != state.source_digest
+            if (state.container_id.is_none()
+                && (state.sequence > 1
+                    || (state.webhook_port.is_some()
+                        && crate::compile(
+                            &root.join("project"),
+                            crate::ProfileArg::Production,
+                            "dev",
+                        )
+                        .is_err())))
+                || digest != state.source_digest
                 || args.breg_port.is_some_and(|p| p != state.breg_port)
                 || args.issuer_port.is_some_and(|p| p != state.issuer_port)
                 || requested_issuer
@@ -1337,11 +1346,6 @@ fn start(args: StartArgs) -> Result<Value> {
         first_start_ports = Some(selected_ports);
         read_state(&root)?
     };
-    if state.sequence > 1 && state.container_id.is_none() {
-        bail!(
-            "the retained successor database was explicitly removed; a successor package cannot initialize empty records. Remove the project's .breg/dev directory, then run bregctl dev start to begin a fresh session"
-        );
-    }
     let breg = match managed_breg {
         Some(path) => path,
         None => executable("breg", args.breg_bin.as_deref())?,

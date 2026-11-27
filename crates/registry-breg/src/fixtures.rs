@@ -62,7 +62,7 @@ use crate::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
     PreparedSchemaTestCatalogVerifier, PreparedSchemaTestDatabase, RuntimePool,
 };
-use crate::runtime_config::RuntimeConfig;
+use crate::runtime_config::{RuntimeConfig, RuntimeConfigError};
 #[cfg(feature = "postgres-test")]
 use crate::startup::PreparedServer;
 
@@ -153,6 +153,7 @@ pub enum SchemaTestRuntimeSetupError {
     EventDestinations(EventDestinationActivationError),
     Evidence,
     ReviewAuthorities,
+    ReviewAuthorityKey(String),
     WasmExecution,
 }
 
@@ -169,6 +170,7 @@ impl fmt::Display for SchemaTestRuntimeSetupError {
             Self::ReviewAuthorities => {
                 formatter.write_str("schema-test review authority activation failed")
             }
+            Self::ReviewAuthorityKey(message) => formatter.write_str(message),
             Self::WasmExecution => formatter.write_str("schema-test WASM execution setup failed"),
         }
     }
@@ -3798,9 +3800,17 @@ impl SchemaTestRuntime {
         // same transaction, so the rehearsal activates the operator's review
         // authority bindings exactly as the server does. No review worker runs
         // here: the rehearsal never contacts the authority.
-        let review_authorities = config.activate_review_authorities(&registry).map_err(|_| {
-            FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::ReviewAuthorities)
-        })?;
+        let review_authorities =
+            config
+                .activate_review_authorities(&registry)
+                .map_err(|error| {
+                    FixtureError::RuntimeSetup(match error {
+                        RuntimeConfigError::InvalidDeliveryKey { .. } => {
+                            SchemaTestRuntimeSetupError::ReviewAuthorityKey(error.to_string())
+                        }
+                        _ => SchemaTestRuntimeSetupError::ReviewAuthorities,
+                    })
+                })?;
         let event_destinations = Arc::new(
             config
                 .activate_event_destinations_with_review_authorities(

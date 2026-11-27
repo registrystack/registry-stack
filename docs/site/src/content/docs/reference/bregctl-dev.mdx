@@ -148,12 +148,11 @@ the same authored project, ports, credentials, and package.
 It also lets the next start take edited inputs: once no records are retained, a changed package,
 clients file, or port ([what counts as changed](#retained-state-and-recovery)) replaces the session
 with a fresh one that keeps the previous ports and clients file and generates new keys.
-A successor package prepared for retained records cannot initialise an empty database after
-removal: start refuses before Docker.
-Create a fresh project at package sequence 1 for a separate empty experiment.
+After removing a successor database, the next start builds a fresh sequence 1 package from
+the current authored project. The new session generates its own keys.
 
 {/* Evidence: crates/registry-bregctl/src/dev/tests.rs changed_inputs_replace_a_session_whose_records_were_discarded,
-    removed_successor_database_is_refused_before_any_prerequisite_or_recreation. */}
+    removed_successor_database_restarts_from_an_initial_package. */}
 
 Use `--format json` to consume the status, URLs, audience, package digest, runtime configuration,
 and private credential file references.
@@ -1032,8 +1031,8 @@ reclaimable once the container is gone.
   Keeps the audit files, keys, credentials, ports, clients, and the built package.
 - Start after `--remove`: at sequence 1, creates an empty container and volume, activates the initial
   package, and replays authored seeds.
-  A retained successor refuses before Docker because its predecessor records were removed; use a
-  fresh project at sequence 1 for an empty experiment.
+  After removing a successor database, start builds a fresh sequence 1 package from the
+  current authored project and replays authored seeds.
 - Seed request committed before checkpoint: replays the same permanent BReg idempotency reservation.
   The original create result is returned without creating or overwriting a record.
 - `breg` from another release: refuses before the owned container is inspected and before the
@@ -1069,9 +1068,8 @@ reclaimable once the container is gone.
     the_changed_inputs_refusal_and_stop_help_name_the_same_two_options;
     crates/registry-bregctl/tests/dev_lifecycle.rs installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding. */}
 
-Reclamation is explicit: only `dev stop --remove` discards records, only a start after it replaces
-retained keys, and only for edited inputs; this command implements no automatic reset or general
-retained-schema upgrade.
+`dev stop --remove` discards records. The next start generates fresh keys if inputs changed,
+the captured inbox project no longer compiles, or the removed database held a successor package.
 The explicit source preparation above is limited to its reviewed policy-only successor.
 An operated successor uses BReg's normal reviewed package, migration, activation, and recovery
 procedure.

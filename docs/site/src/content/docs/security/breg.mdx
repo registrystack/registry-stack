@@ -64,6 +64,7 @@ The signature covers `webhook-id`, `webhook-timestamp` and the exact body, leavi
 the URL and `Registry-Recipient-Binding` outside the signed input. The binding only selects a key,
 so a substituted binding selects a key the sender does not hold, and BReg requires separate keys
 per destination and per review authority because a captured delivery verifies wherever its key is held.
+Startup refuses shared key bytes and identifies both configuration paths.
 BReg refuses a timestamp more than 300 seconds from its clock and stores one completion per
 authority and `webhook-id` for the recovery window.
 

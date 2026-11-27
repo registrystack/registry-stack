@@ -9150,7 +9150,7 @@ fn bregctl_schema_test_with_unreachable_database(arguments: &[&str]) -> Output {
 }
 
 #[test]
-fn hook_drain_and_plan_refuse_a_key_shared_with_completion() {
+fn apply_plan_and_hook_drain_refuse_a_key_shared_with_completion() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let mut module: Value = serde_json::from_slice(&package_module_bytes()).unwrap();
@@ -9170,9 +9170,13 @@ fn hook_drain_and_plan_refuse_a_key_shared_with_completion() {
         uuid::Uuid::new_v4().as_bytes(),
     ]
     .concat();
-    for name in ["hook-key", "completion-key"] {
+    for (name, bytes) in [
+        ("hook-key", key.as_slice()),
+        ("completion-key", key.as_slice()),
+        ("review-token", b"synthetic-review-token".as_slice()),
+    ] {
         let path = fixture.directory.path().join("secrets").join(name);
-        fs::write(&path, &key).unwrap();
+        fs::write(&path, bytes).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
     let raw = fs::read_to_string(&fixture.runtime_config).unwrap();
@@ -9199,7 +9203,7 @@ reviewAuthorities:
     profile: producer
     producerId: registry-producer
     recoveryDays: 7
-    tokenRef: secret:file/unavailable-review-token
+    tokenRef: secret:file/review-token
     completion:
       recipientBinding: registry
       hmacSha256KeyRef: secret:file/completion-key
@@ -9211,6 +9215,7 @@ reviewAuthorities:
     for command in [
         vec!["hook", "drain"],
         vec!["plan", "--package", path(&fixture.package)],
+        vec!["apply", "--initial", "--package", path(&fixture.package)],
     ] {
         let arguments = ["--format", "json"]
             .into_iter()

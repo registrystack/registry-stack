@@ -1131,6 +1131,18 @@ bindings:
     }
 
     #[test]
+    fn schema_test_destination_inventory_refusal_names_the_recovery() {
+        use registry_breg::event_destination::EventDestinationActivationError;
+
+        let error = SchemaTestRuntimeSetupError::EventDestinations(
+            EventDestinationActivationError::InventoryMismatch,
+        );
+        let report =
+            crate::test_lifecycle_failure(execution_error(FixtureError::RuntimeSetup(error)));
+        assert_eq!(report.diagnostics[0].message, "schema-test event destination activation requires an exact compiled binding set; configure exactly the logical destination bindings required by the candidate event deliveries before retrying");
+    }
+
+    #[test]
     fn runtime_setup_failures_report_the_configuration_boundary_without_database_advice() {
         use registry_breg::event_destination::EventDestinationActivationError;
 
@@ -1191,7 +1203,9 @@ bindings:
         }
         for (error, code, path) in cases {
             let activation_message = match &error {
-                SchemaTestRuntimeSetupError::EventDestinations(cause) => Some(cause.to_string()),
+                SchemaTestRuntimeSetupError::EventDestinations(
+                    cause @ EventDestinationActivationError::RepeatedSigningKey { .. },
+                ) => Some(cause.to_string()),
                 _ => None,
             };
             let report =

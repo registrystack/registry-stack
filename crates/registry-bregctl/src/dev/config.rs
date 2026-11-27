@@ -2491,8 +2491,11 @@ fn event_destinations(
 
 /// Restore the inbox bindings after the operator has removed the retained database.
 pub(super) fn repair_inbox(root: &Path, port: u16) -> Result<()> {
-    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
-        .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
+    let Ok(compiled) = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+    else {
+        // Database and receipt removal does not depend on the captured project.
+        return Ok(());
+    };
     let hooks = event_destinations(root, &compiled, port, true)?;
     for name in ["runtime.yaml", "runtime-test.yaml"] {
         let path = root.join(name);

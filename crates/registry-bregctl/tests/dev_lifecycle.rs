@@ -1814,7 +1814,11 @@ fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let temporary = tempfile::Builder::new()
         .prefix("breg-native-source-test-")
-        .tempdir_in(binary.parent().unwrap())
+        .tempdir_in(if cfg!(target_os = "linux") {
+            std::env::temp_dir()
+        } else {
+            binary.parent().unwrap().to_owned()
+        })
         .unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let parent = fs::canonicalize(temporary.keep()).unwrap();
@@ -1825,6 +1829,16 @@ fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
         docker: installed("docker"),
     };
     operator_project(&session);
+    let registry_path = project.join("registry.yaml");
+    let mut source: Value = serde_norway::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    source["recordTypes"]["record"]["hooks"] = json!([
+        {"phase":"after","id":"record-created", "trigger":"created", "projection":["status"],
+         "handler":{"type":"url","destinationId":"receiver"}}
+    ]);
+    write(
+        &registry_path,
+        serde_norway::to_string(&source).unwrap().as_bytes(),
+    );
     let client_file = project.join("dev-clients.yaml");
     let mut clients = fs::read(&client_file).unwrap();
     clients.extend_from_slice(
@@ -1944,6 +1958,19 @@ seed:
         assert_eq!(found["data"]["domainData"]["status"], "active");
     });
     session.stop();
+    let key = project.join(".breg/dev/secrets/inbox-key-receiver");
+    fs::remove_file(&key).unwrap();
+    let refusal = session.dev(&[]);
+    assert!(!refusal.status.success());
+    let report: Value = serde_json::from_slice(&refusal.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["message"], "This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
+    session.remove();
+
+    let fresh = session.start();
+    assert_eq!(fresh["outcome"], "ready");
+    assert_eq!(fresh["packageSequence"], 1);
+    assert!(key.is_file());
+    session.remove();
     std::mem::forget(session);
     fs::remove_dir_all(parent).unwrap();
 }
