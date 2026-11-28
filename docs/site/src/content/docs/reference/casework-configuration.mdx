@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -113,6 +113,17 @@ There is no override for orphaned work.
 {/* Evidence: crates/registry-casework/src/pinned_work.rs compare_pinned_work, stranded_work_refusal;
     crates/registry-casework/tests/review_postgres.rs casework.activation.stranded-work */}
 
+## Deployment posture
+
+Casework uses `--posture` or `REGISTRY_STACK_POSTURE` to declare `development`
+or `production`. The default is `production`. When you use both, their values
+must match. Production refuses all development settings in the runtime file.
+For local work, run `rstack dev`, set `REGISTRY_STACK_POSTURE=development`,
+or pass `--posture development`.
+
+{/* Evidence: crates/registry-casework/src/main.rs declared;
+    crates/registry-casework/src/config.rs RuntimeConfigLoader */}
+
 ## Listener
 
 `listener` is required.
@@ -120,7 +131,7 @@ There is no override for orphaned work.
 `listener.tlsTermination` is required:
 
 - `operator-controlled-upstream` sits behind an operator-managed TLS edge.
-- `development-loopback` is for direct local development.
+- `loopback-plaintext` binds only to loopback. The older `development-loopback` value has the same placement rule. Both apply in either posture.
 
 `listener.networkExposure` defaults to `private-address`.
 `container-private` permits an unspecified bind only for a listener kept on a private container network.
@@ -165,7 +176,11 @@ Those privileges are schema usage, read and write on the Casework tables, and re
 When they name one role, or the runtime role can still write the ledger, apply records `single`, and `status` and `doctor` say that the runtime credential can activate packages.
 
 `database.caBundleRef` is optional.
-Plaintext PostgreSQL is available only to builds with the `postgres-test` feature and an explicit `testOnlyPlaintext: true` setting.
+`database.transport` defaults to `verified-tls`. Use `loopback-plaintext`
+when every database host is a Unix socket, a numeric loopback address, or
+`localhost`. Development also permits `private-network-plaintext` for private
+database hosts. `testOnlyPlaintext: true` is available in builds with the
+`postgres-test` feature.
 
 Unless a database URL sets them, every Casework connection uses these values, all in seconds as Casework reads the URL:
 
@@ -180,8 +195,8 @@ A connection to a server that stopped answering therefore fails within seconds.
 The TCP user timeout applies on Linux only.
 
 {/* Evidence: crates/registry-casework/src/activation.rs grant_runtime_role, observe_role;
-    crates/registry-casework/src/store.rs tcp_user_timeout, test_only_plaintext;
-    crates/registry-casework/src/config.rs test_only_plaintext */}
+    crates/registry-casework/src/store.rs tcp_user_timeout, plaintext_permitted;
+    crates/registry-casework/src/config.rs check_database */}
 
 ## Authentication
 
@@ -198,8 +213,8 @@ The issuer's declared origin may resolve to a private address.
 A discovery document may name a same-origin private `jwks_uri`.
 A cross-origin private `jwks_uri` named by discovery is refused, and cloud metadata and link-local addresses are always refused.
 
-Plain `http` is accepted on IPv4 and IPv6 loopback when `listener.tlsTermination` is `development-loopback`.
-Set `allowInsecureHttp: true` beside `issuer` to permit it elsewhere; startup logs a warning while that setting is active.
+Plain `http` to a loopback issuer needs no additional setting in either posture.
+Only development accepts `allowInsecureHttp: true`, which permits HTTP to other issuer addresses.
 The setting covers the issuer's origin and a `type: uri` key set.
 It never covers a cross-origin `jwks_uri` named by discovery, which must use `https`.
 
@@ -213,6 +228,7 @@ It never covers a cross-origin `jwks_uri` named by discovery, which must use `ht
 - `type: uri` with `uri` fetches the key set from a fixed address instead of the one discovery names.
   As an endpoint you declare, it inherits the declared issuer's allowance and can resolve to a private or loopback address on any origin.
 - `type: static` with `documentRef` reads a pinned key set, which does no rotation of its own.
+- `type: test-issuer` reads the same kind of key set and requires development.
 
 The removed `jwksUri` key is refused with a diagnostic naming `jwksSource` `type: uri` as its replacement.
 
@@ -224,8 +240,7 @@ The removed `jwksUri` key is refused with a diagnostic naming `jwksSource` `type
 Each is matched against the token's `azp` claim or, when it has none, its `client_id` claim.
 Every file writes the member: a list of at least one distinct client, or `unrestricted`, which admits every client the issuer verifies.
 An omitted member, an empty list and a repeated client are refused when the file is read.
-Under `operator-controlled-upstream` the member must list its clients.
-Development loopback accepts `unrestricted` as a local convenience.
+Only development accepts `unrestricted`. Production requires a list on every listener.
 A configured `taskAuthority` requires a list in either mode, and its `issuer` is an absolute `http` or `https` URL with a host and no user information.
 
 `scopeClaim` defaults to `registry_scopes` for compatibility with existing deployments.

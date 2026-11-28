@@ -575,7 +575,7 @@ identity:
   environment: local
   instanceId: inline-value-list-test-instance
   databaseId: inline-value-list-test-database
-  databaseInitializationEnvironment: local
+
 secretProviders:
   file: {{root: {}}}
 database:

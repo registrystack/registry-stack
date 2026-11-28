@@ -44,6 +44,9 @@ pub enum Command {
         /// resolved. Source and destination credentials are not activated.
         #[arg(long)]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
     },
     /// Compile a job the way a pass would, with the value-free findings.
     Check {
@@ -55,6 +58,9 @@ pub enum Command {
         /// The operator runtime config file.
         #[arg(long)]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         #[command(flatten)]
         workspace: WorkspaceArgs,
     },
@@ -70,6 +76,9 @@ pub enum Command {
         /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         #[command(flatten)]
         workspace: WorkspaceArgs,
         /// Hand off to the built-in fixture destination, which posts
@@ -105,6 +114,9 @@ pub enum Command {
         /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
     },
     /// Read one item's row: its statuses, sequence, and references.
     /// Value-free: the row holds no payload to print.
@@ -115,6 +127,9 @@ pub enum Command {
         /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// The source item's key.
         #[arg(long)]
         key: String,
@@ -131,6 +146,9 @@ pub enum Command {
         /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         #[command(flatten)]
         workspace: WorkspaceArgs,
         /// Hand off to the built-in fixture destination at --fixture-url.
@@ -163,6 +181,9 @@ pub enum Command {
         /// the job store's connection reference.
         #[arg(long)]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         #[command(flatten)]
         workspace: WorkspaceArgs,
     },

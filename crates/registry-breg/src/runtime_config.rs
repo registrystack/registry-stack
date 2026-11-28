@@ -15,10 +15,12 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, JwksSource,
-    MetricsBindError, OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretFileCheck, SecretReference,
-    SecretResolver, TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
+    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, DatabaseHost,
+    DatabaseTransport, DatabaseTransportError, DeclaredPosture, DevelopmentWitness, JwksSource,
+    LoadedRuntimeConfig, MetricsBindError, OidcIssuerConfig, PackageConfig as SharedPackageConfig,
+    Posture, PostureReport, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretError,
+    SecretFileCheck, SecretReference, SecretResolver, TaskGrantStatusConfig,
+    REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
 use registry_platform_crypto::{delivery_signature::DeliveryKeys, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -170,6 +172,10 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "Move completionRecipient to completion.recipientBinding.",
     },
     RemovedKey {
+        path: "identity.databaseInitializationEnvironment",
+        replacement: "Delete identity.databaseInitializationEnvironment; if it said local, declare development.",
+    },
+    RemovedKey {
         path: "database.url",
         replacement: "delete database.url and name the connection URL by secret reference in database.runtimeUrlRef and database.migrationUrlRef",
     },
@@ -282,20 +288,35 @@ const REMOVED_KEYS: &[RemovedKey] = &[
 /// `Debug` names the deciding code and pointer only, so a refusal carried in
 /// a startup error never prints the configured file path.
 #[derive(Clone, Eq, PartialEq)]
-pub struct ReaderRefusal(registry_platform_config::RuntimeConfigError);
+pub struct ReaderRefusal(ReaderRefusalKind);
+
+#[derive(Clone, Eq, PartialEq)]
+enum ReaderRefusalKind {
+    Shared(registry_platform_config::RuntimeConfigError),
+    Diagnostics(Vec<Diagnostic>),
+}
 
 impl ReaderRefusal {
     /// Every diagnostic, in the order the reader reported them.
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
-        self.0.diagnostics()
+        match &self.0 {
+            ReaderRefusalKind::Shared(error) => error.diagnostics(),
+            ReaderRefusalKind::Diagnostics(diagnostics) => diagnostics,
+        }
     }
 
     /// The diagnostic the refusal is classified by: the first error of the
     /// earliest kind.
     #[must_use]
     pub fn deciding_diagnostic(&self) -> &Diagnostic {
-        self.0.deciding_diagnostic()
+        match &self.0 {
+            ReaderRefusalKind::Shared(error) => error.deciding_diagnostic(),
+            ReaderRefusalKind::Diagnostics(diagnostics) => diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.severity == Severity::Error)
+                .unwrap_or(&diagnostics[0]),
+        }
     }
 }
 
@@ -351,10 +372,6 @@ pub enum RuntimeConfigError {
         "runtime configuration identity.instanceId must start with a lowercase letter and hold at most 64 lowercase letters, digits, `-`, or `_`; set identity.instanceId to such a value"
     )]
     InvalidInstanceId,
-    #[error(
-        "runtime configuration identity.environment and identity.databaseInitializationEnvironment must be identical; set both to the environment the database was initialized in"
-    )]
-    EnvironmentIdentityConflict,
     #[error("runtime configuration contains an invalid listener binding")]
     InvalidListener,
     #[error("runtime configuration contains an invalid metrics listener binding: {0}")]
@@ -367,8 +384,8 @@ pub enum RuntimeConfigError {
     UnsafeSecretProviderRoot,
     #[error("runtime configuration contains an invalid database binding")]
     InvalidDatabase,
-    #[error("runtime configuration asks for a plaintext database connection")]
-    PlaintextDatabase,
+    #[error(transparent)]
+    DatabaseTransport(DatabaseTransportError),
     #[error("runtime configuration contains an invalid package binding")]
     InvalidPackage,
     #[error("the configured package root is missing or is not a readable directory")]
@@ -453,14 +470,13 @@ impl RuntimeConfigError {
             Self::InvalidExternalSource { .. } => "breg.runtime.invalid-external-sources",
             Self::InvalidTaskGrantStatus => "breg.runtime.invalid-task-grant-status",
             Self::InvalidInstanceId => "breg.runtime.invalid-instance-id",
-            Self::EnvironmentIdentityConflict => "breg.runtime.environment-identity-conflict",
             Self::InvalidListener => "breg.runtime.invalid-listener",
             Self::InvalidMetricsListener(_) => "breg.runtime.invalid-metrics-listener",
             Self::InvalidSecretProvider => "breg.runtime.invalid-secret-provider",
             Self::SecretProviderRootUnavailable => "breg.runtime.secret-provider-root-unavailable",
             Self::UnsafeSecretProviderRoot => "breg.runtime.unsafe-secret-provider-root",
             Self::InvalidDatabase => "breg.runtime.invalid-database",
-            Self::PlaintextDatabase => "breg.runtime.plaintext-database",
+            Self::DatabaseTransport(error) => error.code(),
             Self::InvalidPackage => "breg.runtime.invalid-package",
             Self::PackageRootUnavailable => "breg.runtime.package-root-unavailable",
             Self::UnsafePackageRoot => "breg.runtime.unsafe-package-root",
@@ -501,7 +517,6 @@ impl RuntimeConfigError {
             | Self::DuplicateCompletionRecipient { path, .. } => path,
             Self::InvalidTaskGrantStatus => "/taskGrantStatus",
             Self::InvalidInstanceId => "/identity/instanceId",
-            Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
             Self::InvalidListener => "/listener",
             Self::InvalidMetricsListener(_) => "/metricsListener",
             Self::InvalidSecretProvider => "/secretProviders",
@@ -509,7 +524,10 @@ impl RuntimeConfigError {
                 "/secretProviders/file/root"
             }
             Self::InvalidDatabase => "/database",
-            Self::PlaintextDatabase => "/database/testOnlyPlaintext",
+            Self::DatabaseTransport(DatabaseTransportError::TestOnlyPlaintext) => {
+                "/database/testOnlyPlaintext"
+            }
+            Self::DatabaseTransport(_) => "/database/transport",
             Self::InvalidPackage => "/package",
             Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
             Self::InvalidOidc | Self::InvalidStaticJwks(_) => "/authentication/oidc",
@@ -551,11 +569,8 @@ impl RuntimeConfigError {
             Self::InvalidInstanceId => {
                 "Set identity.instanceId to a lowercase letter followed by at most 63 lowercase letters, digits, `-`, or `_`."
             }
-            Self::EnvironmentIdentityConflict => {
-                "Set identity.environment and identity.databaseInitializationEnvironment to the environment the database was initialized in."
-            }
             Self::InvalidListener => {
-                "Set listener.bind to a numeric address and port, and listener.publicOrigin, when given, to an https origin (http only on loopback) with no query, fragment, or user information."
+                "Set listener.bind to a numeric address and port, and listener.publicOrigin, when given, to an HTTPS origin with no query, fragment, or user information. Development also accepts an HTTP origin on loopback."
             }
             // The remedy depends on the cause, which `diagnostics` states.
             Self::InvalidMetricsListener(_) => "",
@@ -571,9 +586,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabase => {
                 "Name database.runtimeUrlRef, database.migrationUrlRef, and database.caBundleRef (PEM root certificates), when given, by secret reference, give each SQL role a lowercase identifier, and use two references when the roles differ."
             }
-            Self::PlaintextDatabase => {
-                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
-            }
+            Self::DatabaseTransport(error) => error.suggested_action(),
             Self::InvalidPackage => {
                 "Set package.root to an absolute normal path and package.expectedDigest, when given, to the package's sha256 digest."
             }
@@ -696,35 +709,128 @@ fn active_package_envelope_error(
     }
 }
 
-pub fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
-    load_runtime_config_with_env(path, |name| std::env::var(name).ok())
+pub fn load_runtime_config(path: &Path, declared: DeclaredPosture) -> Result<RuntimeConfig> {
+    load_runtime_config_with_env(path, |name| std::env::var(name).ok(), declared)
 }
 
 pub fn load_runtime_config_with_env(
     path: &Path,
     lookup: impl Fn(&str) -> Option<String>,
+    declared: DeclaredPosture,
 ) -> Result<RuntimeConfig> {
-    let raw = runtime_config_loader()
+    let raw = runtime_config_loader(declared)
         .load_with::<RawRuntimeConfig>(path, lookup)
-        .map_err(|error| RuntimeConfigError::Reader(ReaderRefusal(error)))?
-        .config;
-    let config = RuntimeConfig::from_raw(raw)?;
+        .map_err(|error| {
+            RuntimeConfigError::Reader(ReaderRefusal(ReaderRefusalKind::Shared(error)))
+        })?;
+    let mut config = RuntimeConfig::from_raw(raw)?;
+    config.source_path = Some(path.to_path_buf());
     config.validate_loaded_paths()?;
     Ok(config)
 }
 
-pub fn parse_runtime_config(raw: &str) -> Result<RuntimeConfig> {
-    parse_runtime_config_with_env(raw, |name| std::env::var(name).ok())
+pub(crate) fn load_verified_startup_config(
+    path: &Path,
+    declared: DeclaredPosture,
+) -> std::result::Result<(RuntimeConfig, VerifiedPackage), crate::startup::StartupError> {
+    use crate::startup::StartupError;
+
+    let check = runtime_config_loader(declared).check_offline::<RawRuntimeConfig>(
+        path,
+        true,
+        runtime_stand_in,
+    );
+    let loaded = check.loaded.ok_or({
+        StartupError::RuntimeConfig(RuntimeConfigError::Reader(ReaderRefusal(
+            ReaderRefusalKind::Diagnostics(check.diagnostics),
+        )))
+    })?;
+    let package = loaded.config.package.shared.clone();
+    let mut report = loaded.posture.clone();
+    let pending_refusal = report.posture() == Posture::Production && !report.settings().is_empty();
+    // Preserve ordinary configuration validation before reading the package.
+    // A development-only binding can fail construction without a witness, so
+    // a pending posture refusal takes precedence over that typed error.
+    let config = match RuntimeConfig::from_raw(loaded) {
+        Err(error) if !pending_refusal => return Err(StartupError::RuntimeConfig(error)),
+        config => config,
+    };
+    package
+        .check()
+        .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidPackage))?;
+    validate_existing_directory(
+        &package.root,
+        RuntimeConfigError::UnsafePackageRoot,
+        RuntimeConfigError::PackageRootUnavailable,
+    )
+    .map_err(StartupError::RuntimeConfig)?;
+    let shared = package
+        .verify_package(&crate::package::shared_package_limits(), "bregctl package")
+        .map_err(|error| {
+            StartupError::PackageEnvelopeRefused(error.naming_root_as("package.root").to_string())
+        })?;
+    let verified = crate::package::load_verified_package_for_startup(
+        &package.root,
+        &PackageLoadContext {
+            posture: declared.posture,
+        },
+        &shared,
+    )
+    .map_err(StartupError::PackageRefused)?;
+    decide_startup_posture(&mut report, &verified, path, &package.root)
+        .map_err(StartupError::RuntimeConfig)?;
+    let mut config = config.map_err(StartupError::RuntimeConfig)?;
+    config.posture = report;
+    config.source_path = Some(path.to_path_buf());
+    config
+        .validate_loaded_paths()
+        .map_err(StartupError::RuntimeConfig)?;
+    Ok((config, verified))
+}
+
+pub(crate) fn decide_startup_posture(
+    report: &mut PostureReport,
+    package: &VerifiedPackage,
+    runtime_path: &Path,
+    package_root: &Path,
+) -> Result<()> {
+    package.record_posture_settings(report);
+    let mut diagnostics = report.diagnostics(runtime_path);
+    for (found, diagnostic) in report.settings().iter().zip(&mut diagnostics) {
+        if found.origin == registry_platform_config::SettingOrigin::Package {
+            if let Some(source) = &mut diagnostic.source {
+                source.file = package_root
+                    .join(&package.manifest().sources.project)
+                    .display()
+                    .to_string();
+            }
+        }
+    }
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        return Err(RuntimeConfigError::Reader(ReaderRefusal(
+            ReaderRefusalKind::Diagnostics(diagnostics),
+        )));
+    }
+    Ok(())
+}
+
+pub fn parse_runtime_config(raw: &str, declared: DeclaredPosture) -> Result<RuntimeConfig> {
+    parse_runtime_config_with_env(raw, |name| std::env::var(name).ok(), declared)
 }
 
 pub fn parse_runtime_config_with_env(
     raw: &str,
     lookup: impl Fn(&str) -> Option<String>,
+    declared: DeclaredPosture,
 ) -> Result<RuntimeConfig> {
-    let raw = runtime_config_loader()
+    let raw = runtime_config_loader(declared)
         .parse_str::<RawRuntimeConfig>(raw, lookup)
-        .map_err(|error| RuntimeConfigError::Reader(ReaderRefusal(error)))?
-        .config;
+        .map_err(|error| {
+            RuntimeConfigError::Reader(ReaderRefusal(ReaderRefusalKind::Shared(error)))
+        })?;
     RuntimeConfig::from_raw(raw)
 }
 
@@ -771,8 +877,9 @@ pub fn check_runtime_config(
     path: &Path,
     substitute: bool,
     registry: Option<&CompiledRegistry>,
+    declared: DeclaredPosture,
 ) -> RuntimeConfigCheck {
-    let mut check = runtime_config_loader().check_offline::<RawRuntimeConfig>(
+    let mut check = runtime_config_loader(declared).check_offline::<RawRuntimeConfig>(
         path,
         substitute,
         runtime_stand_in,
@@ -804,7 +911,7 @@ pub fn check_runtime_config(
                     check_metrics_bind_address(metrics.bind.socket_addr(), metrics.network_exposure)
                         .is_ok()
                 });
-        match RuntimeConfig::from_raw(loaded.config) {
+        match RuntimeConfig::from_raw(loaded) {
             Err(error) => {
                 for refusal in error.diagnostics(None) {
                     let overlap_deferred = metrics_overlap_deferred
@@ -1055,11 +1162,14 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
 /// configuration, so every unknown key, its closest accepted key, and every
 /// position reach the operator. The file is held to the shared 1 MiB bound
 /// (CFG-YAML-6).
-const fn runtime_config_loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-        api_version: RUNTIME_CONFIG_API_VERSION,
-        kind: RUNTIME_CONFIG_KIND,
-    })
+const fn runtime_config_loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+    RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: RUNTIME_CONFIG_API_VERSION,
+            kind: RUNTIME_CONFIG_KIND,
+        },
+        declared,
+    )
     .removed_keys(REMOVED_KEYS)
     .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
     .require_trusted_ownership()
@@ -1067,6 +1177,10 @@ const fn runtime_config_loader() -> RuntimeConfigLoader {
 
 #[derive(Clone)]
 pub struct RuntimeConfig {
+    posture: PostureReport,
+    development: Option<DevelopmentWitness>,
+    peer_policy: registry_platform_httputil::PeerPolicy,
+    source_path: Option<PathBuf>,
     log_level: LogLevel,
     listener: ListenerConfig,
     identity: DeploymentIdentity,
@@ -1153,10 +1267,16 @@ fn external_source_bindings(
 }
 
 impl RuntimeConfig {
-    fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
+    fn from_raw(loaded: LoadedRuntimeConfig<RawRuntimeConfig>) -> Result<Self> {
+        let LoadedRuntimeConfig {
+            config: raw,
+            posture,
+            development,
+            ..
+        } = loaded;
         validate_runtime_definition_ids(&raw)?;
         let external_sources = external_source_bindings(raw.external_sources)?;
-        let listener = ListenerConfig::from_raw(raw.listener)?;
+        let listener = ListenerConfig::from_raw(raw.listener, development.as_ref())?;
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
         let database = DatabaseConfig::from_raw(raw.database)?;
@@ -1169,9 +1289,11 @@ impl RuntimeConfig {
                 raw.attachment_verification,
             )
             .map_err(|_| RuntimeConfigError::InvalidAttachmentVerification)?;
-        let field_encryption =
-            crate::field_encryption::FieldEncryptionConfig::from_raw(raw.field_encryption)
-                .map_err(|_| RuntimeConfigError::InvalidFieldEncryption)?;
+        let field_encryption = crate::field_encryption::FieldEncryptionConfig::from_raw(
+            raw.field_encryption,
+            development.as_ref(),
+        )
+        .map_err(|_| RuntimeConfigError::InvalidFieldEncryption)?;
         let package = PackageConfig::from_raw(raw.package)?;
         let authentication = AuthenticationConfig::from_raw(raw.authentication)?;
         crate::task_grant::TaskGrantStatusRegistry::validate_configuration(
@@ -1203,7 +1325,15 @@ impl RuntimeConfig {
         if let Some(metrics) = &metrics_listener {
             metrics.validate_separate_binding(&listener)?;
         }
+        let peer_policy = match posture.posture() {
+            Posture::Production => registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+            Posture::Development => registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+        };
         Ok(Self {
+            posture,
+            peer_policy,
+            source_path: None,
+            development,
             log_level: raw.log_level,
             listener,
             identity,
@@ -1242,6 +1372,7 @@ impl RuntimeConfig {
             &self.task_grant_status,
             &self.authentication.oidc.audience,
             &self.secret_resolver()?,
+            self.peer_policy(),
         )
         .map_err(|_| RuntimeConfigError::InvalidBinding)?;
         for issuer in crate::task_grant::required_source_issuers(compiled) {
@@ -1729,9 +1860,38 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::InvalidDatabase);
         }
         #[cfg(feature = "postgres-test")]
-        if self.database.test_only_plaintext {
+        if self.database.transport.test_only_plaintext {
             return ConnectionConfig::from_test_config(postgres, self.database.pool_bounds)
                 .map_err(|_| RuntimeConfigError::InvalidDatabase);
+        }
+        // libpq-style URLs may supply hostaddr as well as host. The driver
+        // connects to hostaddr when both are supplied, so validate both.
+        let hosts: Vec<_> = postgres
+            .get_hosts()
+            .iter()
+            .map(|host| match host {
+                tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
+                #[cfg(unix)]
+                tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
+            })
+            .chain(
+                postgres
+                    .get_hostaddrs()
+                    .iter()
+                    .map(|address| DatabaseHost::Tcp(address.to_string())),
+            )
+            .collect();
+        let transport = self
+            .database
+            .transport
+            .plaintext_permitted(&hosts, self.development_witness())
+            .map_err(RuntimeConfigError::DatabaseTransport)?;
+        match transport {
+            DatabaseTransport::VerifiedTls => {}
+            DatabaseTransport::LoopbackPlaintext | DatabaseTransport::PrivateNetworkPlaintext => {
+                return ConnectionConfig::plaintext_config(postgres, self.database.pool_bounds)
+                    .map_err(|_| RuntimeConfigError::InvalidDatabase);
+            }
         }
         let connection = match &self.database.ca_bundle_ref {
             Some(roots_ref) => {
@@ -1766,14 +1926,33 @@ impl RuntimeConfig {
         .map_err(|_| RuntimeConfigError::InvalidCursor)
     }
 
-    /// How strictly this deployment loads a package: file-mode strictness
-    /// follows the database initialization environment.
-    pub fn package_load_context(&self) -> PackageLoadContext<'_> {
+    pub(crate) fn decide_package_posture(&mut self, package: &VerifiedPackage) -> Result<()> {
+        let path = self
+            .source_path
+            .as_deref()
+            .unwrap_or_else(|| Path::new("<runtime>"));
+        decide_startup_posture(&mut self.posture, package, path, self.package.root())
+    }
+
+    pub(crate) fn peer_policy(&self) -> registry_platform_httputil::PeerPolicy {
+        self.peer_policy
+    }
+
+    pub fn posture_report(&self) -> &PostureReport {
+        &self.posture
+    }
+
+    pub fn development_witness(&self) -> Option<&DevelopmentWitness> {
+        self.development.as_ref()
+    }
+
+    pub fn posture(&self) -> Posture {
+        self.posture.posture()
+    }
+
+    pub fn package_load_context(&self) -> PackageLoadContext {
         PackageLoadContext {
-            database_initialization_environment: self
-                .identity
-                .database_initialization_environment
-                .as_str(),
+            posture: self.posture(),
         }
     }
 
@@ -1867,14 +2046,22 @@ pub struct ListenerConfig {
 }
 
 impl ListenerConfig {
-    fn from_raw(raw: RawRegistryListener) -> Result<Self> {
+    fn from_raw(
+        raw: RawRegistryListener,
+        development: Option<&DevelopmentWitness>,
+    ) -> Result<Self> {
         let bind = raw.listener.bind.socket_addr();
         Ok(Self {
             bind,
             public_origin: raw
                 .public_origin
-                .as_deref()
-                .map(PublicOrigin::parse)
+                .as_ref()
+                .map(|origin| {
+                    let origin = origin
+                        .get(development)
+                        .map_err(|_| RuntimeConfigError::InvalidListener)?;
+                    PublicOrigin::parse(&origin.0)
+                })
                 .transpose()?,
         })
     }
@@ -2023,7 +2210,6 @@ pub struct DeploymentIdentity {
     environment: String,
     instance_id: String,
     database_id: String,
-    database_initialization_environment: String,
 }
 
 impl DeploymentIdentity {
@@ -2036,18 +2222,10 @@ impl DeploymentIdentity {
             return Err(RuntimeConfigError::InvalidInstanceId);
         }
         validate_deployment_value(&raw.database_id)?;
-        validate_deployment_value(&raw.database_initialization_environment)?;
-        // Package loading keys its permission and project-identity strictness
-        // on the initialization environment, so a deployment that names
-        // another environment would load its package under the wrong policy.
-        if raw.environment != raw.database_initialization_environment {
-            return Err(RuntimeConfigError::EnvironmentIdentityConflict);
-        }
         Ok(Self {
             environment: raw.environment,
             instance_id: raw.instance_id,
             database_id: raw.database_id,
-            database_initialization_environment: raw.database_initialization_environment,
         })
     }
 
@@ -2062,10 +2240,6 @@ impl DeploymentIdentity {
     pub fn database_id(&self) -> &str {
         &self.database_id
     }
-
-    pub fn database_initialization_environment(&self) -> &str {
-        &self.database_initialization_environment
-    }
 }
 
 impl fmt::Debug for DeploymentIdentity {
@@ -2075,7 +2249,6 @@ impl fmt::Debug for DeploymentIdentity {
             .field("environment", &"<redacted>")
             .field("instance_id", &"<redacted>")
             .field("database_id", &"<redacted>")
-            .field("database_initialization_environment", &"<redacted>")
             .finish()
     }
 }
@@ -2121,29 +2294,28 @@ pub struct DatabaseConfig {
     runtime_url_ref: SecretReference,
     migration_url_ref: SecretReference,
     ca_bundle_ref: Option<SecretReference>,
-    #[cfg(feature = "postgres-test")]
-    test_only_plaintext: bool,
+    transport: registry_platform_config::DatabaseConfig,
     pool_bounds: PoolBounds,
     roles: SqlRoles,
 }
 
 impl DatabaseConfig {
     fn from_raw(raw: RawRegistryDatabase) -> Result<Self> {
-        #[cfg(not(feature = "postgres-test"))]
-        if raw.database.test_only_plaintext {
-            return Err(RuntimeConfigError::PlaintextDatabase);
-        }
+        raw.database
+            .check(cfg!(feature = "postgres-test"))
+            .map_err(RuntimeConfigError::DatabaseTransport)?;
         let runtime_url_ref = parse_secret_reference(
-            raw.database.runtime_url_ref,
+            raw.database.runtime_url_ref.clone(),
             RuntimeConfigError::InvalidDatabase,
         )?;
         let migration_url_ref = parse_secret_reference(
-            raw.database.migration_url_ref,
+            raw.database.migration_url_ref.clone(),
             RuntimeConfigError::InvalidDatabase,
         )?;
         let ca_bundle_ref = raw
             .database
             .ca_bundle_ref
+            .clone()
             .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidDatabase))
             .transpose()?;
         let roles = SqlRoles::from_raw(raw.roles)?;
@@ -2163,8 +2335,7 @@ impl DatabaseConfig {
             runtime_url_ref,
             migration_url_ref,
             ca_bundle_ref,
-            #[cfg(feature = "postgres-test")]
-            test_only_plaintext: raw.database.test_only_plaintext,
+            transport: raw.database,
             pool_bounds,
             roles,
         })
@@ -2320,11 +2491,9 @@ impl OidcVerifierConfig {
     fn from_raw(raw: RawOidcVerifierConfig) -> Result<Self> {
         validate_oidc_value(&raw.provider.issuer)?;
         validate_oidc_value(&raw.provider.audience)?;
-        // A loopback `http` issuer or key URI stays accepted for the local
-        // development and test deployments that run their issuer beside the
-        // registry; every other issuer and key URI is `https`.
+        // Loopback HTTP for the issuer or key URI is accepted in every posture.
         raw.provider
-            .check_without_posture("authentication.oidc", true)
+            .check("authentication.oidc")
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
         validate_oidc_value(&raw.access_token_type)?;
         validate_claim_name(&raw.scope_claim)?;
@@ -2429,9 +2598,6 @@ impl OidcVerifierConfig {
     }
 
     async fn key_source(&self, resolver: &SecretResolver) -> Result<Arc<JwksFetcher>> {
-        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
         let network = IssuerNetworkPolicy::new(&self.issuer, self.allow_insecure_http)
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
         match &self.jwks_source {
@@ -3377,22 +3543,47 @@ struct RawRegistryListener {
     listener: registry_platform_config::ListenerConfig,
     /// Canonical public origin for QGIS discovery and pagination links, with
     /// an optional deployment path prefix such as
-    /// `https://registry.example.org/breg`. It is `https`; `http` is accepted
-    /// only for a loopback host, for local development. Required when the
+    /// `https://registry.example.org/breg`. Production requires `https`.
+    /// Development also accepts `http` for a loopback host. Required when the
     /// registry exposes GIS collections; omitted, the registry builds no
     /// absolute discovery or paging links.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_origin: Option<Url>,
+    public_origin: Option<registry_platform_config::Gated<RawPublicOrigin>>,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct RawPublicOrigin(Url);
+
+static BREG_HTTP_PUBLIC_ORIGIN: registry_platform_config::DevelopmentSetting =
+    registry_platform_config::DevelopmentSetting {
+        code: "breg.posture.http-public-origin",
+        key: "publicOrigin",
+        summary: "The registry publishes links with a plain HTTP origin",
+        production: "Set listener.publicOrigin to an HTTPS origin.",
+    };
+
+impl registry_platform_config::DevelopmentClass for RawPublicOrigin {
+    const SETTINGS: &'static [&'static registry_platform_config::DevelopmentSetting] =
+        &[&BREG_HTTP_PUBLIC_ORIGIN];
+
+    fn development_setting(&self) -> Option<&'static registry_platform_config::DevelopmentSetting> {
+        self.0
+            .split_once(':')
+            .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("http"))
+            .then_some(&BREG_HTTP_PUBLIC_ORIGIN)
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawDeploymentIdentity {
+    /// A deployment label recorded in activation audit entries.
     environment: String,
     instance_id: String,
     database_id: String,
-    database_initialization_environment: String,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -4158,12 +4349,6 @@ fn install_schema_constraints(schema: &mut Value) {
             VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
         ),
         (
-            "/$defs/RawDeploymentIdentity/properties/databaseInitializationEnvironment",
-            1,
-            MAX_DEPLOYMENT_VALUE_BYTES,
-            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
-        ),
-        (
             "/$defs/RawSqlRoles/properties/migration",
             1,
             63,
@@ -4563,6 +4748,28 @@ fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
 mod tests {
     use super::RuntimeConfigError;
     use crate::attachment_verification_worker::ATTEMPT_BUDGET;
+
+    #[test]
+    fn declared_posture_selects_task_grant_peer_policy() {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        use registry_platform_httputil::PeerPolicy;
+
+        let raw = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml");
+        for (posture, expected) in [
+            (Posture::Production, PeerPolicy::RefuseDevelopmentPeer),
+            (Posture::Development, PeerPolicy::AcceptDevelopmentPeer),
+        ] {
+            let config = super::parse_runtime_config(
+                raw,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            assert_eq!(config.peer_policy(), expected, "{posture:?}");
+        }
+    }
 
     fn review_authority_fragment() -> serde_json::Value {
         serde_json::json!({

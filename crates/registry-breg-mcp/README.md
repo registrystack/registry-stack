@@ -236,8 +236,12 @@ number has the bound its schema states: `maximumTokenLifetimeSeconds` 1 to
 (default 65536). The gateway defaults to production. For laptop runs, use
 `rstack dev`, set `REGISTRY_STACK_POSTURE=development`, or pass `--posture development`.
 Plain HTTP transport to a loopback endpoint works in either posture. Publishing an HTTP
-`resourceServer.resource` or setting `resourceServer.allowInsecureHttp: true` requires
-development. `tlsTermination: loopback-plaintext` binds on loopback and omits HSTS.
+`resourceServer.resource`, `resourceServer.issuer` or `service.reviewBaseUrl`, setting
+`resourceServer.allowInsecureHttp: true`, a `test-issuer` key source, and
+`audit.hashKeyCustody: development-generated` each require development.
+`tlsTermination: loopback-plaintext` binds on loopback behind a TLS proxy on the same host.
+Production sends HSTS on every listener, including that one. Only development on a loopback
+listener omits it.
 `jwksSource` defaults to OIDC discovery. Use `type: static` with a `documentRef` secret
 for issuer keys that the gateway cannot fetch over its permitted network paths.
 

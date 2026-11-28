@@ -162,6 +162,7 @@ pub fn activate(
     }
     Ok(Some(HookIngressPlan {
         bind: ingress.listener.bind.socket_addr(),
+        posture: runtime.posture.posture(),
         state: IngressState {
             sources: Arc::new(sources),
             gate,
@@ -191,6 +192,7 @@ pub fn preflight(
 /// An activated hook ingress whose secrets are captured but whose socket is
 /// not open yet.
 pub struct HookIngressPlan {
+    posture: registry_platform_config::Posture,
     bind: SocketAddr,
     state: IngressState,
 }
@@ -203,7 +205,8 @@ impl HookIngressPlan {
             .map_err(|_| HookIngressError::Bind)?;
         let router = Router::new()
             .fallback(any(receive_hook))
-            .with_state(self.state);
+            .with_state(self.state)
+            .layer(registry_platform_httpsec::posture_mark(self.posture));
         Ok(HookIngressServer { listener, router })
     }
 }

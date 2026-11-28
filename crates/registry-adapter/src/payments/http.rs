@@ -108,22 +108,63 @@ pub fn contract(config: &PaymentsConfig) -> serde_json::Value {
 }
 
 pub fn load_config(path: &Path) -> Result<PaymentsConfig, ServeError> {
+    load_config_in_posture(
+        path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .map(|loaded| loaded.config)
+}
+
+fn load_config_in_posture(
+    path: &Path,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<registry_platform_config::LoadedRuntimeConfig<PaymentsConfig>, ServeError> {
     let absolute = std::fs::canonicalize(path)
         .map_err(|_| refused("payment configuration could not be read"))?;
-    let config = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-        api_version: API_VERSION,
-        kind: KIND,
-    })
+    let loaded = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: API_VERSION,
+            kind: KIND,
+        },
+        declared,
+    )
     .load::<PaymentsConfig>(&absolute)
-    .map_err(|_| refused("payment configuration was refused"))?
-    .config;
-    config.validate().map_err(|error| {
-        ServeError::Configuration(format!(
-            "{}: payment connections were refused",
-            error.code()
-        ))
-    })?;
-    Ok(config)
+    .map_err(|error| refused(&format!("payment configuration was refused: {error}")))?;
+    validate_payments(&loaded)?;
+    Ok(loaded)
+}
+
+pub(crate) fn check_config_in_posture(
+    path: &Path,
+    declared: registry_platform_config::DeclaredPosture,
+) -> registry_platform_config::RuntimeFileCheck<PaymentsConfig> {
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: API_VERSION,
+            kind: KIND,
+        },
+        declared,
+    )
+    .check_offline(&absolute, true, |_| "")
+}
+
+fn validate_payments(
+    loaded: &registry_platform_config::LoadedRuntimeConfig<PaymentsConfig>,
+) -> Result<(), ServeError> {
+    loaded
+        .config
+        .validate(loaded.development.as_ref())
+        .map_err(|error| {
+            ServeError::Configuration(format!(
+                "{}: payment connections were refused",
+                error.code()
+            ))
+        })?;
+    Ok(())
 }
 
 fn resolver(runtime: &AdapterRuntimeConfig) -> Result<SecretResolver, ServeError> {
@@ -235,16 +276,28 @@ pub(crate) struct PreparedPayments {
     resolver: Arc<SecretResolver>,
     authenticator: Authenticator,
     g2p_provider: HttpG2pProvider,
+    peer_policy: registry_platform_httputil::PeerPolicy,
+    development: Option<registry_platform_config::DevelopmentWitness>,
     deployment: String,
 }
 
 impl PreparedPayments {
     pub(crate) async fn prepare(
         runtime: &AdapterRuntimeConfig,
-        path: &Path,
+        loaded: registry_platform_config::LoadedRuntimeConfig<PaymentsConfig>,
         provider_pack_paths: &[PathBuf],
     ) -> Result<Self, ServeError> {
-        let config = load_config(path)?;
+        let peer_policy = match loaded.posture.posture() {
+            registry_platform_config::Posture::Production => {
+                registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+            }
+            registry_platform_config::Posture::Development => {
+                registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
+            }
+        };
+        validate_payments(&loaded)?;
+        let config = loaded.config;
+        let development = loaded.development;
         let packs = load_provider_packs(provider_pack_paths)?;
         for connection in &config.connections {
             let Some(pin) = connection.binding.provider_pack.as_ref() else {
@@ -254,7 +307,11 @@ impl PreparedPayments {
                 return Err(refused("payment connection must pin the provider pack"));
             };
             let pack = packs.for_pin(pin)?;
-            if pack.connector != connection.binding.connector_kind()
+            if pack.connector
+                != connection
+                    .binding
+                    .connector_kind(development.as_ref())
+                    .map_err(|_| refused("the payment provider was refused"))?
                 || !pack.capabilities.contains(&PaymentCapability::Collection)
             {
                 return Err(refused(
@@ -262,7 +319,10 @@ impl PreparedPayments {
                 ));
             }
             if matches!(
-                &connection.binding.provider,
+                connection
+                    .binding
+                    .provider(development.as_ref())
+                    .map_err(|_| refused("the payment provider was refused"))?,
                 super::config::CollectionProvider::Http { .. }
             ) && !mapping_auth_matches(
                 pack.mapping
@@ -346,7 +406,9 @@ impl PreparedPayments {
             packs,
             resolver,
             authenticator,
-            g2p_provider,
+            g2p_provider: g2p_provider.with_peer_policy(peer_policy),
+            peer_policy,
+            development,
             deployment: runtime.id.as_str().to_owned(),
         })
     }
@@ -377,9 +439,12 @@ impl PreparedPayments {
             resolver,
             authenticator,
             g2p_provider,
+            peer_policy,
+            development,
             deployment,
         } = self;
-        let store = PaymentStore::new(pool.clone(), deployment.clone());
+        let store =
+            PaymentStore::new(pool.clone(), deployment.clone()).with_development(development);
         store.check_privileges().await.map_err(|_| {
             refused("payment runtime role lacks required table or sequence privileges")
         })?;
@@ -404,7 +469,11 @@ impl PreparedPayments {
             config,
             store,
             Arc::new(BregBridge::new(resolver.clone())),
-            Arc::new(SyntheticProvider::new(resolver, packs.mapping)),
+            Arc::new(
+                SyntheticProvider::new(resolver, packs.mapping)
+                    .with_peer_policy(peer_policy)
+                    .with_development(development),
+            ),
         )
         .map_err(|_| refused("payment service was refused"))?;
         let state = Arc::new(HttpState {
@@ -461,22 +530,32 @@ pub async fn run_only(
     runtime_path: &Path,
     payments_path: &Path,
     provider_pack_paths: &[PathBuf],
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(), ServeError> {
-    let absolute = std::fs::canonicalize(runtime_path)
-        .map_err(|_| refused("runtime configuration could not be read"))?;
-    let runtime = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-        api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
-        kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
-    })
-    .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS)
-    .load::<AdapterRuntimeConfig>(&absolute)
-    .map_err(|_| refused("runtime configuration was refused"))?
-    .config;
+    let (loaded, payments) =
+        crate::serve::load_serve_configuration(runtime_path, Some(payments_path), declared)?;
+    let runtime = loaded.config;
+    crate::serve::check_database(&runtime.database)?;
     let resolver = resolver(&runtime)?;
-    let prepared = PreparedPayments::prepare(&runtime, payments_path, provider_pack_paths).await?;
-    let pool = crate::serve::pool(&runtime.database, &resolver, false)?;
+    let prepared = PreparedPayments::prepare(
+        &runtime,
+        payments.expect("the supplied payments file was read"),
+        provider_pack_paths,
+    )
+    .await?;
+    let pool = crate::serve::pool(
+        &runtime.database,
+        &resolver,
+        false,
+        loaded.development.as_ref(),
+    )?;
     {
-        let migration = crate::serve::pool(&runtime.database, &resolver, true)?;
+        let migration = crate::serve::pool(
+            &runtime.database,
+            &resolver,
+            true,
+            loaded.development.as_ref(),
+        )?;
         let mut client = migration
             .get()
             .await
@@ -486,7 +565,10 @@ pub async fn run_only(
         // `into_router` refuses a role that lacks one.
         crate::serve::grant_when_split(&mut client, &pool, &prepared.requirements()).await?;
     }
-    let router = prepared.into_router(pool).await?;
+    let router = prepared
+        .into_router(pool)
+        .await?
+        .layer(registry_platform_httpsec::posture_mark(declared.posture));
     let shutdown = crate::serve::shutdown_signal()?;
     let listener = tokio::net::TcpListener::bind(runtime.listener.bind.0)
         .await

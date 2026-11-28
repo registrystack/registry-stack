@@ -210,7 +210,8 @@ pub enum Command {
     },
     /// Create a locally test-signed PDF and its public test CA certificate.
     TestSeal {
-        /// Declared posture: development is required for test signing.
+        /// Declared posture: development or production. Unset means production,
+        /// which refuses test signing.
         #[arg(long = "posture", value_name = "POSTURE")]
         posture: Option<String>,
         /// Authored bundle or verified package containing a document with a declared seal.
@@ -617,8 +618,14 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             if declared.posture != registry_platform_config::Posture::Development {
                 return Err(RenderProblem::new(
                     crate::problem::ProblemKind::RuntimeInvalid,
-                    "test-seal requires development; set REGISTRY_STACK_POSTURE=development or pass --posture development",
-                ));
+                    "test-seal requires development",
+                )
+                .with_diagnostics(vec![registry_platform_yaml::Diagnostic::error(
+                    "render.posture.test-signing",
+                    "",
+                    "Test signing is refused unless development is declared.",
+                    "Set REGISTRY_STACK_POSTURE=development or pass --posture development.",
+                )]));
             }
             let now = issued_at.is_none();
             let issued = parse_issued_at(issued_at, now)?;

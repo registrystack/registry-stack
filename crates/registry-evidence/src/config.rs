@@ -13,13 +13,14 @@ use std::str::FromStr;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_adapter_core::{AdapterEndpointBindings, EvidenceConnectionPolicy};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
-pub use registry_platform_config::SecretReference;
+use registry_platform_config::SecretReference;
 use registry_platform_config::{
     check_metrics_bind_address, check_metrics_bind_apart, contains_environment_expression,
     AuditKeyConfig, JwksSource, ListenerBind, LoadedRuntimeConfig, MetricsBindError,
     OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
     SecretProvidersConfig,
 };
+pub use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use registry_platform_yaml::{
     local_id_collision_diagnostics, AuthoredId, BoundedU32, BoundedU64, Diagnostic, Digest,
     DisplayText, Document, EnvelopeRule, Expect, ExternalId, FormatSpec, Invalid, LocalId, Reader,
@@ -2544,8 +2545,8 @@ pub struct RuntimeAuthorityConfig {
 impl RuntimeConfig {
     /// The shared loader configured with the Evidence envelope and the keys
     /// it no longer accepts.
-    pub fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new_without_posture(EVIDENCE_RUNTIME_ENVELOPE)
+    pub fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(EVIDENCE_RUNTIME_ENVELOPE, declared)
             .removed_keys(EVIDENCE_RUNTIME_REMOVED_KEYS)
             .retired_api_versions(EVIDENCE_RETIRED_RUNTIME_API_VERSIONS)
     }
@@ -2553,7 +2554,15 @@ impl RuntimeConfig {
     /// Parse and validate one runtime document with no environment: an
     /// environment expression resolves only through its own default.
     pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
-        Self::parse_yaml_with(bytes, |_| None).map(|loaded| loaded.config)
+        Self::parse_yaml_with(
+            bytes,
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |_| None,
+        )
+        .map(|loaded| loaded.config)
     }
 
     /// Parse and validate one runtime document, substituting environment
@@ -2561,9 +2570,10 @@ impl RuntimeConfig {
     /// the document after substitution.
     pub fn parse_yaml_with(
         bytes: &[u8],
+        declared: DeclaredPosture,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
-        let loaded = Self::decode_yaml_with(bytes, lookup)?;
+        let loaded = Self::decode_yaml_with(bytes, declared, lookup)?;
         loaded.config.validate()?;
         Ok(loaded)
     }
@@ -2573,6 +2583,7 @@ impl RuntimeConfig {
     /// without the semantic checks [`RuntimeConfig::findings`] applies.
     pub fn decode_yaml_with(
         bytes: &[u8],
+        declared: DeclaredPosture,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
         // The reader refuses a document over its size bound or not in UTF-8
@@ -2581,7 +2592,7 @@ impl RuntimeConfig {
         let Ok(text) = std::str::from_utf8(bytes) else {
             return Err(unreadable_document(RUNTIME_DOCUMENT_NAME, bytes));
         };
-        Self::loader()
+        Self::loader(declared)
             .parse_str::<Self>(text, lookup)
             .map_err(|error| {
                 ConfigError::Refused(Box::new(Report::new(error.diagnostics().to_vec())))
@@ -3426,12 +3437,6 @@ pub struct OidcAuthenticationConfig {
 shared_block_host!(OidcAuthenticationConfig, block = "provider");
 
 impl OidcAuthenticationConfig {
-    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.provider.allow_insecure_http.then_some(
-            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-        )
-    }
-
     /// The exact issuer accepted in `iss`.
     pub fn issuer(&self) -> &str {
         &self.provider.issuer
@@ -3523,17 +3528,12 @@ impl OidcAuthenticationConfig {
                 }
             }
         }
-        self.provider
-            .check_without_posture(
+        self.provider.check("authentication.oidc").map_err(|_| {
+            ConfigError::InvalidField(
+                "the OIDC issuer, audience, or JWKS source is invalid",
                 "authentication.oidc",
-                assurance_profile == AssuranceProfile::Local,
             )
-            .map_err(|_| {
-                ConfigError::InvalidField(
-                    "the OIDC issuer, audience, or JWKS source is invalid",
-                    "authentication.oidc",
-                )
-            })?;
+        })?;
         if self
             .tls_trust_profile
             .as_deref()
@@ -7413,16 +7413,6 @@ mod tests {
         let parsed = EvidenceConfig::parse_projection(&candidate)
             .expect("explicit HTTP issuer opt-in parses and validates under local");
         assert!(parsed.authentication.oidc.provider.allow_insecure_http);
-        assert_eq!(
-            parsed
-                .authentication
-                .oidc
-                .insecure_http_startup_diagnostic(),
-            Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            )
-        );
-
         candidate["authentication"]["oidc"]["tlsTrustProfile"] = serde_json::json!("private-ca");
         let error = EvidenceConfig::parse_projection(&candidate)
             .expect_err("plain HTTP has no TLS trust profile")
@@ -11024,22 +11014,41 @@ outboundTls:
             "path: /var/lib/registry-evidence/audit/evidence.jsonl",
             "path: ${EVIDENCE_AUDIT_PATH}",
         );
-        let loaded = RuntimeConfig::parse_yaml_with(templated.as_bytes(), |name| {
-            (name == "EVIDENCE_AUDIT_PATH").then(|| "/srv/audit/evidence.jsonl".to_owned())
-        })
+        let loaded = RuntimeConfig::parse_yaml_with(
+            templated.as_bytes(),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |name| (name == "EVIDENCE_AUDIT_PATH").then(|| "/srv/audit/evidence.jsonl".to_owned()),
+        )
         .expect("the substituted document loads");
         assert_eq!(
             loaded.config.audit.path.as_deref(),
             Some("/srv/audit/evidence.jsonl")
         );
-        let plain = RuntimeConfig::parse_yaml_with(LOADER_RUNTIME_DOCUMENT.as_bytes(), |_| None)
-            .expect("the plain document loads");
+        let plain = RuntimeConfig::parse_yaml_with(
+            LOADER_RUNTIME_DOCUMENT.as_bytes(),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |_| None,
+        )
+        .expect("the plain document loads");
         assert_ne!(
             loaded.effective_digest, plain.effective_digest,
             "the effective digest covers the substituted value"
         );
 
-        let unset = RuntimeConfig::parse_yaml_with(templated.as_bytes(), |_| None);
+        let unset = RuntimeConfig::parse_yaml_with(
+            templated.as_bytes(),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |_| None,
+        );
         assert!(
             unset.is_err(),
             "an unset variable without a default is refused"
@@ -11056,9 +11065,14 @@ outboundTls:
             ),
         ] {
             let text = LOADER_RUNTIME_DOCUMENT.replace(from, to);
-            let refused = RuntimeConfig::parse_yaml_with(text.as_bytes(), |_| {
-                Some("secret:file/other".to_owned())
-            });
+            let refused = RuntimeConfig::parse_yaml_with(
+                text.as_bytes(),
+                DeclaredPosture {
+                    posture: Posture::Production,
+                    source: PostureSource::Default,
+                },
+                |_| Some("secret:file/other".to_owned()),
+            );
             let Err(ConfigError::Refused(report)) = refused else {
                 panic!("substitution into {from} was accepted");
             };
@@ -11128,8 +11142,15 @@ outboundTls:
     allowedPrivateCidrs: []
 ";
         let disabled = format!("{LOADER_RUNTIME_DOCUMENT}{SOURCE_BINDING}");
-        let decoded = RuntimeConfig::decode_yaml_with(disabled.as_bytes(), |_| None)
-            .expect("the closed runtime wire shape decodes before semantic validation");
+        let decoded = RuntimeConfig::decode_yaml_with(
+            disabled.as_bytes(),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |_| None,
+        )
+        .expect("the closed runtime wire shape decodes before semantic validation");
         let findings = decoded.config.findings();
         let expected = [
             "/sourceConnections/provider/endpoints/0/credential/clientIdRef",
@@ -12425,9 +12446,16 @@ outboundTls:
                     document, LOADER_RUNTIME_DOCUMENT,
                     "{map}: the mutation applies"
                 );
-                let config = RuntimeConfig::decode_yaml_with(document.as_bytes(), |_| None)
-                    .unwrap_or_else(|error| panic!("{map}: the document decodes: {error:?}"))
-                    .config;
+                let config = RuntimeConfig::decode_yaml_with(
+                    document.as_bytes(),
+                    DeclaredPosture {
+                        posture: Posture::Production,
+                        source: PostureSource::Default,
+                    },
+                    |_| None,
+                )
+                .unwrap_or_else(|error| panic!("{map}: the document decodes: {error:?}"))
+                .config;
                 let findings = config.findings();
                 let refusal = findings
                     .iter()

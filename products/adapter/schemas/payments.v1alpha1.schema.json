@@ -463,7 +463,10 @@
           "type": "integer"
         },
         "provider": {
-          "$ref": "#/$defs/CollectionProvider"
+          "$ref": "#/$defs/CollectionProvider",
+          "x-registry-development-only": [
+            "adapter.posture.payment-simulator"
+          ]
         },
         "providerCredentialIdentity": {
           "type": "string"

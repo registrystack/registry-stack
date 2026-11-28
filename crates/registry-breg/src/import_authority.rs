@@ -139,6 +139,11 @@ pub struct ImportAuthority {
 /// no operator reference, reason, or row value travels with it.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ImportAuthorityError {
+    #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     #[error("the import authority request is invalid")]
     InvalidInput,
     #[error("the entity and profile do not name an import grant of the active package")]
@@ -761,11 +766,14 @@ impl ImportAuthorityOperatorService {
         }
     }
 
-    pub async fn from_runtime_config(path: &Path) -> Result<Self, ImportAuthorityError> {
+    pub async fn from_runtime_config(
+        path: &Path,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self, ImportAuthorityError> {
         if !path.is_absolute() {
             return Err(ImportAuthorityError::InvalidInput);
         }
-        let config = crate::runtime_config::load_runtime_config(path)
+        let config = crate::runtime_config::load_runtime_config(path, posture)
             .map_err(|_| ImportAuthorityError::Unavailable)?;
         let package = config.load_active_package().map_err(|error| match error {
             crate::package::PackageError::ExpectedDigestMismatch(mismatch) => {
@@ -796,7 +804,12 @@ impl ImportAuthorityOperatorService {
             config.database().roles().runtime(),
         )
         .await
-        .map_err(|_| ImportAuthorityError::Unavailable)?;
+        .map_err(|error| match error {
+            crate::startup::StartupError::PostureMismatch { recorded, declared } => {
+                ImportAuthorityError::PostureMismatch { recorded, declared }
+            }
+            _ => ImportAuthorityError::Unavailable,
+        })?;
         Ok(Self {
             expected: startup.expected_identity().clone(),
             expected_catalog: startup.expected_catalog().clone(),

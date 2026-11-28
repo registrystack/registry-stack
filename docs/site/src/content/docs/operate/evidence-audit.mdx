@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -25,6 +25,9 @@ is tamper-evident only once it reaches the append-only storage you ship it to.
     crates/registry-evidence/src/runtime_tests.rs, "authentication failures are not audited" and
     "pre-material selector failures are not audited";
     products/evidence/OPERATOR-CONTRACT.md, "Audit destinations, rotation, and retention". */}
+
+Audit records include a `posture` member. Credential-free source bindings and the local
+signing key file are available in the development posture.
 
 ## Choose where the audit log is written
 

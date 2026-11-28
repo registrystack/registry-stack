@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -91,9 +91,9 @@ The deployment project's `runtime.yaml` names the key under `fieldEncryption.pro
 `type: transit`, BReg generates one data-encryption key per registry database and has HashiCorp
 Vault or OpenBao Transit wrap it, reached through a local Unix socket (`unixSocketPath`, `mount`,
 `keyName`); the database stores only the wrapped key. With `type: local-file`, `dekRef` names a
-`secret:file/<name>` holding a base64 key, and startup refuses it unless the same file sets
-`identity.databaseInitializationEnvironment` to `local`. [Deploy a registry](../../operate/breg/)
-shows the block.
+`secret:file/<name>` holding a base64 key. This provider requires the development
+posture. Use Transit in production. [Deploy a registry](../../operate/breg/)
+shows the block and how to declare posture.
 
 Each value is encrypted with AES-256-GCM under a key derived from that data key, bound to its
 registry, Record type, field, and record, so ciphertext copied to another row does not open.
@@ -107,8 +107,7 @@ covers the cryptography and its FIPS posture.
 
 {/* Evidence: crates/registry-breg/src/field_encryption.rs, RawFieldEncryptionConfig,
     RawFieldEncryptionProvider, FieldEncryptionService::activate() and open_existing(), and the
-    module comment on one key version; crates/registry-breg/src/startup.rs,
-    FieldEncryptionCustody and the `databaseInitializationEnvironment` check;
+    module comment on one key version and BREG_LOCAL_KEY_CUSTODY;
     crates/registry-platform-crypto/src/field_encryption.rs, seal_field(), FieldAad, and
     FIELD_ENCRYPTION_ALGORITHM; crates/registry-breg/tests/postgres_field_encryption.rs,
     missing_field_encryption_provider_refuses_startup() and aad_binds_the_record_row(). */}

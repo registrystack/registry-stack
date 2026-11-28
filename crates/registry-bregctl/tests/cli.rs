@@ -50,6 +50,10 @@ mod file_check_tests;
 #[path = "cli/migration_capacity.rs"]
 mod migration_capacity_tests;
 
+#[cfg(feature = "postgres-test")]
+#[path = "cli/posture.rs"]
+mod posture_tests;
+
 #[test]
 fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")
@@ -2379,6 +2383,7 @@ fn prefixed_digest(bytes: &[u8]) -> String {
 fn bregctl(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
         .args(arguments)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .expect("bregctl starts")
 }
@@ -3512,6 +3517,126 @@ fn edited_runtime_config(scratch: &TestProject, edit: impl Fn(&str) -> String) -
 }
 
 #[test]
+fn check_reports_posture_usage_errors() {
+    let example = minimal_example();
+    for (flags, code) in [
+        (
+            &["--production", "--posture", "development"][..],
+            "platform.posture.conflict",
+        ),
+        (
+            &["--posture", "Development"][..],
+            "platform.posture.invalid-value",
+        ),
+    ] {
+        let mut arguments = vec!["--format", "json", "check", path(&example)];
+        arguments.extend_from_slice(flags);
+        let output = bregctl(&arguments);
+        assert_eq!(output.status.code(), Some(2));
+        let report = json_stdout(&output);
+        assert_eq!(report["status"], "usage-error");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], code);
+        if code == "platform.posture.conflict" {
+            assert_eq!(
+                diagnostic["message"],
+                "--production and --posture development contradict each other"
+            );
+            assert_eq!(diagnostic["suggestedAction"], "Use one of them.");
+        }
+    }
+}
+
+#[test]
+fn generate_reports_invalid_posture_without_a_runtime_file() {
+    let scratch = tempfile::tempdir().unwrap();
+    let output_path = scratch.path().join("output");
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "generate",
+        "schemas",
+        path(&minimal_example()),
+        "--output",
+        path(&output_path),
+        "--posture",
+        "invalid",
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(
+        json_stdout(&output)["diagnostics"][0]["code"],
+        "platform.posture.invalid-value"
+    );
+    assert!(!output_path.exists());
+}
+
+#[test]
+fn check_reports_local_key_custody_at_the_declared_severity() {
+    let scratch = tempfile::tempdir().unwrap();
+    let example = minimal_example();
+    let runtime = scratch.path().join("runtime.yaml");
+    let config = fs::read_to_string(example.join("runtime.example.yaml")).unwrap();
+    let config = config.replace(
+        "audit:\n",
+        "audit:\n  hashKeyCustody: development-generated\n",
+    );
+    fs::write(&runtime, format!(
+        "{config}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/data-key\n"
+    )).unwrap();
+    for (flags, posture, source, severity) in [
+        (&[][..], "production", "default", "error"),
+        (
+            &["--posture", "production"][..],
+            "production",
+            "flag",
+            "error",
+        ),
+        (
+            &["--posture", "development"][..],
+            "development",
+            "flag",
+            "warning",
+        ),
+    ] {
+        let mut arguments = vec![
+            "--format",
+            "json",
+            "check",
+            path(&example),
+            "--runtime-config",
+            path(&runtime),
+        ];
+        arguments.extend_from_slice(flags);
+        let report = json_stdout(&bregctl(&arguments));
+        assert_eq!(
+            report["posture"],
+            json!({"value": posture, "source": source})
+        );
+        for code in [
+            "breg.posture.local-key-custody",
+            "platform.posture.generated-audit-key",
+        ] {
+            let finding = report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|finding| finding["code"] == code)
+                .unwrap_or_else(|| panic!("missing {code}: {report}"));
+            assert_eq!(finding["severity"], severity, "{report}");
+            if severity == "error" {
+                let action = finding["suggestedAction"].as_str().unwrap();
+                assert!(action.contains("rstack dev"), "{action}");
+                assert!(
+                    action.contains("REGISTRY_STACK_POSTURE=development"),
+                    "{action}"
+                );
+                assert!(action.contains("--posture development"), "{action}");
+            }
+        }
+    }
+}
+
+#[test]
 fn check_reads_a_runtime_configuration_beside_the_project() {
     let example = minimal_example();
     let runtime = example.join("runtime.example.yaml");
@@ -4613,7 +4738,7 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
     assert!(
         !authoring_explain
             .to_string()
-            .contains("breg.registry.canonical-base-iri-reserved"),
+            .contains("breg.posture.placeholder-identity"),
         "{authoring_explain}"
     );
     let package = bregctl(&[
@@ -4629,7 +4754,17 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         path(&project.path().join("build")),
     ]);
     assert_eq!(package.status.code(), Some(1), "{package:?}");
-    assert_reserved_iri_refusal(&json_stdout(&package));
+    let report = json_stdout(&package);
+    assert_reserved_iri_refusal(&report);
+    let text = report.to_string();
+    for guidance in [
+        "canonicalBaseIri",
+        "rstack dev",
+        "REGISTRY_STACK_POSTURE=development",
+        "--posture development",
+    ] {
+        assert!(text.contains(guidance), "{report}");
+    }
     assert!(!project.path().join("build").exists());
     // No command-line spelling packages the placeholder for deployment:
     // `bregctl dev` packages its loopback session in process instead.
@@ -4666,7 +4801,7 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 
 /// An initialized project whose canonical base IRI is the reserved
 /// `.invalid` placeholder, with the receipt and build paths a package run names.
-fn reserved_iri_package_arguments(project: &TestProject, local: bool) -> (PathBuf, Vec<String>) {
+fn reserved_iri_package_arguments(project: &TestProject) -> (PathBuf, Vec<String>) {
     let destination = project.path().join("initialized");
     let init = bregctl(&["--format", "json", "init", path(&destination)]);
     assert!(init.status.success(), "{init:?}");
@@ -4682,7 +4817,7 @@ fn reserved_iri_package_arguments(project: &TestProject, local: bool) -> (PathBu
         ),
     )
     .expect("registry writes");
-    let mut arguments = vec![
+    let arguments = vec![
         "--format".to_owned(),
         "json".to_owned(),
         "package".to_owned(),
@@ -4694,16 +4829,13 @@ fn reserved_iri_package_arguments(project: &TestProject, local: bool) -> (PathBu
         "--output".to_owned(),
         path(&project.path().join("build")).to_owned(),
     ];
-    if local {
-        arguments.push("--local".to_owned());
-    }
     (destination, arguments)
 }
 
 #[test]
-fn package_refuses_reserved_canonical_iri_without_local() {
+fn package_refuses_reserved_canonical_iri_by_default() {
     let project = TestProject::asset_fixture();
-    let (_destination, arguments) = reserved_iri_package_arguments(&project, false);
+    let (_destination, arguments) = reserved_iri_package_arguments(&project);
     let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
     let package = bregctl(&arguments);
     assert_eq!(package.status.code(), Some(1), "{package:?}");
@@ -4712,41 +4844,71 @@ fn package_refuses_reserved_canonical_iri_without_local() {
 }
 
 #[test]
-fn package_local_accepts_reserved_canonical_iri() {
-    let project = TestProject::asset_fixture();
-    let (_destination, arguments) = reserved_iri_package_arguments(&project, true);
-    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
-    let package = bregctl(&arguments);
-    // No schema-test receipt exists, so the run still stops, but at the
-    // receipt and not at the identity gate `--local` skips.
-    assert_eq!(package.status.code(), Some(1), "{package:?}");
+fn package_development_accepts_and_warns_about_reserved_canonical_iri() {
+    let project = packaging_project();
+    let registry = project.path().join("registry.yaml");
+    let source = fs::read_to_string(&registry).unwrap();
+    let placeholder = source.replacen(
+        "https://package.example.test",
+        "https://package.example.invalid",
+        1,
+    );
+    assert_ne!(source, placeholder);
+    fs::write(&registry, placeholder).unwrap();
+    let fingerprint = format!("sha256:{}", "2".repeat(64));
+    let candidate = prepare_packaging_candidate(&project, &fingerprint);
+    let receipt = project.path().join("receipt.json");
+    fs::write(
+        &receipt,
+        schema_test_receipt_bytes(&candidate, &["package-record-list"]),
+    )
+    .unwrap();
+    let build = project.path().join("build");
+    let package = bregctl(&[
+        "--format",
+        "json",
+        "package",
+        path(project.path()),
+        "--posture",
+        "development",
+        "--test-receipt",
+        path(&receipt),
+        "--output",
+        path(&build),
+    ]);
+    assert!(package.status.success(), "{package:?}");
     let report = json_stdout(&package);
-    assert_eq!(report["ok"], false, "{report}");
-    assert!(
-        !report.to_string().contains("canonical-base-iri-reserved"),
-        "{report}"
-    );
     assert_eq!(
-        report["diagnostics"][0]["code"], "package.build.refused",
+        report["posture"],
+        json!({"value": "development", "source": "flag"})
+    );
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "breg.posture.placeholder-identity"
+                && item["severity"] == "warning"),
         "{report}"
     );
+    assert!(build.join("package/package.json").is_file());
 }
 
 #[test]
-fn package_help_does_not_list_the_local_flag() {
-    let help = bregctl(&["package", "--help"]);
-    assert!(help.status.success(), "{help:?}");
-    let stdout = String::from_utf8(help.stdout).expect("help is UTF-8");
-    assert!(!stdout.contains("--local"), "{stdout}");
+fn package_refuses_the_removed_local_flag() {
+    let output = bregctl(&["package", ".", "--local"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unexpected argument --local"), "{stderr}");
 }
 
 fn assert_reserved_iri_refusal(report: &Value) {
     assert_eq!(report["ok"], false, "{report}");
     let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
     assert!(
-        diagnostics.iter().any(|diagnostic| {
-            diagnostic["code"] == "breg.registry.canonical-base-iri-reserved"
-        }),
+        diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic["code"] == "breg.posture.placeholder-identity" }),
         "{report}"
     );
 }
@@ -9422,7 +9584,7 @@ fn apply_requires_safe_field_encryption_custody_before_database_authority() {
     assert_eq!(unsafe_custody.status.code(), Some(1), "{unsafe_custody:?}");
     assert_eq!(
         json_stdout(&unsafe_custody)["diagnostics"][0]["code"],
-        "apply.field-encryption.custody-refused"
+        "breg.posture.local-key-custody"
     );
     let rendered = String::from_utf8(unsafe_custody.stdout).expect("apply refusal is UTF-8");
     assert!(!rendered.contains("field-encryption-dek"));
@@ -10981,7 +11143,7 @@ identity:
   environment: production
   instanceId: {PACKAGE_INSTANCE}
   databaseId: {PACKAGE_DATABASE}
-  databaseInitializationEnvironment: production
+
 secretProviders:
   environment: {{}}
   file:
@@ -11248,5 +11410,31 @@ fn collect_tree(root: &Path, directory: &Path, files: &mut BTreeMap<String, Vec<
                 fs::read(&path).expect("generated artifact is readable"),
             );
         }
+    }
+}
+
+#[test]
+fn dev_refuses_explicit_production_before_writing_state() {
+    let project = packaging_project();
+    for from_flag in [true, false] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+        command
+            .args(["--format", "json", "dev", path(project.path())])
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if from_flag {
+            command.args(["--posture", "production"]);
+        } else {
+            command.env("REGISTRY_STACK_POSTURE", "production");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let report = json_stdout(&output);
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "platform.posture.conflict");
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("bregctl dev"));
+        assert!(!project.path().join(".breg").exists());
     }
 }

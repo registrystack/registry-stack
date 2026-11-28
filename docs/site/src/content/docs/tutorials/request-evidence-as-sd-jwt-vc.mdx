@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -88,6 +88,8 @@ on that profile may ask for the SD-JWT VC representation once a deployment appli
 project:
 
 ```sh
+# rstack dev sets this for the processes it starts.
+export REGISTRY_STACK_POSTURE=development
 rstack evidence check . --target local-target.yaml
 ```
 

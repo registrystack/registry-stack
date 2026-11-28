@@ -180,7 +180,7 @@ async fn fixture_for_role_with_templates(
         transport: None,
     };
     let (audit, audit_capture) = crate::CaseworkAudit::capture();
-    let store = PostgresStore::connect_migration(&config, &secrets)
+    let store = PostgresStore::connect_migration(&config, &secrets, None)
         .unwrap()
         .with_audit(audit);
     store.migrate().await.unwrap();
@@ -299,6 +299,7 @@ pub(super) fn test_app(
     .unwrap();
     key.alg = Some("RS256".into());
     let authority = TaskAuthority {
+        posture: registry_platform_config::Posture::Production,
         config: crate::TaskAuthorityConfig {
             issuer: "https://task-authority.test".into(),
             exchange_audience: "https://issuer.test/token".into(),
@@ -349,6 +350,12 @@ pub(super) fn test_app(
         crate::HumanIdentityConfig::default(),
     );
     crate::router(crate::HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        ),
         service,
         authenticator: Arc::new(authenticator),
         project: Arc::new(project.clone()),

@@ -243,7 +243,8 @@ BReg and signed Coordinator-event job proofs against their real binaries and
 PostgreSQL. Set `CARGO_TARGET_DIR` explicitly and provide Docker; the wrapper
 owns its pinned loopback PostgreSQL fixture and removes it on success or
 failure. To run only those destination proofs against a caller-owned
-disposable loopback database:
+disposable database, set `ADAPTER_TEST_DATABASE_URL` to a PostgreSQL URL
+with a numeric loopback host:
 
 ```sh
 CARGO_TARGET_DIR=/path/to/your/target \

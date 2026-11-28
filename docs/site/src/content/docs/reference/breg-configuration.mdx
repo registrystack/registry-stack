@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-21"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -46,6 +46,29 @@ runtime also check cross-field rules and references that no table can show.
     products/platform/scripts/check-dev-schemas.sh hold them to the Rust types. */}
 
 <ConfigurationReference contracts={reference.contracts} prefix="server" />
+
+BReg takes its deployment posture from `REGISTRY_STACK_POSTURE` or `--posture`.
+The accepted values are `development` and `production`. Omission selects
+`production`. Both declarations must agree when both are set.
+`identity.environment` is a label recorded in the activation audit.
+Delete the retired `identity.databaseInitializationEnvironment` key.
+
+Production uses Transit for field encryption. `fieldEncryption.provider.type: local-file`
+requires development. PostgreSQL uses `database.transport: verified-tls` by default.
+Use `loopback-plaintext` for a Unix socket, a numeric loopback address, or `localhost`.
+`private-network-plaintext` requires development. For event destinations,
+`networkProfile: loopback-http` permits a loopback HTTP receiver in either posture.
+
+A successful `GET /ready` includes `status`, `posture` and `developmentSettings`.
+Each listed setting includes a diagnostic `code` and its authored `pointer`.
+
+{/* Evidence: crates/registry-platform-posture/src/lib.rs, declared_from;
+    crates/registry-platform-config/src/blocks.rs, DatabaseTransport;
+    crates/registry-breg/src/runtime_config.rs, REMOVED_KEYS;
+    crates/registry-breg/src/migration.rs, ActivationAttempt;
+    crates/registry-breg/src/field_encryption.rs, BREG_LOCAL_KEY_CUSTODY;
+    crates/registry-breg/src/event_destination.rs, EventDestinationNetworkProfile;
+    crates/registry-breg/src/api/mod.rs, ready. */}
 
 Three keys carry authority that cuts across a Record type's grants. `requiredFilters` on a record
 permission makes a list pin search criteria. `disclosureConditions` on a Record type withholds a

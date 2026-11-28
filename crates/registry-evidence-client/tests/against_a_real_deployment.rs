@@ -1713,9 +1713,15 @@ async fn start_trusting_with_request_burst_jwks_and_task_authority(
     seal(&bundle_root);
 
     let runtime = Arc::new(
-        EvidenceRuntime::initialize(&runtime_path)
-            .await
-            .expect("the staged local deployment initializes"),
+        EvidenceRuntime::initialize(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .await
+        .expect("the staged local deployment initializes"),
     );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let served = Arc::clone(&runtime);

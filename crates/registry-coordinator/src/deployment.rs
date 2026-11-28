@@ -591,6 +591,7 @@ async fn open_named(
                 "database-tls-required",
                 "verified TLS requires sslmode=require in the database URL",
             )
+            .at("runtime.yaml", "database.runtimeUrlRef")
             .suggest("Add sslmode=require for a TLS database, or set database.transport: loopback-plaintext for PostgreSQL on this host."));
         }
         Some(tls(&runtime.database, &secrets)?)
@@ -679,7 +680,7 @@ fn posture_mismatch(recorded: Posture, declared: Posture) -> Option<CoordinatorE
             "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
         ),
         (Posture::Development, Posture::Production) => (
-            "this database was activated in the development posture and cannot be opened by a production process",
+            "this database was activated in the development posture; development data and settings are never promoted in place",
             "Create a fresh database and apply the package as production: a fresh apply is the way.",
         ),
         _ => return None,
@@ -1113,6 +1114,19 @@ mod tests {
     };
     use crate::definition::Definition;
     use std::collections::BTreeMap;
+
+    /// The wording is shared with the Document Store, Scheduling and Messaging.
+    #[test]
+    fn a_development_database_opened_as_production_uses_the_shared_wording() {
+        use registry_platform_config::Posture;
+        let error = super::posture_mismatch(Posture::Development, Posture::Production).unwrap();
+        assert_eq!(error.code, "platform.activation.posture-mismatch");
+        assert_eq!(
+            error.message,
+            "this database was activated in the development posture; development data and settings are never promoted in place"
+        );
+        assert!(super::posture_mismatch(Posture::Production, Posture::Production).is_none());
+    }
 
     #[test]
     fn audit_open_refusals_are_fixed_and_value_free() {

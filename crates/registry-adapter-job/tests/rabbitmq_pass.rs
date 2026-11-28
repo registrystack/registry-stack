@@ -244,6 +244,7 @@ async fn isolated() -> Pool {
 
 fn options() -> PassOptions {
     PassOptions {
+        posture: registry_platform_config::Posture::Production,
         refusal_limit: 20,
         rescan: false,
         dry_run: false,

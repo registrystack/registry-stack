@@ -194,6 +194,10 @@ impl PilotHarness {
             &config_path,
             database.runtime_config.clone(),
             key_source,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
         )
         .await
         .expect("existing startup seam accepts the exact package, database, audit, and MockIdp");
@@ -501,9 +505,9 @@ impl PublishedPackage {
         Self { root }
     }
 
-    fn context() -> PackageLoadContext<'static> {
+    fn context() -> PackageLoadContext {
         PackageLoadContext {
-            database_initialization_environment: PILOT_ENVIRONMENT,
+            posture: registry_platform_config::Posture::Production,
         }
     }
 }
@@ -636,7 +640,6 @@ identity:
   environment: {PILOT_ENVIRONMENT}
   instanceId: {PILOT_INSTANCE_ID}
   databaseId: {database_id}
-  databaseInitializationEnvironment: {PILOT_ENVIRONMENT}
 secretProviders:
   file:
     root: {}

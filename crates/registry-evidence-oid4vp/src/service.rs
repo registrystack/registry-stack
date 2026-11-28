@@ -26,8 +26,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use registry_platform_authcommon::{DeclaredScope, FailedCheck, RefusalNote, RefusalRecorder};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit, security_headers_without_posture,
-    CspBuilder, FrameworkRejection, Problem, TraceContext,
+    normalize_framework_rejection, request_body_limit, security_headers, CspBuilder,
+    FrameworkRejection, Problem, TraceContext,
 };
 use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
@@ -232,6 +232,7 @@ impl VerifierService {
         let audit = SessionAudit::initialize(
             destination,
             Zeroizing::new(audit_key.expose_secret().to_vec()),
+            config.posture.posture(),
         )
         .await
         .map_err(|_: AuditFailure| {
@@ -426,6 +427,7 @@ pub fn build_app(service: Arc<VerifierService>) -> Router {
         .layer(DefaultBodyLimit::max(response::MAX_BODY_BYTES))
         .layer(request_body_limit(response::MAX_BODY_BYTES));
     let refusals = Arc::clone(service.metrics.refusal_recorder());
+    let posture = service.config.posture.posture();
     general
         .merge(responses)
         .fallback(unknown_route)
@@ -433,9 +435,7 @@ pub fn build_app(service: Arc<VerifierService>) -> Router {
         .with_state(service)
         .layer(from_fn_with_state(timeout, bound_request_time))
         .layer(from_fn(normalize_rejections))
-        .layer(security_headers_without_posture(
-            CspBuilder::deny_by_default(),
-        ))
+        .layer(security_headers(CspBuilder::deny_by_default(), posture))
         .layer(from_fn(apply_trace_context))
         .layer(from_fn_with_state(refusals, record_refusals))
 }
@@ -664,7 +664,9 @@ async fn health() -> Response {
 /// certificate past its `notAfter`, which wallets refuse the request objects of.
 async fn ready(State(service): State<Arc<VerifierService>>) -> Response {
     if service.audit.ready().await && !service.certificate_expired() {
-        Json(json!({"status": "ready"})).into_response()
+        let mut body = service.config.posture.ready_member();
+        body.insert("status".to_owned(), json!("ready"));
+        Json(body).into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1492,7 +1494,11 @@ where
     tracing::info!(target: "registry_evidence_oid4vp::service", "verifier service listening");
     let cleanup = spawn_cleanup(&service.store, CLEANUP_INTERVAL);
     let app = build_app(Arc::clone(&service));
-    let metrics_router = metrics_app(Arc::clone(&service.metrics), Arc::clone(&service.store));
+    let metrics_router = metrics_app(
+        Arc::clone(&service.metrics),
+        Arc::clone(&service.store),
+        service.config.posture.posture(),
+    );
     let (stop, stopped) = watch::channel(false);
     let public_stopped = stopped.clone();
     let metrics_stopped = stopped;

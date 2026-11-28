@@ -11,6 +11,7 @@ use axum::{
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_authcommon::FailedCheck;
+use registry_platform_config::Posture;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     access_token_typ_set, is_access_token_typ_pair, Claims, JwksFetcher, JwksFetcherConfig,
@@ -85,7 +86,7 @@ fn resource_server_for(
         FetchUrlPolicy::https_or_loopback(),
     ));
     Arc::new(
-        ResourceServer::new(
+        ResourceServer::new_with_posture(
             &options,
             token_verifier(&options, fetcher),
             hasher(),
@@ -99,6 +100,7 @@ fn resource_server_for(
                     burst: client,
                 },
             },
+            Posture::Development,
         )
         .expect("resource server"),
     )
@@ -177,7 +179,7 @@ async fn the_authored_resource_is_the_exact_audience_and_metadata_identifier() {
     );
     assert!(verifier.verify(&canonical).await.is_err());
 
-    let resource_server = ResourceServer::new(
+    let resource_server = ResourceServer::new_with_posture(
         &options,
         verifier,
         hasher(),
@@ -191,6 +193,7 @@ async fn the_authored_resource_is_the_exact_audience_and_metadata_identifier() {
                 burst: 10,
             },
         },
+        Posture::Development,
     )
     .expect("resource server");
     assert_eq!(
@@ -493,7 +496,7 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
     drop(listener);
     let options = options(&auth);
     let server = Arc::new(
-        ResourceServer::new(
+        ResourceServer::new_with_posture(
             &options,
             token_verifier(
                 &options,
@@ -514,6 +517,7 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
                     burst: 10,
                 },
             },
+            Posture::Development,
         )
         .expect("server"),
     );
@@ -590,7 +594,17 @@ async fn only_the_loopback_forms_are_a_development_resource_and_issuer() {
         let mut options = options(&auth);
         options.resource = format!("http://{host}:8095/mcp");
         options.issuer = format!("http://{host}:8096");
-        assert_eq!(options.validate(), Ok(()), "{host}");
+        assert_eq!(
+            options.validate_with_posture(Posture::Development),
+            Ok(()),
+            "{host}"
+        );
+        // Production refuses a plain http resource on every host.
+        assert_eq!(
+            options.validate(),
+            Err(ResourceServerError::Resource),
+            "{host}"
+        );
     }
     for host in [
         "localhost.",
@@ -605,6 +619,14 @@ async fn only_the_loopback_forms_are_a_development_resource_and_issuer() {
             Err(ResourceServerError::Resource),
             "{host}"
         );
+        // Beyond loopback a plain http issuer also needs allowInsecureHttp,
+        // even in development.
+        options.issuer = format!("http://{host}:8096");
+        assert_eq!(
+            options.validate_with_posture(Posture::Development),
+            Err(ResourceServerError::Issuer),
+            "{host}"
+        );
     }
 }
 
@@ -614,7 +636,8 @@ async fn localhost_is_a_development_loopback_resource_and_issuer() {
     let mut options = options(&auth);
     options.resource = "http://localhost:8095/mcp".to_owned();
     options.issuer = "http://localhost:8096".to_owned();
-    assert_eq!(options.validate(), Ok(()));
+    assert_eq!(options.validate_with_posture(Posture::Development), Ok(()));
+    assert_eq!(options.validate(), Err(ResourceServerError::Resource));
 }
 
 #[tokio::test]
@@ -626,7 +649,7 @@ async fn a_token_that_already_names_an_actor_is_refused() {
         JwksFetcherConfig::defaults(),
         FetchUrlPolicy::https_or_loopback(),
     ));
-    let server = ResourceServer::new(
+    let server = ResourceServer::new_with_posture(
         &options,
         token_verifier(&options, fetcher),
         hasher(),
@@ -640,6 +663,7 @@ async fn a_token_that_already_names_an_actor_is_refused() {
                 burst: 10,
             },
         },
+        Posture::Development,
     )
     .expect("server");
     let mut claims: Claims = serde_json::from_value(json!({

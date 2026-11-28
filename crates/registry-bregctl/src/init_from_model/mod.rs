@@ -300,7 +300,7 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
             destination.join(crate::FIXTURE_JOURNEYS_PATH).display()
         ),
         format!(
-            "replace canonicalBaseIri in {} before you build a production package; the derived value is a reserved .invalid name that never resolves",
+            "replace canonicalBaseIri in {} before you build a production package. The derived value is a reserved .invalid name. Package the unchanged project with 'bregctl package --posture development', or set REGISTRY_STACK_POSTURE=development. Both 'bregctl dev' and 'rstack dev' run it as is",
             destination.join("registry.yaml").display()
         ),
         format!(

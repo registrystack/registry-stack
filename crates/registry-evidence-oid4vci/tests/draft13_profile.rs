@@ -140,7 +140,14 @@ fn load_config(text: &str) -> Result<DeliveryConfig, String> {
     let directory = tempfile::tempdir_in(base).expect("a temporary deployment directory");
     let path = directory.path().join("oid4vci.yaml");
     fs::write(&path, text).expect("write the test deployment");
-    DeliveryConfig::load(&path).map_err(|error| error.to_string())
+    DeliveryConfig::load(
+        &path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .map_err(|error| error.to_string())
 }
 
 struct StubAuthorizer;
@@ -314,7 +321,10 @@ fn harness(draft13: bool) -> Harness {
         Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
         Arc::new(
             DeliveryAudit::with_writer(
-                AuditWriter::from_line_sink_without_posture(Box::new(std::io::sink())),
+                AuditWriter::from_line_sink(
+                    Box::new(std::io::sink()),
+                    registry_platform_config::Posture::Development,
+                ),
                 b"0123456789abcdef0123456789abcdef".to_vec(),
             )
             .expect("the test audit profile is valid"),
@@ -1255,7 +1265,10 @@ async fn inspect_shows_the_draft13_metadata_only_when_the_profile_is_on() {
             Arc::new(SigningIssuer::new()) as Arc<dyn CredentialIssuer>,
             Arc::new(
                 DeliveryAudit::with_writer(
-                    AuditWriter::from_line_sink_without_posture(Box::new(std::io::sink())),
+                    AuditWriter::from_line_sink(
+                        Box::new(std::io::sink()),
+                        registry_platform_config::Posture::Development,
+                    ),
                     b"0123456789abcdef0123456789abcdef".to_vec(),
                 )
                 .expect("the test audit profile is valid"),

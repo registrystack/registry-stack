@@ -338,7 +338,7 @@ fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
     assert!(below.status.success(), "a low burst is not a refusal");
     let stdout = std::str::from_utf8(&below.stdout).expect("stdout is UTF-8");
     assert!(stdout.ends_with(" passed check (3 requirements)\n"));
-    let stderr = std::str::from_utf8(&below.stderr).expect("stderr is UTF-8");
+    let stderr = legacy_diagnostics(&below.stderr);
     let lines = stderr.lines().collect::<Vec<_>>();
     let bundle = project.root.path().join("bundle/evidence.yaml");
     assert_eq!(lines.len(), 4, "one warning and the summary: {stderr}");
@@ -470,7 +470,11 @@ fn check_as_json_reports_the_envelope_on_success_and_refusal() {
             .is_some_and(|files| files > 1),
         "the runtime file and the package were checked: {report}"
     );
-    assert_eq!(report["diagnostics"], json!([]));
+    assert_eq!(report["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.posture.local-assurance"
+    );
 
     deployment.append("runtime.yaml", "unknownField: true\n");
     let refused = invoke(&runtime, &["check", "--format", "json"]);
@@ -543,7 +547,9 @@ fn check_skips_value_checks_on_substituted_members_unless_asked_for_the_environm
     let check = |arguments: &[&str], variables: &[(&str, &Path)]| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
         command
-            .args(arguments)
+            .args(["check", "--posture", "development"])
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .args(&arguments[1..])
             .arg("--runtime-config")
             .arg(&runtime)
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -1044,6 +1050,7 @@ async fn dependency_check_fails_when_an_audit_writer_already_holds_the_destinati
         AuditDestination::File(destination),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("first audit writer initializes");
@@ -1080,6 +1087,7 @@ async fn dependency_check_without_the_audit_lock_passes_beside_a_running_writer(
         ),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("first audit writer initializes");
@@ -1175,6 +1183,7 @@ async fn dependency_check_without_the_audit_lock_still_refuses_an_unusable_audit
                     ),
                     b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
                     1,
+                    registry_platform_config::Posture::Production,
                 )
                 .await
                 .expect("first audit writer initializes"),
@@ -2969,6 +2978,7 @@ async fn authority_activation_succeeds_while_the_service_holds_the_audit_lock() 
         ),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("the service writer initializes");
@@ -3007,6 +3017,7 @@ async fn authority_activation_reports_why_the_companion_audit_is_unavailable() {
         .expect("the companion destination is valid"),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("the other activation writer initializes");
@@ -3065,7 +3076,8 @@ fn bundle_check_validates_complete_target_authority_without_fixtures_or_effects(
     deployment.seal();
     let check = || {
         Command::new(env!("CARGO_BIN_EXE_evidence"))
-            .args(["bundle-check", "--bundle"])
+            .args(["bundle-check", "--posture", "development", "--bundle"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg(deployment.path("bundle"))
             .arg("--authority-document")
             .arg(&authority_path)
@@ -3474,7 +3486,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         let output = deployment.check();
 
         let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
-        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        let stderr = legacy_diagnostics(&output.stderr);
         assert!(
             !stdout.contains(CANARY) && !stderr.contains(CANARY),
             "{}: diagnostic disclosed a document value",
@@ -3822,6 +3834,10 @@ fn invalid_acquisition_limits_are_reported_once_by_check_and_bundle_check() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON diagnostic report");
     let diagnostics = report["diagnostics"].as_array().expect("diagnostic array");
+    let diagnostics = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic["severity"] == "error")
+        .collect::<Vec<_>>();
     assert_eq!(
         diagnostics.len(),
         1,
@@ -3960,7 +3976,7 @@ fn check_passes_the_signing_boundary_with_a_chain_that_certifies_the_governed_ke
     let with_chain = deployment.check_with_runtime_dependencies();
 
     for output in [&without_chain, &with_chain] {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = legacy_diagnostics(&output.stderr);
         assert!(
             stderr.contains("error[evidence.deployment.dependency-unavailable]"),
             "{stderr}"
@@ -4068,7 +4084,8 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
         );
         let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
         assert_eq!(
-            stderr, case.expected,
+            stderr.lines().last(),
+            case.expected.lines().last(),
             "{}: unexpected diagnostic",
             case.label
         );
@@ -5496,6 +5513,85 @@ fn probe(port: u16, path: &str) -> Option<String> {
 
 /// A staged deployment: one acceptance bundle, one operator runtime file, and
 /// one private secret root under a single temporary directory.
+#[test]
+fn posture_local_bundle_requires_development() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.seal();
+    for flag in [None, Some("production"), Some("development")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command
+            .args(["check", "--runtime-config"])
+            .arg(deployment.path("runtime.yaml"))
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(flag) = flag {
+            command.args(["--posture", flag]);
+        }
+        let output = command.output().expect("evidence check runs");
+        let rendered = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.status.success(),
+            flag == Some("development"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("evidence.posture.local-assurance"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("/assuranceProfile"), "{rendered}");
+        if flag != Some("development") {
+            assert!(rendered.contains("rstack dev"), "{rendered}");
+            assert!(
+                rendered.contains("REGISTRY_STACK_POSTURE=development"),
+                "{rendered}"
+            );
+
+            let mut serve = Command::new(env!("CARGO_BIN_EXE_evidence"));
+            serve
+                .args(["serve", "--runtime-config"])
+                .arg(deployment.path("runtime.yaml"))
+                .env_remove("REGISTRY_STACK_POSTURE");
+            if let Some(flag) = flag {
+                serve.args(["--posture", flag]);
+            }
+            let output = serve.output().expect("Evidence startup exits");
+            assert!(!output.status.success());
+            let refusal = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                refusal.contains("evidence.posture.local-assurance"),
+                "{refusal}"
+            );
+            assert!(refusal.contains("/assuranceProfile"), "{refusal}");
+        }
+    }
+}
+#[test]
+fn posture_development_refuses_an_evidence_grade_package() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "assuranceProfile: local",
+        "assuranceProfile: evidence-grade",
+    );
+    deployment.seal();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--posture", "development", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .expect("run Evidence check");
+    assert_eq!(output.status.code(), Some(1));
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        refusal.contains("evidence.posture.assurance-profile-conflict"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("/assuranceProfile"), "{refusal}");
+}
+
 struct Deployment {
     root: tempfile::TempDir,
     port: u16,
@@ -5815,6 +5911,8 @@ outboundTls:
     fn serve(&self) -> Child {
         Command::new(env!("CARGO_BIN_EXE_evidence"))
             .arg("serve")
+            .args(["--posture", "development"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("--runtime-config")
             .arg(self.path("runtime.yaml"))
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -5829,6 +5927,8 @@ outboundTls:
     fn serve_capturing(&self) -> CapturedService {
         let mut child = Command::new(env!("CARGO_BIN_EXE_evidence"))
             .arg("serve")
+            .args(["--posture", "development"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("--runtime-config")
             .arg(self.path("runtime.yaml"))
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -5979,6 +6079,8 @@ fn write_private_json(path: &Path, value: &Value) {
 fn invoke_local_relying_procedure(runtime: &Path, input: &Path, stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg("prepare-local-relying-procedure")
+        .args(["--posture", "development"])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(runtime)
         .arg("--input")
@@ -6039,10 +6141,68 @@ fn the_removed_runtime_inputs_are_refused_with_their_replacement_named() {
 }
 
 /// Run one runtime subcommand, `arguments[0]`, against `runtime`.
+// Several CLI tests assert the exact text of a separate diagnostic. The
+// posture-specific tests assert the local warning and its source directly.
+fn legacy_diagnostics(stderr: &[u8]) -> String {
+    let stderr = std::str::from_utf8(stderr).expect("stderr is UTF-8");
+    let mut lines = stderr.lines();
+    let mut result = String::new();
+    let mut count = 0;
+    while let Some(line) = lines.next() {
+        if line.starts_with("warning[evidence.posture.local-assurance] ") {
+            assert!(lines.next().unwrap().contains("production refuses it"));
+            assert!(lines.next().unwrap().starts_with("  next: "));
+            count += 1;
+            continue;
+        }
+        if count > 0 {
+            if let Some((error_count, warnings)) = line.split_once(", ") {
+                if let Some((warnings_count, files)) = warnings.split_once(" in ") {
+                    if let Some(actual) = warnings_count
+                        .split_whitespace()
+                        .next()
+                        .and_then(|n| n.parse::<usize>().ok())
+                    {
+                        let remaining = actual - count;
+                        let label = if remaining == 1 {
+                            "warning"
+                        } else {
+                            "warnings"
+                        };
+                        result
+                            .push_str(&format!("{error_count}, {remaining} {label} in {files}\n"));
+                        continue;
+                    }
+                }
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
+
+fn fixture_posture(bundle_config: &Path) -> &'static str {
+    if fs::read_to_string(bundle_config).is_ok_and(|text| {
+        text.contains("assuranceProfile: local")
+            || text.contains("assuranceProfile: 'local'")
+            || text.contains("assuranceProfile: \"local\"")
+    }) {
+        "development"
+    } else {
+        "production"
+    }
+}
+
 fn invoke(runtime: &Path, arguments: &[&str]) -> Output {
     let (command, rest) = arguments.split_first().expect("a subcommand is named");
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg(command)
+        .args([
+            "--posture",
+            fixture_posture(&runtime.with_file_name("bundle/evidence.yaml")),
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(runtime)
         .args(rest)
@@ -6056,6 +6216,8 @@ fn invoke(runtime: &Path, arguments: &[&str]) -> Output {
 fn invoke_bundle_check(bundle: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg("bundle-check")
+        .args(["--posture", fixture_posture(&bundle.join("evidence.yaml"))])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--bundle")
         .arg(bundle)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -6066,6 +6228,8 @@ fn invoke_bundle_check(bundle: &Path) -> Output {
 fn invoke_bundle_check_with_runtime(bundle: &Path, runtime: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg("bundle-check")
+        .args(["--posture", fixture_posture(&bundle.join("evidence.yaml"))])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--bundle")
         .arg(bundle)
         .arg("--runtime-config")
@@ -6078,9 +6242,9 @@ fn invoke_bundle_check_with_runtime(bundle: &Path, runtime: &Path) -> Output {
 
 fn assert_success(output: &Output, prefix: &str, suffix: &str) {
     assert!(output.status.success(), "evidence command failed");
-    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    let stderr = legacy_diagnostics(&output.stderr);
     assert!(
-        stderr.is_empty() || is_clean_check_summary(stderr),
+        stderr.is_empty() || is_clean_check_summary(&stderr),
         "evidence command wrote diagnostics: {stderr}"
     );
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
@@ -6103,7 +6267,7 @@ fn is_clean_check_summary(stderr: &str) -> bool {
 /// reported exactly one error: `code` on its position line, then `message`, a
 /// `next:` action, and the summary line.
 fn assert_one_check_error(output: &Output, exit: i32, code: &str, message: &str) {
-    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    let stderr = legacy_diagnostics(&output.stderr);
     assert_eq!(
         output.status.code(),
         Some(exit),

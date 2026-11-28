@@ -13,6 +13,7 @@ use crate::project::ProjectRefusal;
 use anyhow::{bail, Context, Result};
 use registry_casework::RuntimeConfig;
 use registry_casework_core::{AccessProfile as ProjectProfile, CaseworkActsAs, CaseworkProject};
+use registry_platform_config::DeclaredPosture;
 use registry_thunderid_tooling::identity_facts::{
     self, AccessProfile, ActorKind, Admission, AssertionIssuer, AssertionMapping, ClaimType,
     ExchangeBinding, IdentityFacts,
@@ -207,7 +208,8 @@ fn unique(admission: Admission) -> Admission {
 /// `authentication.oidc` and `taskAuthority`; opens no secret.
 fn deployed(runtime: &RuntimeConfig, project: &CaseworkProject) -> IdentityFacts {
     let oidc = &runtime.authentication.oidc;
-    let allowed = &oidc.clients.allowed_clients;
+    let clients = &oidc.clients;
+    let allowed = &clients.allowed_clients;
     let allowed_clients = if allowed.is_empty() {
         Admission::Unrestricted
     } else {
@@ -221,7 +223,7 @@ fn deployed(runtime: &RuntimeConfig, project: &CaseworkProject) -> IdentityFacts
             .map(|template| template.client.clone())
             .collect();
         exchange_clients.extend(
-            oidc.clients
+            clients
                 .assertion_issuers
                 .iter()
                 .filter(|(_, issuers)| issuers.contains(&issuer))
@@ -248,10 +250,15 @@ fn deployed(runtime: &RuntimeConfig, project: &CaseworkProject) -> IdentityFacts
 
 /// What `generate identity-facts` reports: the output and counts, nothing
 /// the facts say.
-pub(crate) fn generate(project: &Path, runtime_config: &Path, output: &Path) -> Result<Value> {
+pub(crate) fn generate(
+    project: &Path,
+    runtime_config: &Path,
+    output: &Path,
+    declared: DeclaredPosture,
+) -> Result<Value> {
     let policy = crate::project::load_and_check_policy(project)?;
     let absolute = std::path::absolute(runtime_config).context("resolving the runtime file")?;
-    let loaded = RuntimeConfig::loader().load::<RuntimeConfig>(&absolute)?;
+    let loaded = RuntimeConfig::load_file(&absolute, declared)?;
     let runtime = loaded.config;
     if let Some(finding) = runtime.findings(Some(&policy)).into_iter().next() {
         return Err(finding.into());
@@ -306,7 +313,18 @@ mod tests {
     fn run(runtime: &str) -> (String, Value) {
         let directory = crate::canonical_tempdir();
         let output = directory.path().join("facts.yaml");
-        let report = generate(&manifest(EXAMPLE), &manifest(runtime), &output).unwrap();
+        let trusted_runtime = directory.path().join("runtime.yaml");
+        fs::copy(manifest(runtime), &trusted_runtime).unwrap();
+        let report = generate(
+            &manifest(EXAMPLE),
+            &trusted_runtime,
+            &output,
+            DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .unwrap();
         (fs::read_to_string(output).unwrap(), report)
     }
 
@@ -382,10 +400,20 @@ mod tests {
         let directory = crate::canonical_tempdir();
         let output = directory.path().join("facts.yaml");
         fs::write(&output, "kept").unwrap();
+        let runtime = directory.path().join("runtime.yaml");
+        fs::copy(
+            manifest("tests/fixtures/identity/runtime-task-authority.yaml"),
+            &runtime,
+        )
+        .unwrap();
         let error = generate(
             &manifest(EXAMPLE),
-            &manifest("tests/fixtures/identity/runtime-task-authority.yaml"),
+            &runtime,
             &output,
+            DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
         )
         .unwrap_err();
         assert!(error.chain().any(|cause| cause.is::<ProjectRefusal>()));
@@ -497,7 +525,16 @@ mod tests {
         {
             fs::write(&runtime, source.replace(original, replacement)).unwrap();
             let output = directory.path().join(format!("{index}.yaml"));
-            let error = generate(&manifest(EXAMPLE), &runtime, &output).unwrap_err();
+            let error = generate(
+                &manifest(EXAMPLE),
+                &runtime,
+                &output,
+                DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            )
+            .unwrap_err();
             assert!(
                 error.to_string().contains("humanIdentity")
                     && error
@@ -525,7 +562,16 @@ mod tests {
             )
             .unwrap();
             let output = directory.path().join(format!("{claim}.yaml"));
-            let error = generate(&manifest(EXAMPLE), &runtime, &output).unwrap_err();
+            let error = generate(
+                &manifest(EXAMPLE),
+                &runtime,
+                &output,
+                DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            )
+            .unwrap_err();
             assert!(
                 error
                     .to_string()

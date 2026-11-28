@@ -99,9 +99,14 @@ fn durable_log(runtime: &Runtime) -> (tempfile::TempDir, Arc<EvidenceAuditLog>) 
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("audit.jsonl");
     let log = runtime.block_on(async {
-        EvidenceAuditLog::initialize(bench_destination(&path), BENCH_SECRET.to_vec(), 1)
-            .await
-            .expect("initialize audit log")
+        EvidenceAuditLog::initialize(
+            bench_destination(&path),
+            BENCH_SECRET.to_vec(),
+            1,
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        .expect("initialize audit log")
     });
     (directory, Arc::new(log))
 }
@@ -112,9 +117,14 @@ fn report_record_bytes(runtime: &Runtime) {
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("audit.jsonl");
     runtime.block_on(async {
-        let log = EvidenceAuditLog::initialize(bench_destination(&path), BENCH_SECRET.to_vec(), 1)
-            .await
-            .expect("initialize audit log");
+        let log = EvidenceAuditLog::initialize(
+            bench_destination(&path),
+            BENCH_SECRET.to_vec(),
+            1,
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        .expect("initialize audit log");
         let event = sample_event();
         event
             .validate_phase_fields()

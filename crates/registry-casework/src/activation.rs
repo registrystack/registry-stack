@@ -12,6 +12,7 @@
 //! reads the ledger and refuses a database whose active package is not the
 //! configured one.
 
+use registry_platform_config::Posture;
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_casework_core::{CaseworkProject, ReviewContextProvider, TaskTemplate};
@@ -103,6 +104,7 @@ const PLAN_THEN_APPLY: &str =
 /// The verified package and runtime identity an activation is planned or
 /// applied for.
 pub struct ActivationCandidate<'a> {
+    pub posture: Posture,
     /// The configured `identity.databaseId`.
     pub database_id: &'a str,
     /// The verified package digest.
@@ -225,7 +227,30 @@ pub struct ActivationRefusal {
     pub message: String,
 }
 
+/// The refusal message and action for an opposite-posture activation.
+pub fn posture_mismatch(recorded: Posture) -> (&'static str, &'static str) {
+    match recorded {
+        Posture::Production => (
+            "this database was activated in the production posture; a development process never opens it",
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
+        ),
+        Posture::Development => (
+            "this database was activated in the development posture; development data and settings are never promoted in place",
+            "Create a fresh database and apply the package as production: a fresh apply is the way.",
+        ),
+    }
+}
+
 impl ActivationRefusal {
+    fn posture_mismatch(recorded: Posture) -> Self {
+        let (message, action) = posture_mismatch(recorded);
+        Self {
+            code: "platform.activation.posture-mismatch".into(),
+            path: "database".into(),
+            message: format!("{message}. {action}"),
+        }
+    }
+
     fn new(code: &str, path: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: format!("{REFUSAL_PREFIX}.{code}"),
@@ -687,15 +712,16 @@ async fn apply_in(
     let activation = platform_activation::append_activation(
         transaction,
         &activation_layout(),
-        &NewActivation::without_posture(
+        &NewActivation {
             activation_id,
-            candidate.package_digest,
-            candidate.database_id,
-            operator_reference_hash.as_deref(),
-            &request.backup_references,
+            package_digest: candidate.package_digest,
+            database_id: candidate.database_id,
+            operator_reference_hash: operator_reference_hash.as_deref(),
+            backup_references: &request.backup_references,
             role_mode,
-            None,
-        ),
+            posture: candidate.posture,
+            runtime_role: None,
+        },
     )
     .await
     .map_err(platform_error)?;
@@ -787,6 +813,11 @@ async fn analyze(
         platform_activation::database_id_check(active.as_ref(), candidate.database_id);
     if database_id_check == DatabaseIdCheck::Differs {
         refusals.push(ActivationRefusal::database_id_mismatch());
+    }
+    if let Some(active) = &active {
+        if active.posture != candidate.posture {
+            refusals.push(ActivationRefusal::posture_mismatch(active.posture));
+        }
     }
     for refusal in pending_migration_refusals(transaction, &pending_schema_versions).await? {
         refusals.push(ActivationRefusal::new(

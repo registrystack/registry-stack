@@ -828,7 +828,7 @@ const MAX_UNIX_SOCKET_PATH_CHARS: usize = 4_096;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RawFieldEncryptionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    provider: Option<RawFieldEncryptionProvider>,
+    provider: Option<registry_platform_config::Gated<RawFieldEncryptionProvider>>,
 }
 
 /// Raw provider binding; the `type` member selects the custodian.
@@ -857,6 +857,7 @@ pub(crate) enum RawFieldEncryptionProvider {
         )]
         attempt_timeout_milliseconds: u64,
     },
+    /// Development-only custody of the data key in a local file. Use Transit in production.
     LocalFile {
         /// The data encryption key, named by a `secret:file/NAME` reference;
         /// an environment reference is refused.
@@ -864,6 +865,26 @@ pub(crate) enum RawFieldEncryptionProvider {
     },
 }
 registry_platform_yaml::tagged_union!(RawFieldEncryptionProvider);
+
+pub(crate) static BREG_LOCAL_KEY_CUSTODY: registry_platform_config::DevelopmentSetting =
+    registry_platform_config::DevelopmentSetting {
+        code: "breg.posture.local-key-custody",
+        key: "provider",
+        summary: "The field-encryption data key is stored in a local file",
+        production: "Configure the transit provider for field encryption.",
+    };
+
+impl registry_platform_config::DevelopmentClass for RawFieldEncryptionProvider {
+    const SETTINGS: &'static [&'static registry_platform_config::DevelopmentSetting] =
+        &[&BREG_LOCAL_KEY_CUSTODY];
+
+    fn development_setting(&self) -> Option<&'static registry_platform_config::DevelopmentSetting> {
+        match self {
+            Self::LocalFile { .. } => Some(&BREG_LOCAL_KEY_CUSTODY),
+            Self::Transit { .. } => None,
+        }
+    }
+}
 
 #[cfg(feature = "schema")]
 impl serde::Serialize for RawFieldEncryptionProvider {
@@ -899,8 +920,15 @@ impl FieldEncryptionConfig {
     /// Validate one raw block.
     pub(crate) fn from_raw(
         raw: RawFieldEncryptionConfig,
+        witness: Option<&registry_platform_config::DevelopmentWitness>,
     ) -> Result<Self, InvalidFieldEncryptionConfig> {
-        let provider = match raw.provider {
+        let provider = raw
+            .provider
+            .as_ref()
+            .map(|provider| provider.get(witness).cloned())
+            .transpose()
+            .map_err(|_| InvalidFieldEncryptionConfig)?;
+        let provider = match provider {
             None => None,
             Some(RawFieldEncryptionProvider::Transit {
                 unix_socket_path,

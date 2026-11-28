@@ -547,7 +547,7 @@ fn check_origins(
                 &url_pointer,
                 "a catalogUrl is an https URL with no query, fragment, empty path segment, \
                  whitespace, or control character",
-                "Write an https catalog URL with no query or fragment, or, for an HTTP loopback origin, start with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+                "Write an https catalog URL with no query or fragment, or, for an HTTP loopback origin, declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
             ));
         } else if let Some(first) = urls.get(origin.catalog_url.as_str()) {
             let mut diagnostic = error_at(
@@ -1313,6 +1313,26 @@ alternatives:
                 "{endpoint}"
             );
         }
+    }
+
+    #[test]
+    fn a_refused_catalog_url_action_does_not_send_the_operator_to_rstack_dev() {
+        let origins = ORIGINS.replace(
+            "https://unreachable.example.invalid/catalog.jsonld",
+            "http://127.0.0.2:8080/catalog.jsonld",
+        );
+        let root = project(&origins, &[]);
+        let diagnostics = refusal(root.path());
+        let refused = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "discovery.origins.catalog-url-not-allowed")
+            .expect("the catalog URL is refused");
+        assert!(
+            !refused.suggested_action.contains("rstack dev"),
+            "{}",
+            refused.suggested_action
+        );
+        assert!(refused.suggested_action.contains("--posture development"));
     }
 
     #[test]

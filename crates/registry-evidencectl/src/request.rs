@@ -114,6 +114,13 @@ pub struct PrepareArgs {
         conflicts_with = "profile"
     )]
     runtime_config: Option<PathBuf>,
+    #[arg(
+        requires = "runtime_config",
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
 
     /// Response format to request and verify.
     #[arg(
@@ -340,17 +347,35 @@ struct LocalRelyingProcedure {
     clock_skew_seconds: u64,
 }
 
-pub fn run(command: RequestCommand) -> Result<ExitCode> {
-    match command {
-        RequestCommand::Prepare(args) => prepare(args),
+impl RequestCommand {
+    pub(crate) fn posture_flag(&self) -> Option<Option<&str>> {
+        match self {
+            Self::Prepare(args) if args.runtime_config.is_some() => Some(args.posture.as_deref()),
+            Self::Prepare(_) => None,
+        }
     }
 }
 
-fn prepare(args: PrepareArgs) -> Result<ExitCode> {
+pub fn run(
+    command: RequestCommand,
+    declared: Option<registry_platform_config::DeclaredPosture>,
+) -> Result<ExitCode> {
+    match command {
+        RequestCommand::Prepare(args) => prepare(args, declared),
+    }
+}
+
+fn prepare(
+    args: PrepareArgs,
+    declared: Option<registry_platform_config::DeclaredPosture>,
+) -> Result<ExitCode> {
     if args.profile.is_some() {
         return prepare_progressive(args);
     }
-    prepare_local(args)
+    prepare_local(
+        args,
+        declared.expect("runtime request has a declared posture"),
+    )
 }
 
 fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
@@ -587,7 +612,10 @@ fn progressive_curl_config(
     )))
 }
 
-fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
+fn prepare_local(
+    args: PrepareArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
     let (evidence_url, header, runtime) = match (
         args.evidence_url.as_deref(),
@@ -643,7 +671,8 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
     let procedure_input = canonicalize_json(&serde_json::to_value(procedure_input)?)
         .context("failed to serialize the local relying procedure input")?;
     write_private_bytes(&procedure_input_path, &procedure_input)?;
-    let procedure = prepare_local_relying_procedure(&evidence, runtime, &procedure_input_path)?;
+    let procedure =
+        prepare_local_relying_procedure(&evidence, runtime, &procedure_input_path, declared)?;
     fs::remove_file(&procedure_input_path)
         .context("failed to remove the private relying procedure input")?;
     validate_local_relying_procedure(&procedure, definition, audience, args.format)?;
@@ -950,6 +979,7 @@ fn prepare_local_relying_procedure(
     evidence: &Path,
     runtime: &Path,
     input: &Path,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<LocalRelyingProcedure> {
     let mut child = Command::new(evidence)
         .arg("prepare-local-relying-procedure")
@@ -958,6 +988,7 @@ fn prepare_local_relying_procedure(
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .arg("--input")
         .arg(input)
+        .args(["--posture", declared.posture.as_str()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1281,6 +1312,7 @@ mod tests {
             evidence_url: None,
             header: None,
             runtime_config: None,
+            posture: None,
             format: PreparedResponseFormat::SignedJws,
             project: PathBuf::from("."),
             evidence_bin: None,

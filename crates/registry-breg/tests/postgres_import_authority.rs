@@ -203,7 +203,7 @@ journeys: []
     load_package(
         &package,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("activation package loads")
@@ -1676,7 +1676,9 @@ async fn plan_and_apply_refuse_legacy_run_conflicts_before_maintenance_until_own
     .await
     .expect("initial package activates");
     let registry = Arc::new(initial.registry().clone());
-    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID)
+        .expect("lock key derives")
+        .for_posture(initial.posture());
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
         .expect("test owns a keyed audit profile");
     let app = build_router(
@@ -1853,7 +1855,9 @@ async fn exact_target_recovery_ignores_conflicts_discovered_after_maintenance_st
     .await
     .expect("initial package activates");
     let registry = Arc::new(initial.registry().clone());
-    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID)
+        .expect("lock key derives")
+        .for_posture(initial.posture());
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
         .expect("test owns a keyed audit profile");
     let app = build_router(
@@ -1940,7 +1944,9 @@ async fn non_live_authority_run_conflicts_do_not_block_a_successor() {
         .await
         .expect("initial package activates");
         let registry = Arc::new(initial.registry().clone());
-        let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+        let lock_key = RegistryLockKey::derive(PACKAGE_ID)
+            .expect("lock key derives")
+            .for_posture(initial.posture());
         let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
             .expect("test owns a keyed audit profile");
         let app = build_router(

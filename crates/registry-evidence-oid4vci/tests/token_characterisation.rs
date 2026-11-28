@@ -17,7 +17,7 @@ use axum::{routing::get, Json, Router};
 use jsonwebtoken::jwk::JwkSet;
 use registry_evidence_oid4vci::{
     authorizer::{verifier_profile, AuthorizationError, MintResourceServer, OfferAuthorizer},
-    config::{AccessTokenAlgorithm, OfferAuthorizationConfig, Restriction, ValidationMode},
+    config::{AccessTokenAlgorithm, OfferAuthorizationConfig, Restriction},
 };
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
 use registry_platform_testing::{
@@ -151,8 +151,7 @@ async fn refusal_stage(config: &OfferAuthorizationConfig, case: &FixtureCase) ->
 
 async fn authorize(case: FixtureCase, key_set_uri: String) -> Outcome {
     let config = row_config(&case, &key_set_uri);
-    let server =
-        MintResourceServer::from_config(&config, ValidationMode::SupervisedLocalDevelopment);
+    let server = MintResourceServer::from_config(&config);
     match server.authorize(case.token.expose()).await {
         Ok(_) => Outcome::Admitted(None),
         Err(AuthorizationError::Missing) => Outcome::Refused(Stage::Header),

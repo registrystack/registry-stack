@@ -345,7 +345,14 @@ offers:
 "#,
     )
     .expect("write fixture deployment");
-    DeliveryConfig::load(&path).expect("the fixture deployment loads")
+    DeliveryConfig::load(
+        &path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("the fixture deployment loads")
 }
 
 fn canonical_tempdir() -> tempfile::TempDir {
@@ -366,7 +373,10 @@ fn deployment() -> (tempfile::TempDir, Arc<FixtureIssuer>, TestServer) {
         Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
         Arc::new(
             DeliveryAudit::with_writer(
-                AuditWriter::from_line_sink_without_posture(Box::new(io::sink())),
+                AuditWriter::from_line_sink(
+                    Box::new(io::sink()),
+                    registry_platform_config::Posture::Development,
+                ),
                 b"0123456789abcdef0123456789abcdef".to_vec(),
             )
             .expect("the test audit profile is valid"),
@@ -856,7 +866,14 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     // it, through their environment; it is never written to disk.
     let client_identity = FixtureKey::generate();
 
-    let loaded = DeliveryConfig::load(&config_path).expect("the copied configuration loads");
+    let loaded = DeliveryConfig::load(
+        &config_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("the copied configuration loads");
     assert_eq!(loaded.credential_issuer, ADOPTER_ORIGIN);
     assert_eq!(loaded.evidence.base_url, SUPPORT_ORIGIN);
     assert_eq!(
@@ -870,7 +887,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     let binary = adapter_binary();
     let check = Command::new(&binary)
         .env("RUST_LOG", "off")
-        .args(["check", "--runtime-config"])
+        .args(["check", "--posture", "development", "--runtime-config"])
         .arg(&config_path)
         .output()
         .expect("run the real check command");
@@ -903,7 +920,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
         .env("RUST_LOG", "off")
         .env(CLIENT_KEY_VARIABLE, &client_identity.private)
         .env(AUDIT_KEY_VARIABLE, AUDIT_KEY)
-        .args(["inspect", "--runtime-config"])
+        .args(["inspect", "--posture", "development", "--runtime-config"])
         .arg(&config_path)
         .output()
         .expect("run the real inspect command");
@@ -938,7 +955,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
             .env("RUST_LOG", "off")
             .env(CLIENT_KEY_VARIABLE, &client_identity.private)
             .env(AUDIT_KEY_VARIABLE, AUDIT_KEY)
-            .args(["serve", "--runtime-config"])
+            .args(["serve", "--posture", "development", "--runtime-config"])
             .arg(&live_config_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -950,6 +967,23 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
         .build()
         .expect("build the loopback-only adopter client");
     wait_until_ready(&client, &format!("{ADOPTER_ORIGIN}/ready")).await;
+    let readiness = client
+        .get(format!("{ADOPTER_ORIGIN}/ready"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(readiness.headers()["registry-posture"], "development");
+    let readiness: Value = readiness.json().await.unwrap();
+    assert_eq!(readiness["status"], "ready");
+    assert_eq!(readiness["posture"], "development");
+    assert!(readiness["developmentSettings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |setting| setting["code"] == "evidence.posture.supervised-validation"
+                && setting["pointer"] == "/validationMode"
+        ));
     assert_eq!(
         client
             .get(format!("{ADOPTER_ORIGIN}/health"))
@@ -965,7 +999,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
         .env("RUST_LOG", "off")
         .env(CLIENT_KEY_VARIABLE, &client_identity.private)
         .env(AUDIT_KEY_VARIABLE, AUDIT_KEY)
-        .args(["inspect", "--runtime-config"])
+        .args(["inspect", "--posture", "development", "--runtime-config"])
         .arg(&live_config_path)
         .output()
         .expect("inspect while the service holds the audit-file lock");
@@ -985,7 +1019,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
         .env("RUST_LOG", "off")
         .env(CLIENT_KEY_VARIABLE, &client_identity.private)
         .env_remove(AUDIT_KEY_VARIABLE)
-        .args(["inspect", "--runtime-config"])
+        .args(["inspect", "--posture", "development", "--runtime-config"])
         .arg(&live_config_path)
         .output()
         .expect("inspect the live service with no audit secret");

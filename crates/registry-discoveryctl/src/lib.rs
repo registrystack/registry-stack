@@ -1098,6 +1098,72 @@ mod tests {
                 assert_eq!(finding["severity"], severity);
             }
         }
+
+        let (exit, stdout, stderr) = run_cli(&[
+            "check",
+            "--runtime-config",
+            runtime.to_str().unwrap(),
+            "--posture",
+            "development",
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
+        let index = package.join(INDEX_FILE);
+        let warning = |pointer: &str| {
+            format!(
+                "warning[discovery.posture.loopback-catalog-url] {} {pointer}\n  \
+                 the index advertises an address on the reader's own machine; production refuses it\n  \
+                 next: Publish HTTPS URLs on non-loopback hosts.\n",
+                index.display()
+            )
+        };
+        assert!(
+            stdout.contains(&warning("/origins/0/catalogUrl"))
+                && stdout.contains(&warning("/services/0/originUrl"))
+                && stdout.ends_with("0 errors, 2 warnings in 1 file\n"),
+            "{stdout}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_config_check_reports_an_unreadable_package_as_unavailable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = fixture_copy(copy_runtime);
+        let runtime = root.path().join("runtime.yaml");
+        let package = root.path().join("package");
+        fs::create_dir(&package).unwrap();
+        let sums = package.join("SHA256SUMS");
+        fs::write(&sums, b"").unwrap();
+        fs::set_permissions(&sums, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&sums).is_ok() {
+            // A superuser reads any file, so nothing here is unreadable.
+            return;
+        }
+        let text = fs::read_to_string(&runtime)
+            .unwrap()
+            .replace("/srv/registry-discovery/package", package.to_str().unwrap());
+        fs::write(&runtime, text).unwrap();
+
+        let (exit, stdout, stderr) = run_cli(&[
+            "check",
+            "--runtime-config",
+            runtime.to_str().unwrap(),
+            "--format",
+            "json",
+        ]);
+        fs::set_permissions(&sums, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            exit,
+            ExitCode::from(report::OPERATIONAL_FAILURE_EXIT),
+            "{stdout}{stderr}"
+        );
+        let report = json(&stdout);
+        assert_eq!(report["status"], "operational-failure");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "discovery.runtime.package-refused"
+        );
     }
 
     #[test]

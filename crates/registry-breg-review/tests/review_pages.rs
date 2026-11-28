@@ -819,7 +819,7 @@ async fn health_and_ready_answer() {
     assert_eq!(body["status"], "ready");
     assert_eq!(body["posture"], "development");
     let settings = body["developmentSettings"].as_array().unwrap();
-    for pointer in ["/publicOrigin", "/signIn/discovery/authorization_endpoint"] {
+    for pointer in ["/publicOrigin", "/signIn/issuer"] {
         assert!(settings.iter().any(|setting| setting["pointer"] == pointer));
     }
     let _ = harness.sign_in_page(CITIZEN_A).await;
@@ -1578,6 +1578,30 @@ async fn build_custom_issuer_page(
     posture: registry_platform_config::Posture,
     external_listener: bool,
 ) -> Result<CustomIssuerPage, registry_breg_review::RuntimeError> {
+    build_custom_issuer_page_with(
+        issuer,
+        posture,
+        external_listener,
+        |document| document,
+        |_| {},
+    )
+    .await
+}
+
+/// The loaded configuration the review page is built from.
+type LoadedReview =
+    registry_platform_config::LoadedRuntimeConfig<registry_breg_review::RuntimeConfig>;
+
+/// [`build_custom_issuer_page`], with `edit_document` applied to the runtime
+/// document before it loads and `hand_off` applied to what the loader returns
+/// before the page is built from it.
+async fn build_custom_issuer_page_with(
+    issuer: &str,
+    posture: registry_platform_config::Posture,
+    external_listener: bool,
+    edit_document: impl FnOnce(String) -> String,
+    hand_off: impl FnOnce(&mut LoadedReview),
+) -> Result<CustomIssuerPage, registry_breg_review::RuntimeError> {
     use std::os::unix::fs::PermissionsExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1633,9 +1657,9 @@ async fn build_custom_issuer_page(
     } else {
         document
     };
-    std::fs::write(&config_path, document).unwrap();
+    std::fs::write(&config_path, edit_document(document)).unwrap();
 
-    let loaded = registry_breg_review::RuntimeConfig::load_with_posture(
+    let mut loaded = registry_breg_review::RuntimeConfig::load_with_posture(
         &config_path,
         registry_platform_config::DeclaredPosture {
             posture,
@@ -1643,6 +1667,7 @@ async fn build_custom_issuer_page(
         },
     )
     .expect("runtime document loads");
+    hand_off(&mut loaded);
     let router = registry_breg_review::router_with_posture(loaded).await?;
     tokio::spawn(async move {
         registry_breg_review::serve_until(listener, router, std::future::pending())
@@ -1668,8 +1693,79 @@ async fn production_refuses_an_http_authorization_redirect_at_startup() {
         .expect("production must refuse HTTP authorization");
     assert_eq!(
         error.to_string(),
-        "/signIn/discovery/authorization_endpoint [breg.posture.review-http-authorization-endpoint] The discovered authorization endpoint is plain http; it is accepted only when the process declares development. Publish an https authorization_endpoint in the issuer's discovery document. For a laptop or test run, start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development."
+        "/signIn/issuer [breg.posture.review-http-authorization-endpoint] The authorization endpoint discovered from signIn.issuer is plain http; it is accepted only when the process declares development. Publish an https authorization_endpoint in the issuer's discovery document. For a laptop or test run, start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development."
     );
+}
+
+fn production_report() -> registry_platform_config::PostureReport {
+    registry_platform_config::PostureReport::new(registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Flag,
+    })
+}
+
+#[tokio::test]
+async fn production_refuses_a_development_loaded_audit_key_custody() {
+    use registry_platform_config::Posture;
+    let provider = support::start_narrow_scope_provider_with_authorization(Some(
+        "https://issuer.example/authorize",
+    ))
+    .await;
+    let result = build_custom_issuer_page_with(
+        &provider.issuer,
+        Posture::Development,
+        false,
+        |document| {
+            document
+                .replace("publicOrigin: http://", "publicOrigin: https://")
+                .replace(
+                    "audit:\n",
+                    "audit:\n  hashKeyCustody: development-generated\n",
+                )
+        },
+        |loaded| {
+            loaded.posture = production_report();
+            loaded.development = None;
+        },
+    )
+    .await;
+    let error = result
+        .err()
+        .expect("production refuses a development-generated audit key")
+        .to_string();
+    assert!(
+        error.contains("/audit/hashKeyCustody [platform.posture.generated-audit-key]")
+            && error.contains("rstack dev"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_witness_that_does_not_match_the_report_is_refused() {
+    use registry_platform_config::Posture;
+    let provider = start_narrow_scope_provider().await;
+    let hand_offs: [fn(&mut LoadedReview); 2] = [
+        |loaded| loaded.posture = production_report(),
+        |loaded| loaded.development = None,
+    ];
+    for hand_off in hand_offs {
+        let result = build_custom_issuer_page_with(
+            &provider.issuer,
+            Posture::Development,
+            false,
+            |document| document,
+            hand_off,
+        )
+        .await;
+        let error = result
+            .err()
+            .expect("a mismatched witness is refused")
+            .to_string();
+        assert!(
+            error.contains("the development witness does not match the declared posture"),
+            "{error}"
+        );
+    }
 }
 
 #[tokio::test]

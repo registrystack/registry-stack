@@ -1074,7 +1074,13 @@ async fn two_channels_that_accept_one_selector_profile_refuse_at_startup() {
     };
     let (_source, _wallet, prepared) = prepare_wallet_deployment(&issuer, &deployment).await;
 
-    match crate::bundle::DeploymentInputs::load(&prepared.runtime_path) {
+    match crate::bundle::DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    ) {
         Err(crate::bundle::BundleError::Refused(report)) => {
             let first = report
                 .diagnostics()
@@ -1103,9 +1109,15 @@ async fn startup_refusal_after(
     let issuer = TrustedIssuer::generate();
     let (_source, _wallet, prepared) =
         prepare_wallet_deployment(&issuer, &Deployment::standard()).await;
-    let (mut bundle, _runtime) = crate::bundle::DeploymentInputs::load(&prepared.runtime_path)
-        .expect("the wallet deployment loads")
-        .into_parts();
+    let (mut bundle, _runtime) = crate::bundle::DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("the wallet deployment loads")
+    .into_parts();
     edit(&mut bundle.config.requirements[0].acquisition);
     crate::runtime::refuse_misassigned_channel_sources(&bundle)
 }

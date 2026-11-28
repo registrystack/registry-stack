@@ -6,7 +6,9 @@ use registry_casework_core::{
     IssuerPrincipal, TeamRecord,
 };
 use registry_platform_authcommon::FailedCheck;
-use registry_platform_config::SecretResolver;
+use registry_platform_config::{
+    DatabaseHost, DatabaseTransport, DatabaseTransportError, DevelopmentWitness, SecretResolver,
+};
 use serde_json::{json, Value};
 use std::str::FromStr;
 use std::time::Duration;
@@ -194,10 +196,12 @@ impl PostgresStore {
     pub fn connect_runtime(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.runtimeUrlRef",
             &config.runtime_url_ref,
         )
@@ -205,10 +209,12 @@ impl PostgresStore {
     pub fn connect_migration(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.migrationUrlRef",
             &config.migration_url_ref,
         )
@@ -216,6 +222,7 @@ impl PostgresStore {
     fn connect_reference(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
         field: &'static str,
         reference: &str,
     ) -> Result<Self, StoreError> {
@@ -232,23 +239,38 @@ impl PostgresStore {
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
-        #[cfg(feature = "postgres-test")]
-        let manager = if config.test_only_plaintext {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
+        config.check(cfg!(feature = "postgres-test"))?;
+        // PostgreSQL uses hostaddr in preference to host when both are specified.
+        let hosts: Vec<_> = postgres
+            .get_hosts()
+            .iter()
+            .map(|host| match host {
+                tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
+                #[cfg(unix)]
+                tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
+            })
+            .chain(
+                postgres
+                    .get_hostaddrs()
+                    .iter()
+                    .map(|address| DatabaseHost::Tcp(address.to_string())),
+            )
+            .collect();
+        let transport = if config.test_only_plaintext {
+            DatabaseTransport::LoopbackPlaintext
         } else {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
+            config.plaintext_permitted(&hosts, witness)?
         };
-        #[cfg(not(feature = "postgres-test"))]
-        let manager = {
-            if config.test_only_plaintext {
-                return Err(StoreError::Configuration);
+        let manager = match transport {
+            DatabaseTransport::VerifiedTls => {
+                postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
+                let connector = tls_connector(config, secrets)?;
+                Manager::from_config(postgres, connector, manager_config)
             }
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
+            DatabaseTransport::LoopbackPlaintext | DatabaseTransport::PrivateNetworkPlaintext => {
+                postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
+                Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
+            }
         };
         let pool = Pool::builder(manager)
             .max_size(32)
@@ -747,6 +769,8 @@ fn violated_constraint(error: &tokio_postgres::Error) -> String {
 }
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("[{}] {}. {}", .0.code(), .0, .0.suggested_action())]
+    DatabaseTransport(#[from] DatabaseTransportError),
     #[error("this release requires a fresh review-only database; the configured database contains a retired Casework schema. Preserve it with the release that wrote it and configure a fresh database before applying this package")]
     RetiredSchema,
     #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]

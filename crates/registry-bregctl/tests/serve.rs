@@ -25,6 +25,7 @@ fn run(binary: &Path, capture: &Path, arguments: &[&str]) -> Output {
         .args(arguments)
         .env("BREG_BIN", binary)
         .env("RUNTIME_CAPTURE", capture)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("RSTACK_GENERATION_DIR")
         .output()
         .expect("bregctl starts")
@@ -39,6 +40,7 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_and_exit() {
         .args(["serve", "--runtime-config", "/tmp/runtime.yaml"])
         .env("BREG_BIN", &binary)
         .env("RUNTIME_CAPTURE", &capture)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("RSTACK_GENERATION_DIR")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -52,7 +54,7 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_and_exit() {
     assert_eq!(output.stderr, b"runtime-stderr\n");
     assert_eq!(
         fs::read_to_string(capture).unwrap(),
-        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n")
+        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n--posture\nproduction\n")
     );
 }
 
@@ -70,6 +72,7 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
         .env("PATH", path)
         .env("RUNTIME_CAPTURE", &capture)
         .env_remove("BREG_BIN")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("RSTACK_GENERATION_DIR")
         .output()
         .expect("bregctl starts");
@@ -81,7 +84,12 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/path.yaml"]
+        [
+            "--runtime-config",
+            "/tmp/path.yaml",
+            "--posture",
+            "production"
+        ]
     );
 }
 
@@ -109,6 +117,7 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
         .env("RSTACK_BREG_BIN", &selected)
         .env("RSTACK_RELEASE_TAG", "v-test")
         .env_remove("BREG_BIN")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .expect("bregctl starts");
 
@@ -119,7 +128,12 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/managed.yaml"]
+        [
+            "--runtime-config",
+            "/tmp/managed.yaml",
+            "--posture",
+            "production"
+        ]
     );
     assert_ne!(selected, poisoned);
 }
@@ -170,4 +184,29 @@ fn serve_rejects_explicit_human_report_format_before_starting_the_runtime() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("--format does not apply"));
     assert!(!capture.exists(), "the runtime must not start");
+}
+
+#[test]
+fn serve_passes_development_from_the_flag_or_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = runtime(temp.path(), "breg", 0);
+    let capture = temp.path().join("capture");
+    for use_flag in [true, false] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+        command
+            .args(["serve", "--runtime-config", "/tmp/runtime.yaml"])
+            .env("BREG_BIN", &binary)
+            .env("RUNTIME_CAPTURE", &capture)
+            .env_remove("RSTACK_GENERATION_DIR")
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if use_flag {
+            command.args(["--posture", "development"]);
+        } else {
+            command.env("REGISTRY_STACK_POSTURE", "development");
+        }
+        assert!(command.output().unwrap().status.success());
+        assert!(fs::read_to_string(&capture)
+            .unwrap()
+            .ends_with("--posture\ndevelopment\n"));
+    }
 }

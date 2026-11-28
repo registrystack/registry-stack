@@ -1410,12 +1410,15 @@ async fn proposal_disclosures_refuse_a_signed_grant_expiring_during_terminal_aud
         let entries = Arc::new(std::sync::Mutex::new(Vec::new()));
         let audit = RegistryAudit::new(
             AuditProfile::production_from_secret_bytes(vec![0x61; 32].into()).unwrap(),
-            AuditWriter::from_line_sink_without_posture(Box::new(DelayedTerminal {
-                expiry,
-                reached: reached.clone(),
-                was_current: was_current.clone(),
-                entries: entries.clone(),
-            })),
+            AuditWriter::from_line_sink(
+                Box::new(DelayedTerminal {
+                    expiry,
+                    reached: reached.clone(),
+                    was_current: was_current.clone(),
+                    entries: entries.clone(),
+                }),
+                registry_platform_config::Posture::Production,
+            ),
         );
         let service = PostgresRecordMutationService::new(
             fixture.pool.clone(),

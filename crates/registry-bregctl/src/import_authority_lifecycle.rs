@@ -43,6 +43,7 @@ pub(crate) struct CloseArguments<'a> {
 }
 
 pub(crate) fn open(
+    posture: registry_platform_config::DeclaredPosture,
     arguments: &OpenArguments<'_>,
 ) -> Result<ImportAuthority, ImportAuthorityCliError> {
     runtime_config_path(arguments.runtime_config)?;
@@ -61,7 +62,7 @@ pub(crate) fn open(
         .validate()
         .map_err(ImportAuthorityCliError::Authority)?;
     block_on(async {
-        service(arguments.runtime_config)
+        service(posture, arguments.runtime_config)
             .await?
             .open(request)
             .await
@@ -70,6 +71,7 @@ pub(crate) fn open(
 }
 
 pub(crate) fn close(
+    posture: registry_platform_config::DeclaredPosture,
     arguments: &CloseArguments<'_>,
 ) -> Result<ImportAuthority, ImportAuthorityCliError> {
     runtime_config_path(arguments.runtime_config)?;
@@ -84,7 +86,7 @@ pub(crate) fn close(
         .validate()
         .map_err(ImportAuthorityCliError::Authority)?;
     block_on(async {
-        service(arguments.runtime_config)
+        service(posture, arguments.runtime_config)
             .await?
             .close(request)
             .await
@@ -93,11 +95,12 @@ pub(crate) fn close(
 }
 
 pub(crate) fn close_expired(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
 ) -> Result<Vec<ImportAuthority>, ImportAuthorityCliError> {
     runtime_config_path(runtime_config)?;
     block_on(async {
-        service(runtime_config)
+        service(posture, runtime_config)
             .await?
             .close_expired()
             .await
@@ -105,10 +108,13 @@ pub(crate) fn close_expired(
     })
 }
 
-pub(crate) fn list(runtime_config: &Path) -> Result<Vec<ImportAuthority>, ImportAuthorityCliError> {
+pub(crate) fn list(
+    posture: registry_platform_config::DeclaredPosture,
+    runtime_config: &Path,
+) -> Result<Vec<ImportAuthority>, ImportAuthorityCliError> {
     runtime_config_path(runtime_config)?;
     block_on(async {
-        service(runtime_config)
+        service(posture, runtime_config)
             .await?
             .list()
             .await
@@ -125,9 +131,10 @@ fn runtime_config_path(path: &Path) -> Result<(), ImportAuthorityCliError> {
 }
 
 async fn service(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
 ) -> Result<ImportAuthorityOperatorService, ImportAuthorityCliError> {
-    ImportAuthorityOperatorService::from_runtime_config(runtime_config)
+    ImportAuthorityOperatorService::from_runtime_config(runtime_config, posture)
         .await
         .map_err(ImportAuthorityCliError::Authority)
 }

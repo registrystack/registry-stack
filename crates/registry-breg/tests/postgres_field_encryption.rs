@@ -15,6 +15,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+const DEVELOPMENT_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use base64::Engine as _;
@@ -30,7 +36,7 @@ use registry_breg::package::{
     FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    initialize_compiled_registry_state_with_posture_for_test, install_compiled_schema,
     managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 use registry_breg::startup::{
@@ -215,7 +221,7 @@ fn encrypted_fixture(schema_fingerprint: &str, project: &[u8]) -> EncryptedFixtu
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("local encrypted package closure rederives into VerifiedPackage");
@@ -239,10 +245,17 @@ struct BootedDatabase {
 }
 
 async fn boot_encrypted_database() -> BootedDatabase {
+    boot_encrypted_database_with_identity("https://field-encryption.example.test").await
+}
+
+async fn boot_encrypted_database_with_identity(canonical_base_iri: &str) -> BootedDatabase {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
     let module = parse_module_yaml(MODULE_SOURCE.as_bytes()).expect("fixture module parses");
-    let project_bytes = project_source(&module_digest(&module));
+    let project_bytes = String::from_utf8(project_source(&module_digest(&module)))
+        .unwrap()
+        .replace("https://field-encryption.example.test", canonical_base_iri)
+        .into_bytes();
     let project = parse_project_yaml(&project_bytes).expect("fixture project parses");
     let registry = Arc::new(
         compile_project(&project, &[module], CompileProfile::Production)
@@ -258,7 +271,7 @@ async fn boot_encrypted_database() -> BootedDatabase {
             .expect("closed managed schema fingerprint computes");
     let fixture = encrypted_fixture(&schema_fingerprint, &project_bytes);
     let manifest = fixture.package.manifest();
-    initialize_compiled_registry_state_for_test(
+    initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &registry,
@@ -267,6 +280,7 @@ async fn boot_encrypted_database() -> BootedDatabase {
             database_id: DATABASE_ID,
             label: fixture.package.package_digest(),
         },
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("administrator activates the exact verified package identity");
@@ -319,7 +333,6 @@ identity:
   environment: local
   instanceId: {INSTANCE_ID}
   databaseId: {DATABASE_ID}
-  databaseInitializationEnvironment: local
 secretProviders:
   file:
     root: {}
@@ -407,6 +420,16 @@ async fn assert_ready(prepared: &PreparedServer, expected: StatusCode) {
         .await
         .expect("router responds");
     assert_eq!(response.status(), expected);
+    assert_eq!(response.headers()["registry-posture"], "development");
+    if expected == StatusCode::OK {
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        let ready: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(ready["status"], "ready");
+        assert_eq!(ready["posture"], "development");
+        assert!(ready["developmentSettings"].is_array());
+    }
 }
 
 async fn key_row_count(client: &tokio_postgres::Client) -> i64 {
@@ -469,7 +492,7 @@ async fn assert_key_table_grants(client: &tokio_postgres::Client, runtime_role: 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_file_data_key_is_bound_during_apply_and_prepares_ready() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
-    let booted = boot_encrypted_database().await;
+    let booted = boot_encrypted_database_with_identity("https://field-encryption.invalid").await;
     let (migration, migration_task) = booted.database.connect_migration().await;
     assert_key_table_grants(&migration, booted.database.runtime_role.as_str()).await;
 
@@ -491,11 +514,102 @@ async fn local_file_data_key_is_bound_during_apply_and_prepares_ready() {
                 .to_owned(),
         ),
     );
-    let prepared =
-        prepare_with_connection_config_for_test(&config, booted.database.runtime_config.clone())
-            .await
-            .expect("local file key state prepares the encrypted registry");
-    assert_ready(&prepared, StatusCode::OK).await;
+    let raw = fs::read_to_string(&config).unwrap();
+    write_private(
+        &config,
+        raw.replace(
+            "allowedClients: unrestricted",
+            "allowedClients: [grant-client]",
+        )
+        .as_bytes(),
+    );
+    let production = registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Default,
+    };
+    let Some(StartupError::RuntimeConfig(refusal)) = prepare_with_connection_config_for_test(
+        &config,
+        booted.database.runtime_config.clone(),
+        production,
+    )
+    .await
+    .err() else {
+        panic!("production refuses both development settings");
+    };
+    let diagnostics = refusal.diagnostics(None);
+    assert_eq!(diagnostics.len(), 2);
+    for (code, pointer, source, action) in [
+        (
+            "breg.posture.local-key-custody",
+            "/fieldEncryption/provider",
+            "runtime.yaml",
+            "transit",
+        ),
+        (
+            "breg.posture.placeholder-identity",
+            "/project/canonicalBaseIri",
+            "sources/project.yaml",
+            "rebuild",
+        ),
+    ] {
+        let finding = diagnostics
+            .iter()
+            .find(|item| item.code == code)
+            .expect(code);
+        assert_eq!(finding.path, pointer);
+        assert!(finding.source.as_ref().unwrap().file.ends_with(source));
+        assert!(finding.suggested_action.contains(action));
+        assert!(finding.suggested_action.contains("--posture development"));
+    }
+
+    use tracing::instrument::WithSubscriber as _;
+    let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+    let prepared = prepare_with_connection_config_for_test(
+        &config,
+        booted.database.runtime_config.clone(),
+        DEVELOPMENT_POSTURE,
+    )
+    .with_subscriber(logs.subscriber())
+    .await
+    .expect("local file key state prepares the encrypted registry");
+    let startup = logs.text();
+    assert!(startup.contains("posture declared"), "{startup}");
+    assert!(
+        startup.contains("breg.posture.local-key-custody"),
+        "{startup}"
+    );
+    assert!(startup.contains("/fieldEncryption/provider"), "{startup}");
+
+    let ready = prepared
+        .app()
+        .oneshot(
+            Request::builder()
+                .uri("/ready")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), StatusCode::OK);
+    assert_eq!(ready.headers()["registry-posture"], "development");
+    assert!(!ready
+        .headers()
+        .contains_key(axum::http::header::STRICT_TRANSPORT_SECURITY));
+    let body = axum::body::to_bytes(ready.into_body(), 65_536)
+        .await
+        .unwrap();
+    let ready: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["posture"], "development");
+    assert_eq!(
+        ready["developmentSettings"],
+        json!([
+            {"code": "breg.posture.local-key-custody", "pointer": "/fieldEncryption/provider"},
+        {"code": "breg.posture.placeholder-identity", "pointer": "/project/canonicalBaseIri"}
+        ])
+    );
+
+    assert_development_task_assertion_is_authenticated(&prepared).await;
 
     // The local key stays in its owner-only file. The database stores only a
     // nonsecret identifier so restart can refuse a changed or mis-mounted key.
@@ -519,6 +633,53 @@ async fn local_file_data_key_is_bound_during_apply_and_prepares_ready() {
     booted.database.cleanup().await;
 }
 
+async fn assert_development_task_assertion_is_authenticated(prepared: &PreparedServer) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut claims = json!({
+        "iss": "https://auth.example.test",
+        "aud": "urn:breg:field-encryption",
+        "iat": now,
+        "nbf": now,
+        "exp": now + 120,
+        "sub": "operator",
+        "registry_principal": "operator",
+        "azp": "grant-client",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "case-management",
+        "registry_grant_id": "00000000-0000-4000-8000-0000000000bf",
+        "registry_approver": "h:synthetic-approver",
+        "registry_grant_source_issuer": "https://casework.example",
+        "registry_grant_client": "grant-client",
+        "registry_grant_resource": "urn:breg:field-encryption",
+        "registry_grant_exp": now + 120,
+        "registry_grant_bounds": {"type":"breg","permissions":[{"collection":"assets","operations":["get"]}]},
+        "identity": {"jurisdiction":"area-a"},
+    });
+    claims[registry_platform_oidc::POSTURE_CLAIM] = json!("development");
+    let token = sign_ed25519_compact_jwt(
+        testing_fixtures::ED25519_PRIVATE_JWK,
+        "JWT",
+        AUTHORITY_KID,
+        claims,
+    );
+    let response = prepared
+        .app()
+        .oneshot(
+            Request::get("/unserved-route")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // The authenticated router only reaches the unknown-route fallback after
+    // the signed assertion has passed bearer admission.
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn missing_field_encryption_provider_refuses_startup() {
     let booted = boot_encrypted_database().await;
@@ -526,9 +687,13 @@ async fn missing_field_encryption_provider_refuses_startup() {
 
     let config = write_runtime_config(&booted, None);
     assert_eq!(
-        prepare_with_connection_config_for_test(&config, booted.database.runtime_config.clone())
-            .await
-            .err(),
+        prepare_with_connection_config_for_test(
+            &config,
+            booted.database.runtime_config.clone(),
+            DEVELOPMENT_POSTURE
+        )
+        .await
+        .err(),
         Some(StartupError::FieldEncryption),
         "an active package with encrypted fields refuses to run without key state"
     );
@@ -584,10 +749,13 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
             first.socket_path.display()
         )),
     );
-    let prepared =
-        prepare_with_connection_config_for_test(&config, booted.database.runtime_config.clone())
-            .await
-            .expect("Transit key state activates the encrypted registry");
+    let prepared = prepare_with_connection_config_for_test(
+        &config,
+        booted.database.runtime_config.clone(),
+        DEVELOPMENT_POSTURE,
+    )
+    .await
+    .expect("Transit key state activates the encrypted registry");
     assert_ready(&prepared, StatusCode::OK).await;
     drop(prepared);
 
@@ -636,6 +804,7 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
     let restarted = prepare_with_connection_config_for_test(
         &restart_config,
         booted.database.runtime_config.clone(),
+        DEVELOPMENT_POSTURE,
     )
     .await
     .expect("stored Transit key row re-derives the key state");
@@ -658,7 +827,8 @@ async fn transit_provider_activates_the_first_key_row_and_restart_unwraps_it() {
     assert_eq!(
         prepare_with_connection_config_for_test(
             &unreachable,
-            booted.database.runtime_config.clone()
+            booted.database.runtime_config.clone(),
+            DEVELOPMENT_POSTURE
         )
         .await
         .err(),
@@ -899,10 +1069,13 @@ async fn boot_live_server() -> LiveServer {
     );
     activate_local_field_key(&booted, &secrets).await;
     let config = write_runtime_config(&booted, Some(LOCAL_FILE_FIELD_ENCRYPTION.to_owned()));
-    let prepared =
-        prepare_with_connection_config_for_test(&config, booted.database.runtime_config.clone())
-            .await
-            .expect("local file key state prepares the encrypted registry");
+    let prepared = prepare_with_connection_config_for_test(
+        &config,
+        booted.database.runtime_config.clone(),
+        DEVELOPMENT_POSTURE,
+    )
+    .await
+    .expect("local file key state prepares the encrypted registry");
     assert_ready(&prepared, StatusCode::OK).await;
     LiveServer {
         runtime_guard,

@@ -1375,11 +1375,12 @@ fn deployment_refuses_a_reserved_canonical_base_iri_that_compilation_accepts() {
         project.project.canonical_base_iri = iri.to_owned();
         let diagnostics = deployment_diagnostics(&project);
         assert_eq!(diagnostics.len(), 1, "{iri}");
+        assert_eq!(diagnostics[0].code, "breg.posture.placeholder-identity");
+        assert_eq!(diagnostics[0].path, "/project/canonicalBaseIri");
         assert_eq!(
-            diagnostics[0].code,
-            "breg.registry.canonical-base-iri-reserved"
+            diagnostics[0].message,
+            "The package uses a reserved placeholder registry identity. Replace canonicalBaseIri and rebuild the package."
         );
-        assert_eq!(diagnostics[0].path, "project.project.canonicalBaseIri");
         // Local development and schema tests compile the placeholder
         // unchanged; only deployment tooling refuses it.
         compile_project(&project, &[], CompileProfile::Authoring)
@@ -1389,7 +1390,7 @@ fn deployment_refuses_a_reserved_canonical_base_iri_that_compilation_accepts() {
         assert!(production
             .diagnostics()
             .iter()
-            .all(|diagnostic| diagnostic.code != "breg.registry.canonical-base-iri-reserved"));
+            .all(|diagnostic| diagnostic.code != "breg.posture.placeholder-identity"));
     }
 
     for iri in [

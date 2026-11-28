@@ -564,6 +564,31 @@ fn at_least_one_client_schema(generator: &mut schemars::SchemaGenerator) -> sche
     })
 }
 
+/// Record each explicitly approved credential-free HTTPS endpoint.
+pub fn record_endpoint_posture(
+    endpoints: &UniqueIdList<EndpointBinding>,
+    report: &mut registry_platform_config::PostureReport,
+) {
+    use registry_platform_config::{
+        ExplicitProductionSetting, FoundExplicitSetting, SettingOrigin,
+    };
+    static ANONYMOUS_HTTPS: ExplicitProductionSetting = ExplicitProductionSetting {
+        code: "adapter.posture.anonymous-https",
+        key: "anonymousHttps",
+        summary: "a fixed HTTPS source is reached without an application credential",
+    };
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        if endpoint.anonymous_https.is_some() {
+            report.record_explicit(FoundExplicitSetting {
+                setting: &ANONYMOUS_HTTPS,
+                pointer: Some(format!("/endpoints/{index}/anonymousHttps")),
+                position: None,
+                origin: SettingOrigin::RuntimeFile,
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

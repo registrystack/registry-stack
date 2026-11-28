@@ -262,6 +262,13 @@ pub async fn record_refusals(
 
 /// The router the metrics listener serves: the counters and nothing else.
 pub fn metrics_router(metrics: Arc<Metrics>) -> Router {
+    metrics_router_in_posture(metrics, registry_platform_config::Posture::Production)
+}
+
+fn metrics_router_in_posture(
+    metrics: Arc<Metrics>,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route(
             METRICS_PATH,
@@ -270,6 +277,7 @@ pub fn metrics_router(metrics: Arc<Metrics>) -> Router {
             }),
         )
         .with_state(metrics)
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 /// How long open metrics connections get to drain once shutdown starts.
@@ -288,13 +296,16 @@ pub async fn serve(
     metrics: Arc<Metrics>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     shutdown_timeout: std::time::Duration,
+    posture: registry_platform_config::Posture,
 ) -> std::io::Result<()> {
     let (shutdown_started, shutdown_started_rx) = tokio::sync::oneshot::channel();
     let server = std::future::IntoFuture::into_future(
-        axum::serve(listener, metrics_router(metrics)).with_graceful_shutdown(async move {
-            shutdown.await;
-            let _ = shutdown_started.send(());
-        }),
+        axum::serve(listener, metrics_router_in_posture(metrics, posture)).with_graceful_shutdown(
+            async move {
+                shutdown.await;
+                let _ = shutdown_started.send(());
+            },
+        ),
     );
     tokio::pin!(server);
     tokio::select! {
@@ -451,6 +462,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_responses_mark_development_only() {
+        use registry_platform_config::Posture;
+        for (posture, mark) in [
+            (Posture::Production, None),
+            (Posture::Development, Some("development")),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    metrics_router_in_posture(Arc::new(Metrics::default()), posture),
+                )
+                .await
+            });
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+            stream
+                .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
+            let headers = response.split_once("\r\n\r\n").unwrap().0;
+            assert!(headers.starts_with("HTTP/1.1 200"), "{headers}");
+            let actual = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("registry-posture")
+                    .then(|| value.trim())
+            });
+            assert_eq!(actual, mark);
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn a_scope_refusal_line_names_the_declared_values_and_no_token_value() {
         let text = refusal_line(registry_platform_authcommon::FailedCheck::Scope).await;
         assert!(text.contains("\"scope_claim\":\"scope\""), "{text}");
@@ -492,6 +539,7 @@ mod tests {
                 let _ = shutdown_rx.await;
             },
             std::time::Duration::from_millis(25),
+            registry_platform_config::Posture::Production,
         ));
 
         let mut partial = tokio::net::TcpStream::connect(address)

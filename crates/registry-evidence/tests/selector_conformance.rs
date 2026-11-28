@@ -1233,8 +1233,14 @@ async fn prepare_service_with_ceiling(
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
         .expect("selector runtime is immutable");
 
-    let deployment =
-        DeploymentInputs::load(&runtime_path).expect("closed selector deployment inputs load");
+    let deployment = DeploymentInputs::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("closed selector deployment inputs load");
     assert!(deployment.bundle().package_digest().starts_with("sha256:"));
     let (bundle, document) = deployment.into_parts();
     let bundle = Arc::new(bundle);
@@ -1257,6 +1263,7 @@ async fn prepare_service_with_ceiling(
         registry_platform_audit::AuditDestination::File(destination),
         AUDIT_KEY.to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("selector audit initializes");

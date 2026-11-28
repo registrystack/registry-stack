@@ -1146,15 +1146,26 @@ mod tests {
             ]);
         for (document, accepted) in documents {
             std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
-            let local = document["assuranceProfile"] == "local"
-                && document
-                    .pointer("/signing/seals/ministry/signer/type")
-                    .is_none_or(|kind| kind != "transit")
-                && document["signing"]["seals"]["Ministry"]["signer"]["type"] != "transit";
+            let local = document["assuranceProfile"] == "local";
+            let transit_signer = document
+                .pointer("/signing/seals/ministry/signer/type")
+                .is_some_and(|kind| kind == "transit")
+                || document["signing"]["seals"]["Ministry"]["signer"]["type"] == "transit";
             let declared = if local { DEVELOPMENT } else { DEFAULT_POSTURE };
             let check = check_runtime_with_bundle(&path, false, None, None, declared);
             if local && accepted {
                 assert_local_assurance_warning(&check.diagnostics);
+            }
+            if local && transit_signer {
+                // Under development the posture refusal is gone, so the
+                // signer rule alone rejects this combination.
+                let codes = check
+                    .diagnostics
+                    .iter()
+                    .filter(|finding| finding.severity == Severity::Error)
+                    .map(|finding| finding.code.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(codes, ["render.runtime.signer-assurance-mismatch"]);
             }
             assert_eq!(
                 !check

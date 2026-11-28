@@ -73,8 +73,12 @@ impl BillSnapshot {
     pub fn provider_command(
         &self,
         binding: &PaymentBinding,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
     ) -> Result<CollectionProviderCommand, PaymentProblemCode> {
-        match &binding.provider {
+        match binding
+            .provider(development)
+            .map_err(|_| PaymentProblemCode::Unavailable)?
+        {
             CollectionProvider::Simulator { connection } => {
                 let origin = url::Url::parse(&connection.base_url)
                     .map_err(|_| PaymentProblemCode::Unavailable)?;
@@ -179,7 +183,9 @@ impl BillSnapshot {
             submit_base_url,
             status_base_url,
             settings,
-        } = &binding.provider
+        } = binding
+            .provider(None)
+            .map_err(|_| PaymentProblemCode::Unavailable)?
         else {
             return Err(PaymentProblemCode::Unavailable);
         };
@@ -363,13 +369,19 @@ impl Attempt {
         }
     }
 
-    pub fn may_dispatch(&self, now: i64) -> Result<(), PaymentProblemCode> {
+    pub fn may_dispatch(
+        &self,
+        now: i64,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Result<(), PaymentProblemCode> {
         if !self.bound {
             return Err(PaymentProblemCode::Conflict);
         }
         if let Some(first) = self.first_send_at {
             if matches!(
-                &self.binding.provider,
+                self.binding
+                    .provider(development)
+                    .map_err(|_| PaymentProblemCode::Unavailable)?,
                 CollectionProvider::Mifos { .. } | CollectionProvider::Http { .. }
             ) {
                 return Err(PaymentProblemCode::RecoveryHeld);
@@ -384,8 +396,16 @@ impl Attempt {
         Ok(())
     }
 
-    pub fn validate_integrity(&self) -> Result<(), PaymentProblemCode> {
-        let command_matches = match (&self.binding.provider, &self.provider_command) {
+    pub fn validate_integrity(
+        &self,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Result<(), PaymentProblemCode> {
+        let command_matches = match (
+            self.binding
+                .provider(development)
+                .map_err(|_| PaymentProblemCode::Unavailable)?,
+            &self.provider_command,
+        ) {
             (CollectionProvider::Http { .. }, CollectionProviderCommand::Http(command)) => {
                 command.intent == self.bill.http_intent(&self.binding)?
                     && self.binding.provider_pack.as_ref()
@@ -406,12 +426,13 @@ impl Attempt {
             (CollectionProvider::Http { .. }, _) | (_, CollectionProviderCommand::Http(_)) => false,
             _ => {
                 self.provider_command_digest.is_none()
-                    && self.provider_command == self.bill.provider_command(&self.binding)?
+                    && self.provider_command
+                        == self.bill.provider_command(&self.binding, development)?
             }
         };
         if self
             .binding
-            .revision()
+            .revision(development)
             .map_err(|_| PaymentProblemCode::Unavailable)?
             != self.binding_revision
             || self.bill.digest()? != self.bill_snapshot_digest

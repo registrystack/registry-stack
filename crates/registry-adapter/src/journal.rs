@@ -19,7 +19,7 @@ use tokio_postgres::Error as PgError;
 
 /// Every schema version, in the order it is applied. Each later migration
 /// takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 5] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 6] = [
     (100, include_str!("journal/migrations/0100_journal.sql")),
     (
         200,
@@ -36,6 +36,10 @@ pub(crate) const MIGRATIONS: [(i64, &str); 5] = [
     (
         500,
         include_str!("journal/migrations/0500_linear_write_resume.sql"),
+    ),
+    (
+        600,
+        include_str!("journal/migrations/0600_declared_posture.sql"),
     ),
 ];
 
@@ -282,11 +286,26 @@ pub async fn append(
     event: JournalEvent,
     occurred_at: SystemTime,
 ) -> Result<(), JournalError> {
+    append_in_posture(
+        client,
+        event,
+        occurred_at,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+}
+
+pub(crate) async fn append_in_posture(
+    client: &impl GenericClient,
+    event: JournalEvent,
+    occurred_at: SystemTime,
+    posture: registry_platform_config::Posture,
+) -> Result<(), JournalError> {
     client
         .execute(
             "INSERT INTO adapter_journal_events \
-             (event_kind, exchange_id, operation, caller_ref, route_id, detail, occurred_at) \
-             VALUES ($1, $2, $3, $4, $5, COALESCE($6::text::jsonb, '{}'::jsonb), $7)",
+             (event_kind, exchange_id, operation, caller_ref, route_id, detail, occurred_at, posture) \
+             VALUES ($1, $2, $3, $4, $5, COALESCE($6::text::jsonb, '{}'::jsonb), $7, $8)",
             &[
                 &event.event_kind,
                 &event.exchange_id,
@@ -295,6 +314,7 @@ pub async fn append(
                 &event.route_id,
                 &event.detail,
                 &occurred_at,
+                &posture.as_str(),
             ],
         )
         .await?;

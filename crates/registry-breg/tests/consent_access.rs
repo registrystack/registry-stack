@@ -1230,7 +1230,7 @@ fn a_predecessor_package_carries_its_recipients_into_a_metadata_only_successor()
     let predecessor = load_predecessor_package(
         &root,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .unwrap();
@@ -1357,7 +1357,7 @@ fn a_package_sealed_with_a_max_duration_member_is_refused() {
     let root = directory.path().canonicalize().unwrap().join("package");
     package_sealed_with_an_earlier_duration(&root, "P365D", [0, 0, 0, 365, 0, 0, 0]);
     let context = PackageLoadContext {
-        database_initialization_environment: "local",
+        posture: registry_platform_config::Posture::Development,
     };
     assert!(load_package(&root, &context).is_err());
     assert!(load_predecessor_package(&root, &context).is_err());

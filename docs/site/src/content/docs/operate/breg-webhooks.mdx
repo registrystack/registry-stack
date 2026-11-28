@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-21"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -226,8 +226,11 @@ Some values need a decision:
 
 - `classificationCeiling` must cover the classification of every field the event sends. A binding
   cannot add fields to a payload.
-- `production-https` refuses `localhost` and every name under it. Use `loopback-development-http`
-  only for a receiver on a development host.
+- Use `loopback-http` for a loopback HTTP receiver in either posture.
+  `production-https` refuses `localhost` and every name under it.
+  Replace `loopback-development-http` with `loopback-http`. Retained deliveries
+  keep their destination binding.
+  {/* Evidence: crates/registry-breg/tests/runtime_config.rs, event_destination_profiles_are_written_in_kebab_case_and_keep_their_binding_digest. */}
 - For a receiver on a private network, list its address ranges in `allowedPrivateCidrs`. Use
   `dnsFamily: ipv4-only` only on a network without IPv6.
 - For a receiver behind a private certificate authority, or one that requires mutual TLS, name the

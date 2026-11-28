@@ -61,7 +61,7 @@ fn predecessor_with_list_form_sources_is_refused_even_as_a_plain_predecessor() {
     let Err(refusal) = load_predecessor_package(
         &root,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     ) else {
         panic!("stored list-form sources are not read from a predecessor");
@@ -86,7 +86,7 @@ fn predecessor_with_list_form_sources_is_refused_even_as_a_plain_predecessor() {
 #[test]
 fn predecessor_with_legacy_engine_features_is_refused() {
     let context = PackageLoadContext {
-        database_initialization_environment: "local",
+        posture: registry_platform_config::Posture::Development,
     };
     let root = list_form_package();
     assert_eq!(
@@ -124,7 +124,7 @@ fn predecessor_naming_entity_id_is_refused_with_the_fresh_database_path() {
     let Err(refusal) = load_predecessor_package(
         &entity_id_package(),
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     ) else {
         panic!("a package that names entityId is not read as a predecessor");

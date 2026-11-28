@@ -952,7 +952,7 @@ impl<'a> ProductRunner<'a> {
                 // for that environment.
                 config["identity"] = json!({
                     "environment": "local", "instanceId": identity,
-                    "databaseId": identity, "databaseInitializationEnvironment": "local"
+                    "databaseId": identity
                 });
                 if authority.encrypts_fields {
                     config["fieldEncryption"] = json!({"provider": {
@@ -4203,10 +4203,6 @@ mod tests {
             );
             assert_eq!(config["secretProviders"]["file"]["root"], json!(root));
             assert_eq!(config["identity"]["environment"], "local");
-            assert_eq!(
-                config["identity"]["databaseInitializationEnvironment"],
-                "local"
-            );
             assert!(!text.contains(encoded.trim()), "{name}");
         }
     }

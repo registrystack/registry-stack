@@ -202,7 +202,7 @@ pub(crate) fn run(
                         &super::posture_refusal(
                             "platform.posture.conflict",
                             "messagingctl dev runs under the development posture, but production was declared",
-                            "Drop the production declaration, or run the runtime in production with messagingctl serve.",
+                            "Drop --posture production or unset REGISTRY_STACK_POSTURE, or run the runtime in production with messagingctl serve.",
                         ),
                         "dev", format, stdout, stderr,
                     );

@@ -20,6 +20,7 @@ use std::{
 
 use registry_adapter_engine::evidence::EvidenceCompileError;
 use registry_platform_config::{contains_environment_expression, PackageError, PackageErrorKind};
+use registry_platform_config::{DeclaredPosture, PostureReport};
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Node, NodeValue, Position, Reader, Refusal, Report,
     ScalarHook, ScalarSite, Severity, Source, MAXIMUM_DOCUMENT_BYTES,
@@ -230,7 +231,11 @@ impl OfflineCheck {
 /// would need the substituted text is skipped. With it, expressions are
 /// substituted from the current environment as startup substitutes them, and
 /// every value check runs.
-pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
+pub fn check_runtime_file(
+    path: &Path,
+    environment: bool,
+    declared: DeclaredPosture,
+) -> OfflineCheck {
     let mut check = OfflineCheck::new(path.display().to_string());
     let bytes = match read_bounded(path, MAX_CONFIG_BYTES as u64) {
         Ok(bytes) => bytes,
@@ -250,15 +255,15 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
     check.files_checked = 1;
 
     let decoded = if environment {
-        RuntimeConfig::decode_yaml_with(&bytes, |name| std::env::var(name).ok())
+        RuntimeConfig::decode_yaml_with(&bytes, declared, |name| std::env::var(name).ok())
     } else {
         // An expression stands for itself: the reader still refuses one that
         // is malformed or written where substitution is not allowed, and the
         // value it would fill is never read.
-        RuntimeConfig::decode_yaml_with(&bytes, |name| Some(format!("${{{name}}}")))
+        RuntimeConfig::decode_yaml_with(&bytes, declared, |name| Some(format!("${{{name}}}")))
     };
-    let config = match decoded {
-        Ok(loaded) => loaded.config,
+    let loaded = match decoded {
+        Ok(loaded) => loaded,
         Err(ConfigError::Refused(report)) if !environment => {
             push_offline_refusal(&mut check, *report, &bytes);
             return check;
@@ -278,6 +283,9 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
             return check;
         }
     };
+    let config = loaded.config;
+    let mut posture = loaded.posture;
+    check.extend(Report::new(posture.diagnostics(path)));
     let layout = Layout::scan(&check.file, &bytes);
 
     let package_refused = push_config_findings(&mut check, &layout, &config, !environment);
@@ -322,6 +330,7 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
             return check;
         }
     };
+    report_bundle_posture(&mut check, path, &bundle, Some(&config), &mut posture);
     if let Err(error) = bundle.bind_target_authority(config.authority.as_ref()) {
         check.push_runtime(&layout, "evidence.authority.invalid", "/authority", false,
             error.to_string(), "Activate a valid target authority for this exact package with `evidence authority activate`.");
@@ -345,7 +354,11 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
 /// It applies the runtime's own grammar, listener, signer, secret-provider,
 /// TLS, extract, and acquisition binding rules without resolving a secret,
 /// opening an extract, loading activated authority, or contacting a service.
-pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck {
+pub fn check_runtime_bindings_file(
+    path: &Path,
+    bundle: &Bundle,
+    declared: DeclaredPosture,
+) -> OfflineCheck {
     let mut check = OfflineCheck::new(path.display().to_string());
     let bytes = match read_bounded(path, MAX_CONFIG_BYTES as u64) {
         Ok(bytes) => bytes,
@@ -361,9 +374,10 @@ pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck
         }
     };
     check.files_checked = 1;
-    let config = match RuntimeConfig::decode_yaml_with(&bytes, |name| Some(format!("${{{name}}}")))
-    {
-        Ok(loaded) => loaded.config,
+    let loaded = match RuntimeConfig::decode_yaml_with(&bytes, declared, |name| {
+        Some(format!("${{{name}}}"))
+    }) {
+        Ok(loaded) => loaded,
         Err(ConfigError::Refused(report)) => {
             push_offline_refusal(&mut check, *report, &bytes);
             return check;
@@ -378,10 +392,54 @@ pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck
             return check;
         }
     };
+    let config = loaded.config;
+    let mut posture = loaded.posture;
+    check.extend(Report::new(posture.diagnostics(path)));
     let layout = Layout::scan(&check.file, &bytes);
+    report_bundle_posture(&mut check, path, bundle, Some(&config), &mut posture);
     push_config_findings(&mut check, &layout, &config, true);
     push_binding_findings(&mut check, &layout, bundle, &config, true);
     check
+}
+
+/// Check the package posture even when no runtime file was supplied.
+pub fn check_bundle_posture(bundle: &Bundle, declared: DeclaredPosture) -> OfflineCheck {
+    let path = bundle.root().join(BUNDLE_DOCUMENT);
+    let mut check = OfflineCheck::new(path.display().to_string());
+    report_bundle_posture(
+        &mut check,
+        &path,
+        bundle,
+        None,
+        &mut PostureReport::new(declared),
+    );
+    check
+}
+
+fn report_bundle_posture(
+    check: &mut OfflineCheck,
+    path: &Path,
+    bundle: &Bundle,
+    config: Option<&RuntimeConfig>,
+    posture: &mut PostureReport,
+) {
+    let previous = posture.settings().len();
+    let conflict = bundle.record_posture(posture, config);
+    let mut diagnostics = posture
+        .diagnostics(path)
+        .into_iter()
+        .skip(previous)
+        .collect::<Vec<_>>();
+    let package_file = bundle.root().join(BUNDLE_DOCUMENT);
+    for (setting, diagnostic) in posture.settings()[previous..].iter().zip(&mut diagnostics) {
+        if setting.origin == registry_platform_config::SettingOrigin::Package {
+            if let Some(source) = &mut diagnostic.source {
+                source.file = package_file.display().to_string();
+            }
+        }
+    }
+    diagnostics.extend(conflict);
+    check.extend(Report::new(diagnostics));
 }
 
 /// Report the runtime's own findings about one decoded document. Findings at a

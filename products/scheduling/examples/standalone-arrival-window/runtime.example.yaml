@@ -60,20 +60,17 @@ secretProviders:
   # reference must resolve under a provider declared here.
   # environment: {}
 database:
-  # The least-privilege service connection and the operator-run migration
-  # connection, each a PostgreSQL URL held in the secret provider. The
-  # runtime requires TLS on the database connection: it sets sslmode Require
-  # and refuses a connection that cannot be verified.
+  # The least-privilege service connection and operator migration connection
+  # each use a PostgreSQL URL held in the secret provider.
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
   # The PEM bundle of the private CA in front of PostgreSQL, when the
   # deployment terminates database TLS with one.
   # caBundleRef: secret:file/postgres-ca.pem
-  # `testOnlyPlaintext: true` is the one plaintext escape, and only a build
-  # carrying the `postgres-test` feature accepts it: a production build
-  # refuses the setting at startup instead of opening an unencrypted
-  # connection.
-  # testOnlyPlaintext: true
+  # The transport defaults to verified-tls. Use loopback-plaintext for
+  # a loopback PostgreSQL host in either posture, or private-network-plaintext
+  # for a private network under the development posture.
+  # transport: verified-tls
 authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry

@@ -13,6 +13,7 @@ use clap::{
     builder::{PossibleValuesParser, TypedValueParser as _},
     ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches as _, Parser, Subcommand, ValueEnum,
 };
+use registry_platform_config::{declared, DeclaredPosture, Posture, PostureSource};
 
 mod access;
 mod authored;
@@ -181,12 +182,18 @@ enum CliFormat {
         .args(["project", "file"])
 ))]
 struct CheckArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Editable Evidence project directory. Required unless --file is given.
     project: Option<PathBuf>,
     /// Check one tooling file on its own, offline: a client profile, reviewed
     /// contracts, a ThunderID task connection or session file, a source-import
     /// baseline or journal, a source resolution file, or a source export manifest.
-    #[arg(long, conflicts_with_all = ["project", "target", "production"])]
+    #[arg(long, conflicts_with_all = ["project", "target", "production", "posture"])]
     file: Option<PathBuf>,
     /// Explicit deployment target whose governance and runtime structure are checked.
     #[arg(long)]
@@ -210,6 +217,12 @@ struct ExplainArgs {
 
 #[derive(Debug, Args)]
 struct TestArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Editable or deployment Evidence project directory.
     project: PathBuf,
     /// Complete deployment target to use when compiling an editable project.
@@ -233,6 +246,12 @@ struct TestArgs {
 
 #[derive(Debug, Args)]
 struct PackageArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Editable Evidence project directory.
     project: PathBuf,
     /// Explicit deployment target.
@@ -461,6 +480,11 @@ pub fn main_entry() -> ExitCode {
     code
 }
 
+const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
+
 fn run_entry() -> ExitCode {
     let arguments = normalized_process_args();
     let requested_format = requested_output_format(&arguments);
@@ -547,6 +571,48 @@ fn run_entry() -> ExitCode {
             return ExitCode::from(report::USAGE_EXIT);
         }
     }
+    let posture_flag = match &cli.command {
+        Command::Check(args) if args.file.is_none() => Some(args.posture.as_deref()),
+        Command::Package(args) => Some(args.posture.as_deref()),
+        Command::Test(args) => Some(args.posture.as_deref()),
+        Command::Fixtures(fixtures::FixturesCommand::Run(args)) => Some(args.posture.as_deref()),
+        Command::Doctor(args) if args.runtime_config.is_some() => Some(args.posture.as_deref()),
+        Command::Oid4vci(args) => args.posture_flag(),
+        Command::Request(command) => command.posture_flag(),
+        _ => None,
+    };
+    let production = matches!(&cli.command, Command::Check(args) if args.production);
+    let declared = match posture_flag {
+        Some(Some("development")) if production => {
+            let report = registry_platform_yaml::Report::new(vec![
+                registry_platform_yaml::Diagnostic::error(
+                    "platform.posture.conflict",
+                    "",
+                    "--production and --posture development contradict each other",
+                    "Use one of them.",
+                ),
+            ]);
+            write_report_failure(&command_path, report::USAGE_EXIT, &report, format, None);
+            return ExitCode::from(report::USAGE_EXIT);
+        }
+        Some(flag) => match declared(flag.or(production.then_some("production"))) {
+            Ok(posture) => Some(posture),
+            Err(error) => {
+                let report = registry_platform_yaml::Report::new(vec![
+                    registry_platform_yaml::Diagnostic::error(
+                        error.code(),
+                        "",
+                        error.message(),
+                        error.suggested_action(),
+                    ),
+                ]);
+                write_report_failure(&command_path, report::USAGE_EXIT, &report, format, None);
+                return ExitCode::from(report::USAGE_EXIT);
+            }
+        },
+        None => None,
+    };
+    let posture = declared.unwrap_or(DEFAULT_POSTURE);
     let result = match cli.command {
         Command::Api(args) => {
             if format_explicit {
@@ -608,7 +674,7 @@ fn run_entry() -> ExitCode {
         Command::Check(args) => {
             let artifact = project_of(&args).display().to_string();
             safe_command(
-                run_check_command(args, format),
+                run_check_command(args, format, posture),
                 "evidence.check.failed",
                 artifact,
                 "Evidence could not inspect the selected authoring project.",
@@ -629,18 +695,22 @@ fn run_entry() -> ExitCode {
             let artifact = args.project.display().to_string();
             let project = args.project.clone();
             safe_command(
-                fixtures::run_fixtures(fixtures::RunArgs {
-                    project: args.project,
-                    evidence_bin: args.evidence_bin,
-                    target: args.target,
-                    fixture: args.fixture,
-                    case: args.case,
-                    json: format == OutputFormat::Json,
-                    junit,
-                    command: "test",
-                    explain: args.explain,
-                    deny_warnings: args.deny_warnings,
-                })
+                fixtures::run_fixtures(
+                    fixtures::RunArgs {
+                        posture: None,
+                        project: args.project,
+                        evidence_bin: args.evidence_bin,
+                        target: args.target,
+                        fixture: args.fixture,
+                        case: args.case,
+                        json: format == OutputFormat::Json,
+                        junit,
+                        command: "test",
+                        explain: args.explain,
+                        deny_warnings: args.deny_warnings,
+                    },
+                    posture,
+                )
                 .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.test.failed",
                 artifact,
@@ -660,6 +730,7 @@ fn run_entry() -> ExitCode {
                         revision: args.revision,
                     },
                     format,
+                    posture,
                 )
                 .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.package.failed",
@@ -688,7 +759,7 @@ fn run_entry() -> ExitCode {
         Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
             args.json |= format == OutputFormat::Json;
             args.junit = junit;
-            fixtures::run_fixtures(args)
+            fixtures::run_fixtures(args, posture)
         }
         Command::Fixtures(fixtures::FixturesCommand::RecordFacts(args)) => {
             let artifact = args.fixture.clone();
@@ -703,7 +774,7 @@ fn run_entry() -> ExitCode {
         Command::Source(command) => source_cli::run(command, format),
         Command::Target(command) => target::run(command, format),
         Command::Doctor(args) => safe_command(
-            runtime::run(args, format),
+            runtime::run(args, format, posture),
             "evidence.doctor.failed",
             "runtime configuration".to_owned(),
             "Evidence could not inspect the selected runtime configuration.",
@@ -724,13 +795,13 @@ fn run_entry() -> ExitCode {
             )
         }
         Command::Oid4vci(args) => safe_command(
-            oid4vci::run(args, format),
+            oid4vci::run(args, format, declared),
             "evidence.oid4vci.failed",
             "wallet-delivery helper".to_owned(),
             "Evidence could not run the selected wallet-delivery command.",
             "Install or repair the Evidence wallet-delivery capability and retry.",
         ),
-        Command::Request(command) => request::run(command),
+        Command::Request(command) => request::run(command, declared),
         Command::Verify(args) => verify::run(args),
         Command::Tooling(command) => tooling::run(command, format),
         Command::Runtime(_) => unreachable!("runtime bypasses report dispatch"),
@@ -743,7 +814,13 @@ fn run_entry() -> ExitCode {
                 if junit {
                     write_junit_setup_failure(&command_path, &found.summary());
                 }
-                write_report_failure(&command_path, report::DOMAIN_REFUSAL_EXIT, found, format);
+                write_report_failure(
+                    &command_path,
+                    report::DOMAIN_REFUSAL_EXIT,
+                    found,
+                    format,
+                    declared,
+                );
                 return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
             if let Some(failure) = error.downcast_ref::<SafeCliFailure>() {
@@ -753,7 +830,7 @@ fn run_entry() -> ExitCode {
                         &format!("{} {}", failure.message, failure.suggested_action),
                     );
                 }
-                write_safe_failure(failure, &command_path, format);
+                write_safe_failure(failure, &command_path, format, declared);
                 return ExitCode::from(failure.exit());
             }
             if let Some(unknown) = error.downcast_ref::<suggest::UnknownSelectionPointer>() {
@@ -784,21 +861,24 @@ fn run_entry() -> ExitCode {
             };
             match format {
                 OutputFormat::Human => eprintln!("evidencectl: {detail}"),
-                OutputFormat::Json => print_report(&report::failure(
-                    &command_path,
-                    exit,
-                    vec![serde_json::json!({
-                        "severity": "error",
-                        "code": code,
-                        "artifact": "evidencectl",
-                        "path": "$",
-                        "message": safe_message,
-                        "cause": detail,
-                        "suggestedAction": format!(
-                            "Correct the cause reported above, then rerun evidencectl {command_path}."
-                        ),
-                    })],
-                )),
+                OutputFormat::Json => print_report_with_posture(
+                    &report::failure(
+                        &command_path,
+                        exit,
+                        vec![serde_json::json!({
+                            "severity": "error",
+                            "code": code,
+                            "artifact": "evidencectl",
+                            "path": "$",
+                            "message": safe_message,
+                            "cause": detail,
+                            "suggestedAction": format!(
+                                "Correct the cause reported above, then rerun evidencectl {command_path}."
+                            ),
+                        })],
+                    ),
+                    declared,
+                ),
             }
             ExitCode::from(exit)
         }
@@ -1003,13 +1083,23 @@ fn usage_failure_json() -> serde_json::Value {
 
 /// Write one JSON report. A closed standard output leaves nothing to report
 /// to, so the exit code the caller returns is the only remaining signal.
+fn print_report_with_posture(report: &serde_json::Value, declared: Option<DeclaredPosture>) {
+    if declared.is_none() {
+        print_report(report);
+    } else if let Err(error) = report::print_with_posture(report, declared) {
+        report_write_error(&error);
+    }
+}
+
 pub(crate) fn print_report(report: &serde_json::Value) {
     if let Err(error) = report::print(report) {
-        // Standard error stays silent under --format json except when the
-        // report itself cannot be delivered.
-        eprintln!("evidencectl: could not write the JSON report: {error}");
-        REPORT_UNDELIVERED.store(true, std::sync::atomic::Ordering::Relaxed);
+        report_write_error(&error);
     }
+}
+
+fn report_write_error(error: &std::io::Error) {
+    eprintln!("evidencectl: could not write the JSON report: {error}");
+    REPORT_UNDELIVERED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Set when a JSON report could not be written, so the process exits in the
@@ -1069,18 +1159,22 @@ fn write_report_failure(
     exit: u8,
     found: &registry_platform_yaml::Report,
     format: OutputFormat,
+    declared: Option<DeclaredPosture>,
 ) {
     match format {
         OutputFormat::Human => eprint!("{}", found.render_human()),
-        OutputFormat::Json => print_report(&report::failure(
-            command,
-            exit,
-            found
-                .to_json_value()
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
-        )),
+        OutputFormat::Json => print_report_with_posture(
+            &report::failure(
+                command,
+                exit,
+                found
+                    .to_json_value()
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+            declared,
+        ),
     }
 }
 
@@ -1222,10 +1316,17 @@ fn safe_command(
     })
 }
 
-fn write_safe_failure(failure: &SafeCliFailure, command: &str, format: OutputFormat) {
+fn write_safe_failure(
+    failure: &SafeCliFailure,
+    command: &str,
+    format: OutputFormat,
+    declared: Option<DeclaredPosture>,
+) {
     match format {
         OutputFormat::Human => eprint!("{}", safe_failure_human(failure)),
-        OutputFormat::Json => print_report(&safe_failure_json(failure, command)),
+        OutputFormat::Json => {
+            print_report_with_posture(&safe_failure_json(failure, command), declared)
+        }
     }
 }
 
@@ -1405,22 +1506,27 @@ fn project_of(args: &CheckArgs) -> &std::path::Path {
         .expect("clap requires a project unless --file is given")
 }
 
-fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
+fn run_check_command(
+    args: CheckArgs,
+    format: OutputFormat,
+    declared: DeclaredPosture,
+) -> anyhow::Result<ExitCode> {
     let project = project_of(&args);
     let checked = check::check(
         project,
         args.target.as_deref(),
         args.production,
         args.deny_warnings,
+        declared,
     );
-    write_checked(checked, format, |found| {
+    write_checked(checked, format, Some(declared), |found| {
         check::refused_check_report(project, args.target.as_deref(), found)
     })
 }
 
 fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
     let checked = check::explain(&args.project, args.target.as_deref());
-    write_checked(checked, format, |found| {
+    write_checked(checked, format, None, |found| {
         check::refused_explain_report(&args.project, args.target.as_deref(), found)
     })
 }
@@ -1430,16 +1536,17 @@ fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Resul
 fn write_checked(
     checked: anyhow::Result<check::Checked>,
     format: OutputFormat,
+    declared: Option<DeclaredPosture>,
     refused: impl FnOnce(&registry_platform_yaml::Report) -> serde_json::Value,
 ) -> anyhow::Result<ExitCode> {
     match checked {
         Ok(checked) => {
-            write_check_report(&checked.report, &checked.diagnostics, format)?;
+            write_check_report(&checked.report, &checked.diagnostics, format, declared)?;
             Ok(ExitCode::SUCCESS)
         }
         Err(error) => match authored::report_in(&error) {
             Some(found) => {
-                write_check_report(&refused(found), found, format)?;
+                write_check_report(&refused(found), found, format, declared)?;
                 Ok(ExitCode::from(report::DOMAIN_REFUSAL_EXIT))
             }
             None => Err(error),
@@ -1451,10 +1558,11 @@ fn write_check_report(
     report: &serde_json::Value,
     diagnostics: &registry_platform_yaml::Report,
     format: OutputFormat,
+    declared: Option<DeclaredPosture>,
 ) -> anyhow::Result<()> {
     match format {
         OutputFormat::Human => check::render_human(report, diagnostics, &mut std::io::stdout())?,
-        OutputFormat::Json => report::print(report)?,
+        OutputFormat::Json => report::print_with_posture(report, declared)?,
     }
     Ok(())
 }

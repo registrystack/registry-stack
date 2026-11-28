@@ -55,6 +55,7 @@ pub(crate) struct ProposalRetentionEraseOutcome {
 }
 
 pub(crate) fn list(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     action_id: Option<&str>,
     after_cursor: Option<&str>,
@@ -70,9 +71,10 @@ pub(crate) fn list(
     }
     let runtime = operator_runtime()?;
     let page = runtime.block_on(async {
-        let service = ProposalRetentionOperatorService::from_runtime_config(runtime_config)
-            .await
-            .map_err(map_error)?;
+        let service =
+            ProposalRetentionOperatorService::from_runtime_config(runtime_config, posture)
+                .await
+                .map_err(map_error)?;
         service
             .list(action_id, after_cursor, limit)
             .await
@@ -82,6 +84,7 @@ pub(crate) fn list(
 }
 
 pub(crate) fn dry_run(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     action_id: &str,
     proposal_id: &str,
@@ -93,15 +96,17 @@ pub(crate) fn dry_run(
     let scope = scope(action_id, proposal_id, submission_version)?;
     let runtime = operator_runtime()?;
     let dry_run = runtime.block_on(async {
-        let service = ProposalRetentionOperatorService::from_runtime_config(runtime_config)
-            .await
-            .map_err(map_error)?;
+        let service =
+            ProposalRetentionOperatorService::from_runtime_config(runtime_config, posture)
+                .await
+                .map_err(map_error)?;
         service.dry_run(scope).await.map_err(map_error)
     })?;
     Ok(ProposalRetentionDryRunOutcome { dry_run })
 }
 
 pub(crate) fn erase(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     action_id: &str,
     proposal_id: &str,
@@ -113,22 +118,24 @@ pub(crate) fn erase(
     let scope = scope(action_id, proposal_id, submission_version)?;
     let runtime = operator_runtime()?;
     let erase = runtime.block_on(async {
-        let service = ProposalRetentionOperatorService::from_runtime_config(runtime_config)
-            .await
-            .map_err(map_error)?;
+        let service =
+            ProposalRetentionOperatorService::from_runtime_config(runtime_config, posture)
+                .await
+                .map_err(map_error)?;
         service.erase(scope).await.map_err(map_error)
     })?;
     Ok(ProposalRetentionEraseOutcome { erase })
 }
 
 pub(crate) fn cleanup_attachments(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
 ) -> Result<AttachmentCleanup, ProposalRetentionCliError> {
     if !runtime_config.is_absolute() {
         return Err(ProposalRetentionCliError::Operator);
     }
     operator_runtime()?.block_on(async {
-        ProposalRetentionOperatorService::from_runtime_config(runtime_config)
+        ProposalRetentionOperatorService::from_runtime_config(runtime_config, posture)
             .await
             .map_err(map_error)?
             .cleanup_attachments()
@@ -167,6 +174,7 @@ fn map_error(error: ProposalRetentionError) -> ProposalRetentionCliError {
             ProposalRetentionCliError::PackagePinMismatch(mismatch)
         }
         ProposalRetentionError::ActiveProposalRecoveryUnavailable
+        | ProposalRetentionError::PostureMismatch { .. }
         | ProposalRetentionError::Unavailable => ProposalRetentionCliError::Operator,
     }
 }

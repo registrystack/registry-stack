@@ -848,7 +848,7 @@ mod shape_package {
         load_package(
             &path,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Production,
             },
         )
         .unwrap()

@@ -7,6 +7,12 @@
 
 use serde_json::{json, Value};
 
+const PRODUCTION_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Default,
+    };
+
 fn fragment(page: &str, marker: &str) -> Value {
     // A fence may carry a title or runner attribute after the language, so
     // the YAML starts after the line break that ends the fence line.
@@ -39,12 +45,14 @@ fn documented_runtime_config_parses_after_filling_the_package_digest() {
     registry_breg::runtime_config::parse_runtime_config_with_env(
         &serde_norway::to_string(&source).unwrap(),
         |_| None,
+        PRODUCTION_POSTURE,
     )
     .expect("documented runtime config parses as shown");
     source["package"]["expectedDigest"] = json!(format!("sha256:{}", "b".repeat(64)));
     registry_breg::runtime_config::parse_runtime_config_with_env(
         &serde_norway::to_string(&source).unwrap(),
         |_| None,
+        PRODUCTION_POSTURE,
     )
     .expect("documented runtime config parses without resolving secrets or connecting to services");
 }

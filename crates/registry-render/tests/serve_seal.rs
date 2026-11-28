@@ -1393,6 +1393,21 @@ fn explicit_unrestricted_clients_are_logged_and_reported_but_absent_from_readine
     let report: serde_json::Value = serde_json::from_slice(&check.stdout).unwrap();
     assert_eq!(report["explicitProductionSettings"][0]["pointer"], pointer);
     assert_eq!(report["warnings"], 0);
+
+    let human = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["check", "--runtime-config"])
+        .arg(&fixture.runtime_path)
+        .output()
+        .unwrap();
+    assert!(human.status.success(), "{human:?}");
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        text.contains(&format!(
+            "Explicit production setting render.posture.unrestricted-oidc-clients at {pointer}."
+        )),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1426,6 +1441,36 @@ fn without_signing_the_seal_route_and_signing_readiness_do_not_exist() {
     );
     let openapi = request(server.port, "GET", "/openapi.json", &[], None).json();
     assert!(openapi["paths"].get("/v1/seal/{type}").is_none());
+}
+
+#[test]
+fn development_logs_the_seals_not_served_setting_once() {
+    let fixture = deployment(None);
+    let server = start_server(&fixture);
+    let log = server.log();
+    let mentions = log
+        .iter()
+        .filter(|event| {
+            event["fields"]["error_code"] == "render.posture.seals-not-served"
+                || event["fields"]["code"] == "render.posture.seals-not-served"
+        })
+        .count();
+    assert_eq!(mentions, 1, "{log:?}");
+}
+
+#[test]
+fn posture_is_logged_and_combination_refused_before_authentication_starts() {
+    let fixture = deployment(None);
+    // Authentication cannot start without its key set. The posture block and
+    // the seals refusal come first, so they are what an operator reads.
+    std::fs::remove_file(fixture.home.join("jwks.json")).unwrap();
+    let (exit, stderr) = refused_startup_with_posture(&fixture, "production");
+    assert_eq!(exit, Some(20), "{stderr}");
+    assert!(stderr.contains("posture declared"), "{stderr}");
+    assert!(
+        stderr.contains("render.posture.seals-not-served"),
+        "{stderr}"
+    );
 }
 
 #[test]

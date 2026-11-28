@@ -38,9 +38,9 @@ use registry_breg::hooks::{
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationPlan, MutationRequest, MutationTransaction};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, test_activation_id,
-    test_package_digest, ClaimContext, ExpectedRegistryIdentity, RegistryLockKey,
-    RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
+    initialize_compiled_registry_state_with_posture_for_test, install_compiled_schema,
+    test_activation_id, test_package_digest, ClaimContext, ExpectedRegistryIdentity,
+    RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_platform_audit::AuditProfile;
@@ -581,11 +581,12 @@ async fn setup_in(
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs delivery state with the compiled schema");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -608,8 +609,9 @@ async fn setup_in(
         .expect("bounded runtime pool builds");
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
         .expect("test owns a keyed audit profile");
-    let lock_key =
-        RegistryLockKey::derive("hook-proposal-registry").expect("test lock identity is bounded");
+    let lock_key = RegistryLockKey::derive("hook-proposal-registry")
+        .expect("test lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -682,7 +684,8 @@ impl Setup {
         let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
             .expect("test owns a keyed audit profile");
         let lock_key = RegistryLockKey::derive("hook-proposal-registry")
-            .expect("test lock identity is bounded");
+            .expect("test lock identity is bounded")
+            .for_posture(registry_platform_config::Posture::Development);
         HookDeliveryService::new(
             self.pool.clone(),
             destinations,
@@ -2839,8 +2842,9 @@ impl DestinationFixture {
         &self,
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
-        parse_runtime_config(&self.runtime_config(&format!(
-            r#"destinations:
+        parse_runtime_config(
+            &self.runtime_config(&format!(
+                r#"destinations:
   hooks:
     {DESTINATION_ID}:
       origin: https://localhost:{}/
@@ -2856,8 +2860,13 @@ impl DestinationFixture {
         attemptTimeoutMilliseconds: 2000
         maximumAttempts: 2
 "#,
-            self.receiver_port,
-        )))
+                self.receiver_port,
+            )),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
         .expect("strict pinned-loopback HTTPS config parses")
         .activate_event_destinations(compiled)
         .expect("exact destination inventory and TLS material activate")
@@ -2869,10 +2878,16 @@ impl DestinationFixture {
         &self,
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
-        parse_runtime_config(&self.runtime_config(""))
-            .expect("a deployment without destinations parses")
-            .activate_event_destinations(compiled)
-            .expect("an empty destination inventory matches a local-only package")
+        parse_runtime_config(
+            &self.runtime_config(""),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("a deployment without destinations parses")
+        .activate_event_destinations(compiled)
+        .expect("an empty destination inventory matches a local-only package")
     }
 
     fn runtime_config(&self, event_destinations: &str) -> String {
@@ -2891,7 +2906,6 @@ identity:
   environment: local
   instanceId: hook-proposal-instance
   databaseId: hook-proposal-database
-  databaseInitializationEnvironment: local
 secretProviders:
   file:
     root: {}

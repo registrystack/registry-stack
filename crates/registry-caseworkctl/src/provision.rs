@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use registry_casework::{secret_resolver, RuntimeConfig};
-use registry_platform_config::{describe_secret_failure, SecretResolver};
+use registry_platform_config::{describe_secret_failure, DeclaredPosture, SecretResolver};
 use registry_platform_provision::cli::OutputFormat;
 use registry_platform_provision::{
     run_provision, ProductDatabase, ProvisionArgs, ProvisionInput, SchemaLayout,
@@ -19,7 +19,7 @@ const SECRET_ACTION: &str =
     "Provision a runtime-readable secret through the configured provider and retry provision.";
 
 /// Runs the command with this tool's global `--format`.
-pub(crate) fn run(args: ProvisionArgs, json: bool) -> ExitCode {
+pub(crate) fn run(args: ProvisionArgs, json: bool, declared: DeclaredPosture) -> ExitCode {
     let format = if json {
         OutputFormat::Json
     } else {
@@ -30,12 +30,18 @@ pub(crate) fn run(args: ProvisionArgs, json: bool) -> ExitCode {
         registry_platform_buildinfo::DISPLAY_VERSION,
         &args,
         format,
-        load,
+        |path| load(path, declared),
     )
 }
 
-fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
-    let config = RuntimeConfig::load(path).map_err(|error| {
+fn load(path: &Path, declared: DeclaredPosture) -> Result<ProvisionInput, Box<Diagnostic>> {
+    let config = RuntimeConfig::load(path, declared).map_err(|error| {
+        if let Some(diagnostic) = error
+            .load_diagnostics()
+            .and_then(|diagnostics| diagnostics.first())
+        {
+            return Box::new(diagnostic.clone());
+        }
         Box::new(Diagnostic::error(
             error.code(),
             format!("runtime.yaml:{}", error.pointer()),
@@ -43,6 +49,7 @@ fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
             error.suggested_action(),
         ))
     })?;
+    let config = config.config;
     let secrets = secret_resolver(&config).map_err(|_| {
         Box::new(Diagnostic::error(
             "casework.runtime.secret-unavailable",

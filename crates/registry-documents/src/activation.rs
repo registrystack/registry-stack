@@ -95,7 +95,7 @@ fn schema_history_refusal(schema: &platform::SchemaState) -> Option<ActivationRe
     if known.last().is_some_and(|latest| unexpected > *latest) {
         Some(ActivationRefusal::new(
             "documentsctl.activation.schema-newer",
-            "database",
+            "/database",
             format!(
                 "the database schema contains version {unexpected}, which is newer than this Document Store release"
             ),
@@ -103,7 +103,7 @@ fn schema_history_refusal(schema: &platform::SchemaState) -> Option<ActivationRe
     } else {
         Some(ActivationRefusal::new(
             "documentsctl.activation.schema-invalid",
-            "database",
+            "/database",
             format!(
                 "the database schema history is not an ordered prefix of this Document Store release at version {unexpected}"
             ),
@@ -288,7 +288,7 @@ pub async fn plan(
     {
         return Err(ActivationError::Refused(vec![ActivationRefusal::new(
             "documentsctl.activation.ledger-unreadable",
-            "database.runtimeUrlRef",
+            "/database/runtimeUrlRef",
             "the runtime credential cannot read the activation ledger; run documentsctl apply with the migration credential",
         )]));
     }
@@ -308,7 +308,7 @@ pub async fn plan(
     if database_id_check == DatabaseIdCheck::Differs {
         refusals.push(ActivationRefusal::new(
             "documentsctl.activation.database-id-mismatch",
-            "identity.databaseId",
+            "/identity/databaseId",
             "the database belongs to another deployment",
         ));
     }
@@ -319,13 +319,13 @@ pub async fn plan(
         if active.role_mode == RoleMode::Split && role.mode == RoleMode::Single {
             refusals.push(ActivationRefusal::new(
                 "documentsctl.activation.role-mode-weakened",
-                "database.runtimeUrlRef",
+                "/database/runtimeUrlRef",
                 "the runtime credential gained authority over the activation boundary; restore split-role ownership and apply again",
             ));
         } else if role.mode == RoleMode::Split && !role.grants_current {
             refusals.push(ActivationRefusal::new(
                 "documentsctl.activation.grants-stale",
-                "database.runtimeUrlRef",
+                "/database/runtimeUrlRef",
                 "the runtime credential is missing required grants; apply the package again",
             ));
         }
@@ -369,7 +369,7 @@ pub async fn status(store: &PostgresStore) -> Result<ActivationStatus, Activatio
     {
         return Err(ActivationError::Refused(vec![ActivationRefusal::new(
             "documentsctl.activation.ledger-unreadable",
-            "database.runtimeUrlRef",
+            "/database/runtimeUrlRef",
             "the runtime credential cannot read the activation ledger; run documentsctl apply with the migration credential",
         )]));
     }
@@ -417,7 +417,7 @@ pub async fn apply(
     {
         return Err(ActivationError::Refused(vec![ActivationRefusal::new(
             "documentsctl.activation.invalid-reference",
-            "arguments",
+            "/arguments",
             "operator references must be non-empty, free of control characters, at most 256 bytes, with at most 16 backups",
         )]));
     }
@@ -513,7 +513,7 @@ async fn apply_begun(
     {
         let refusals = vec![ActivationRefusal::new(
             "documentsctl.activation.database-id-mismatch",
-            "identity.databaseId",
+            "/identity/databaseId",
             "the database belongs to another deployment",
         )];
         drop(tx);
@@ -542,7 +542,7 @@ async fn apply_begun(
         if !stray.is_empty() {
             let refusals = vec![ActivationRefusal::new(
                 "documentsctl.activation.role-mode-weakened",
-                "database.runtimeUrlRef",
+                "/database/runtimeUrlRef",
                 format!(
                     "the runtime role has migration authority; apply these corrections first: {}",
                     stray.join("; ")
@@ -592,7 +592,7 @@ async fn apply_begun(
     if role_mode == RoleMode::Single && split || !grants_current || !readable {
         let refusals = vec![ActivationRefusal::new(
             "documentsctl.activation.role-mode-weakened",
-            "database.runtimeUrlRef",
+            "/database/runtimeUrlRef",
             "the runtime role retains activation authority or lacks the complete runtime grants",
         )];
         drop(tx);
@@ -773,6 +773,27 @@ mod tests {
             applied: applied.to_vec(),
             pending: Vec::new(),
         }
+    }
+
+    /// Tools resolve a refusal path as a JSON pointer, so every refusal in one
+    /// `diagnostics` list uses the pointer form.
+    #[test]
+    fn every_activation_refusal_names_its_path_as_a_json_pointer() {
+        let source = include_str!("activation.rs");
+        let production = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("the production source");
+        let marker = concat!("ActivationRefusal", "::new(");
+        let mut checked = 0;
+        for call in production.split(marker).skip(1) {
+            let mut literals = call.split('"').skip(1).step_by(2);
+            let code = literals.next().expect("a code literal");
+            let path = literals.next().expect("a path literal");
+            assert!(path.starts_with('/'), "{code} names {path}");
+            checked += 1;
+        }
+        assert!(checked >= 10, "only {checked} refusals found");
     }
 
     #[test]

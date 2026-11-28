@@ -420,7 +420,7 @@ async fn casework_store() -> (PostgresStore, tokio_postgres::Client, String) {
         test_only_plaintext: true,
         transport: None,
     };
-    let store = PostgresStore::connect_migration(&config, &secrets)
+    let store = PostgresStore::connect_migration(&config, &secrets, None)
         .unwrap()
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     store.migrate().await.unwrap();
@@ -818,6 +818,12 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
         HumanIdentityConfig::default(),
     );
     let (casework_url, casework_server) = serve(casework_router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        ),
         service,
         authenticator: Arc::new(casework_auth),
         project: Arc::new(project),
@@ -1304,6 +1310,12 @@ async fn native_proposal_journey(producer_id: &'static str) {
     let progress_counter = Arc::clone(&progress_reads);
     let unavailable = Arc::clone(&progress_unavailable);
     let casework = casework_router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        ),
         service,
         authenticator: Arc::new(casework_auth),
         project: Arc::new(project.clone()),

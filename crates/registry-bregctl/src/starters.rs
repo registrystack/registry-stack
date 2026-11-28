@@ -336,6 +336,7 @@ mod tests {
             };
             let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
             let exit = crate::check::run(
+                crate::DEFAULT_POSTURE,
                 &request,
                 crate::OutputFormat::Json,
                 &mut stdout,

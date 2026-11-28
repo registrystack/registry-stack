@@ -160,6 +160,7 @@ async fn activation_plan(
     let providers = [provider];
     f.store
         .plan_activation(&ActivationCandidate {
+            posture: registry_platform_config::Posture::Production,
             database_id: "independent-review-tests",
             package_digest: &format!("sha256:{}", "a".repeat(64)),
             project: &project,
@@ -177,6 +178,7 @@ async fn assert_activation_refused(
     let project = decode(value);
     let providers = [provider];
     let candidate = ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: "independent-review-tests",
         package_digest: &format!("sha256:{}", "a".repeat(64)),
         project: &project,

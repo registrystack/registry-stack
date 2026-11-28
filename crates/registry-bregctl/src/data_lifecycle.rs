@@ -32,7 +32,7 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::client::{
     build_client, OutboundOptions, ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers_without_peer_policy};
+use registry_platform_httputil::{read_bounded, validate_response_headers, PeerPolicy};
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, Report,
     RetiredApiVersion,
@@ -1052,6 +1052,7 @@ fn data_runtime() -> Result<tokio::runtime::Runtime, DataLifecycleError> {
 }
 
 pub(crate) fn run_export(
+    posture: registry_platform_config::DeclaredPosture,
     request: DataExportRequest<'_>,
 ) -> Result<DataExportOutcome, DataLifecycleError> {
     let inspected = inspect_data_package(request.package)?;
@@ -1069,12 +1070,16 @@ pub(crate) fn run_export(
     let token = read_access_token(request.access_token_file)?;
     let mut started = load_or_start_export(&plan, &inspected, request.output, request.checkpoint)?;
     let client = build_data_http_client()?;
+    let peer_policy = match posture.posture {
+        registry_platform_config::Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        registry_platform_config::Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    };
     run_export_pages(
         &plan,
         &inspected,
         &mut started,
         request.max_pages,
-        |data_request| dispatch_http(&client, &breg_url, &token, data_request),
+        |data_request| dispatch_http(&client, &breg_url, &token, data_request, peer_policy),
     )?;
     Ok(DataExportOutcome {
         package_revision: inspected.package_revision,
@@ -1145,6 +1150,7 @@ async fn dispatch_http(
     base: &ServiceBaseUrl,
     token: &str,
     request: DataHttpRequest,
+    peer_policy: PeerPolicy,
 ) -> Result<DataHttpResponse, ()> {
     let url = data_endpoint(base, request.path_and_query())?;
     let method = match request.method() {
@@ -1166,7 +1172,7 @@ async fn dispatch_http(
         .await
         .map_err(|_| ())?;
     let status = response.status().as_u16();
-    validate_response_headers_without_peer_policy(response.headers()).map_err(|_| ())?;
+    validate_response_headers(response.headers(), peer_policy).map_err(|_| ())?;
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)
@@ -2140,8 +2146,8 @@ mod tests {
         (plan, inspected)
     }
 
-    fn export_response(code: &str, next_cursor: Option<&str>) -> DataHttpResponse {
-        let body = canonicalize_json(&json!({
+    fn export_page_bytes(code: &str, next_cursor: Option<&str>) -> Vec<u8> {
+        canonicalize_json(&json!({
             "items": [{
                 "recordIdentifier": "00000000-0000-4000-8000-000000000001",
                 "revisionIdentifier": "1",
@@ -2154,8 +2160,16 @@ mod tests {
                 "recordTypeIdentifier": ENTITY
             }
         }))
-        .unwrap();
-        DataHttpResponse::new(200, Some("application/json".to_owned()), body).unwrap()
+        .unwrap()
+    }
+
+    fn export_response(code: &str, next_cursor: Option<&str>) -> DataHttpResponse {
+        DataHttpResponse::new(
+            200,
+            Some("application/json".to_owned()),
+            export_page_bytes(code, next_cursor),
+        )
+        .unwrap()
     }
 
     /// One scripted exchange for the multi-response server: the bytes to
@@ -3715,6 +3729,36 @@ mod tests {
         assert_eq!(fs::read(&checkpoint).unwrap(), b"initial-checkpoint");
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn export_http_refuses_a_development_peer_in_production() {
+        let (plan, inspected) = export_plan_and_inspected();
+        let client = build_data_http_client().unwrap();
+        for (policy, accepted) in [
+            (PeerPolicy::RefuseDevelopmentPeer, false),
+            (PeerPolicy::AcceptDevelopmentPeer, true),
+        ] {
+            let scratch = tempfile::tempdir().unwrap();
+            let output = scratch.path().join("records.jsonl");
+            let checkpoint = scratch.path().join("export.json");
+            let mut started =
+                load_or_start_export(&plan, &inspected, &output, &checkpoint).unwrap();
+            let body = export_page_bytes("AA", None);
+            let mut wire = format!(
+                "HTTP/1.1 200 OK\r\nRegistry-Posture: development\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            ).into_bytes();
+            wire.extend(body);
+            let (address, server) = spawn_one_response_server(wire);
+            let base = parse_breg_url(&format!("http://{address}")).unwrap();
+            let outcome = run_export_pages(&plan, &inspected, &mut started, Some(1), |request| {
+                dispatch_http(&client, &base, "synthetic-export-token", request, policy)
+            });
+            server.join().unwrap();
+            assert_eq!(outcome.is_ok(), accepted, "{outcome:?}");
+            assert_eq!(!fs::read(&output).unwrap().is_empty(), accepted);
+        }
     }
 
     #[test]

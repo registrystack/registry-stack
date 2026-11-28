@@ -533,11 +533,11 @@ async fn fixture() -> Fixture {
         test_only_plaintext: true,
         transport: None,
     };
-    let migration = PostgresStore::connect_migration(&database_config, &secrets)
+    let migration = PostgresStore::connect_migration(&database_config, &secrets, None)
         .expect("migration store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     migration.migrate().await.expect("review migrations");
-    let store = PostgresStore::connect_runtime(&database_config, &secrets)
+    let store = PostgresStore::connect_runtime(&database_config, &secrets, None)
         .expect("runtime store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     let database = connect_scoped(&scoped_url).await;
@@ -2588,6 +2588,7 @@ async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flig
     renamed.check().expect("candidate project");
     let digest = format!("sha256:{}", "c".repeat(64));
     let candidate = registry_casework::ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: "casework-review-test",
         package_digest: &digest,
         project: &renamed,

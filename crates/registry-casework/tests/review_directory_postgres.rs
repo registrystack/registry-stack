@@ -109,11 +109,11 @@ async fn fixture() -> Fixture {
         test_only_plaintext: true,
         transport: None,
     };
-    let migration = PostgresStore::connect_migration(&config, &secrets)
+    let migration = PostgresStore::connect_migration(&config, &secrets, None)
         .expect("migration store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     migration.migrate().await.expect("assignment migrations");
-    let store = PostgresStore::connect_runtime(&config, &secrets)
+    let store = PostgresStore::connect_runtime(&config, &secrets, None)
         .expect("runtime store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     let administrator = actor(

@@ -56,6 +56,10 @@ pub struct JobLockArgs {
 /// The arguments of `job check`.
 #[derive(Debug, Args)]
 pub struct JobCheckArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    pub posture: Option<String>,
+
     /// The pack document the job pins.
     #[arg(value_name = "PACK")]
     pub pack: PathBuf,
@@ -120,7 +124,10 @@ fn files_checked() -> usize {
 
 /// Run the job check: compile the job offline, or refuse with the
 /// compile's own diagnostics.
-pub(crate) fn run(args: &JobCheckArgs) -> Result<JobCheckRun, JobCheckFailure> {
+pub(crate) fn run(
+    args: &JobCheckArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<JobCheckRun, JobCheckFailure> {
     let pack_directory = args
         .pack
         .parent()
@@ -140,10 +147,14 @@ pub(crate) fn run(args: &JobCheckArgs) -> Result<JobCheckRun, JobCheckFailure> {
         });
     }
     let outcome = match (&args.profile, &args.project) {
-        (Some(profile), Some(project)) => registry_adapter::engine::job::compile_job_with(
-            &args.pack, &args.job, &runtime, profile, project,
+        (Some(profile), Some(project)) => {
+            registry_adapter::engine::job::compile_job_with_in_posture(
+                &args.pack, &args.job, &runtime, profile, project, declared,
+            )
+        }
+        (None, None) => registry_adapter::engine::job::compile_job_in_posture(
+            &args.pack, &args.job, &runtime, declared,
         ),
-        (None, None) => registry_adapter::engine::job::compile_job(&args.pack, &args.job, &runtime),
         // The parser requires the two together; a caller that builds the
         // arguments by hand still gets a refusal, never a guess.
         _ => {
@@ -621,6 +632,7 @@ mod tests {
         let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../products/adapter/fixtures/corpus/base-job");
         let args = JobCheckArgs {
+            posture: None,
             pack: base.join("pack.yaml"),
             job: base.join("job.yaml"),
             runtime: Some(base.join("job-runtime.yaml")),
@@ -628,7 +640,10 @@ mod tests {
             project: Some(base.join("project.yaml")),
             deny_warnings: false,
         };
-        let run = match run(&args) {
+        let run = match run(
+            &args,
+            crate::check_posture(Some("production"), false).unwrap(),
+        ) {
             Ok(run) => run,
             Err(JobCheckFailure::Io { path, source }) => panic!("{path}: {source}"),
             Err(JobCheckFailure::Refused { diagnostics }) => panic!("{diagnostics:?}"),

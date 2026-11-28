@@ -1917,6 +1917,10 @@ pub(super) fn add(
             false,
             false,
             Ok(check),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Default,
+            },
         )?,
         "caseworkctl check --runtime-config",
     )?;
@@ -1987,6 +1991,11 @@ pub(super) fn add(
     if check.get("runtimeConfig").is_some() {
         check["runtimeConfig"] = json!(project.join("runtime.example.yaml"));
     }
+    let next = if breg_package.is_some() {
+        "Replace the .test identities and bind the declared endpoints and secret references before deployment."
+    } else {
+        "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package."
+    };
     report(
         true,
         ProviderAddData {
@@ -2008,12 +2017,7 @@ pub(super) fn add(
             pairing,
             package,
             source_writes: false,
-            next: if breg_package.is_some() {
-                "Replace the .test identities and bind the declared endpoints and secret references before deployment."
-            } else {
-                "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package."
-            }
-            .into(),
+            next: format!("{next} For local use, start with rstack dev, set REGISTRY_STACK_POSTURE=development, or pass --posture development."),
         },
     )
 }
@@ -3420,7 +3424,7 @@ exit 1
         assert_eq!(created["outcome"], "created");
         assert_eq!(
             created["next"],
-            "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package."
+            "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package. For local use, start with rstack dev, set REGISTRY_STACK_POSTURE=development, or pass --posture development."
         );
         assert!(created.get("state").is_none());
         assert_eq!(created["providerId"], "correct-address-context");

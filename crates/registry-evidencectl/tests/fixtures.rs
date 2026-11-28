@@ -273,7 +273,9 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
                 "--runtime-config",
                 runtime_path,
                 "--format",
-                "json"
+                "json",
+                "--posture",
+                "production"
             ],
             vec![
                 "evaluate",
@@ -283,7 +285,9 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
                 "fixtures/a.yaml",
                 "--explain",
                 "--explain-format",
-                "json"
+                "json",
+                "--posture",
+                "production"
             ],
             vec![
                 "evaluate",
@@ -293,7 +297,9 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
                 "fixtures/b.yaml",
                 "--explain",
                 "--explain-format",
-                "json"
+                "json",
+                "--posture",
+                "production"
             ],
         ],
         "unexpected evidence invocations"
@@ -345,7 +351,9 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
                 "--runtime-config",
                 runtime_path,
                 "--format",
-                "json"
+                "json",
+                "--posture",
+                "production"
             ],
             vec![
                 "evaluate",
@@ -358,6 +366,8 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
                 "--explain",
                 "--explain-format",
                 "json",
+                "--posture",
+                "production",
             ],
         ]
     );
@@ -1033,7 +1043,9 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
                 "--runtime-config",
                 runtime_path,
                 "--format",
-                "json"
+                "json",
+                "--posture",
+                "production"
             ],
             vec![
                 "evaluate",
@@ -1043,7 +1055,9 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
                 "fixtures/a.yaml",
                 "--explain",
                 "--explain-format",
-                "json"
+                "json",
+                "--posture",
+                "production"
             ],
             vec![
                 "evaluate",
@@ -1053,7 +1067,9 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
                 "fixtures/b.yaml",
                 "--explain",
                 "--explain-format",
-                "json"
+                "json",
+                "--posture",
+                "production"
             ],
         ],
         "unexpected evidence invocations"

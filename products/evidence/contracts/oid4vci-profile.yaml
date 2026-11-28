@@ -258,7 +258,8 @@ endpoints:
     rule: >-
       Operational probes, not protocol surface. They report that the process is
       running and whether its required local audit destination can accept
-      entries. Readiness deliberately says nothing about the deployments this
+      entries. A successful readiness response includes posture and developmentSettings.
+      Readiness deliberately says nothing about the deployments this
       service calls outbound, because their transient failure does not make the
       process itself unready. Neither probe discloses anything about any offer,
       token, or credential, and both are named here so this endpoint list is the

@@ -84,7 +84,10 @@ struct Measured<'a> {
     postgres_major: u16,
 }
 
-pub(crate) fn run(request: &DraftRequest<'_>) -> Result<Drafted, Refusal> {
+pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
+    request: &DraftRequest<'_>,
+) -> Result<Drafted, Refusal> {
     let (module, id) = checked_identifiers(request)?;
     let output = preflight_output(request.output, &module, &id)?;
     let selected_project = canonicalize_project_path(request.project).map_err(|diagnostic| {
@@ -150,7 +153,7 @@ pub(crate) fn run(request: &DraftRequest<'_>) -> Result<Drafted, Refusal> {
         },
         COMMAND,
         false,
-        false,
+        None,
     )?;
     if candidate.registry().revision() != compiled.revision() {
         return Err(candidate_failure(
@@ -164,7 +167,7 @@ pub(crate) fn run(request: &DraftRequest<'_>) -> Result<Drafted, Refusal> {
         .into());
     }
     let measurement =
-        test_lifecycle::measure(candidate, request.runtime_config).map_err(|error| {
+        test_lifecycle::measure(posture, candidate, request.runtime_config).map_err(|error| {
             let mut failure = crate::test_lifecycle_failure(error);
             failure.command = COMMAND;
             failure

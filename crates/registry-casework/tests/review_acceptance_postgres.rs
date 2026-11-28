@@ -220,11 +220,11 @@ impl Fixture {
             transport: None,
         };
         let (audit, capture) = CaseworkAudit::capture();
-        let migration = PostgresStore::connect_migration(&config, &secrets)
+        let migration = PostgresStore::connect_migration(&config, &secrets, None)
             .unwrap()
             .with_audit(audit.clone());
         migration.migrate().await.unwrap();
-        let store = PostgresStore::connect_runtime(&config, &secrets)
+        let store = PostgresStore::connect_runtime(&config, &secrets, None)
             .unwrap()
             .with_audit(audit);
         let (db, connection) = tokio_postgres::connect(&scoped, NoTls).await.unwrap();

@@ -42,9 +42,12 @@ fn map(value: Value) -> Map<String, Value> {
 }
 async fn application_queue_age(fixture: &client_http::ClientFixture) -> f64 {
     use tower::util::ServiceExt;
-    let router = registry_breg::metrics::metrics_app(std::sync::Arc::new(
-        registry_breg::metrics::Metrics::with_pool_for_test(fixture.pool.clone()),
-    ));
+    let router = registry_breg::metrics::metrics_app(
+        std::sync::Arc::new(registry_breg::metrics::Metrics::with_pool_for_test(
+            fixture.pool.clone(),
+        )),
+        registry_platform_config::Posture::Production,
+    );
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -75,9 +78,10 @@ async fn application_queue_age(fixture: &client_http::ClientFixture) -> f64 {
 /// with others asserts a rise of at least what it caused.
 async fn refusal_count(check: &str) -> u64 {
     use tower::util::ServiceExt;
-    let response = registry_breg::metrics::metrics_app(std::sync::Arc::new(
-        registry_breg::metrics::Metrics::without_pool_for_test(),
-    ))
+    let response = registry_breg::metrics::metrics_app(
+        std::sync::Arc::new(registry_breg::metrics::Metrics::without_pool_for_test()),
+        registry_platform_config::Posture::Production,
+    )
     .oneshot(
         axum::http::Request::builder()
             .uri("/metrics")
@@ -5626,9 +5630,13 @@ async fn missing_review_binding_preserves_unrelated_builtin_work_and_fails_revie
             .push(grant);
     }
     let registry = compile(source);
-    let runtime = registry_breg::runtime_config::parse_runtime_config(include_str!(
-        "../../../products/breg/examples/minimal/runtime.example.yaml"
-    ))
+    let runtime = registry_breg::runtime_config::parse_runtime_config(
+        include_str!("../../../products/breg/examples/minimal/runtime.example.yaml"),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
     .unwrap();
     assert!(
         runtime

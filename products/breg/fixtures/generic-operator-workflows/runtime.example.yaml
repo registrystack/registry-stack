@@ -23,7 +23,6 @@ identity:
   environment: local
   instanceId: generic-registry-1
   databaseId: generic-registry-db-1
-  databaseInitializationEnvironment: local
 
 # The directory holding the owner-only files the references below name.
 secretProviders:

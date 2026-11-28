@@ -155,7 +155,6 @@ identity:
   environment: production
   instanceId: facility-registry
   databaseId: facility-registry-db
-  databaseInitializationEnvironment: production
 secretProviders:
   file:
     root: /etc/breg/secrets
@@ -467,7 +466,14 @@ bregctl check facility --runtime-config /etc/breg/runtime.yaml --production
 Production check passed; registry revision sha256:4877be0dd9ded0447278206d829445780bf93a6cee356bc1526773003acad158.
 ```
 
-Warnings follow the success line; read each one.
+Warnings follow the success line. Read each one.
+
+`check --production` declares production and checks package closure. A check
+without the flag still defaults to production for the runtime file. Use
+`--posture development` to report development settings as warnings in a laptop file.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs write_posture_usage;
+    crates/registry-bregctl/tests/cli.rs check_reports_local_key_custody_at_the_declared_severity. */}
 
 `test` compiles the project, applies it to an empty schema-test database, measures the schema it
 produces, runs every journey in `tests/journeys.yaml` over real HTTP with real tokens, and writes a
@@ -549,6 +555,18 @@ Planned the first activation on this registry; nothing was changed. Run `bregctl
   checks passed             migration-role, runtime-write-authority, prerequisites, uninitialized-database
 ```
 
+Use `--posture` on `plan`, `apply`, `status` and `doctor` to declare the posture
+of your deployment. Use `bregctl package --posture development` to build a
+laptop package with a placeholder `canonicalBaseIri`.
+
+The first activation fixes the database's posture. Startup, plan and apply
+refuse a mismatch with the active activation. Reconciliation also refuses a
+posture that differs from the failed apply's recorded posture.
+{/* Evidence: crates/registry-breg/tests/postgres_migration.rs, real_postgres_reconcile_refuses_a_different_posture. */} Status and doctor report the
+mismatch as a finding. Databases activated before
+posture was recorded read as production. Use a fresh database and apply the
+package in the other posture if you need to switch.
+
 Then activate. `--initial` is for the first package in a database that has never had one:
 
 ```sh
@@ -620,9 +638,9 @@ Verified the package against the runtime it is bound to.
 ```
 
 `doctor` opens every startup dependency without binding the listener, stops at the first one that
-refuses, and otherwise lists them all, then its advisories. These include the PostgreSQL advisories
-and the `authentication.insecure-http` warning when the runtime file sets
-`authentication.oidc.allowInsecureHttp: true`. Advisories never change the exit status:
+refuses, and otherwise lists them all, then its advisories. PostgreSQL
+advisories leave the exit status unchanged. Production refuses
+`authentication.oidc.allowInsecureHttp: true` in the runtime file.
 
 ```sh
 bregctl doctor --runtime-config /etc/breg/runtime.yaml
@@ -665,19 +683,39 @@ print.
 ### Start serving
 
 ```sh
-breg --runtime-config /etc/breg/runtime.yaml
+bregctl serve --runtime-config /etc/breg/runtime.yaml --posture production
 ```
 
-Startup refuses a package the ledger does not name as active, and logs the role mode it serves in.
+`bregctl serve` passes the resolved posture to `breg`.
+
+{/* Evidence: crates/registry-bregctl/tests/serve.rs unmanaged_serve_preserves_runtime_arguments_streams_process_and_exit. */}
+
+When you omit a declaration, BReg starts in production. For local development,
+declare development with `REGISTRY_STACK_POSTURE=development` or
+`--posture development`. When both
+declarations are present they must agree. Startup logs the posture and its
+source, counts development settings, and names each one by diagnostic code and
+configuration pointer. Startup checks that the package is active and logs the
+role mode it serves in. If production refuses development settings, the
+startup report lists findings from the runtime file and the verified package.
+{/* Evidence: crates/registry-breg/tests/postgres_field_encryption.rs, local_file_data_key_is_bound_during_apply_and_prepares_ready. */}
+
+Use one posture across a stack. Production peers refuse responses marked
+as development. If Render or Evidence signs using a local key file, run
+the stack in development. Use Transit for production signing.
+
+{/* Evidence: crates/registry-platform-httputil/src/lib.rs PeerPolicy;
+    crates/registry-bregctl/src/data_lifecycle.rs export_http_refuses_a_development_peer_in_production. */}
+
 Check readiness before admitting traffic:
 
 ```sh
 curl -fsS http://127.0.0.1:8080/ready
 ```
 
-```text
-{"status":"ready"}
-```
+The successful response includes `status: ready`, `posture` and
+`developmentSettings`. Each selected development setting includes a code and
+configuration pointer.
 
 `GET /health` and `GET /healthz` report liveness only. Neither probe reflects the background
 workers that deliver webhooks and advance reviews: when one stops, `breg` exits with status 1, so

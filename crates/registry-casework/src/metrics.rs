@@ -209,11 +209,15 @@ pub async fn scrape_for_test(store: PostgresStore, deadline: ScrapeDeadline) -> 
     let readings = state.sample(deadline).await;
     render(readings, &state.inner.failures, &refusal_recorder())
 }
-pub(crate) fn metrics_router(state: MetricsState) -> Router {
+pub(crate) fn metrics_router(
+    state: MetricsState,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route("/metrics", get(metrics))
         .route("/version", get(version))
         .with_state(state)
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 async fn version(State(state): State<MetricsState>) -> Json<serde_json::Value> {
     Json(json!({"version":env!("CARGO_PKG_VERSION"),"packageDigest":state.inner.package_digest}))
@@ -418,6 +422,53 @@ mod tests {
                 refusal_series(None)
             )
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn metrics_listener_marks_only_development_responses() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use axum::body::Body;
+        use axum::http::Request;
+        use registry_platform_config::{Posture, SecretProvider, SecretResolver};
+        use tower::ServiceExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let secret = root.path().join("url");
+        std::fs::write(&secret, "postgresql://casework@127.0.0.1:1/casework").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let database = crate::DatabaseConfig {
+            runtime_url_ref: "secret:file/url".to_owned(),
+            migration_url_ref: "secret:file/url".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: None,
+        };
+        let resolver = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
+        let store = crate::PostgresStore::connect_runtime(&database, &resolver, None).unwrap();
+        for (posture, expected) in [
+            (Posture::Development, Some("development")),
+            (Posture::Production, None),
+        ] {
+            let state = super::MetricsState::new(store.clone(), vec![], "sha256:test".to_owned());
+            let response = super::metrics_router(state, posture)
+                .oneshot(
+                    Request::builder()
+                        .uri("/version")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response
+                    .headers()
+                    .get("registry-posture")
+                    .and_then(|value| value.to_str().ok()),
+                expected
+            );
+        }
     }
 
     #[tokio::test]

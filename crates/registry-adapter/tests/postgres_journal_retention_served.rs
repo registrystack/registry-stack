@@ -35,14 +35,14 @@ fn seed_expired_and_in_window_rows() -> String {
     let expired = MAX_RETENTION_BATCH + 1;
     format!(
         "INSERT INTO adapter_journal_events \
-             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at) \
+             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at, posture) \
          SELECT 'exchangeCreated', 'expired-' || g, 'records-get', 'synthetic-caller', \
-                'seeded', now() - interval '91 days' - g * interval '1 millisecond' \
+                'seeded', now() - interval '91 days' - g * interval '1 millisecond', 'production' \
          FROM generate_series(1, {expired}) AS g; \
          INSERT INTO adapter_journal_events \
-             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at) \
+             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at, posture) \
          VALUES ('exchangeCreated', 'in-window', 'records-get', 'synthetic-caller', \
-                 'seeded', now() - interval '89 days');"
+                 'seeded', now() - interval '89 days', 'production');"
     )
 }
 
@@ -248,11 +248,10 @@ id: govstack-split-roles
 database:
   runtimeUrlRef: secret:env/TEST_DB_RUNTIME_URL
   migrationUrlRef: secret:env/TEST_DB_MIGRATION_URL
-  testOnlyPlaintext: true
+  transport: loopback-plaintext
 oidc:
   issuer: {ISSUER}
   audience: {AUDIENCE}
-  allowInsecureHttp: true
   jwksSource:
     type: static
     documentRef: secret:env/TEST_JWKS
@@ -271,6 +270,7 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
         .expect("write the runtime config");
         let mut command = Command::new(env!("CARGO_BIN_EXE_adapter"));
         command.args(["serve", "--runtime-config"]).arg(&runtime);
+        command.env_remove("REGISTRY_STACK_POSTURE");
         if let Some((project, profile, _)) = facade {
             command.arg("--project").arg(project);
             if !project.join("pack.yaml").exists() {
@@ -281,7 +281,9 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
             }
         }
         if let Some((payments, packs)) = payments {
-            command.arg("--payments-config").arg(payments);
+            command
+                .args(["--posture", "development", "--payments-config"])
+                .arg(payments);
             for pack in packs {
                 command.arg("--payment-provider-pack").arg(pack);
             }
@@ -1556,4 +1558,28 @@ async fn payment_grants_commit_with_the_facade_grants_or_not_at_all() {
     );
     drop_role(&database, &migrator).await;
     drop_role(&database, &role).await;
+}
+
+#[tokio::test]
+async fn served_journal_rows_include_the_declared_posture() {
+    let upstream = UpstreamDouble::start();
+    let url = upstream.url("");
+    for (served, expected) in [
+        (Served::start(&url).await, "production"),
+        (Served::start_development(&url).await, "development"),
+    ] {
+        let token = served.token("");
+        let (status, _, _) = served.request("GET", "/v1/records/person", Some(&token), &[], b"");
+        assert_ne!(status, 500);
+        let rows = connect(&served.database)
+            .await
+            .query("SELECT posture FROM adapter_journal_events", &[])
+            .await
+            .expect("read the posture of each journal event");
+        assert!(
+            !rows.is_empty(),
+            "the exchange writes journal rows: HTTP {status}"
+        );
+        assert!(rows.iter().all(|row| row.get::<_, &str>(0) == expected));
+    }
 }

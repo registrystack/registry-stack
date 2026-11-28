@@ -14,7 +14,9 @@
 
 use std::{fmt, path::Path};
 
-use registry_mcp_edge::config::{bounded_restricting_list, ResourceServerConfigError};
+use registry_mcp_edge::config::{
+    bounded_restricting_list, record_development_settings, ResourceServerConfigError,
+};
 pub use registry_mcp_edge::config::{
     AccessTokenAlgorithm, AuditConfig, ExchangeConfig, LimitsConfig, LogLevel, RateLimitConfig,
     ResourceServerConfig, ResourceUri, ScopeToken,
@@ -22,9 +24,10 @@ pub use registry_mcp_edge::config::{
 use registry_platform_audit::AuditDestinationError;
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
-    ConfigBlockError, ConfigBlockErrorKind, DeclaredPosture, DevelopmentWitness,
+    ConfigBlockError, ConfigBlockErrorKind, DeclaredPosture, DevelopmentClass,
+    DevelopmentOnlyRefused, DevelopmentSetting, DevelopmentWitness, FoundSetting, Gated,
     LoadedRuntimeConfig, Posture, PostureSource, PrivateListenerConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig, TlsTermination,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig, SettingOrigin, TlsTermination,
 };
 use registry_platform_httputil::loopback::loopback_host;
 use registry_platform_yaml::{
@@ -163,31 +166,55 @@ pub struct ServiceConfig {
     /// `publicOrigin`, with no path, query, or fragment. Plain HTTP requires
     /// declared development posture.
     #[cfg_attr(feature = "schema", schemars(extend("x-registry-development-only" = ["breg.posture.review-http-public-origin"])))]
-    pub review_base_url: Url,
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
+    review_base_url: Gated<ReviewOrigin>,
+}
+
+static HTTP_REVIEW_ORIGIN: DevelopmentSetting = DevelopmentSetting {
+    code: "breg.posture.review-http-public-origin",
+    key: "reviewBaseUrl",
+    summary: "The review base URL is plain http",
+    production: "Use an https review base URL.",
+};
+
+/// The review page origin published in review links. Plain http is
+/// development-only on every host.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(transparent)]
+struct ReviewOrigin(Url);
+
+impl DevelopmentClass for ReviewOrigin {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&HTTP_REVIEW_ORIGIN];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        (self.0.to_url().scheme() == "http").then_some(&HTTP_REVIEW_ORIGIN)
+    }
 }
 
 impl ServiceConfig {
-    /// Record the posture requirement of the URL published in review links.
-    pub fn record_review_origin(
+    /// The review page origin, which only a development process may read when
+    /// it is plain http.
+    pub fn review_base_url(
         &self,
-        report: &mut registry_platform_config::PostureReport,
-        pointer: String,
-    ) {
-        use registry_platform_config::{DevelopmentSetting, FoundSetting, SettingOrigin};
-        static HTTP_REVIEW_ORIGIN: DevelopmentSetting = DevelopmentSetting {
-            code: "breg.posture.review-http-public-origin",
-            key: "reviewBaseUrl",
-            summary: "The review base URL is plain http",
-            production: "Use an https review base URL.",
-        };
-        if self.review_base_url.to_url().scheme() == "http" {
-            report.record(FoundSetting {
-                setting: &HTTP_REVIEW_ORIGIN,
-                pointer: Some(pointer),
+        development: Option<&DevelopmentWitness>,
+    ) -> Result<&Url, DevelopmentOnlyRefused> {
+        self.review_base_url.get(development).map(|value| &value.0)
+    }
+
+    /// The development-only setting this block holds, with its pointer under
+    /// `service`, the pointer of this block in its runtime file.
+    #[must_use]
+    pub fn development_settings(&self, service: &str) -> Vec<FoundSetting> {
+        self.review_base_url
+            .development_setting()
+            .map(|setting| FoundSetting {
+                setting,
+                pointer: Some(format!("{service}/reviewBaseUrl")),
                 position: None,
                 origin: SettingOrigin::RuntimeFile,
-            });
-        }
+            })
+            .into_iter()
+            .collect()
     }
 }
 
@@ -359,6 +386,17 @@ impl RuntimeConfig {
             TlsTermination::DevelopmentLoopback | TlsTermination::LoopbackPlaintext
         )
     }
+
+    /// Every development-only setting in the file, each with its pointer.
+    /// The reader records them, and a production gateway refuses to build
+    /// while the list is not empty.
+    #[must_use]
+    pub fn development_settings(&self) -> Vec<FoundSetting> {
+        let mut settings = self.resource_server.development_settings();
+        settings.extend(self.service.development_settings("/service"));
+        settings.extend(self.audit.development_settings());
+        settings
+    }
 }
 
 /// Check the runtime file at the absolute `path` as `breg-mcp serve` reads
@@ -403,14 +441,7 @@ fn read_runtime(
         stand_in_for,
     );
     if let Some(loaded) = check.loaded.as_mut() {
-        loaded
-            .config
-            .resource_server
-            .record_posture(&mut loaded.posture);
-        loaded
-            .config
-            .service
-            .record_review_origin(&mut loaded.posture, "/service/reviewBaseUrl".to_owned());
+        record_development_settings(&mut loaded.posture, loaded.config.development_settings());
     }
     let mut diagnostics = check.loaded.as_ref().map_or_else(
         || check.diagnostics.clone(),
@@ -505,7 +536,7 @@ fn findings(
             .iter()
             .map(resource_server_finding),
     );
-    endpoint_findings(config, &mut findings);
+    endpoint_findings(config, development, &mut findings);
     cross_member_findings(config, defers, development, &mut findings);
     if let Err(error) = config.audit.destination() {
         findings.push(audit_finding(&error));
@@ -515,7 +546,11 @@ fn findings(
 
 /// Every endpoint the gateway serves or calls is https with no query or
 /// fragment, or plain HTTP on a loopback host.
-fn endpoint_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
+fn endpoint_findings(
+    config: &RuntimeConfig,
+    development: Option<&DevelopmentWitness>,
+    findings: &mut Vec<Finding>,
+) {
     let endpoints = [
         ("/registry/baseUrl", &config.registry.base_url),
         ("/exchange/tokenEndpoint", &config.exchange.token_endpoint),
@@ -539,8 +574,13 @@ fn endpoint_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
             ));
         }
     }
-    // The review page serves its pages at the root of its publicOrigin.
-    let review = config.service.review_base_url.to_url();
+    // The review page serves its pages at the root of its publicOrigin. A
+    // plain http origin read without the witness is the posture report's
+    // finding.
+    let Ok(review) = config.service.review_base_url(development) else {
+        return;
+    };
+    let review = review.to_url();
     if review.query().is_some() || review.fragment().is_some() {
         findings.push(Finding::new(
             "breg.mcp-runtime.endpoint-query-or-fragment",
@@ -642,6 +682,9 @@ fn pointer_of(dotted: &str) -> String {
         .collect()
 }
 
+/// The one remedy for a refused resource-server issuer, in both MCP runtimes.
+pub const ISSUER_REMEDY: &str = "Write an https issuer URL. For plain http, start with `rstack dev` or declare development with REGISTRY_STACK_POSTURE=development or --posture development; beyond loopback, also set resourceServer.allowInsecureHttp: true.";
+
 fn resource_server_finding(error: &ResourceServerConfigError) -> Finding {
     match error {
         ResourceServerConfigError::InvalidResource => Finding::new(
@@ -671,8 +714,8 @@ fn resource_server_finding(error: &ResourceServerConfigError) -> Finding {
         ResourceServerConfigError::InsecureIssuer => Finding::new(
             "breg.mcp-runtime.plain-http-endpoint",
             "/resourceServer/issuer",
-            "the endpoint uses plain http, which is accepted only on a loopback host",
-            "Write an https URL or a plain http loopback URL. For a laptop or test run, set resourceServer.allowInsecureHttp: true and start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+            "the issuer uses plain http beyond loopback without allowInsecureHttp",
+            ISSUER_REMEDY,
         ),
         ResourceServerConfigError::JwksSource(error)
         | ResourceServerConfigError::JwksDocumentReference(error) => block_finding(error),
@@ -896,6 +939,11 @@ rateLimits:
     }
 
     pub(crate) fn service() -> ServiceConfig {
+        service_reviewed_at("https://review.example.test/")
+    }
+
+    /// The test service, with its review page at `review_base_url`.
+    pub(crate) fn service_reviewed_at(review_base_url: &str) -> ServiceConfig {
         ServiceConfig {
             name: ServiceText::new("Address correction").expect("service name"),
             description: ServiceText::new("Correct the postal address the registry holds for you.")
@@ -909,7 +957,8 @@ rateLimits:
                 action: LocalId::new("correct-address").expect("application action"),
                 target_input: LocalId::new("address").expect("application target input"),
             },
-            review_base_url: Url::new("https://review.example.test/").expect("review base URL"),
+            review_base_url: serde_json::from_value(serde_json::json!(review_base_url))
+                .expect("review base URL"),
         }
     }
 
@@ -1349,6 +1398,111 @@ rateLimits:
     }
 
     #[test]
+    fn malformed_configuration_still_reports_http_issuer_and_review_origin() {
+        let source = document()
+            .replace(
+                "  issuer: https://login.example.test",
+                "  issuer: http://127.0.0.1:8111",
+            )
+            .replace(
+                "reviewBaseUrl: https://review.example.test",
+                "reviewBaseUrl: http://127.0.0.1:8113",
+            );
+        let findings = findings_of(&format!("{source}unknown: true\n"));
+        assert!(findings.contains(&("config.unknown-key".to_owned(), "/unknown".to_owned())));
+        for (code, pointer) in [
+            (
+                "platform.posture.mcp-http-published-issuer",
+                "/resourceServer/issuer",
+            ),
+            (
+                "breg.posture.review-http-public-origin",
+                "/service/reviewBaseUrl",
+            ),
+        ] {
+            assert!(
+                findings.contains(&(code.to_owned(), pointer.to_owned())),
+                "{code}: {findings:?}"
+            );
+        }
+    }
+
+    /// Every gated member is recorded while the file decodes, at the pointer
+    /// `development_settings` names, so the runtime's own list and the
+    /// loader's report cannot drift apart.
+    #[test]
+    fn development_settings_list_what_the_decoder_records() {
+        let yaml = document()
+            .replace("https://gateway.example.test/mcp", "http://10.0.0.4/mcp")
+            .replace(
+                "  issuer: https://login.example.test",
+                "  issuer: http://login.example.test\n  allowInsecureHttp: true",
+            )
+            .replace(
+                "    type: uri\n    uri: https://login.example.test/jwks.json",
+                "    type: test-issuer\n    documentRef: secret:file/test-issuer-jwks",
+            )
+            .replace(
+                "reviewBaseUrl: https://review.example.test",
+                "reviewBaseUrl: http://review.example.test",
+            )
+            .replace(
+                "audit:\n",
+                "audit:\n  hashKeyCustody: development-generated\n",
+            );
+        let (_directory, path) = written(&yaml);
+        let declared = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+            &path,
+            true,
+            stand_in_for,
+        );
+        let loaded = check.loaded.expect("development decodes the document");
+        let pairs = |settings: &[registry_platform_config::FoundSetting]| {
+            let mut pairs: Vec<(&str, Option<String>)> = settings
+                .iter()
+                .map(|found| (found.setting.code, found.pointer.clone()))
+                .collect();
+            pairs.sort();
+            pairs
+        };
+        let listed = loaded.config.development_settings();
+        assert_eq!(listed.len(), 6, "{:?}", pairs(&listed));
+        assert_eq!(pairs(&listed), pairs(loaded.posture.settings()));
+    }
+
+    #[test]
+    fn an_http_issuer_beyond_loopback_names_its_one_remedy() {
+        let source = document().replace(
+            "  issuer: https://login.example.test",
+            "  issuer: http://login.example.test",
+        );
+        let (_directory, path) = written(&source);
+        let check = check_runtime_with_posture(
+            &path,
+            true,
+            DeclaredPosture {
+                posture: Posture::Development,
+                source: PostureSource::Flag,
+            },
+        );
+        let diagnostic = check
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.mcp-runtime.plain-http-endpoint")
+            .unwrap_or_else(|| panic!("{:?}", check.diagnostics));
+        assert_eq!(diagnostic.path, "/resourceServer/issuer");
+        assert_eq!(
+            diagnostic.message,
+            "the issuer uses plain http beyond loopback without allowInsecureHttp"
+        );
+        assert_eq!(diagnostic.suggested_action, "Write an https issuer URL. For plain http, start with `rstack dev` or declare development with REGISTRY_STACK_POSTURE=development or --posture development; beyond loopback, also set resourceServer.allowInsecureHttp: true.");
+    }
+
+    #[test]
     fn published_review_origin_requires_development_for_any_http_host() {
         for host in ["127.0.0.1", "review.example.test"] {
             let source =
@@ -1404,11 +1558,19 @@ rateLimits:
                 "    type: test-issuer\n    documentRef: secret:file/test-issuer-jwks",
             )
             .replace(
+                "reviewBaseUrl: https://review.example.test",
+                "reviewBaseUrl: http://review.example.test",
+            )
+            .replace(
                 "audit:\n",
                 "audit:\n  hashKeyCustody: development-generated\n",
             );
         let (_directory, path) = written(&yaml);
         let expected = [
+            (
+                "breg.posture.review-http-public-origin",
+                "/service/reviewBaseUrl",
+            ),
             (
                 "platform.posture.mcp-http-published-issuer",
                 "/resourceServer/issuer",

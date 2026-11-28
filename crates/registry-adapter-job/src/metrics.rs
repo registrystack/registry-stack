@@ -347,6 +347,20 @@ struct ScrapeState {
 
 /// The router the metrics listener serves: the counters and nothing else.
 pub fn metrics_router(metrics: Arc<JobMetrics>, pool: Pool, job_id: &str) -> Router {
+    metrics_router_in_posture(
+        metrics,
+        pool,
+        job_id,
+        registry_platform_config::Posture::Production,
+    )
+}
+
+pub fn metrics_router_in_posture(
+    metrics: Arc<JobMetrics>,
+    pool: Pool,
+    job_id: &str,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route(METRICS_PATH, get(scrape))
         .with_state(ScrapeState {
@@ -355,6 +369,7 @@ pub fn metrics_router(metrics: Arc<JobMetrics>, pool: Pool, job_id: &str) -> Rou
             job_id: Arc::from(job_id),
             samples: Arc::new(SampleCache::new(SAMPLE_CACHE)),
         })
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 /// Serve the metrics router until `shutdown` resolves, then give open

@@ -137,7 +137,6 @@ database:
 oidc:
   issuer: http://127.0.0.1:9
   audience: breg-govstack-contract-test
-  allowInsecureHttp: true
   jwksSource:
     type: static
     documentRef: secret:env/CONTRACT_TEST_JWKS

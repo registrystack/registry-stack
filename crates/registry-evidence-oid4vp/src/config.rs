@@ -18,9 +18,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use registry_platform_config::{
     check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, ConfigBlockErrorKind,
-    JwksSource, ListenerNetworkExposure, MetricsBindError, OidcIssuerConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvidersConfig, SecretReference,
-    DEFAULT_STAND_IN,
+    DeclaredPosture, JwksSource, ListenerNetworkExposure, MetricsBindError, OidcIssuerConfig,
+    PostureReport, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck,
+    SecretProvidersConfig, SecretReference, DEFAULT_STAND_IN,
 };
 use registry_platform_oidc::AccessTokenAlgorithm;
 use registry_platform_yaml::{
@@ -61,11 +61,14 @@ const REMOVED_KEYS: &[RemovedKey] = &[
 
 /// The shared runtime reader for a runtime file.
 #[must_use]
-pub const fn loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-        api_version: OID4VP_RUNTIME_API_VERSION,
-        kind: OID4VP_RUNTIME_KIND,
-    })
+pub const fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+    RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: OID4VP_RUNTIME_API_VERSION,
+            kind: OID4VP_RUNTIME_KIND,
+        },
+        declared,
+    )
     .removed_keys(REMOVED_KEYS)
     .require_trusted_ownership()
 }
@@ -142,8 +145,8 @@ pub struct RuntimeCheck {
 /// checked by syntax and position only, and a rule that reads its value is
 /// left out.
 #[must_use]
-pub fn check_file(path: &Path, substitute: bool) -> RuntimeCheck {
-    let check = loader().check_offline::<VerifierDocument>(path, substitute, stand_in_for);
+pub fn check_file(path: &Path, substitute: bool, declared: DeclaredPosture) -> RuntimeCheck {
+    let check = loader(declared).check_offline::<VerifierDocument>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
     if let Some(loaded) = &check.loaded {
         diagnostics.extend(
@@ -363,6 +366,7 @@ pub struct RateLimitConfig {
 /// The whole startup configuration.
 #[derive(Debug)]
 pub struct Oid4vpConfig {
+    pub posture: PostureReport,
     /// The public origin wallets reach, without a trailing slash.
     pub public_base_url: String,
     /// The host of `public_base_url`, lowercase, without a port.
@@ -400,26 +404,32 @@ impl Oid4vpConfig {
     }
 
     /// Load and validate the runtime file at the absolute `path`.
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        Self::load_reporting(path).map(|(config, _)| config)
+    pub fn load(path: &Path, declared: DeclaredPosture) -> Result<Self, ConfigError> {
+        Self::load_reporting(path, declared).map(|(config, _)| config)
     }
 
     /// Load and validate the runtime file at the absolute `path`, returning
     /// the warnings it carries beside the configuration.
-    pub fn load_reporting(path: &Path) -> Result<(Self, Vec<Diagnostic>), ConfigError> {
-        let mut check = loader().check_offline::<VerifierDocument>(path, true, stand_in_for);
+    pub fn load_reporting(
+        path: &Path,
+        declared: DeclaredPosture,
+    ) -> Result<(Self, Vec<Diagnostic>), ConfigError> {
+        let mut check =
+            loader(declared).check_offline::<VerifierDocument>(path, true, stand_in_for);
         let Some(loaded) = check.loaded.take() else {
             return Err(ConfigError {
                 diagnostics: std::mem::take(&mut check.diagnostics),
                 unavailable: check.unavailable,
             });
         };
-        let mut diagnostics: Vec<Diagnostic> = loaded
-            .config
-            .findings()
-            .iter()
-            .map(|finding| positioned(&check, finding))
-            .collect();
+        let mut diagnostics = std::mem::take(&mut check.diagnostics);
+        diagnostics.extend(
+            loaded
+                .config
+                .findings()
+                .iter()
+                .map(|finding| positioned(&check, finding)),
+        );
         in_file_order(&mut diagnostics);
         if diagnostics
             .iter()
@@ -430,7 +440,7 @@ impl Oid4vpConfig {
                 unavailable: false,
             });
         }
-        Ok((loaded.config.into_config(), diagnostics))
+        Ok((loaded.config.into_config(loaded.posture), diagnostics))
     }
 
     /// The policy with this identifier.
@@ -1323,7 +1333,7 @@ impl VerifierDocument {
                 &self.evidence_credentials.provider,
             ),
         ] {
-            let Err(error) = provider.check_without_posture(field, false) else {
+            let Err(error) = provider.check(field) else {
                 continue;
             };
             let member = error.field().rsplit('.').next().unwrap_or_default();
@@ -1333,8 +1343,8 @@ impl VerifierDocument {
                     "Write the audience the token issuer puts in aud.",
                 ),
                 _ => (
-                    "the issuer and its key set must be absolute https URLs without credentials, query, or fragment",
-                    "Write an https URL, or set allowInsecureHttp: true for a declared plain-HTTP issuer.",
+                    "the issuer and its key set must use HTTPS or loopback HTTP without credentials, query, or fragment; HTTP beyond loopback requires a development opt-in",
+                    "Write an HTTPS or loopback HTTP URL, or declare development and set allowInsecureHttp: true for HTTP beyond loopback.",
                 ),
             };
             let located = match member {
@@ -1439,7 +1449,7 @@ impl VerifierDocument {
         }
     }
 
-    fn into_config(self) -> Oid4vpConfig {
+    fn into_config(self, posture: PostureReport) -> Oid4vpConfig {
         let parsed = self.public_base_url.to_url();
         let public_host = parsed
             .host_str()
@@ -1453,6 +1463,7 @@ impl VerifierDocument {
             .to_owned();
         let accepted_algorithms = |list: UniqueList<AccessTokenAlgorithm>| list.into_vec();
         Oid4vpConfig {
+            posture,
             public_base_url,
             public_host,
             listener: ListenerConfig {

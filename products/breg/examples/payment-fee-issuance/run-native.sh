@@ -301,7 +301,6 @@ identity:
   environment: acceptance
   instanceId: payment-fee-issuance-$run_suffix
   databaseId: $database_id
-  databaseInitializationEnvironment: acceptance
 secretProviders:
   file: {root: $secrets}
 database:

@@ -5,7 +5,12 @@ mod common;
 
 use common::{Harness, Options};
 use registry_evidence_oid4vp::config::{check_file, Oid4vpConfig};
+use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use registry_platform_yaml::Severity;
+const PRODUCTION: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
 
 async fn startup_code(options: Options) -> String {
     let harness = Harness::new(&options).await;
@@ -90,7 +95,7 @@ async fn a_missing_secret_is_refused_without_naming_its_contents() {
 }
 
 fn codes(harness: &Harness) -> Vec<String> {
-    check_file(&harness.config_path, false)
+    check_file(&harness.config_path, false, PRODUCTION)
         .diagnostics
         .iter()
         .map(|diagnostic| diagnostic.code.clone())
@@ -104,10 +109,78 @@ fn edit(harness: &Harness, from: &str, to: &str) {
 }
 
 #[tokio::test]
+async fn posture_loopback_issuers_need_no_opt_in() {
+    let harness = Harness::new(&Options::default()).await;
+    assert_eq!(codes(&harness), Vec::<String>::new());
+    let service = harness.service().await;
+    let server = axum_test::TestServer::new(registry_evidence_oid4vp::service::build_app(service));
+    let ready = server.get("/ready").await;
+    ready.assert_status_ok();
+    assert_eq!(
+        ready.json::<serde_json::Value>(),
+        serde_json::json!({
+            "status": "ready", "posture": "production", "developmentSettings": []
+        })
+    );
+    assert!(ready.maybe_header("registry-posture").is_none());
+}
+
+#[tokio::test]
+async fn posture_insecure_issuers_are_development_only() {
+    let harness = Harness::new(&Options::default()).await;
+    let text = std::fs::read_to_string(&harness.config_path).unwrap();
+    let text = text
+        .replacen("issuer: http://127.0.0.1", "issuer: http://10.0.0.5", 1)
+        .replacen(
+            "applicantTokens:\n",
+            "applicantTokens:\n  allowInsecureHttp: true\n",
+            1,
+        );
+    std::fs::write(&harness.config_path, text).unwrap();
+    assert!(codes(&harness)
+        .iter()
+        .any(|code| code == "platform.posture.insecure-issuer-http"));
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
+    let development = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+    let config = Oid4vpConfig::load(&harness.config_path, development)
+        .expect("development accepts the setting");
+    assert_eq!(
+        config.posture.settings()[0].pointer.as_deref(),
+        Some("/applicantTokens/allowInsecureHttp")
+    );
+    let service = registry_evidence_oid4vp::service::VerifierService::load_with_clock(
+        config,
+        harness.clock(),
+    )
+    .await
+    .unwrap();
+    let server = axum_test::TestServer::new(registry_evidence_oid4vp::service::build_app(
+        std::sync::Arc::new(service),
+    ));
+    let ready = server.get("/ready").await;
+    ready.assert_status_ok();
+    ready.assert_header("registry-posture", "development");
+    assert_eq!(
+        ready.json::<serde_json::Value>(),
+        serde_json::json!({
+            "status": "ready",
+            "posture": "development",
+            "developmentSettings": [{
+                "code": "platform.posture.insecure-issuer-http",
+                "pointer": "/applicantTokens/allowInsecureHttp"
+            }]
+        })
+    );
+}
+
+#[tokio::test]
 async fn the_unedited_deployment_passes_the_offline_check() {
     let harness = Harness::new(&Options::default()).await;
     assert_eq!(codes(&harness), Vec::<String>::new());
-    assert!(Oid4vpConfig::load(&harness.config_path).is_ok());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_ok());
 }
 
 #[tokio::test]
@@ -116,7 +189,7 @@ async fn an_empty_policy_identifier_is_refused() {
     edit(&harness, "- id: national-id", "- id: \"\"");
     let codes = codes(&harness);
     assert!(!codes.is_empty());
-    assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
 }
 
 #[tokio::test]
@@ -211,7 +284,7 @@ async fn metrics_accept_loopback_and_private_addresses_and_refuse_link_local_and
             vec!["evidence.oid4vp.metrics-address".to_owned()],
             "accepted {refused}"
         );
-        assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+        assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
     }
 }
 
@@ -228,7 +301,7 @@ async fn a_metrics_refusal_names_its_cause_and_remedy() {
     ] {
         let harness = Harness::new(&Options::default()).await;
         with_metrics(&harness, bind, None);
-        let diagnostics = check_file(&harness.config_path, false).diagnostics;
+        let diagnostics = check_file(&harness.config_path, false, PRODUCTION).diagnostics;
         let action = &diagnostics
             .first()
             .unwrap_or_else(|| panic!("{bind} should be refused"))
@@ -248,7 +321,7 @@ async fn the_metrics_wildcard_needs_container_private_exposure() {
         let harness = Harness::new(&Options::default()).await;
         with_metrics(&harness, wildcard, Some("container-private"));
         assert_eq!(codes(&harness), Vec::<String>::new(), "refused {wildcard}");
-        assert!(Oid4vpConfig::load(&harness.config_path).is_ok());
+        assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_ok());
     }
     for (bind, code) in [
         ("169.254.1.1:9095", "evidence.oid4vp.metrics-address"),
@@ -345,7 +418,7 @@ async fn an_empty_claim_path_segment_is_refused() {
     let harness = Harness::new(&Options::default()).await;
     edit(&harness, "- path: [given_name]", "- path: [\"\"]");
     assert!(!codes(&harness).is_empty());
-    assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
 }
 
 #[tokio::test]
@@ -380,7 +453,7 @@ async fn response_and_read_rate_limits_have_bounds() {
             edit(&harness, &line, &format!("  {member}: {bad}"));
             assert!(!codes(&harness).is_empty(), "{member}: {bad}");
             assert!(
-                Oid4vpConfig::load(&harness.config_path).is_err(),
+                Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err(),
                 "{member}: {bad}"
             );
         }
@@ -407,7 +480,7 @@ async fn the_response_and_read_limits_default_when_omitted() {
         })
         .collect();
     std::fs::write(&harness.config_path, kept.join("\n")).unwrap();
-    let config = Oid4vpConfig::load(&harness.config_path).expect("defaults apply");
+    let config = Oid4vpConfig::load(&harness.config_path, PRODUCTION).expect("defaults apply");
     assert_eq!(config.rate_limits.wallet_responses_per_minute, 600);
     assert_eq!(config.rate_limits.responses_per_request_per_minute, 12);
     assert_eq!(config.rate_limits.evidence_read_burst, 100);
@@ -425,7 +498,7 @@ async fn a_policy_naming_an_unknown_client_identifier_is_refused() {
         codes(&harness),
         vec!["evidence.oid4vp.unknown-client-identifier".to_owned()]
     );
-    assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
 }
 
 #[tokio::test]
@@ -454,7 +527,7 @@ async fn a_policy_must_name_its_client_identifier() {
     let harness = Harness::new(&Options::default()).await;
     edit(&harness, "    clientIdentifier: haip\n", "");
     assert!(!codes(&harness).is_empty());
-    assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
 }
 
 #[tokio::test]

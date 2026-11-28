@@ -4,7 +4,7 @@
 
 #[cfg(not(all(feature = "runtime", feature = "tooling")))]
 use tokio_postgres::GenericClient;
-#[cfg(all(feature = "runtime", feature = "tooling", feature = "postgres-test"))]
+#[cfg(all(feature = "runtime", feature = "tooling"))]
 use tokio_postgres::NoTls;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use tokio_postgres::{Client, GenericClient};
@@ -1023,8 +1023,7 @@ async fn connect_schema_test_with_cause(
             });
             Ok((client, task))
         }
-        #[cfg(feature = "postgres-test")]
-        ConnectionTls::TestOnlyPlaintext => {
+        ConnectionTls::Plaintext => {
             let (client, connection) = config
                 .postgres()
                 .connect(NoTls)

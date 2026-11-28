@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The gateway over its real HTTP surface: an rmcp client talks to the
-//! complete application `runtime::build` returns, the test authorization
-//! server issues and exchanges the tokens, and a stand-in registry records
-//! everything the gateway sends.
+//! complete application `runtime::build_with_posture` returns, the test
+//! authorization server issues and exchanges the tokens, and a stand-in
+//! registry records everything the gateway sends.
 
 #[path = "support/gateway.rs"]
 mod gateway;
@@ -963,5 +963,99 @@ async fn built_gateway_reports_and_audits_its_posture_behind_a_loopback_proxy() 
         let mark: Value = serde_json::from_str(text.lines().next().expect("tool audit")).unwrap();
         assert_eq!(mark["posture"], posture.as_str());
         task.abort();
+    }
+}
+
+/// A gateway document with a static key set that production accepts, with
+/// `jwks_source` as its key source and `audit_member` added to its audit block,
+/// loaded under development.
+fn development_loaded(
+    root: &std::path::Path,
+    jwks_source: &str,
+    audit_member: &str,
+) -> registry_platform_config::LoadedRuntimeConfig<registry_breg_mcp::config::RuntimeConfig> {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+    use registry_platform_testing::jwks_from_private_jwk;
+
+    let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let secrets = gateway::write_secrets(root, &key);
+    gateway::write_secret(&secrets, "jwks", &jwks_from_private_jwk(&key).to_string());
+    let path = root.join("runtime.yaml");
+    let audit = root.join("audit.jsonl");
+    let source_text = gateway::document(&gateway::Document {
+        listen: "127.0.0.1:8110",
+        resource: "https://citizen-assistant.example.invalid/mcp",
+        issuer: "https://login.example.invalid",
+        jwks: "https://login.example.invalid/jwks",
+        registry: "http://127.0.0.1:1/",
+        token_endpoint: "http://127.0.0.1:1/token",
+        review: "https://review.example.invalid",
+        secrets: &secrets,
+        audit: &audit,
+        limits: Limits::default(),
+    })
+    .replace(
+        "type: uri\n    uri: https://login.example.invalid/jwks",
+        &format!("type: {jwks_source}\n    documentRef: secret:file/jwks"),
+    )
+    .replace("algorithms: [EdDSA]", "algorithms: [ES256]")
+    .replace("audit:\n", &format!("audit:\n{audit_member}"));
+    std::fs::write(&path, source_text).unwrap();
+    registry_breg_mcp::config::RuntimeConfig::load_with_posture(
+        &path,
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    )
+    .expect("development loads the document")
+}
+
+fn production_report() -> registry_platform_config::PostureReport {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
+    PostureReport::new(DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Flag,
+    })
+}
+
+#[tokio::test]
+async fn production_refuses_a_development_loaded_audit_key_custody() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let loaded = development_loaded(&root, "static", "  hashKeyCustody: development-generated\n");
+    let error =
+        registry_breg_mcp::runtime::build_with_posture(&loaded.config, &production_report(), None)
+            .await
+            .expect_err("production refuses a development-generated audit key");
+    let text = error.to_string();
+    assert!(
+        text.contains("production refuses development settings")
+            && text.contains("platform.posture.generated-audit-key at /audit/hashKeyCustody")
+            && text.contains("rstack dev"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_witness_that_does_not_match_the_report_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let loaded = development_loaded(&root, "test-issuer", "");
+    for (posture, development) in [
+        (&production_report(), loaded.development.as_ref()),
+        (&loaded.posture, None),
+    ] {
+        let error =
+            registry_breg_mcp::runtime::build_with_posture(&loaded.config, posture, development)
+                .await
+                .expect_err("a mismatched witness is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("the development witness does not match the declared posture"),
+            "{error}"
+        );
     }
 }

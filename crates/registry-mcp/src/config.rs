@@ -2,12 +2,12 @@
 //! Offline-checked bindings for one independently operated MCP resource server.
 use registry_breg_mcp::config::{RegistryConfig, ServiceConfig};
 use registry_mcp_edge::config::{
-    AuditConfig, ExchangeConfig, LimitsConfig, LogLevel, RateLimitConfig, ResourceServerConfig,
-    ResourceServerConfigError, ResourceUri, ScopeToken,
+    record_development_settings, AuditConfig, ExchangeConfig, LimitsConfig, LogLevel,
+    RateLimitConfig, ResourceServerConfig, ResourceServerConfigError, ResourceUri, ScopeToken,
 };
 use registry_mcp_edge::ResourceServerOptions;
 use registry_platform_config::{
-    DeclaredPosture, DevelopmentWitness, LoadedRuntimeConfig, Posture, PostureSource,
+    DeclaredPosture, DevelopmentWitness, FoundSetting, LoadedRuntimeConfig, Posture, PostureSource,
     PrivateListenerConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
     SecretReference, TlsTermination, MAX_OIDC_AUDIENCE_CHARACTERS,
 };
@@ -215,16 +215,21 @@ impl RuntimeConfig {
         self.resource_server
             .options(development, &self.name, "mcp.principal", "mcp.client")
     }
-    pub(crate) fn record_posture(&self, report: &mut registry_platform_config::PostureReport) {
-        self.resource_server.record_posture(report);
+    /// Every development-only setting in the file, each with its pointer.
+    /// The reader records them, and a production gateway refuses to build
+    /// while the list is not empty.
+    #[must_use]
+    pub fn development_settings(&self) -> Vec<FoundSetting> {
+        let mut settings = self.resource_server.development_settings();
+        settings.extend(self.audit.development_settings());
         for (index, binding) in self.bindings.iter().enumerate() {
             if let ProviderConfig::Breg { service, .. } = &binding.provider {
-                service.record_review_origin(
-                    report,
-                    format!("/bindings/{index}/provider/service/reviewBaseUrl"),
+                settings.extend(
+                    service.development_settings(&format!("/bindings/{index}/provider/service")),
                 );
             }
         }
+        settings
     }
 
     fn findings(
@@ -286,18 +291,26 @@ impl RuntimeConfig {
         let resource_errors =
             self.resource_server
                 .validate(true, &self.secret_providers, development);
-        if resource_errors.iter().any(|error| {
-            matches!(
-                error,
-                ResourceServerConfigError::InsecureResource
-                    | ResourceServerConfigError::InsecureIssuer
-            )
-        }) {
+        if resource_errors
+            .iter()
+            .any(|error| matches!(error, ResourceServerConfigError::InsecureResource))
+        {
             reject(
                 "insecure-resource-server",
                 "/resourceServer",
                 "Production resource-server URLs must protect credentials.",
                 "Write an https URL without credentials or a plain http loopback URL. For plain http beyond loopback, set resourceServer.allowInsecureHttp: true and start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+            );
+        }
+        if resource_errors
+            .iter()
+            .any(|error| matches!(error, ResourceServerConfigError::InsecureIssuer))
+        {
+            reject(
+                "insecure-resource-server",
+                "/resourceServer/issuer",
+                "The issuer uses plain http beyond loopback without allowInsecureHttp.",
+                registry_breg_mcp::config::ISSUER_REMEDY,
             );
         }
         if resource_errors.iter().any(|error| {
@@ -366,7 +379,9 @@ impl RuntimeConfig {
                     service,
                 } => {
                     let provider = format!("{pointer}/provider");
-                    let review = service.review_base_url.to_url();
+                    // A plain http origin read without the witness is the
+                    // posture report's finding.
+                    let review = service.review_base_url(development).ok().map(Url::to_url);
                     if resource
                         .is_some_and(|resource| registry.audience.as_str() == resource.as_str())
                     {
@@ -377,11 +392,12 @@ impl RuntimeConfig {
                             "Configure the distinct downstream audience admitted by BReg.",
                         );
                     }
-                    if review.path() != "/"
-                        || review.query().is_some()
-                        || review.fragment().is_some()
-                        || !matches!(review.scheme(), "https" | "http")
-                    {
+                    if review.is_some_and(|review| {
+                        review.path() != "/"
+                            || review.query().is_some()
+                            || review.fragment().is_some()
+                            || !matches!(review.scheme(), "https" | "http")
+                    }) {
                         reject(
                             "breg-review-origin-invalid",
                             &format!("{provider}/service/reviewBaseUrl"),
@@ -722,7 +738,7 @@ fn read_runtime(
     let mut check =
         RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(path, environment, stand_in);
     if let Some(loaded) = check.loaded.as_mut() {
-        loaded.config.record_posture(&mut loaded.posture);
+        record_development_settings(&mut loaded.posture, loaded.config.development_settings());
         check.diagnostics = loaded.posture.diagnostics(path);
     }
     let report = semantic_report(&check, declared);

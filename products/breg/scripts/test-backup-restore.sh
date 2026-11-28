@@ -332,7 +332,6 @@ identity:
   environment: production
   instanceId: $instance_id
   databaseId: generic-registry-production-db
-  databaseInitializationEnvironment: production
 secretProviders:
   file:
     root: $temporary_root/secrets
@@ -374,7 +373,7 @@ destinations:
     record-events:
       origin: http://$receiver_address
       path: /events
-      networkProfile: loopback-development-http
+      networkProfile: loopback-http
       dnsFamily: dual-stack-strict
       allowedPrivateCidrs: []
       hmacSha256KeyRef: secret:file/record-events-key

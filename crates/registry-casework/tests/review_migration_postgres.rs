@@ -132,10 +132,10 @@ impl Fixture {
         schema: String,
     ) -> Self {
         let (audit, capture) = CaseworkAudit::capture();
-        let migration = PostgresStore::connect_migration(&database, &secrets())
+        let migration = PostgresStore::connect_migration(&database, &secrets(), None)
             .expect("migration pool")
             .with_audit(audit);
-        let runtime_user = PostgresStore::connect_runtime(&database, &secrets())
+        let runtime_user = PostgresStore::connect_runtime(&database, &secrets(), None)
             .expect("runtime pool")
             .current_user()
             .await
@@ -152,7 +152,7 @@ impl Fixture {
     }
 
     fn runtime(&self) -> PostgresStore {
-        PostgresStore::connect_runtime(&self.database, &secrets())
+        PostgresStore::connect_runtime(&self.database, &secrets(), None)
             .expect("runtime pool")
             .with_audit(CaseworkAudit::capture().0)
     }
@@ -231,7 +231,7 @@ impl Fixture {
             runtime_url_ref: secret_ref(&url),
             ..self.database.clone()
         };
-        let store = PostgresStore::connect_runtime(&database, &secrets())
+        let store = PostgresStore::connect_runtime(&database, &secrets(), None)
             .expect("runtime pool")
             .with_audit(CaseworkAudit::capture().0);
         (role, store)
@@ -305,6 +305,7 @@ fn candidate<'a>(
     providers: &'a [&'a dyn ReviewContextProvider],
 ) -> ActivationCandidate<'a> {
     ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: DATABASE_ID,
         package_digest: digest,
         project,
@@ -596,9 +597,14 @@ async fn a_refused_audit_response_after_commit_reports_the_activation_applied_bu
     assert!(message.contains(&first) && message.contains(&activation_id.to_string()));
     assert!(message.contains("caseworkctl status"), "{message}");
     assert_eq!(fixture.ledger().await.len(), 1, "the activation committed");
-    check_activation(&fixture.runtime(), DATABASE_ID, &first)
-        .await
-        .expect("the applied package starts");
+    check_activation(
+        &fixture.runtime(),
+        DATABASE_ID,
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect("the applied package starts");
 }
 
 #[tokio::test]
@@ -682,9 +688,14 @@ async fn startup_refuses_an_unapplied_database_another_package_and_another_datab
         .await
         .expect("migrate without activating");
     let runtime = fixture.runtime();
-    let unapplied = check_activation(&runtime, DATABASE_ID, &first)
-        .await
-        .expect_err("a database with no activation is refused");
+    let unapplied = check_activation(
+        &runtime,
+        DATABASE_ID,
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("a database with no activation is refused");
     assert!(matches!(unapplied, RuntimeError::NotActivated));
     assert!(unapplied
         .to_string()
@@ -698,15 +709,25 @@ async fn startup_refuses_an_unapplied_database_another_package_and_another_datab
         .await
         .expect("apply");
     assert_eq!(
-        check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect("the active package starts"),
+        check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("the active package starts"),
         RoleMode::Single
     );
     let second = digest('b');
-    let other_package = check_activation(&runtime, DATABASE_ID, &second)
-        .await
-        .expect_err("another package is refused");
+    let other_package = check_activation(
+        &runtime,
+        DATABASE_ID,
+        &second,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("another package is refused");
     let message = other_package.to_string();
     assert!(matches!(
         other_package,
@@ -717,9 +738,14 @@ async fn startup_refuses_an_unapplied_database_another_package_and_another_datab
         "{message}"
     );
     assert!(message.contains("caseworkctl apply --runtime-config FILE"));
-    let other_database = check_activation(&runtime, "another-database", &first)
-        .await
-        .expect_err("another database's configuration is refused");
+    let other_database = check_activation(
+        &runtime,
+        "another-database",
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("another database's configuration is refused");
     assert!(matches!(other_database, RuntimeError::DatabaseIdMismatch));
     assert!(!other_database.to_string().contains("another-database"));
 }
@@ -740,9 +766,14 @@ async fn split_role_runtime_cannot_write_the_ledgers_but_still_serves() {
         .await
         .expect("the runtime role reads the schema");
     assert_eq!(
-        check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect("the runtime role starts"),
+        check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("the runtime role starts"),
         RoleMode::Split
     );
     let client = connect(&fixture.runtime_url).await;
@@ -855,9 +886,14 @@ async fn a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until
         ))
         .await
         .expect("grant the runtime role ledger authority");
-    let weakened = check_activation(&runtime, DATABASE_ID, &first)
-        .await
-        .expect_err("a split activation whose runtime role can write the ledger is refused");
+    let weakened = check_activation(
+        &runtime,
+        DATABASE_ID,
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("a split activation whose runtime role can write the ledger is refused");
     assert!(
         matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
         "{weakened}"
@@ -877,9 +913,14 @@ async fn a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until
         .expect("apply reissues the grants for the active package");
     assert_eq!(reissued.activation.role_mode, RoleMode::Split);
     assert_eq!(
-        check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect("the reissued grants start"),
+        check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("the reissued grants start"),
         RoleMode::Split
     );
 
@@ -904,9 +945,14 @@ async fn a_runtime_role_that_gained_ledger_authority_is_refused_at_startup_until
         .expect("apply records the runtime role's authority");
     assert_eq!(member.activation.role_mode, RoleMode::Single);
     assert_eq!(
-        check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect("a single-role activation starts"),
+        check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("a single-role activation starts"),
         RoleMode::Single
     );
     assert_eq!(fixture.ledger().await.len(), 3);
@@ -930,9 +976,14 @@ async fn moving_to_split_and_rotating_the_runtime_role_reapply_the_active_packag
         .expect("moving to split applies the active package again");
     assert_eq!(moved.activation.role_mode, RoleMode::Split);
     assert_eq!(
-        check_activation(&one_store, DATABASE_ID, &first)
-            .await
-            .expect("the split runtime role starts"),
+        check_activation(
+            &one_store,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("the split runtime role starts"),
         RoleMode::Split
     );
     let (two, two_store) = fixture.login_role().await;
@@ -942,9 +993,14 @@ async fn moving_to_split_and_rotating_the_runtime_role_reapply_the_active_packag
         .expect("a rotated runtime role applies the active package again");
     assert_eq!(rotated.activation.role_mode, RoleMode::Split);
     assert_eq!(
-        check_activation(&two_store, DATABASE_ID, &first)
-            .await
-            .expect("the rotated runtime role starts"),
+        check_activation(
+            &two_store,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("the rotated runtime role starts"),
         RoleMode::Split
     );
     let error = fixture
@@ -982,9 +1038,14 @@ async fn a_single_role_activation_rotated_to_a_role_without_its_grants_is_refuse
         ))
         .await
         .expect("let the rotated role read the ledgers only");
-    let missing = check_activation(&rotated, DATABASE_ID, &first)
-        .await
-        .expect_err("a split runtime role without its grants is refused");
+    let missing = check_activation(
+        &rotated,
+        DATABASE_ID,
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("a split runtime role without its grants is refused");
     assert!(
         matches!(missing, RuntimeError::RuntimeGrantsMissing),
         "{missing}"
@@ -1001,9 +1062,14 @@ async fn a_single_role_activation_rotated_to_a_role_without_its_grants_is_refuse
         .await
         .expect("grant the rotated role TRIGGER");
     assert_eq!(
-        check_activation(&rotated, DATABASE_ID, &first)
-            .await
-            .expect("a single-role activation starts"),
+        check_activation(
+            &rotated,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("a single-role activation starts"),
         RoleMode::Single
     );
     let refused = fixture
@@ -1025,9 +1091,14 @@ async fn a_single_role_activation_rotated_to_a_role_without_its_grants_is_refuse
         .expect("apply issues the rotated role its grants");
     assert_eq!(applied.activation.role_mode, RoleMode::Split);
     assert_eq!(
-        check_activation(&rotated, DATABASE_ID, &first)
-            .await
-            .expect("the rotated runtime role starts"),
+        check_activation(
+            &rotated,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("the rotated runtime role starts"),
         RoleMode::Split
     );
     assert_eq!(fixture.ledger().await.len(), 2);
@@ -1196,9 +1267,14 @@ async fn a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_st
         .await
         .expect("give the runtime role a work table");
 
-    let weakened = check_activation(&runtime, DATABASE_ID, &first)
-        .await
-        .expect_err("a runtime role that owns a Casework table is refused");
+    let weakened = check_activation(
+        &runtime,
+        DATABASE_ID,
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("a runtime role that owns a Casework table is refused");
     assert!(
         matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
         "{weakened}"
@@ -1251,9 +1327,14 @@ async fn a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_st
     // Taking the table back also took the runtime role's grants on it, so
     // startup refuses until apply reissues them, and the active package is
     // pending again rather than already active.
-    let missing = check_activation(&runtime, DATABASE_ID, &first)
-        .await
-        .expect_err("a split activation whose runtime role lost its grants is refused");
+    let missing = check_activation(
+        &runtime,
+        DATABASE_ID,
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("a split activation whose runtime role lost its grants is refused");
     assert!(
         matches!(missing, RuntimeError::RuntimeGrantsMissing),
         "{missing}"
@@ -1277,9 +1358,14 @@ async fn a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_st
         .expect("apply reissues the grants after the reassignment");
     assert_eq!(applied.activation.role_mode, RoleMode::Split);
     assert_eq!(
-        check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect("the reassigned split activation starts"),
+        check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("the reassigned split activation starts"),
         RoleMode::Split
     );
     connect(&fixture.runtime_url)
@@ -1349,9 +1435,14 @@ async fn a_runtime_role_with_create_on_the_schema_is_refused_by_apply_and_at_sta
         .batch_execute(&grant)
         .await
         .expect("grant schema CREATE again");
-    let weakened = check_activation(&runtime, DATABASE_ID, &first)
-        .await
-        .expect_err("a split activation whose runtime role can create objects is refused");
+    let weakened = check_activation(
+        &runtime,
+        DATABASE_ID,
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("a split activation whose runtime role can create objects is refused");
     assert!(
         matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
         "{weakened}"
@@ -1445,9 +1536,14 @@ async fn ledger_writes_weaken_a_split_activation_until_apply_revokes_them() {
             .batch_execute(&grant.replace("{role}", &fixture.runtime_user))
             .await
             .expect("grant the runtime role a privilege");
-        let weakened = check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect_err("the privilege weakens the split activation");
+        let weakened = check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        .expect_err("the privilege weakens the split activation");
         assert!(
             matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
             "{grant}: {weakened}"
@@ -1461,9 +1557,14 @@ async fn ledger_writes_weaken_a_split_activation_until_apply_revokes_them() {
             .expect("apply reissues the grants");
         assert_eq!(reissued.activation.role_mode, RoleMode::Split, "{grant}");
         assert_eq!(
-            check_activation(&runtime, DATABASE_ID, &first)
-                .await
-                .expect("the reissued grants start"),
+            check_activation(
+                &runtime,
+                DATABASE_ID,
+                &first,
+                registry_platform_config::Posture::Production
+            )
+            .await
+            .expect("the reissued grants start"),
             RoleMode::Split
         );
     }
@@ -1510,9 +1611,14 @@ async fn trigger_and_public_privileges_are_refused_naming_their_revoke() {
             .batch_execute(&grant)
             .await
             .expect("grant a weakening privilege");
-        let weakened = check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect_err("the privilege weakens the split activation");
+        let weakened = check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        .expect_err("the privilege weakens the split activation");
         assert!(
             matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
             "{grant}: {weakened}"
@@ -1537,9 +1643,14 @@ async fn trigger_and_public_privileges_are_refused_naming_their_revoke() {
             .await
             .expect("revoke the privilege");
         assert_eq!(
-            check_activation(&runtime, DATABASE_ID, &first)
-                .await
-                .expect("the split activation starts after the revoke"),
+            check_activation(
+                &runtime,
+                DATABASE_ID,
+                &first,
+                registry_platform_config::Posture::Production
+            )
+            .await
+            .expect("the split activation starts after the revoke"),
             RoleMode::Split,
             "{grant}"
         );
@@ -1593,9 +1704,14 @@ async fn a_trigger_left_by_a_runtime_role_that_owned_a_table_is_refused_after_re
     let fix = format!("DROP TRIGGER stray_touch ON {schema}.casework_teams");
 
     let runtime = fixture.runtime();
-    let weakened = check_activation(&runtime, DATABASE_ID, &first)
-        .await
-        .expect_err("a stray trigger weakens the split activation");
+    let weakened = check_activation(
+        &runtime,
+        DATABASE_ID,
+        &first,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect_err("a stray trigger weakens the split activation");
     assert!(
         matches!(weakened, RuntimeError::RoleModeWeakened { .. }),
         "{weakened}"
@@ -1640,9 +1756,14 @@ async fn a_trigger_left_by_a_runtime_role_that_owned_a_table_is_refused_after_re
         .expect("apply reissues the grants once the trigger is gone");
     assert_eq!(applied.activation.role_mode, RoleMode::Split);
     assert_eq!(
-        check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect("the split activation starts"),
+        check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("the split activation starts"),
         RoleMode::Split
     );
     drop(runtime);
@@ -1670,9 +1791,14 @@ async fn a_trigger_on_a_casework_table_refuses_no_single_role_apply() {
         .expect("attach a trigger");
     let runtime = fixture.runtime();
     assert_eq!(
-        check_activation(&runtime, DATABASE_ID, &first)
-            .await
-            .expect("a single-role activation starts"),
+        check_activation(
+            &runtime,
+            DATABASE_ID,
+            &first,
+            registry_platform_config::Posture::Production
+        )
+        .await
+        .expect("a single-role activation starts"),
         RoleMode::Single
     );
     let plan = runtime
@@ -1745,7 +1871,7 @@ async fn serve_refuses_an_unapplied_database_before_listening_or_writing() {
             "package": {"root": package},
             "listener": {
                 "bind": format!("127.0.0.1:{port}"),
-                "tlsTermination": "development-loopback",
+                "tlsTermination": "loopback-plaintext",
                 "networkExposure": "private-address"
             },
             "secretProviders": {"file": {"root": secrets}, "environment": {}},
@@ -1757,7 +1883,7 @@ async fn serve_refuses_an_unapplied_database_before_listening_or_writing() {
             "authentication": {"oidc": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:casework",
-                "allowedClients": "unrestricted"
+                "allowedClients": ["test-client"]
             }},
             "audit": {"path": root.path().join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
             "contextProviders": {}
@@ -1768,7 +1894,13 @@ async fn serve_refuses_an_unapplied_database_before_listening_or_writing() {
 
     let refused = tokio::time::timeout(
         Duration::from_secs(30),
-        registry_casework::serve_from_path(&runtime),
+        registry_casework::serve_from_path(
+            &runtime,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        ),
     )
     .await
     .expect("serve returns instead of serving")
@@ -1942,4 +2074,113 @@ async fn refuses_a_pre_1_0_ledger_by_name_at_plan_apply_and_startup(prefix: &str
             .collect::<Vec<_>>(),
         vec![version]
     );
+}
+
+#[tokio::test]
+async fn activation_posture_is_immutable_and_checked_at_startup() {
+    use registry_platform_config::Posture;
+    for (recorded, declared) in [
+        (Posture::Production, Posture::Development),
+        (Posture::Development, Posture::Production),
+    ] {
+        let fixture = Fixture::single("posture").await;
+        let project = project();
+        let first = digest('a');
+        let second = digest('b');
+        let first = ActivationCandidate {
+            posture: recorded,
+            ..candidate(&project, &first, &[])
+        };
+        let second = ActivationCandidate {
+            posture: declared,
+            ..candidate(&project, &second, &[])
+        };
+        let applied = fixture
+            .apply(&first)
+            .await
+            .expect("activate in the original posture");
+        assert_eq!(applied.activation.posture, recorded);
+        let runtime = fixture.runtime();
+        let plan = runtime
+            .plan_activation(&second)
+            .await
+            .expect("inspect the plan");
+        assert!(plan
+            .refusals
+            .iter()
+            .any(|refusal| refusal.code == "platform.activation.posture-mismatch"));
+        let refusal = fixture
+            .apply(&second)
+            .await
+            .expect_err("opposite posture refuses");
+        assert!(refusal_codes(&refusal)
+            .iter()
+            .any(|code| code == "platform.activation.posture-mismatch"));
+        let refusal = check_activation(&runtime, DATABASE_ID, first.package_digest, declared)
+            .await
+            .expect_err("opposite posture refuses at startup");
+        assert!(
+            matches!(refusal, RuntimeError::ActivationPostureMismatch(posture) if posture == recorded)
+        );
+        assert_eq!(fixture.ledger().await.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn production_connects_to_postgres_with_loopback_plaintext() {
+    use registry_platform_config::{DatabaseTransport, Gated};
+    let fixture = Fixture::single("loopback").await;
+    let mut config = fixture.database.clone();
+    config.test_only_plaintext = false;
+    config.transport = Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap());
+    let store = PostgresStore::connect_runtime(&config, &secrets(), None)
+        .expect("production permits the loopback transport");
+    assert_eq!(store.current_user().await.unwrap(), fixture.runtime_user);
+}
+
+#[tokio::test]
+async fn private_network_plaintext_connection_requires_a_development_witness() {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
+    let fixture = Fixture::single("private_transport").await;
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime.yaml");
+    let contents =
+        include_str!("../../../products/casework/examples/canonical-review/runtime.example.yaml")
+            .replace(
+                "database:\n",
+                "database:\n  transport: private-network-plaintext\n",
+            )
+            .replace(
+                "allowedClients: unrestricted",
+                "allowedClients: [test-client]",
+            );
+    std::fs::write(&runtime, contents).unwrap();
+    let declare = |posture| DeclaredPosture {
+        posture,
+        source: PostureSource::Flag,
+    };
+    let refusal =
+        registry_casework::RuntimeConfig::load_file(&runtime, declare(Posture::Production))
+            .unwrap_err();
+    assert_eq!(
+        refusal.code(),
+        "platform.posture.database-private-plaintext"
+    );
+
+    let development =
+        registry_casework::RuntimeConfig::load_file(&runtime, declare(Posture::Development))
+            .unwrap();
+    let mut config = fixture.database.clone();
+    config.test_only_plaintext = false;
+    config.transport = development.config.database.transport;
+    let refusal = PostgresStore::connect_runtime(&config, &secrets(), None).unwrap_err();
+    assert!(
+        matches!(refusal, registry_casework::StoreError::DatabaseTransport(error)
+        if error.code() == "platform.posture.database-private-plaintext")
+    );
+    let store =
+        PostgresStore::connect_runtime(&config, &secrets(), development.development.as_ref())
+            .expect("development permits the private-network transport");
+    assert_eq!(store.current_user().await.unwrap(), fixture.runtime_user);
 }

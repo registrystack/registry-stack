@@ -1330,7 +1330,6 @@ identity:
   environment: local
   instanceId: webhook-outbox-instance
   databaseId: webhook-outbox-database
-  databaseInitializationEnvironment: local
 secretProviders:
   file:
     root: {}
@@ -1398,10 +1397,16 @@ operationalTimeouts:
             self.secret_root.display(),
             self.package_root.display(),
         );
-        parse_runtime_config(&raw)
-            .expect("strict destination configuration parses")
-            .activate_event_destinations(compiled)
-            .expect("exact destination inventory activates")
+        parse_runtime_config(
+            &raw,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("strict destination configuration parses")
+        .activate_event_destinations(compiled)
+        .expect("exact destination inventory activates")
     }
 }
 

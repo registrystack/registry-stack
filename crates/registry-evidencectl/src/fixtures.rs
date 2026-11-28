@@ -28,6 +28,12 @@ pub enum FixturesCommand {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    pub(crate) posture: Option<String>,
     /// Evidence project directory; defaults to the current directory.
     ///
     /// This command accepts either shape: an editable project holding
@@ -214,7 +220,10 @@ fn failed_run_diagnostic(command: &str) -> JsonValue {
     })
 }
 
-pub(crate) fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
+pub(crate) fn run_fixtures(
+    args: RunArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     let runtime_path = args.project.join("runtime.yaml");
     let evidence_bin = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
     let mut editable_lock = None;
@@ -276,7 +285,7 @@ pub(crate) fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let _editable_lock = editable_lock;
     let fixture_paths = select_fixture_paths(target.fixture_paths(), args.fixture.as_deref())?;
 
-    let check_outcome = target.check(&evidence_bin, &args.project);
+    let check_outcome = target.check(&evidence_bin, &args.project, declared);
     let check_passed = check_outcome.passed;
 
     // A broken bundle makes per-fixture results meaningless, so a failing
@@ -289,6 +298,7 @@ pub(crate) fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
                 fixture_path,
                 args.case.as_deref(),
                 args.explain,
+                declared,
             );
             fixtures.push(FixtureReport {
                 path: fixture_path.to_owned(),
@@ -343,11 +353,14 @@ pub(crate) fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
 
     if args.json {
         let members = serde_json::to_value(&report).context("failed to encode the JSON report")?;
-        crate::print_report(&if overall_passed {
-            crate::report::success(args.command, "passed", members)
-        } else {
-            crate::report::refused(args.command, "failed", members)
-        });
+        crate::report::print_with_posture(
+            &if overall_passed {
+                crate::report::success(args.command, "passed", members)
+            } else {
+                crate::report::refused(args.command, "failed", members)
+            },
+            Some(declared),
+        )?;
     } else if args.junit {
         print_diagnostics(&report, true);
         crate::junit::print(args.command, &report)?;
@@ -468,13 +481,18 @@ impl FixtureTarget {
         }
     }
 
-    fn check(&self, evidence_bin: &Path, project: &Path) -> StepOutcome {
+    fn check(
+        &self,
+        evidence_bin: &Path,
+        project: &Path,
+        declared: registry_platform_config::DeclaredPosture,
+    ) -> StepOutcome {
         let mut outcome = match self {
             Self::Deployment { runtime_path, .. } => run_evidence_step(
                 evidence_bin,
                 &["check", "--runtime-config"],
                 Some(runtime_path),
-                &["--format", "json"],
+                &["--format", "json", "--posture", declared.posture.as_str()],
             ),
             Self::TargetedEditable { compilation } => {
                 let runtime = compilation.runtime_path.to_string_lossy();
@@ -482,7 +500,13 @@ impl FixtureTarget {
                     evidence_bin,
                     &["bundle-check", "--bundle"],
                     Some(&compilation.bundle_path),
-                    &["--runtime-config", runtime.as_ref(), "--json"],
+                    &[
+                        "--runtime-config",
+                        runtime.as_ref(),
+                        "--json",
+                        "--posture",
+                        declared.posture.as_str(),
+                    ],
                 )
             }
         };
@@ -509,6 +533,7 @@ impl FixtureTarget {
         fixture: &str,
         case: Option<&str>,
         explain: bool,
+        declared: registry_platform_config::DeclaredPosture,
     ) -> StepOutcome {
         // The structured trace is always requested, whether or not the caller
         // asked to see it: it is the only shape that still carries an
@@ -522,7 +547,13 @@ impl FixtureTarget {
                 if let Some(case) = case {
                     args.extend(["--case", case]);
                 }
-                args.extend(["--explain", "--explain-format", "json"]);
+                args.extend([
+                    "--explain",
+                    "--explain-format",
+                    "json",
+                    "--posture",
+                    declared.posture.as_str(),
+                ]);
                 run_evidence_step(
                     evidence_bin,
                     &["evaluate", "--runtime-config"],
@@ -661,7 +692,10 @@ fn run_evidence_step(
             let trace = structured_trace(&stdout);
             StepOutcome {
                 passed: true,
-                diagnostics: Vec::new(),
+                diagnostics: serde_json::from_str::<JsonValue>(&stdout)
+                    .ok()
+                    .and_then(|value| serde_json::from_value(value["diagnostics"].clone()).ok())
+                    .unwrap_or_default(),
                 evaluated_cases: structured_evaluated_cases(trace.as_ref())
                     .or_else(|| evaluated_cases(&stdout)),
                 stderr: None,

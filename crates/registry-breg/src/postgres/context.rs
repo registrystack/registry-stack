@@ -1993,8 +1993,9 @@ async fn begin_registry_transaction_inner<'a>(
     let state = transaction
         .query_typed_opt(
             "SELECT package_id, database_id, active_package_digest,
-                    active_activation_id::text, schema_fingerprint, maintenance_status
-             FROM registry_internal.registry_state
+                    active_activation_id::text, schema_fingerprint, maintenance_status,
+                    coalesce(to_jsonb(state) ->> 'posture', 'production')
+             FROM registry_internal.registry_state state
              WHERE singleton",
             &[],
         )
@@ -2005,7 +2006,8 @@ async fn begin_registry_transaction_inner<'a>(
         && state.get::<_, String>(1) == expected.database_id
         && state.get::<_, String>(2) == expected.package_digest
         && state.get::<_, String>(3) == expected.activation_id
-        && state.get::<_, String>(4) == expected.schema_fingerprint;
+        && state.get::<_, String>(4) == expected.schema_fingerprint
+        && state.get::<_, &str>(6) == lock_key.posture().as_str();
     if !ready {
         return Err(PostgresKernelError::RegistryUnavailable.into());
     }

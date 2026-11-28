@@ -432,7 +432,7 @@ fn runtime_yaml(base_url: &str) -> String {
         "allowedPrivateCidrs": ["192.168.0.0/16"],
         "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "testOnlyPlaintext": true
+            "transport": "loopback-plaintext"
         }
     });
     serde_json::to_string_pretty(&config).expect("the runtime config renders")
@@ -457,7 +457,7 @@ fn direct_breg_runtime_yaml(
         "allowedPrivateCidrs": ["192.168.0.0/16"],
         "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "testOnlyPlaintext": true
+            "transport": "loopback-plaintext"
         },
         "destinations": {
             "breg-test": {
@@ -831,7 +831,7 @@ triggers:
             },
             "store": {
                 "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-                "testOnlyPlaintext": true
+                "transport": "loopback-plaintext"
             }
         });
         std::fs::write(
@@ -846,4 +846,26 @@ triggers:
             runtime,
         }
     }
+}
+
+/// A disposable PostgreSQL database URL with a numeric loopback host.
+#[cfg(feature = "postgres-test")]
+pub fn test_database_url() -> String {
+    let url = std::env::var("ADAPTER_TEST_DATABASE_URL")
+        .expect("ADAPTER_TEST_DATABASE_URL must name a numeric loopback host");
+    validate_test_database_url(&url);
+    url
+}
+
+#[cfg(feature = "postgres-test")]
+pub fn validate_test_database_url(url: &str) {
+    use tokio_postgres::config::Host;
+
+    assert!((url.starts_with("postgresql://") || url.starts_with("postgres://"))
+             && url.parse::<tokio_postgres::Config>().is_ok_and(|config| {
+        let hosts = config.get_hosts();
+        !hosts.is_empty() && hosts.iter().all(|host| {
+            matches!(host, Host::Tcp(name) if registry_platform_loopback::loopback_literal(name).is_some())
+        }) && config.get_hostaddrs().iter().all(|address| registry_platform_loopback::loopback_address(*address))
+    }), "ADAPTER_TEST_DATABASE_URL must name a numeric loopback host");
 }

@@ -34,7 +34,7 @@ product can take back.
 | Holder of the migration credential | Applying a reviewed package and running operator commands (`bregctl apply`, `adopt`, `hook discard`, erasure). | Applying any valid successor of the active package. Packages are unsigned (`BREG-SEC-02`). |
 | Holder of the runtime credential | Serving reads and writes through the generated row-level security policies. | In split-role mode, nothing beyond what the grants allow (`BREG-SEC-04`, `BREG-SEC-118`, `BREG-SEC-119`); the grants include reading any row by setting the transaction context the policies read (see [Read boundary](#read-boundary)). In single-role mode, rewriting the activation ledger. |
 | Database superuser | Nothing is withheld from a superuser. | Editing the ledger, the instance claim, or any row. The activation audit stream is the independent trace. |
-| Operator who writes the runtime file | Naming the issuer, JWKS source, listeners, secret references, and destinations. | Naming a private-network issuer or an HTTP issuer when `allowInsecureHttp` is set. |
+| Operator who writes the runtime file | Naming the issuer, JWKS source, listeners, secret references, and destinations. | Naming a private-network issuer, or a non-loopback HTTP issuer in development with `allowInsecureHttp` set. |
 | Token issuer | Authenticating callers and signing the claims the access profiles map to authority. | An issuer that signs wrong claims. BReg verifies signature, issuer, audience, and lifetime; it does not second-guess the claims. |
 | Review, evidence, and function providers | Their own decisions, within the exact bindings BReg freezes. | A provider that decides wrongly. BReg binds the result to the frozen request but does not judge it (`BREG-SEC-34`). |
 | Host users who can write audit files | Nothing. | Rewriting or removing lines of a local audit file. Ship the stream to append-only storage (obligation 2). |
@@ -550,15 +550,30 @@ The residuals refer to these obligations by number.
    {/* Evidence: crates/registry-breg/src/migration.rs, MAX_BACKUP_AGE_SECONDS. */}
 6. Choose the production identity.
    Set `canonicalBaseIri` to a hostname you control before packaging.
-   Only the reserved `.invalid` namespace is refused.
-   {/* Evidence: crates/registry-breg/src/compiler.rs, reserved_production_iri,
-        deployment_diagnostics. */}
+   A reserved `.invalid` placeholder identity and local-file data-key custody
+   require the development posture. Production uses Transit for field encryption.
+   Development HTTP responses carry `Registry-Posture: development`, and journal
+   entries carry `posture`. Production BReg refuses development task-grant
+   status responses and signed development task assertions. A development
+   runtime accepts development task-grant peers. BReg omits HSTS on loopback
+   listeners in development. Production sends HSTS on every listener.
+   Run your stack under one posture. A deployment that uses key-file signing in Render or
+   Evidence runs in development. Use Transit for production signing.
+   {/* Evidence: crates/registry-breg/src/compiler.rs, deployment_diagnostics;
+        crates/registry-breg/src/field_encryption.rs, BREG_LOCAL_KEY_CUSTODY;
+        crates/registry-breg/src/api/mod.rs, authenticated_router_with_listener;
+        crates/registry-breg/src/startup.rs, open_registry_audit;
+        crates/registry-breg/src/auth.rs, grant_context_check;
+        crates/registry-platform-oidc/src/task_grant.rs, TaskGrantStatusClient. */}
 7. Use TLS to PostgreSQL and an HTTPS issuer.
    `database.testOnlyPlaintext` is refused unless BReg was built with its test-only PostgreSQL
    feature.
-   Loopback HTTP is accepted for an issuer; anything else needs
-   `authentication.oidc.allowInsecureHttp: true`, which is logged at startup and reported by
-   `bregctl doctor` (`BREG-RES-17`).
+   Loopback HTTP is accepted for an issuer in either posture. Non-loopback
+   HTTP requires development and `authentication.oidc.allowInsecureHttp: true`
+   (`BREG-RES-17`).
+   Set `listener.publicOrigin` to HTTPS in production. A loopback HTTP public
+   origin requires development.
+   {/* Evidence: crates/registry-breg/tests/runtime_config.rs, http_public_origin_requires_development_posture. */}
    For an issuer and for `listener.publicOrigin`, loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case. BReg connects to an issuer named `localhost` only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
    A pinned key set (`authentication.oidc.jwksSource.type: static`) holds public keys only.
    BReg refuses a key that carries a private or symmetric member (`d`, `p`, `q`, `dp`, `dq`, `qi`,
@@ -977,14 +992,11 @@ Each lists the condition, the consequence, the mitigation, and the related matri
   Access explanations are review aids; runtime admission is authoritative.
   The same-engine fingerprint comparison when rehearsing over a predecessor does not stop `test`;
   the strict final check still catches any effect on the candidate.
-  The deployment identity check guards against accident, not against an operator who means to
-  bypass it: a database initialised for `local` accepts the reserved identity.
 - Mitigation: treat availability as a form hint and handle Invoke refusal.
 - Related: `BREG-SEC-186`.
 
 {/* Evidence: crates/registry-breg/tests/postgres_immediate_action_requirements.rs,
-    immediate_action_availability_preserves_disclosure_and_commit_boundaries;
-    crates/registry-breg/src/startup.rs, database_initialization_environment. */}
+    immediate_action_availability_preserves_disclosure_and_commit_boundaries. */}
 
 ### `BREG-RES-14`: a global unique constraint reveals that a value is taken
 
@@ -1042,12 +1054,11 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 
 - Condition: the runtime file names an issuer or JWKS URI.
 - Consequence: BReg trusts a declared issuer or JWKS URI on the operator's word.
-  Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
-  keys.
+  In development with `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute keys.
   The residual is shared across products and set out in [Token issuer and key endpoints](../#token-issuer-and-key-endpoints).
   `breg-review` never takes the HTTP opt-in, because it sends client credentials to the token
   endpoint.
-- Mitigation: use an HTTPS issuer; leave `allowInsecureHttp` off.
+- Mitigation: use an HTTPS issuer and leave `allowInsecureHttp` off.
 - Related: `BREG-SEC-19`.
 
 {/* Evidence: crates/registry-breg/tests/runtime_config.rs,

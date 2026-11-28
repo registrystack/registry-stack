@@ -62,13 +62,14 @@ pub(crate) struct HistoryRebaselineLifecycleOutcome {
 }
 
 pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: HistoryRebaselineLifecycleRequest<'_>,
 ) -> Result<HistoryRebaselineLifecycleOutcome, HistoryRebaselineLifecycleError> {
     if !request.runtime_config.is_absolute() {
         return Err(HistoryRebaselineLifecycleError::RuntimeConfigPath);
     }
     let rebaseline = load_rebaseline_request(request.request_file)?;
-    let config = load_runtime_config(request.runtime_config)
+    let config = load_runtime_config(request.runtime_config, posture)
         .map_err(HistoryRebaselineLifecycleError::RuntimeConfig)?;
     let package = config
         .load_active_package()

@@ -195,6 +195,35 @@ fn assert_usage_refusal(arguments: &[&str]) {
     );
 }
 
+#[test]
+fn posture_conflict_is_a_usage_error() {
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args([
+            "--format",
+            "json",
+            "check",
+            ".",
+            "--target",
+            "target.yaml",
+            "--production",
+            "--posture",
+            "development",
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .expect("run evidencectl");
+    assert_eq!(output.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "usage-error");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "platform.posture.conflict");
+    assert_eq!(
+        diagnostic["message"],
+        "--production and --posture development contradict each other"
+    );
+    assert_eq!(diagnostic["suggestedAction"], "Use one of them.");
+}
+
 fn evidencectl(arguments: &[&str]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(arguments)

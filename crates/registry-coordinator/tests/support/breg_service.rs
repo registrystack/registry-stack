@@ -283,7 +283,7 @@ impl Breg {
             let mut config = json!({
                 "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1", "kind":"BRegRuntimeConfig",
             "listener":{"bind":address.to_string()},
-                "identity":{"environment":"test", "instanceId":"coordinator-action-proof", "databaseId":"coordinator-action-proof", "databaseInitializationEnvironment":"test"},
+                "identity":{"environment":"test", "instanceId":"coordinator-action-proof", "databaseId":"coordinator-action-proof"},
                 "secretProviders":{"file":{"root":service.root}},
                 "database":{"runtimeUrlRef":format!("secret:file/database-{database}-1"), "migrationUrlRef":format!("secret:file/database-{database}-0"), "testOnlyPlaintext":true,
                     "pool":{"maximumConnections":4}, "roles":{"migration":service.roles[0], "runtime":service.roles[1]}},
@@ -309,7 +309,7 @@ impl Breg {
             if let Some(origin) = event_origin {
                 config["destinations"] = json!({"hooks":{"coordinator":{
                     "origin":format!("{origin}/"),"path":"/v1/events/proposal-event-proof/submitted",
-                    "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
+                    "networkProfile":"loopback-http","dnsFamily":"dual-stack-strict",
                     "allowedPrivateCidrs":[],"hmacSha256KeyRef":"secret:file/event-key",
                     "classificationCeiling":"internal","deliveryCeilings":{"attemptTimeoutMilliseconds":1000,"maximumAttempts":3}
                 }}});

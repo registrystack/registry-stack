@@ -3,7 +3,6 @@
 use std::{error::Error as _, fmt, str::FromStr, sync::OnceLock, time::Duration};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
-#[cfg(feature = "postgres-test")]
 use tokio_postgres::NoTls;
 use tokio_postgres::{config::SslMode, CancelToken, Config};
 use tokio_postgres_rustls::MakeRustlsConnect;
@@ -53,6 +52,8 @@ pub enum TlsPolicy {
     RequireNativeRoots,
     /// Require TLS and validate the server certificate with one explicit CA.
     RequireCustomCa,
+    /// Plaintext under the deployment's configured host policy.
+    Plaintext,
     /// Permit plaintext only in an isolated test environment.
     #[cfg(feature = "postgres-test")]
     TestOnlyPlaintext,
@@ -110,14 +111,12 @@ enum Transport {
         policy: TlsPolicy,
         connector: MakeRustlsConnect,
     },
-    #[cfg(feature = "postgres-test")]
-    TestOnlyPlaintext,
+    Plaintext(TlsPolicy),
 }
 
 pub(crate) enum ConnectionTls {
     Rustls(MakeRustlsConnect),
-    #[cfg(feature = "postgres-test")]
-    TestOnlyPlaintext,
+    Plaintext,
 }
 
 impl fmt::Debug for ConnectionConfig {
@@ -223,17 +222,29 @@ impl ConnectionConfig {
     /// Constructs a plaintext connection from an already parsed configuration
     /// for isolated real-PostgreSQL tests.
     #[cfg(feature = "postgres-test")]
-    pub fn from_test_config(mut postgres: Config, pool_bounds: PoolBounds) -> Result<Self> {
+    pub fn from_test_config(postgres: Config, pool_bounds: PoolBounds) -> Result<Self> {
+        Self::plaintext_with_policy(postgres, pool_bounds, TlsPolicy::TestOnlyPlaintext)
+    }
+
+    pub(crate) fn plaintext_config(postgres: Config, pool_bounds: PoolBounds) -> Result<Self> {
+        Self::plaintext_with_policy(postgres, pool_bounds, TlsPolicy::Plaintext)
+    }
+
+    fn plaintext_with_policy(
+        mut postgres: Config,
+        pool_bounds: PoolBounds,
+        policy: TlsPolicy,
+    ) -> Result<Self> {
         postgres.ssl_mode(SslMode::Disable);
         name_session(&mut postgres);
         if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
             return Err(PostgresKernelError::Configuration(
-                "test database configuration requires an explicit user and database",
+                "database configuration requires an explicit user and database",
             ));
         }
         Ok(Self {
             postgres,
-            transport: Transport::TestOnlyPlaintext,
+            transport: Transport::Plaintext(policy),
             pool_bounds,
         })
     }
@@ -292,16 +303,14 @@ impl ConnectionConfig {
     pub(crate) fn tls_policy(&self) -> TlsPolicy {
         match &self.transport {
             Transport::Tls { policy, .. } => *policy,
-            #[cfg(feature = "postgres-test")]
-            Transport::TestOnlyPlaintext => TlsPolicy::TestOnlyPlaintext,
+            Transport::Plaintext(policy) => *policy,
         }
     }
 
     pub(crate) fn tls_connector(&self) -> ConnectionTls {
         match &self.transport {
             Transport::Tls { connector, .. } => ConnectionTls::Rustls(connector.clone()),
-            #[cfg(feature = "postgres-test")]
-            Transport::TestOnlyPlaintext => ConnectionTls::TestOnlyPlaintext,
+            Transport::Plaintext(_) => ConnectionTls::Plaintext,
         }
     }
 
@@ -324,8 +333,7 @@ impl ConnectionConfig {
             ConnectionTls::Rustls(connector) => {
                 Manager::from_config(self.postgres.clone(), connector, manager_config)
             }
-            #[cfg(feature = "postgres-test")]
-            ConnectionTls::TestOnlyPlaintext => {
+            ConnectionTls::Plaintext => {
                 Manager::from_config(self.postgres.clone(), NoTls, manager_config)
             }
         };
@@ -601,8 +609,7 @@ impl RuntimePool {
     pub(crate) async fn cancel_query(&self, token: CancelToken) -> Result<()> {
         match &self.transport {
             Transport::Tls { connector, .. } => token.cancel_query(connector.clone()).await?,
-            #[cfg(feature = "postgres-test")]
-            Transport::TestOnlyPlaintext => token.cancel_query(NoTls).await?,
+            Transport::Plaintext(_) => token.cancel_query(NoTls).await?,
         }
         Ok(())
     }

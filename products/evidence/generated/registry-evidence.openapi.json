@@ -1988,6 +1988,32 @@
       "ReadyStatus": {
         "additionalProperties": false,
         "properties": {
+          "developmentSettings": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "pointer"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "development",
+              "production"
+            ],
+            "type": "string"
+          },
           "status": {
             "enum": [
               "ready"
@@ -1996,7 +2022,9 @@
           }
         },
         "required": [
-          "status"
+          "status",
+          "posture",
+          "developmentSettings"
         ],
         "type": "object"
       },

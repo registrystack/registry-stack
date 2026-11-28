@@ -41,6 +41,17 @@ fn evaluate(project: &LoadedProject, fixture: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .arg("evaluate")
+        .args([
+            "--posture",
+            if project.bundle.config.assurance_profile
+                == registry_evidence_verifier::AssuranceProfile::Local
+            {
+                "development"
+            } else {
+                "production"
+            },
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(&project.runtime_path)
         .arg("--fixture")
@@ -371,7 +382,18 @@ fn load_project_with(
             String::from_utf8_lossy(&activated.stderr)
         );
     }
-    let deployment = DeploymentInputs::load(&runtime_path).unwrap_or_else(|error| {
+    let deployment = DeploymentInputs::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: if project_name == "public-check-evidence" {
+                registry_platform_config::Posture::Development
+            } else {
+                registry_platform_config::Posture::Production
+            },
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .unwrap_or_else(|error| {
         panic!("{project_name}: production deployment loading failed: {error:?}")
     });
     let (loaded_bundle, _loaded_runtime) = deployment.into_parts();

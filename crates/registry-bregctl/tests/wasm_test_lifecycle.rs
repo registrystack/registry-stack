@@ -241,12 +241,18 @@ impl ProjectFixture {
         )
         .expect("runtime configuration writes");
         set_private(&runtime_config);
-        registry_breg::runtime_config::load_runtime_config(&runtime_config)
-            .expect("runtime configuration loads")
-            .secret_resolver()
-            .expect("runtime secret resolver builds")
-            .resolve("secret:file/operator-token")
-            .expect("operator token resolves through the public runtime configuration");
+        registry_breg::runtime_config::load_runtime_config(
+            &runtime_config,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
+        )
+        .expect("runtime configuration loads")
+        .secret_resolver()
+        .expect("runtime secret resolver builds")
+        .resolve("secret:file/operator-token")
+        .expect("operator token resolves through the public runtime configuration");
 
         let credentials = root_path.join("credentials.yaml");
         fs::write(
@@ -389,7 +395,7 @@ identity:
   environment: local
   instanceId: {INSTANCE_ID}
   databaseId: {DATABASE_ID}
-  databaseInitializationEnvironment: local
+
 secretProviders:
   file: {{root: {}}}
 database:

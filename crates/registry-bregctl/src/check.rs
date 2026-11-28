@@ -157,6 +157,7 @@ struct Outcome {
 }
 
 pub(super) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: &Request<'_>,
     format: OutputFormat,
     stdout: &mut dyn Write,
@@ -173,6 +174,7 @@ pub(super) fn run(
             let compiled = check_project(project, profile, &mut outcome);
             if let Some(runtime) = request.runtime_config {
                 check_runtime_file(
+                    posture,
                     runtime,
                     request.environment,
                     compiled.as_ref(),
@@ -205,7 +207,7 @@ pub(super) fn run(
         0
     };
     let passed = exit == 0;
-    let written = if format == OutputFormat::Json {
+    let written = if format.is_json() {
         let diagnostics = ranked_diagnostics(outcome.report.diagnostics());
         let report = CheckReport {
             ok: passed,
@@ -223,7 +225,7 @@ pub(super) fn run(
             package_digest: outcome.package_digest.as_deref().filter(|_| passed),
             diagnostics,
         };
-        write_ctl_report(&mut *stdout, &report)
+        write_ctl_report(format, &mut *stdout, &report)
             .map_err(std::io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else if passed {
@@ -765,8 +767,20 @@ fn compile_project_with_documents(
     // deployment, so it also reports the identity a deployable package must
     // not carry.
     if profile == ProfileArg::Production {
+        let mut posture = registry_platform_config::PostureReport::new(crate::DEFAULT_POSTURE);
+        registry_breg::compiler::record_project_posture(&mut posture, &source.project);
+        let posture_diagnostics = posture.diagnostics(&project.join("registry.yaml"));
         for refusal in registry_breg::compiler::deployment_diagnostics(&source.project) {
-            diagnostics.push(place(project, &documents, refusal, Severity::Error));
+            let mut finding = place(project, &documents, refusal, Severity::Error);
+            if let Some(posture_diagnostic) = posture_diagnostics
+                .iter()
+                .find(|item| item.code == finding.code)
+            {
+                finding
+                    .suggested_action
+                    .clone_from(&posture_diagnostic.suggested_action);
+            }
+            diagnostics.push(finding);
         }
     }
     match compile_captured_registry(&source, profile) {
@@ -1206,6 +1220,7 @@ fn file_diagnostic(
 }
 
 fn check_runtime_file(
+    posture: registry_platform_config::DeclaredPosture,
     path: &Path,
     environment: bool,
     registry: Option<&CompiledRegistry>,
@@ -1224,7 +1239,7 @@ fn check_runtime_file(
         return;
     };
     let absolute_text = absolute.display().to_string();
-    let check = check_runtime_config(&absolute, environment, registry);
+    let check = check_runtime_config(&absolute, environment, registry, posture);
     outcome.files += 1;
     outcome.unavailable |= check.unavailable;
     for mut diagnostic in check.diagnostics {

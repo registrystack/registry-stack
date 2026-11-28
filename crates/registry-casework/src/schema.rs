@@ -264,10 +264,13 @@ mod tests {
     /// before its own checks.
     fn read(instance: &Value) -> Result<RuntimeConfig, RuntimeConfigError> {
         let text = serde_norway::to_string(instance).expect("the instance serializes");
-        RuntimeConfig::loader()
-            .parse_str::<RuntimeConfig>(&text, |_| None)
-            .map(|loaded| loaded.config)
-            .map_err(RuntimeConfigError::Load)
+        RuntimeConfig::loader(registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        })
+        .parse_str::<RuntimeConfig>(&text, |_| None)
+        .map(|loaded| loaded.config)
+        .map_err(RuntimeConfigError::Load)
     }
 
     fn runtime_instance(document_ref: &str, provider: &str) -> Value {
@@ -290,7 +293,7 @@ mod tests {
             "kind": RUNTIME_CONFIG_KIND,
             "identity": {"databaseId": "casework-schema-test"},
             "package": {"root": "/var/lib/casework/package"},
-            "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "development-loopback"},
+            "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "loopback-plaintext"},
             "secretProviders": secret_providers,
             "database": {
                 "runtimeUrlRef": supporting_reference,

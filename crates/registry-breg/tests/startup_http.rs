@@ -10,6 +10,12 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+const PRODUCTION_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Default,
+    };
+
 use axum::body::{to_bytes, Body};
 use axum::http::{HeaderName, HeaderValue, Request, StatusCode};
 use jsonwebtoken::jwk::JwkSet;
@@ -517,6 +523,10 @@ fn startup_errors() -> [StartupError; 41] {
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
         // exercises the same static text, so one representative is enough here.
         StartupError::RuntimeConfig(RuntimeConfigError::InvalidBinding),
+        StartupError::PostureMismatch {
+            recorded: registry_platform_config::Posture::Development,
+            declared: registry_platform_config::Posture::Production,
+        },
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection(
             registry_breg::postgres::DatabaseConnectionCause::Unreachable,
@@ -578,7 +588,6 @@ fn startup_errors() -> [StartupError; 41] {
         },
         StartupError::AttachmentStorage,
         StartupError::FieldEncryption,
-        StartupError::FieldEncryptionCustody,
         StartupError::Listener,
         StartupError::Shutdown,
         StartupError::BackgroundTaskStopped,
@@ -621,6 +630,7 @@ fn expected_operational_event(
         OperationalEvent::StoppedWithError(error) => {
             let code = match &error {
                 StartupError::DatabaseConnection(cause) => Some(cause.code()),
+                StartupError::PostureMismatch { .. } => Some(registry_breg::migration::POSTURE_MISMATCH_CODE),
                 _ => None,
             };
             (
@@ -796,6 +806,7 @@ fn baseline_observed_field(advisory: &BaselineAdvisory) -> String {
 fn expected_startup_error(error: StartupError) -> &'static str {
     match error {
         StartupError::RuntimeConfig(_) => "the Registry runtime configuration was refused",
+        StartupError::PostureMismatch { recorded, .. } => registry_breg::migration::posture_mismatch_message(recorded),
         StartupError::PackageRefused(_) => "the Registry package was refused",
         StartupError::PackageEnvelopeRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection(cause) => cause.message(),
@@ -862,9 +873,6 @@ fn expected_startup_error(error: StartupError) -> &'static str {
             "the Registry attachment storage or verification binding was refused"
         }
         StartupError::FieldEncryption => "the Registry field-encryption key state was refused",
-        StartupError::FieldEncryptionCustody => {
-            "the Registry field-encryption data-key custody was refused"
-        }
         StartupError::Listener => "the Registry listener could not be started",
         StartupError::Shutdown => "the Registry shutdown signal failed",
         StartupError::BackgroundTaskStopped => {
@@ -1074,6 +1082,12 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             }
             _ => None,
         };
+        let action = match &event {
+            OperationalEvent::StoppedWithError(StartupError::PostureMismatch {
+                recorded, ..
+            }) => Some(registry_breg::migration::posture_mismatch_action(*recorded)),
+            _ => None,
+        };
         let (level, target, message, error, code) = expected_operational_event(event);
         assert_eq!(expected.level(), level);
         assert_eq!(expected.target(), target);
@@ -1101,6 +1115,10 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
         if observed.is_some() {
             expected_field_names.insert("observed");
         }
+        if action.is_some() {
+            expected_field_names.insert("action");
+        }
+        assert_eq!(fields.get("action").and_then(Value::as_str), action);
         if reason.is_some() {
             expected_field_names.insert("reason");
         }
@@ -1264,7 +1282,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     }
 
     let valid_runtime = runtime_without_telemetry(directory.path());
-    parse_runtime_config_with_env(&valid_runtime, |_| None)
+    parse_runtime_config_with_env(&valid_runtime, |_| None, PRODUCTION_POSTURE)
         .expect("runtime without telemetry parses");
     for (member, expected_path) in [
         (
@@ -1276,9 +1294,12 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
             "/telemetry",
         ),
     ] {
-        let error =
-            parse_runtime_config_with_env(&(valid_runtime.clone() + member.as_str()), |_| None)
-                .expect_err("runtime telemetry authority is absent");
+        let error = parse_runtime_config_with_env(
+            &(valid_runtime.clone() + member.as_str()),
+            |_| None,
+            PRODUCTION_POSTURE,
+        )
+        .expect_err("runtime telemetry authority is absent");
         let diagnostics = error.diagnostics(None);
         assert_eq!(diagnostics[0].code, "config.unknown-key");
         assert_eq!(diagnostics[0].path, expected_path);
@@ -1469,15 +1490,18 @@ async fn configured_metrics_record_served_requests_with_closed_value_free_labels
         .expect("canary request responds");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    let scrape = metrics::metrics_app(Arc::clone(&metrics))
-        .oneshot(
-            Request::builder()
-                .uri("/metrics")
-                .body(Body::empty())
-                .expect("scrape request builds"),
-        )
-        .await
-        .expect("scrape request responds");
+    let scrape = metrics::metrics_app(
+        Arc::clone(&metrics),
+        registry_platform_config::Posture::Production,
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("scrape request builds"),
+    )
+    .await
+    .expect("scrape request responds");
     assert_eq!(scrape.status(), StatusCode::OK);
     let body = to_bytes(scrape.into_body(), 1024 * 1024)
         .await
@@ -1568,15 +1592,18 @@ async fn unauthenticated_requests_are_refused_before_any_profile_or_query_is_rea
         .expect("correlation capture")
         .is_empty());
 
-    let scrape = metrics::metrics_app(Arc::clone(&metrics))
-        .oneshot(
-            Request::builder()
-                .uri("/metrics")
-                .body(Body::empty())
-                .expect("scrape request builds"),
-        )
-        .await
-        .expect("scrape request responds");
+    let scrape = metrics::metrics_app(
+        Arc::clone(&metrics),
+        registry_platform_config::Posture::Production,
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("scrape request builds"),
+    )
+    .await
+    .expect("scrape request responds");
     assert_eq!(scrape.status(), StatusCode::OK);
     let body = to_bytes(scrape.into_body(), 1024 * 1024)
         .await
@@ -1733,7 +1760,6 @@ identity:
   environment: production
   instanceId: registry-primary
   databaseId: registry-db
-  databaseInitializationEnvironment: production
 secretProviders:
   environment: {{}}
   file:

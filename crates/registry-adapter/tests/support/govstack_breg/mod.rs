@@ -462,7 +462,6 @@ database:
 oidc:
   issuer: {ISSUER}
   audience: {AUDIENCE}
-  allowInsecureHttp: true
   jwksSource:
     type: static
     documentRef: secret:env/TEST_ADAPTER_JWKS

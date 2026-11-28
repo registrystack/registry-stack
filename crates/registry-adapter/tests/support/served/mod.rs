@@ -583,12 +583,60 @@ impl Served {
         runtime_id: &str,
         database: Option<&str>,
     ) -> Self {
+        Self::spawn_in_posture(
+            upstream_url,
+            project,
+            pack,
+            endpoint,
+            cursor_key,
+            omitted_env,
+            cursor_lines,
+            credential,
+            response_retention_seconds,
+            runtime_id,
+            database,
+            None,
+        )
+        .await
+    }
+
+    pub async fn start_development(upstream_url: &str) -> Self {
+        let mut served = Self::spawn_in_posture(
+            upstream_url, &Self::example_project(), None, "tracker", CURSOR_KEY, &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            "      type: basic\n      usernameRef: secret:env/TEST_UPSTREAM_USERNAME\n      passwordRef: secret:env/TEST_UPSTREAM_PASSWORD\n",
+            86_400, DEFAULT_RUNTIME_ID, None, Some("development"),
+        ).await;
+        served.wait_until_listening();
+        served
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_in_posture(
+        upstream_url: &str,
+        project: &Path,
+        pack: Option<&Path>,
+        endpoint: &str,
+        cursor_key: &str,
+        omitted_env: &[&str],
+        cursor_lines: &str,
+        credential: &str,
+        response_retention_seconds: u64,
+        runtime_id: &str,
+        database: Option<&str>,
+        posture: Option<&str>,
+    ) -> Self {
         let database = match database {
             Some(database) => database.to_owned(),
             None => schema_url().await,
         };
         let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
+        let insecure_issuer = if posture == Some("development") {
+            "  allowInsecureHttp: true\n"
+        } else {
+            ""
+        };
         let directory = tempfile::tempdir().expect("a scratch directory");
         let runtime = directory.path().join("runtime.yaml");
         std::fs::write(
@@ -606,12 +654,11 @@ endpoints:
 database:
   runtimeUrlRef: secret:env/TEST_DB_URL
   migrationUrlRef: secret:env/TEST_DB_URL
-  testOnlyPlaintext: true
+  transport: loopback-plaintext
 oidc:
   issuer: {ISSUER}
   audience: {AUDIENCE}
-  allowInsecureHttp: true
-  jwksSource:
+{insecure_issuer}  jwksSource:
     type: static
     documentRef: secret:env/TEST_JWKS
 allowedClients:
@@ -632,7 +679,11 @@ idempotency:
             .args(["serve", "--runtime-config"])
             .arg(&runtime)
             .arg("--project")
-            .arg(project);
+            .arg(project)
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(posture) = posture {
+            command.args(["--posture", posture]);
+        }
         // The example folder holds only the project; its profile and pack
         // are the maintained artifacts, passed by flag. A project directory
         // that carries its own pair is served from beside the project.

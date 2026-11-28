@@ -338,7 +338,18 @@ fn schemas() -> Value {
         },
         "ReadinessResponse": {
             "type": "object", "additionalProperties": false, "required": ["status"],
-            "properties": {"status": {"enum": ["ready", "not_ready"]}}
+            "properties": {
+                "status": {"enum": ["ready", "not_ready"]},
+                "posture": {"enum": ["development", "production"]},
+                "developmentSettings": {
+                    "type": "array",
+                    "items": {"type": "object", "required": ["code", "pointer"], "additionalProperties": false,
+                        "properties": {"code": {"type": "string"}, "pointer": {"type": "string"}}}
+                }
+            },
+            "if": {"properties": {"status": {"const": "ready"}}},
+            "then": {"required": ["posture", "developmentSettings"]},
+            "else": {"maxProperties": 1}
         },
         "Empty": {"type": "object", "additionalProperties": false},
         "Problem": {

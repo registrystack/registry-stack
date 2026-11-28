@@ -188,6 +188,7 @@ fn invalid_claims(check: FailedCheck) -> Refusal {
 /// Production OIDC verifier plus the only claim mapping allowed to construct
 /// [`VerifiedRequestClaims`].
 pub struct RegistryAuthenticator {
+    peer_policy: registry_platform_httputil::PeerPolicy,
     verifier: TokenVerifier,
     last_key_refusal_warning: Mutex<Option<Instant>>,
     last_actor_kind_warning: Mutex<Option<Instant>>,
@@ -223,6 +224,7 @@ impl RegistryAuthenticator {
         let leeway = verifier_config.leeway;
         let consent_decisions = crate::consent::feed_decisions(registry.entities());
         Ok(Self {
+            peer_policy: registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
             verifier: TokenVerifier::new(verifier_config, key_source),
             last_key_refusal_warning: Mutex::new(None),
             last_actor_kind_warning: Mutex::new(None),
@@ -238,6 +240,14 @@ impl RegistryAuthenticator {
             consent_decisions,
             leeway,
         })
+    }
+
+    pub(crate) fn with_peer_policy(
+        mut self,
+        policy: registry_platform_httputil::PeerPolicy,
+    ) -> Self {
+        self.peer_policy = policy;
+        self
     }
 
     /// Verify and map one already-admitted compact bearer token.
@@ -373,7 +383,7 @@ impl RegistryAuthenticator {
             })?;
         if let Some(grant) = &grant {
             grant
-                .verify_context_without_peer_policy(&verified, &self.audience)
+                .verify_context(&verified, &self.audience, self.peer_policy)
                 .map_err(|error| invalid_claims(grant_context_check(error)))?;
             task_grant_token_lifetime(verified.claims.iat, verified.claims.exp, now, self.leeway)
                 .map_err(invalid_claims)?;

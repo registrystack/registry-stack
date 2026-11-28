@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -28,6 +28,13 @@ see why no other answer could have come back: the project lists every value the 
   level="Local development with synthetic data"
   prerequisites={['The project, source, and run left going by Your first assertion']}
 />
+
+For the local commands in this tutorial, declare development in your shell.
+`rstack dev` sets this value for the processes it starts.
+
+```bash
+export REGISTRY_STACK_POSTURE=development
+```
 
 ## Request the region
 

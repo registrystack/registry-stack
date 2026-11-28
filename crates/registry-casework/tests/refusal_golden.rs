@@ -422,6 +422,7 @@ fn unconnected_store(root: &std::path::Path) -> PostgresStore {
             transport: None,
         },
         &secrets,
+        None,
     )
     .expect("an unconnected runtime store")
 }
@@ -443,6 +444,12 @@ fn app(idp: &MockIdp, root: &std::path::Path, recorder: Arc<RefusalRecorder>) ->
         .expect("a service with no providers");
     router_with_recorder(
         HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            ),
             service,
             authenticator: Arc::new(authenticator),
             project: Arc::new(project),

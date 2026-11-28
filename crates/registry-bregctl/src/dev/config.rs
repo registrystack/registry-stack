@@ -2228,12 +2228,12 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
     let mut runtime = json!({
         "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1","kind":"BRegRuntimeConfig",
         "listener":{"bind":format!("127.0.0.1:{}",state.breg_port),"publicOrigin":state.breg_origin()},
-        "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
+        "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID},
         "secretProviders":{"file":{"root":final_root.join("secrets")}},
         "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maximumConnections":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
         "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
         "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":authority_claims},
-        "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"destinations":{"hooks":destinations},
+        "audit":{"hashKeyCustody":"development-generated","hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"destinations":{"hooks":destinations},
         "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
             "baseUrl":provider.base_url,
             "trustBindingId":provider.trust_binding_id,
@@ -2264,10 +2264,16 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             .remove("assertionIssuers");
     }
     let rendered = serde_norway::to_string(&runtime)?;
-    let generated =
-        registry_breg::runtime_config::parse_runtime_config(&rendered).map_err(|error| {
-            anyhow::anyhow!("generated local runtime authentication is invalid: {error}")
-        })?;
+    let generated = registry_breg::runtime_config::parse_runtime_config(
+        &rendered,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .map_err(|error| {
+        anyhow::anyhow!("generated local runtime authentication is invalid: {error}")
+    })?;
     generated
         .authentication()
         .check_against(&compiled)
@@ -2400,7 +2406,7 @@ pub(super) fn external_event_destinations(
         let binding = &bindings[id];
         (id.clone(), json!({
             "origin":binding.origin,"path":binding.path,
-            "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
+            "networkProfile":"loopback-http","dnsFamily":"dual-stack-strict",
             "allowedPrivateCidrs":[],"hmacSha256KeyRef":format!("secret:file/webhook-{id}"),
             "classificationCeiling":classification,
             "deliveryCeilings":{"attemptTimeoutMilliseconds":timeout,"maximumAttempts":attempts}
@@ -2481,7 +2487,7 @@ fn event_destinations(
         ensure_inbox_key(root, id, repair_keys)?;
         Ok((id.clone(), json!({
             "origin":format!("http://127.0.0.1:{port}"),"path":"/events",
-            "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
+            "networkProfile":"loopback-http","dnsFamily":"dual-stack-strict",
             "allowedPrivateCidrs":[],"hmacSha256KeyRef":format!("secret:file/inbox-key-{id}"),
             "classificationCeiling":classification,
             "deliveryCeilings":{"attemptTimeoutMilliseconds":timeout,"maximumAttempts":attempts}

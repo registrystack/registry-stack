@@ -304,15 +304,18 @@ async fn send(
 }
 
 async fn scrape(metrics: &Arc<Metrics>) -> String {
-    let response = metrics::metrics_app(Arc::clone(metrics))
-        .oneshot(
-            Request::builder()
-                .uri("/metrics")
-                .body(Body::empty())
-                .expect("scrape request builds"),
-        )
-        .await
-        .expect("scrape request responds");
+    let response = metrics::metrics_app(
+        Arc::clone(metrics),
+        registry_platform_config::Posture::Production,
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("scrape request builds"),
+    )
+    .await
+    .expect("scrape request responds");
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 1024 * 1024)
         .await

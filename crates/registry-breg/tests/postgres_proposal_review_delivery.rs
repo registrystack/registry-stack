@@ -198,7 +198,10 @@ impl Authority {
             Arc::new(
                 ReviewAuthorityClient::new(
                     id.into(),
-                    ReviewClient::new(ReviewClientConfig::new_without_peer_policy(endpoint.parse().unwrap())).unwrap(),
+                    ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
+                        endpoint.parse().unwrap(),
+                    ))
+                    .unwrap(),
                     Arc::new(Token),
                     "producer".into(),
                     PRODUCER.into(),

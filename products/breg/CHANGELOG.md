@@ -33,6 +33,49 @@
   refused before the receiver starts, with the advice to run
   `bregctl dev stop --remove` and start again.
 
+- BREAKING: `bregctl check` without a declared posture reports development
+  settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: `bregctl package --local` is removed. Migration: Use bregctl package --posture development.
+- BREAKING: `bregctl apply` and `plan` refuse a database activated in the
+  other posture, and `status` and `doctor` report it. Migration: Recreate development databases: a fresh apply is the way.
+- Commands that read a runtime file accept `--posture`. Their JSON reports
+  include the declared `posture` and its source.
+- `bregctl dev` declares development for its child processes and marks the
+  audit hash key it creates as `development-generated`. It refuses an
+  explicit production declaration.
+- `bregctl data export` refuses a development peer when it runs in production.
+
+- **Breaking.** Production is the default posture. It refuses
+  `authentication.oidc.allowInsecureHttp: true` in place of the former startup
+  warning. It also refuses `authentication.oidc.jwksSource.type: test-issuer`,
+  `audit.hashKeyCustody: development-generated`, `fieldEncryption.provider.type: local-file`,
+  a placeholder `canonicalBaseIri` and an HTTP `/listener/publicOrigin`. Use production
+  settings for deployments and declare `REGISTRY_STACK_POSTURE=development`
+  or `--posture development` for local runs that need these settings.
+- **Breaking.** Delete the retired `identity.databaseInitializationEnvironment`
+  key. If it said `local` and you use the database in development, follow the
+  instruction below to recreate development databases.
+- **Breaking.** Write `networkProfile: loopback-http` in place of
+  `loopback-development-http` for loopback event destinations.
+- **Breaking.** `breg.posture.placeholder-identity` replaces
+  `breg.registry.canonical-base-iri-reserved`. `platform.database.test-only-plaintext`
+  replaces `breg.runtime.plaintext-database`. The
+  `breg.runtime.environment-identity-conflict` code is removed. Update scripts
+  that match the old codes.
+- **Breaking.** The activation ledger records posture. Existing databases
+  read as production. Recreate development databases and apply the package
+  to the fresh database with development declared.
+- `/ready` includes `posture` and `developmentSettings`. Probes can keep
+  checking the status code.
+- The audit line's existing `posture` member can now be `development`.
+  The activation audit record body also gains a `posture` member.
+- Development responses carry `Registry-Posture: development`. A development
+  runtime accepts a development task-grant peer.
+- BReg omits HSTS on development loopback listeners. Production keeps HSTS
+  on every listener, including a loopback bind behind a TLS proxy.
+- PostgreSQL supports `database.transport: loopback-plaintext` in either posture
+  and `private-network-plaintext` in development.
+
 - A `rowBoundarySets` member declares a named list of row boundaries once
   per project or module file. A grant, an Action or Proposal target, or a
   Record type's `accessRequirements` writes
@@ -121,6 +164,62 @@
   profile, each as the configuration or package declares it. The line never
   names a scope the token held. Refusal statuses, headers and bodies are
   unchanged.
+
+- BREAKING: the BReg MCP gateway (`breg-mcp`) and the review page
+  (`breg-review`) default to production when no posture is declared.
+  Production refuses every development-only setting at startup, and `check`
+  lists each one with its code and pointer. `check` also takes `--production`.
+  Migration: for laptop and test runs, start with `rstack dev`, set
+  `REGISTRY_STACK_POSTURE=development`, or pass `--posture development`.
+
+- BREAKING: in production the BReg MCP gateway refuses plain HTTP in
+  `resourceServer.resource`, `resourceServer.issuer` and
+  `service.reviewBaseUrl`, on loopback too. It also refuses
+  `resourceServer.allowInsecureHttp: true`, a `test-issuer` key source and
+  `audit.hashKeyCustody: development-generated`. Development accepts each one
+  and lists it. A plain HTTP issuer beyond loopback also needs
+  `allowInsecureHttp` in development, and the finding
+  `breg.mcp-runtime.plain-http-endpoint` at `/resourceServer/issuer` says so.
+  Migration: publish the HTTPS URLs the chat host and the browser reach.
+
+- BREAKING: in production the review page refuses an HTTP `publicOrigin`,
+  an issuer whose discovery document names an HTTP `authorization_endpoint`
+  (`breg.posture.review-http-authorization-endpoint` at `/signIn/issuer`),
+  and `audit.hashKeyCustody: development-generated`. Plain HTTP transport to
+  a loopback issuer still works in both postures. Migration: publish an
+  HTTPS `publicOrigin`, and use an issuer that publishes an HTTPS
+  `authorization_endpoint`.
+
+- BREAKING: production sends HSTS and `Secure` cookies with `__Host-` names on
+  every listener, including `loopback-plaintext` behind a same-host TLS
+  proxy. Only development on a loopback listener omits HSTS, and only an HTTP
+  `publicOrigin`, which only development accepts, drops `Secure` and the
+  `__Host-` prefix. Migration: write `tlsTermination: loopback-plaintext` for
+  a listener behind a TLS proxy on the same host.
+
+- The BReg MCP gateway and the review page answer `/ready` with `posture` and
+  `developmentSettings`. Probes that read only the status code see no change.
+
+- BREAKING: BReg MCP and review page audit lines carry `posture`, and their
+  development responses carry `Registry-Posture: development`. Migration:
+  audit readers with a closed line parser accept the `posture` member, and
+  production runtimes call production peers.
+
+- BREAKING: the Rust API builds a runtime only from what
+  `load_with_posture` returned. `registry_breg_mcp::runtime::build` and
+  `registry_breg_review::router` are removed. Use
+  `registry_breg_mcp::runtime::build_with_posture(config, posture, witness)`
+  or `serve(config, posture, witness, shutdown)`, and
+  `registry_breg_review::router_with_posture(loaded)` or
+  `router_with_audit_writer(loaded, sink)`. Each refuses a witness that does
+  not match the posture report, and in production each refuses a
+  configuration whose `development_settings()` is not empty.
+  `registry_breg_mcp::breg_binding` takes the witness after `service`.
+  `ResourceServerConfig.resource` and `.issuer` are private: read them with
+  `resource_url(witness)` and `issuer_url(witness)`, and `options(witness, ..)`
+  returns a `Result`. `ServiceConfig.review_base_url` is private: read it with
+  `review_base_url(witness)`. The review page's `RuntimeConfig::origin(witness)`
+  and `redirect_uri(witness)` return a `Result`.
 
 - The BReg MCP gateway and the review page read loopback the way every
   other service does. Under `development-loopback`, plain HTTP to the

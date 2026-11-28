@@ -129,10 +129,11 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         .expect("the maintained runtime fixture is not empty")
         .to_json_value();
     runtime["secretProviders"]["environment"] = json!({});
+    runtime["authentication"]["oidc"]["allowedClients"] = json!(["operator-test"]);
     runtime["database"] = json!({"runtimeUrlRef":format!("secret:env/{secret}"),"migrationUrlRef":format!("secret:env/{secret}"),"testOnlyPlaintext":true});
     let config = project.join("runtime.yaml");
     std::fs::write(&config, serde_norway::to_string(&runtime).unwrap()).unwrap();
-    let invoke = |command: &str, extra: &[&str]| {
+    let invoke = |command: &str, posture: &str, extra: &[&str]| {
         let mut args = vec![
             OsString::from("caseworkctl"),
             OsString::from("--format"),
@@ -140,6 +141,8 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
             OsString::from(command),
             OsString::from("--runtime-config"),
             config.as_os_str().to_owned(),
+            OsString::from("--posture"),
+            OsString::from(posture),
         ];
         args.extend(extra.iter().map(OsString::from));
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
@@ -173,11 +176,12 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         assert!(!report.to_string().contains("CHANGE_REFERENCE_CANARY"));
         (exit, report)
     };
-    let (exit, plan) = invoke("plan", &[]);
+    let (exit, plan) = invoke("plan", "development", &[]);
     assert_eq!(exit, ExitCode::SUCCESS, "{plan:?}");
     assert_eq!(plan["plan"]["planKind"], "initial");
     let (exit, applied) = invoke(
         "apply",
+        "development",
         &["--operator-reference", "CHANGE_REFERENCE_CANARY"],
     );
     assert_eq!(exit, ExitCode::SUCCESS, "{applied:?}");
@@ -185,11 +189,39 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         .as_array()
         .unwrap()
         .is_empty());
-    let (exit, status) = invoke("status", &[]);
+    let (exit, status) = invoke("status", "development", &[]);
     assert_eq!(exit, ExitCode::SUCCESS, "{status:?}");
-    let (exit, replan) = invoke("plan", &[]);
+    let (exit, replan) = invoke("plan", "development", &[]);
     assert_eq!(exit, ExitCode::SUCCESS, "{replan:?}");
     assert_eq!(replan["plan"]["changesPending"], false);
+    assert_eq!(
+        status["posture"],
+        json!({"value": "development", "source": "flag"})
+    );
+    let (exit, opposite_status) = invoke("status", "production", &[]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{opposite_status:?}");
+    assert_eq!(
+        opposite_status["diagnostics"][0]["code"],
+        "platform.activation.posture-mismatch"
+    );
+    assert_eq!(
+        opposite_status["activation"]["history"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let (exit, opposite_doctor) = invoke("doctor", "production", &[]);
+    assert_eq!(
+        exit,
+        ExitCode::from(DOMAIN_REFUSAL_EXIT),
+        "{opposite_doctor:?}"
+    );
+    assert!(opposite_doctor["activation"]["refusals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|refusal| refusal["code"] == "platform.activation.posture-mismatch"));
     let supported = status["activation"]["supportedSchemaVersion"]
         .as_i64()
         .unwrap();
@@ -200,7 +232,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
             supported + 1
         ),
     );
-    let (exit, refused) = invoke("apply", &[]);
+    let (exit, refused) = invoke("apply", "development", &[]);
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{refused:?}");
     assert_eq!(refused["status"], "domain-refusal");
     assert_eq!(
@@ -220,7 +252,7 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         .as_str()
         .unwrap()
         .contains("supports"));
-    let (exit, plan) = invoke("plan", &[]);
+    let (exit, plan) = invoke("plan", "development", &[]);
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{plan:?}");
     assert_eq!(
         plan["diagnostics"][0]["code"],
@@ -238,4 +270,73 @@ fn plan_refusals_preserve_actionable_schema_recovery() {
     assert!(diagnostic
         .suggested_action
         .contains("supports this database schema"));
+}
+
+#[test]
+fn check_rejects_contradictory_posture_flags() {
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let exit = main_entry_from(
+        [
+            "caseworkctl",
+            "--format",
+            "json",
+            "check",
+            ".",
+            "--production",
+            "--posture",
+            "development",
+        ]
+        .map(OsString::from),
+        &mut stdout,
+        &mut stderr,
+    );
+    assert_eq!(exit, ExitCode::from(report::USAGE_EXIT));
+    assert!(stderr.is_empty());
+    let value: Value = serde_json::from_slice(&stdout).unwrap();
+    let diagnostic = &value["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "platform.posture.conflict");
+    assert_eq!(
+        diagnostic["message"],
+        "--production and --posture development contradict each other"
+    );
+    assert_eq!(diagnostic["suggestedAction"], "Use one of them.");
+}
+
+#[test]
+fn a_check_acceptance_cannot_hide_a_development_setting() {
+    let root = canonical_tempdir();
+    let project = root.path().join("project");
+    project::init(&project, "standalone-decision").unwrap();
+    std::fs::write(
+        project.join("check-acceptances.yaml"),
+        r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: casework.posture.unrestricted-clients
+    scope:
+      file: runtime.example.yaml
+      path: /authentication/oidc/allowedClients
+    reason: A local acceptance must not hide this warning.
+"#,
+    )
+    .unwrap();
+    let result = project::check_runtime_config(
+        &project,
+        &project.join("runtime.example.yaml"),
+        false,
+        false,
+        project::check(&project, false, false),
+        DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    );
+    let error = result.unwrap_err();
+    let diagnostics = configuration_report(&error).unwrap().diagnostics();
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "config.check-acceptance-not-acceptable"));
+    assert!(diagnostics.iter().any(|diagnostic| diagnostic.code
+        == "casework.posture.unrestricted-clients"
+        && diagnostic.severity == registry_platform_yaml::Severity::Warning));
 }

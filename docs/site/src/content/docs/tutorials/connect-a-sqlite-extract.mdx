@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-03"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -32,6 +32,13 @@ standalone one from your first assertion, prove it over synthetic extracts, and 
 Use v0.45.0 or later of the Evidence component, installed as in [your first Evidence
 assertion](../first-evidence-assertion/). It is the first release that reads Adapter packs, and the
 0.44.0 tools cannot read this project form.
+
+For the local commands in this tutorial, declare development in your shell.
+`rstack dev` sets this value for the processes it starts.
+
+```bash
+export REGISTRY_STACK_POSTURE=development
+```
 
 ## Create the SQLite starter
 
@@ -132,8 +139,8 @@ works](../../explanation/how-evidence-works/#what-do-i-define) explains each par
 ## Prove the starter
 
 ```sh
-rstack evidence check . --target local-target.yaml --deny-warnings
-rstack evidence test . --target local-target.yaml --deny-warnings
+rstack evidence check . --target local-target.yaml
+rstack evidence test . --target local-target.yaml
 ```
 
 ```text test-expect
@@ -184,7 +191,7 @@ with `<extract-file>` replaced by its name:
 Check the target again:
 
 ```sh
-rstack evidence check . --target local-target.yaml --deny-warnings
+rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-expect

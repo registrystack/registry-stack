@@ -257,8 +257,7 @@ impl Deployment {
             "kind": "BRegRuntimeConfig",
             "listener": {"bind": bind},
             "identity": {"environment": "test", "instanceId": "provision-proof",
-                         "databaseId": "provision-proof",
-                         "databaseInitializationEnvironment": "test"},
+                         "databaseId": "provision-proof"},
             "secretProviders": {"file": {"root": self.path("secrets")}},
             "database": {
                 "runtimeUrlRef": format!("secret:file/{name}-runtime-url"),
@@ -477,8 +476,14 @@ async fn provision_then_apply_then_serve_with_split_roles() {
     ]);
     assert_eq!(applied["activation"], "initial", "{applied:#}");
 
-    let config = registry_breg::runtime_config::load_runtime_config(Path::new(&live_runtime))
-        .expect("the live runtime file loads");
+    let config = registry_breg::runtime_config::load_runtime_config(
+        Path::new(&live_runtime),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .expect("the live runtime file loads");
     let prepared = registry_breg::startup::prepare_loaded(config)
         .await
         .expect("the runtime prepares over the runtime role");

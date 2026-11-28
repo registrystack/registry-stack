@@ -1080,9 +1080,10 @@ mod tests {
                 accepted,
             };
             let log = EvidenceAuditLog::with_writer(
-                registry_platform_audit::AuditWriter::from_line_sink_without_posture(Box::new(
-                    sink.clone(),
-                )),
+                registry_platform_audit::AuditWriter::from_line_sink(
+                    Box::new(sink.clone()),
+                    registry_platform_config::Posture::Production,
+                ),
                 b"activation-audit-key-canary-32-bytes".to_vec(),
                 1,
             )

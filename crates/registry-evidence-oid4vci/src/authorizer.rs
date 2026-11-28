@@ -25,7 +25,7 @@ use registry_platform_oidc::{
     TokenVerifier, TokenVerifierConfig,
 };
 
-use crate::config::{OfferAuthorizationConfig, ValidationMode};
+use crate::config::OfferAuthorizationConfig;
 
 /// The access-token types this service accepts, which are the two spellings
 /// RFC 9068 permits for a JWT access token.
@@ -108,14 +108,11 @@ impl MintResourceServer {
     /// purpose: the offer boundary must be configurable,
     /// and auditable, without reference to who this service is elsewhere.
     #[must_use]
-    pub fn from_config(config: &OfferAuthorizationConfig, mode: ValidationMode) -> Self {
-        if let Some(diagnostic) = config.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
+    pub fn from_config(config: &OfferAuthorizationConfig) -> Self {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             config.jwks_uri.clone(),
             JwksFetcherConfig::defaults(),
-            fetch_url_policy(config, mode),
+            fetch_url_policy(config),
         ));
         let required_scopes = config.required_scopes.items().to_vec();
         let profile = verifier_profile(config);
@@ -191,16 +188,8 @@ pub fn verifier_profile(config: &OfferAuthorizationConfig) -> TokenVerifierConfi
 /// local validation admits it, and beyond loopback only with
 /// `allowInsecureHttp`. A plain HTTP offer issuer outside a supervised local
 /// group, without that setting, gets the strict policy.
-fn fetch_url_policy(config: &OfferAuthorizationConfig, mode: ValidationMode) -> FetchUrlPolicy {
-    let supervised_local_http = mode == ValidationMode::SupervisedLocalDevelopment
-        && config.issuer.starts_with("http://127.0.0.1:")
-        && config.jwks_uri.starts_with("http://127.0.0.1:");
-    if config.issuer.starts_with("http://") && !config.allow_insecure_http && !supervised_local_http
-    {
-        return FetchUrlPolicy::strict();
-    }
-    let allow_insecure_http = config.allow_insecure_http || supervised_local_http;
-    IssuerNetworkPolicy::new(&config.issuer, allow_insecure_http)
+fn fetch_url_policy(config: &OfferAuthorizationConfig) -> FetchUrlPolicy {
+    IssuerNetworkPolicy::new(&config.issuer, config.allow_insecure_http)
         .map(|network| network.declared_jwks_fetch_policy())
         .unwrap_or_else(|_| FetchUrlPolicy::strict())
 }
@@ -333,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn an_empty_credential_is_missing_rather_than_refused() {
         let config = valid_config();
-        let server = MintResourceServer::from_config(&config.offers, config.validation_mode);
+        let server = MintResourceServer::from_config(&config.offers);
         assert_eq!(server.authorize("").await, Err(AuthorizationError::Missing));
     }
 
@@ -342,14 +331,14 @@ mod tests {
         let mut config = valid_config();
         config.offers.required_scopes =
             crate::config::Restriction::Listed(vec!["offers:create".to_owned()]);
-        let server = MintResourceServer::from_config(&config.offers, config.validation_mode);
+        let server = MintResourceServer::from_config(&config.offers);
         let declared = server.declared_scope().expect("a scope gate is declared");
         assert_eq!(declared.scope_claim(), "scope");
         assert_eq!(declared.required_scope(), Some("offers:create"));
         assert_eq!(declared.access_profile(), None);
 
         config.offers.required_scopes = crate::config::Restriction::Unrestricted;
-        let server = MintResourceServer::from_config(&config.offers, config.validation_mode);
+        let server = MintResourceServer::from_config(&config.offers);
         assert_eq!(server.declared_scope(), None);
     }
 
@@ -359,22 +348,18 @@ mod tests {
         // There is no parameter for the outbound token-client identity, so no
         // key or identifier belonging to the client half can reach this one.
         let config = valid_config();
-        let _server = MintResourceServer::from_config(&config.offers, config.validation_mode);
+        let _server = MintResourceServer::from_config(&config.offers);
     }
 
     #[test]
     fn plain_http_key_sources_stay_on_loopback_without_the_opt_in() {
         let validate = |offers: &OfferAuthorizationConfig| {
-            fetch_url_policy(offers, ValidationMode::SupervisedLocalDevelopment)
-                .validate_dns_pinned_for_immediate_fetch(
-                    &reqwest::Url::parse(&offers.jwks_uri).unwrap(),
-                )
+            fetch_url_policy(offers).validate_dns_pinned_for_immediate_fetch(
+                &reqwest::Url::parse(&offers.jwks_uri).unwrap(),
+            )
         };
         let mut config = valid_config();
 
-        // Under an https issuer, a plain http key set that supervised local
-        // validation admits on loopback is fetched, and one beyond loopback
-        // is refused.
         config.offers.jwks_uri = "http://127.0.0.1:8082/.well-known/jwks.json".to_owned();
         validate(&config.offers).expect("a declared loopback key set is accepted");
         config.offers.jwks_uri = "http://10.20.30.40:8080/.well-known/jwks.json".to_owned();
@@ -385,23 +370,10 @@ mod tests {
 
         config.offers.issuer = "http://127.0.0.1:8081".to_owned();
         config.offers.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
-        assert_eq!(
-            fetch_url_policy(&config.offers, ValidationMode::Strict).allowed_schemes,
-            ["https"],
-            "strict mode never opens a plain http key source"
-        );
-        let supervised =
-            fetch_url_policy(&config.offers, ValidationMode::SupervisedLocalDevelopment);
-        assert!(supervised
-            .allowed_schemes
-            .iter()
-            .any(|scheme| scheme == "http"));
-        assert!(!supervised.deny_private_ranges);
+        validate(&config.offers).expect("a loopback HTTP issuer admits a loopback HTTP key set");
 
-        // The key set is declared configuration, so a supervised local group
-        // may serve it from another loopback port than the issuer.
         config.offers.jwks_uri = "http://127.0.0.1:8082/.well-known/jwks.json".to_owned();
-        fetch_url_policy(&config.offers, ValidationMode::SupervisedLocalDevelopment)
+        fetch_url_policy(&config.offers)
             .validate_dns_pinned_for_immediate_fetch(
                 &reqwest::Url::parse(&config.offers.jwks_uri).unwrap(),
             )

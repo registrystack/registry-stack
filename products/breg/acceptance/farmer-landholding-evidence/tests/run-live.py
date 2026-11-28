@@ -116,7 +116,7 @@ def main() -> None:
                 (secret_root / f"{label}-{index}").write_text(url)
             runtime = {
                 "apiVersion": "id.registrystack.org/formats/breg/runtime/v1alpha1", "kind": "BRegRuntimeConfig", "listener": {"bind": "127.0.0.1:0"},
-                "identity": {"environment": "acceptance", "instanceId": "farmer-landholding-evidence", "databaseId": database_id, "databaseInitializationEnvironment": "acceptance"},
+                "identity": {"environment": "acceptance", "instanceId": "farmer-landholding-evidence", "databaseId": database_id},
                 "secretProviders": {"file": {"root": str(secret_root)}},
                 "database": {"runtimeUrlRef": f"secret:file/runtime-{index}", "migrationUrlRef": f"secret:file/migration-{index}", "pool": {"maximumConnections": 4, "waitTimeoutMilliseconds": 1000, "createTimeoutMilliseconds": 1000, "recycleTimeoutMilliseconds": 1000}, "roles": {"migration": migration, "runtime": runtime_role}},
                 "package": {"root": str(root / "empty-package")},

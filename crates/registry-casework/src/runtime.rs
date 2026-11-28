@@ -8,7 +8,9 @@ use std::time::{Duration, SystemTime};
 use clap::{Arg, Command};
 use registry_casework_core::ReviewContextProvider;
 use registry_platform_audit::{AuditProfile, AuditWriter};
-use registry_platform_config::{SecretError, SecretReference, SecretResolver};
+use registry_platform_config::{
+    DeclaredPosture, Posture, SecretError, SecretReference, SecretResolver,
+};
 use registry_platform_crypto::delivery_signature::{self, DeliveryKey, DeliveryKeys};
 #[cfg(feature = "postgres-test")]
 use registry_platform_dispatch::postgres::DispatchOutcome;
@@ -419,6 +421,12 @@ pub fn command() -> Command {
                 .help("Runtime configuration file")
                 .required(true),
         )
+        .arg(
+            Arg::new("posture")
+                .long("posture")
+                .value_name("POSTURE")
+                .help("Declared posture: development or production. Unset means production."),
+        )
         .subcommand_required(true)
         .subcommand(Command::new("serve").about("Run the Casework HTTP service"))
 }
@@ -437,12 +445,15 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter, Runtime
     }
 }
 
-pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
+pub async fn run(
+    matches: &clap::ArgMatches,
+    declared: DeclaredPosture,
+) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
-        Some("serve") => serve_from_path(path).await,
+        Some("serve") => serve_from_path(path, declared).await,
         _ => Err(RuntimeError::Arguments),
     }
 }
@@ -503,6 +514,7 @@ pub async fn check_activation(
     store: &PostgresStore,
     database_id: &str,
     package_digest: &str,
+    posture: Posture,
 ) -> Result<crate::RoleMode, RuntimeError> {
     let active = store
         .active_activation()
@@ -516,6 +528,9 @@ pub async fn check_activation(
             active: active.package_digest,
             configured: package_digest.to_owned(),
         });
+    }
+    if active.posture != posture {
+        return Err(RuntimeError::ActivationPostureMismatch(active.posture));
     }
     let (role_mode, grants_current) = store
         .effective_role()
@@ -555,23 +570,29 @@ pub async fn check_pinned_work(
     }
 }
 
-pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
+pub async fn serve_from_path(
+    path: impl AsRef<Path>,
+    declared: DeclaredPosture,
+) -> Result<(), RuntimeError> {
     let path = path.as_ref();
-    let config =
-        RuntimeConfig::load(path).map_err(|error| {
-            match crate::config::startup_report(path, &error) {
+    let loaded =
+        RuntimeConfig::load(path, declared).map_err(
+            |error| match crate::config::startup_report(path, &error, declared) {
                 Some(report) => RuntimeError::ConfigurationRefused(report),
                 None => RuntimeError::Config(error),
-            }
-        })?;
+            },
+        )?;
+    loaded.posture.log_startup();
+    let config = loaded.config;
     let package = config.load_package()?;
     let package_digest = package.digest().to_owned();
     tracing::info!(package_digest = %package_digest, "verified Casework package");
     let project = package.project();
     let secrets = secret_resolver(&config)?;
-    let audit = open_audit(&config, &secrets, None).await?;
+    let audit = open_audit(&config, &secrets, None, declared.posture).await?;
     let store =
-        PostgresStore::connect_runtime(&config.database, &secrets)?.with_audit(audit.clone());
+        PostgresStore::connect_runtime(&config.database, &secrets, loaded.development.as_ref())?
+            .with_audit(audit.clone());
     store.ready().await?;
     validate_retained_completion_destinations(&store, &config.review_completion_destinations)
         .await?;
@@ -581,7 +602,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .iter()
         .map(|provider| provider.as_ref())
         .collect::<Vec<_>>();
-    let role_mode = check_activation(&store, config.database_id(), &package_digest).await?;
+    let role_mode = check_activation(
+        &store,
+        config.database_id(),
+        &package_digest,
+        declared.posture,
+    )
+    .await?;
     check_pinned_work(&store, project, &provider_refs, &package_digest).await?;
     if role_mode == crate::RoleMode::Single {
         tracing::warn!(
@@ -593,7 +620,9 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         tracing::info!(role_mode = role_mode.as_str(), "Casework runtime role mode");
     }
 
-    let (verifier, keys) = config.oidc_verifier(&secrets).await?;
+    let (verifier, keys) = config
+        .oidc_verifier(&secrets, loaded.development.as_ref())
+        .await?;
     let authenticator = Arc::new(
         CaseworkAuthenticator::new(
             project,
@@ -615,7 +644,12 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .task_authority
         .as_ref()
         .map(|authority| {
-            crate::task_grants::TaskAuthority::load(authority, &secrets, audit.identifiers())
+            crate::task_grants::TaskAuthority::load(
+                authority,
+                &secrets,
+                audit.identifiers(),
+                declared.posture,
+            )
         })
         .transpose()?;
     let service = CaseworkService::new(store.clone(), project.clone(), providers)?
@@ -688,6 +722,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         package_digest.clone(),
     );
     let app = router(HttpState {
+        posture: loaded.posture,
         service,
         authenticator,
         project: Arc::new(project.clone()),
@@ -699,7 +734,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             tokio::net::TcpListener::bind(metrics_listener.bind.socket_addr())
                 .await
                 .map_err(RuntimeError::MetricsListen)?,
-            crate::metrics::metrics_router(metrics_state),
+            crate::metrics::metrics_router(metrics_state, declared.posture),
         )),
         None => None,
     };
@@ -802,6 +837,7 @@ pub async fn open_audit(
     config: &RuntimeConfig,
     secrets: &SecretResolver,
     process: Option<&str>,
+    posture: Posture,
 ) -> Result<crate::CaseworkAudit, RuntimeError> {
     let audit_secret = resolve_audit_secret(secrets, config.audit.key.hash_key_ref.as_str())?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
@@ -817,7 +853,7 @@ pub async fn open_audit(
             .for_process(process)
             .map_err(|error| RuntimeError::AuditDestination(error.to_string()))?;
     }
-    let writer = AuditWriter::open_without_posture(destination)
+    let writer = AuditWriter::open(destination, posture)
         .await
         .map_err(|error| RuntimeError::AuditDestination(error.operator_description()))?;
     Ok(crate::CaseworkAudit::new(
@@ -1475,6 +1511,8 @@ mod tests {
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    #[error("[platform.activation.posture-mismatch] {}\n  next: {}", crate::activation::posture_mismatch(*.0).0, crate::activation::posture_mismatch(*.0).1)]
+    ActivationPostureMismatch(Posture),
     #[error("the Casework command arguments are invalid")]
     Arguments,
     #[error(transparent)]

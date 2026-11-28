@@ -23,7 +23,7 @@ The supported native deployment has:
   header, static API-key, or OAuth 2.0 client-credentials authentication through
   secret references, the last authenticating by client secret or by private-key
   JWT assertion;
-- optional credential-free source access only for `assuranceProfile: local`
+- optional credential-free source access only in development with `assuranceProfile: local`
   at a canonical numeric-loopback HTTP origin with an explicit non-zero port;
 - fixed reviewed SQL statements over regular, checkpointed, read-only SQLite
   extracts bound by logical profile, with publisher metadata, bundle-declared
@@ -87,9 +87,9 @@ establishes trust through review, distribution controls, read-only mounts, and
 process replacement for every revision.
 
 Every bundle explicitly declares `assuranceProfile: local`, `production`, or
-`evidence-grade`. Local is the only authoring profile and may omit a
-requirement's fixture reference. It changes no other runtime trust boundary and
-is carried in discovery, signed assertions, SD-JWT VC responses, audit, and
+`evidence-grade`. Local requires the development posture and may omit a
+requirement's fixture reference. Production and evidence-grade require the production posture.
+The profile is carried in discovery, signed assertions, SD-JWT VC responses, audit, and
 verification policy. Production and evidence-grade require one captured,
 complete fixture suite per requirement under the existing bundle validator.
 There is no fixture receipt, certification command, or second serving path.
@@ -197,7 +197,7 @@ authority store holds the history alone.
 opening the public listener, sending an Evidence request, or appending an
 application audit event. Audit initialization may briefly hold its operational
 lock. The runtime remains the authority for startup. Route traffic only after
-`/ready`. For one approved
+`/ready` succeeds. Its JSON object includes `posture` and `developmentSettings`. For one approved
 synthetic deployment subject, retain the signed response, verify it against an
 independently prepared `production` policy and trusted keys, and confirm that
 its access and disclosure audit entries reached the audit destination.
@@ -1421,6 +1421,10 @@ GET /ready
 GET /.well-known/evidence/jwks.json
 GET /.well-known/jwt-vc-issuer
 ```
+
+`GET /ready` includes the declared `posture` and the active `developmentSettings` when ready.
+Development HTTP responses carry `Registry-Posture: development`, and the audit journal records
+the posture on every new entry.
 
 `GET /openapi.json` publishes the generated public contract as
 `application/json`. It carries no credential requirement because the

@@ -236,7 +236,7 @@ The residuals refer to these obligations by number.
        crates/registry-casework/src/http.rs, review_result_feed. */}
 7. Treat reviewer-written public reasons as released text (`CASEWORK-RES-06`).
    {/* Evidence: crates/registry-review-protocol/src/lib.rs, check_public_reason. */}
-8. Use an HTTPS issuer and leave `authentication.oidc.allowInsecureHttp` unset.
+8. Use an HTTPS issuer and list the admitted OAuth clients. Production refuses `authentication.oidc.allowInsecureHttp: true` and `allowedClients: unrestricted`.
    Declare only issuer and JWKS addresses you intend Casework to reach (`CASEWORK-RES-08`).
    {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http,
        insecure_http_startup_diagnostic. */}
@@ -373,7 +373,7 @@ identifiers.
 ### `CASEWORK-RES-08`: declared issuer and key endpoints are trusted
 
 - Condition: the runtime file names an issuer or a JWKS URI, or sets
-  `authentication.oidc.allowInsecureHttp: true`.
+  `authentication.oidc.allowInsecureHttp: true` in development.
 - Consequence: Casework trusts a declared issuer or JWKS URI on the operator's word.
   Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
   keys and mint tokens Casework accepts.
@@ -442,3 +442,17 @@ Report a suspected vulnerability through the process in
 - [Registry Casework runtime configuration reference](../../reference/casework-configuration/)
 - [Registry Casework task grants](../../reference/casework-task-grants/)
 - [Report a vulnerability](../report-a-vulnerability/)
+
+## Development posture
+
+Development Casework marks HTTP responses with `Registry-Posture: development`,
+audit lines with `posture`, and signed task assertions with `registry_posture`.
+Production peers refuse development responses or assertions when they check
+the corresponding mark. Run the stack in one posture. A stack that signs
+Evidence or Render output with a local key file runs in development.
+Production signing uses Transit.
+
+{/* Evidence: crates/registry-casework/src/http.rs security_headers;
+    crates/registry-casework/src/runtime.rs open_audit;
+    crates/registry-casework/src/task_grants.rs POSTURE_CLAIM;
+    crates/registry-platform-httputil/src/lib.rs RefuseDevelopmentPeer */}

@@ -51,7 +51,7 @@ async fn store_for_schema(schema: &str, application_name: &str) -> PostgresStore
         test_only_plaintext: true,
         transport: None,
     };
-    let store = PostgresStore::connect_runtime(&config, &secrets)
+    let store = PostgresStore::connect_runtime(&config, &secrets, None)
         .expect("connect lock-order store")
         .with_audit(crate::CaseworkAudit::capture().0);
     std::env::remove_var(secret_name);

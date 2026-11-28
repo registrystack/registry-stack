@@ -86,8 +86,11 @@ values. Ordinary deployment values accept `${NAME}`, `${NAME:-fallback}`, and
 `${NAME:?message}` substitution. Secret references and the `secretProviders`
 block must stay literal. The redirect URI registered with the provider is
 `publicOrigin` followed by `/signin/callback`. `loopback-plaintext` is for a
-loopback listener. It omits `Secure`, the `__Host-` cookie prefix, and HSTS.
-The review service defaults to production. HTTP transport to loopback works
+loopback listener behind a TLS proxy on the same host. Production always sends
+HSTS and `Secure` cookies with the `__Host-` prefix, also behind that proxy.
+Only development on a loopback listener omits HSTS, and only an HTTP
+`publicOrigin`, which only development accepts, drops `Secure` and the
+`__Host-` prefix. The review service defaults to production. HTTP transport to loopback works
 in either posture. For a local HTTP `publicOrigin`, start with `rstack dev`,
 set `REGISTRY_STACK_POSTURE=development`, or pass `--posture development`.
 

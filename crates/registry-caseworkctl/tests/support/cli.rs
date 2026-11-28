@@ -6,6 +6,12 @@ use std::{
 };
 
 pub(crate) fn caseworkctl(arguments: &[&str]) -> Output {
+    caseworkctl_command(arguments)
+        .output()
+        .expect("caseworkctl starts")
+}
+
+pub(crate) fn caseworkctl_command(arguments: &[&str]) -> Command {
     let dependencies = dependency_directory();
     let candidate = std::env::var_os("CASEWORKCTL_BIN")
         .or_else(|| option_env!("CARGO_BIN_EXE_caseworkctl").map(std::ffi::OsString::from))
@@ -13,7 +19,7 @@ pub(crate) fn caseworkctl(arguments: &[&str]) -> Output {
     let mut command = Command::new(candidate);
     command.args(arguments);
     configure_library_path(&mut command, &dependencies);
-    command.output().expect("caseworkctl starts")
+    command
 }
 
 pub(crate) fn dependency_directory() -> PathBuf {

@@ -27,9 +27,12 @@ fn a_missing_database_reference_names_the_member_and_says_it_is_missing() {
     let root = tempfile::tempdir().expect("temporary secret root");
     let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
 
-    let error =
-        PostgresStore::connect_migration(&database("secret:file/casework-database-url"), &secrets)
-            .expect_err("an absent secret file cannot resolve");
+    let error = PostgresStore::connect_migration(
+        &database("secret:file/casework-database-url"),
+        &secrets,
+        None,
+    )
+    .expect_err("an absent secret file cannot resolve");
 
     let message = error.to_string();
     assert!(
@@ -49,7 +52,7 @@ fn a_literal_database_credential_is_never_rendered_in_the_diagnostic() {
     let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
     let literal_credential = "postgresql://casework:literal-password-canary@localhost/casework";
 
-    let error = PostgresStore::connect_migration(&database(literal_credential), &secrets)
+    let error = PostgresStore::connect_migration(&database(literal_credential), &secrets, None)
         .expect_err("a literal credential is not a secret reference");
 
     let message = error.to_string();
@@ -87,6 +90,7 @@ mod unix {
         let error = PostgresStore::connect_migration(
             &database("secret:file/casework-database-url"),
             &secrets,
+            None,
         )
         .expect_err("a group-readable secret file is refused");
 
@@ -119,7 +123,7 @@ mod unix {
         let mut config = database("secret:file/casework-database-url");
         config.ca_bundle_ref = Some("secret:file/database-root.pem".to_owned());
 
-        let error = PostgresStore::connect_runtime(&config, &secrets)
+        let error = PostgresStore::connect_runtime(&config, &secrets, None)
             .expect_err("a group-readable certificate file is refused");
 
         let message = error.to_string();
@@ -132,4 +136,28 @@ mod unix {
             "the failure does not name the mode rule: {message}"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn loopback_plaintext_checks_the_driver_host_address() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use registry_platform_config::{DatabaseTransport, Gated};
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("url");
+    std::fs::write(
+        &file,
+        "host=localhost hostaddr=10.0.0.5 user=casework dbname=casework",
+    )
+    .unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
+    let mut config = database("secret:file/url");
+    config.transport = Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap());
+    let error = PostgresStore::connect_runtime(&config, &secrets, None).unwrap_err();
+    assert!(
+        matches!(error, registry_casework::StoreError::DatabaseTransport(error)
+        if error.code() == "platform.database.transport-host-mismatch")
+    );
 }

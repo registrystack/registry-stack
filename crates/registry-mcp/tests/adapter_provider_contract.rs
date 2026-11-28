@@ -499,22 +499,29 @@ async fn runtime_admits_development_adapter_responses_only_in_development() {
     let kid = key.kid.as_deref().unwrap();
     let contract = document(200);
     let operation_headers = Arc::new(Mutex::new(Vec::new()));
-    let state = AdapterState {
-        runtime_contract: contract.clone(),
-        runtime_contract_fetches: Arc::new(AtomicUsize::new(0)),
-        operation_status: StatusCode::OK,
-        operation_body: json!({}),
-        request_id: Some("0123456789abcdef0123456789abcdef".to_owned()),
-        response_posture: Some("development"),
-        operation_headers: Arc::clone(&operation_headers),
-    };
-    let adapter = Router::new()
-        .route(&format!("/{CONTRACT_PATH}"), get(runtime_contract))
-        .route("/records", get(operation))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move { axum::serve(listener, adapter).await.unwrap() });
+    // Two stand-in Adapters that differ only in the development marker, so
+    // the production refusal can be pinned on the marker.
+    let mut adapters = Vec::new();
+    for response_posture in [Some("development"), None] {
+        let state = AdapterState {
+            runtime_contract: contract.clone(),
+            runtime_contract_fetches: Arc::new(AtomicUsize::new(0)),
+            operation_status: StatusCode::OK,
+            operation_body: json!({}),
+            request_id: Some("0123456789abcdef0123456789abcdef".to_owned()),
+            response_posture,
+            operation_headers: Arc::clone(&operation_headers),
+        };
+        let adapter = Router::new()
+            .route(&format!("/{CONTRACT_PATH}"), get(runtime_contract))
+            .route("/records", get(operation))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, adapter).await.unwrap() });
+        adapters.push((address, task));
+    }
+    let (marked, unmarked) = (adapters[0].0, adapters[1].0);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -528,9 +535,16 @@ async fn runtime_admits_development_adapter_responses_only_in_development() {
             "client_id": "chat-host", "scope": "fixture:read", "iat": now, "exp": now + 300,
         }),
     );
-    for (posture, source) in [
-        (Posture::Production, "static"),
-        (Posture::Development, "test-issuer"),
+    // (posture, key source, Adapter, refused with this code)
+    for (posture, source, address, refused) in [
+        (
+            Posture::Production,
+            "static",
+            marked,
+            Some("adapter-protocol-invalid"),
+        ),
+        (Posture::Production, "static", unmarked, None),
+        (Posture::Development, "test-issuer", marked, None),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -626,13 +640,21 @@ async fn runtime_admits_development_adapter_responses_only_in_development() {
         let reply: Value = serde_json::from_str(data).unwrap();
         assert_eq!(
             reply["result"]["isError"].as_bool().unwrap_or(false),
-            posture == Posture::Production,
+            refused.is_some(),
             "{reply}"
         );
+        if let Some(code) = refused {
+            assert_eq!(
+                reply["result"]["structuredContent"]["error"]["code"], code,
+                "{reply}"
+            );
+        }
         let text = std::fs::read_to_string(&audit).unwrap();
         let mark: Value = serde_json::from_str(text.lines().next().expect("tool audit")).unwrap();
         assert_eq!(mark["posture"], posture.as_str());
     }
-    assert_eq!(operation_headers.lock().unwrap().len(), 2);
-    task.abort();
+    assert_eq!(operation_headers.lock().unwrap().len(), 3);
+    for (_, task) in adapters {
+        task.abort();
+    }
 }

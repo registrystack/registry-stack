@@ -7,9 +7,9 @@ use crate::{
 };
 use axum::Router;
 use registry_mcp_edge::{
-    AuditOptions, AuthorizationFactory, Delegation, DelegationOptions, FixedAuthorizationFactory,
-    GatewayCore, GatewayInfo, ProviderBinding, RateLimitOptions, ResourceServer, ServerOptions,
-    TokenBucketOptions, ToolAuditLog,
+    config::describe_development_settings, AuditOptions, AuthorizationFactory, Delegation,
+    DelegationOptions, FixedAuthorizationFactory, GatewayCore, GatewayInfo, ProviderBinding,
+    RateLimitOptions, ResourceServer, ServerOptions, TokenBucketOptions, ToolAuditLog,
 };
 use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
 use registry_platform_config::{
@@ -159,11 +159,11 @@ fn private_key(
     })
 }
 
-pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
-    let declared = crate::config::default_posture();
-    assemble_router(config, &PostureReport::new(declared), None).await
-}
+/// How an operator gets past a posture refusal at startup.
+const POSTURE_REMEDY: &str = "Run registry-mcp check for each member. For a laptop or test run, start with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.";
 
+/// Build the gateway's HTTP application from what the runtime loader
+/// returned: the configuration, the posture report and the witness.
 pub async fn build_with_posture(
     loaded: &registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
 ) -> Result<Router, StartupError> {
@@ -179,7 +179,7 @@ async fn assemble_router(
         return Err(startup_failure(
             "runtime configuration",
             "the development witness does not match the declared posture",
-            "Use the configuration and posture returned by the runtime loader.",
+            "Use the configuration, posture and witness the runtime loader returned. For a laptop or test run, start with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
         ));
     }
     let declared = DeclaredPosture {
@@ -190,15 +190,15 @@ async fn assemble_router(
         Posture::Production => registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
         Posture::Development => registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
     };
-    let mut checked = posture.clone();
-    config.record_posture(&mut checked);
-    if checked.posture() == Posture::Production
-        && (!checked.settings().is_empty() || config.resource_server.allow_insecure_http)
-    {
+    let settings = config.development_settings();
+    if posture.posture() == Posture::Production && !settings.is_empty() {
         return Err(startup_failure(
             "runtime configuration",
-            "production refuses development settings",
-            "Run registry-mcp check for exact diagnostics and correct every reported member.",
+            format!(
+                "production refuses development settings: {}",
+                describe_development_settings(&settings)
+            ),
+            POSTURE_REMEDY,
         ));
     }
     config.validate(declared, development).map_err(|_| {
@@ -226,25 +226,26 @@ async fn assemble_router(
     })?;
     let resource = &config.resource_server;
     let resource_url = resource.resource_url(development).map_err(|error| {
+        startup_failure("resourceServer.resource", error.to_string(), POSTURE_REMEDY)
+    })?;
+    let issuer = resource.issuer_url(development).map_err(|error| {
+        startup_failure("resourceServer.issuer", error.to_string(), POSTURE_REMEDY)
+    })?;
+    let policy =
+        IssuerNetworkPolicy::new(issuer.as_str(), resource.allow_insecure_http).map_err(|_| {
+            startup_failure(
+                "resourceServer.issuer",
+                "the issuer network policy could not be configured",
+                "Use the checked issuer URL and its explicit insecure-HTTP policy.",
+            )
+        })?;
+    let jwks_source = resource.jwks_source.get(development).map_err(|error| {
         startup_failure(
-            "resourceServer.resource",
+            "resourceServer.jwksSource",
             error.to_string(),
-            "Use an https resource identifier.",
+            POSTURE_REMEDY,
         )
     })?;
-    let policy = IssuerNetworkPolicy::new(resource.issuer.as_str(), resource.allow_insecure_http)
-        .map_err(|_| {
-        startup_failure(
-            "resourceServer.issuer",
-            "the issuer network policy could not be configured",
-            "Use the checked issuer URL and its explicit insecure-HTTP policy.",
-        )
-    })?;
-    let jwks_source = resource.jwks_source.get(development).map_err(|error| startup_failure(
-        "resourceServer.jwksSource",
-        error.to_string(),
-        "Start with rstack dev or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
-    ))?;
     let fetcher = match jwks_source {
         JwksSource::Uri { uri } => JwksFetcher::new_with_fetch_url_policy(
             uri.to_string(),
@@ -262,7 +263,7 @@ async fn assemble_router(
         JwksSource::Discovery {} => {
             let (discovery, network) = fetch_discovery_for_issuer(
                 &OidcDiscoveryConfig {
-                    issuer: resource.issuer.to_string(),
+                    issuer: issuer.to_string(),
                     jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
@@ -284,13 +285,9 @@ async fn assemble_router(
             )
         }
     };
-    let options = config.resource_options(development).map_err(|error| {
-        startup_failure(
-            "resourceServer.resource",
-            error.to_string(),
-            "Use an https resource identifier.",
-        )
-    })?;
+    let options = config
+        .resource_options(development)
+        .map_err(|error| startup_failure("resourceServer", error.to_string(), POSTURE_REMEDY))?;
     let limits = &config.rate_limits;
     let bucket = |limit: &registry_mcp_edge::config::RateLimitConfig| TokenBucketOptions {
         requests_per_minute: limit.requests_per_minute.get(),
@@ -344,6 +341,7 @@ async fn assemble_router(
                 registry,
                 exchange,
                 service,
+                development,
                 resource_url.as_str(),
                 private_key(
                     &secrets,
@@ -368,6 +366,11 @@ async fn assemble_router(
                     binding_member("tools"),
                     error.to_string(),
                     "Correct this binding's public BReg tool ceiling and retry startup.",
+                ),
+                registry_breg_mcp::BRegBindingError::ReviewOrigin => startup_failure(
+                    provider_field("service/reviewBaseUrl"),
+                    error.to_string(),
+                    POSTURE_REMEDY,
                 ),
             })?,
             ProviderConfig::Casework {

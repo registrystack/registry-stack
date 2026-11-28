@@ -332,9 +332,12 @@ The table below gives each key. Rules that span keys or services:
   refuses Adapter responses marked as development.
 - Use `tlsTermination: loopback-plaintext` behind a TLS proxy on the same host.
   Production keeps HSTS and the review page uses secure cookies with `__Host-` names.
+  Only development on a loopback listener omits HSTS.
   Use HTTPS for `resourceServer.resource`, `resourceServer.issuer`, `service.reviewBaseUrl`,
   the review page's `publicOrigin`, and the issuer's discovered `authorization_endpoint`.
-  The review page can fetch discovery from a loopback HTTP `signIn.issuer`.
+  The review page can fetch discovery from a loopback HTTP `signIn.issuer`. In production this
+  works only when the discovery document publishes an HTTPS `authorization_endpoint`. A typical
+  local issuer publishes an HTTP one, which production refuses.
 - `resourceServer.allowInsecureHttp: true` requires development and permits plain HTTP
   to a non-loopback issuer and to a configured JWKS URI.
 - For an explicitly configured JWKS URI, HTTPS can reach loopback and private addresses.
@@ -345,7 +348,7 @@ The table below gives each key. Rules that span keys or services:
     cross_member_findings, audience-reused, exchange-client-admitted-inbound;
     crates/registry-platform-oidc/src/lib.rs, declared_jwks_fetch_policy;
     crates/registry-mcp-edge/src/server.rs, METADATA_PREFIX;
-    crates/registry-mcp-edge/src/config.rs, record_posture, deserialize_insecure_http;
+    crates/registry-mcp-edge/src/config.rs, development_settings, deserialize_insecure_http;
     crates/registry-platform-config/src/posture.rs, diagnostics;
     crates/registry-mcp/src/adapter.rs, response_bytes;
     crates/registry-mcp/src/runtime.rs, build_with_posture;
@@ -401,17 +404,20 @@ Rules that span keys or services:
 - `registry.resource` equals the gateway's `registry.audience`. `registry.action` and
   `registry.targetInput` match its `service.application`, and `registry.accessProfile` names the
   human profile.
-- The issuer must be reachable at a public address.
+- The page fetches the issuer's discovery document over HTTPS at any address except a
+  cloud-metadata address, or over plain HTTP on loopback. An endpoint that discovery names on
+  another origin must use HTTPS at a public address.
 - `session.maximumPendingSignIns` must hold every sign-in that `rateLimits.globalSignIn` admits
   within `session.signInLifetimeSeconds`.
 - One citizen holds at most three sessions, and a fourth sign-in ends the oldest.
-- `loopback-plaintext` also drops the `Secure` attribute and the `__Host-` prefix from the
-  session cookie.
+- An HTTP `publicOrigin`, which only development accepts, drops the `Secure` attribute and the
+  `__Host-` prefix from the session cookie.
 
 {/* Evidence: crates/registry-breg-review/src/config.rs, RuntimeConfig, REMOVED_KEYS, CALLBACK_PATH,
     findings, openid-scope, pending-sign-ins-fillable;
     crates/registry-breg-review/src/session.rs, MAXIMUM_SESSIONS_PER_CITIZEN, insert;
-    crates/registry-breg-review/src/lib.rs, router, FetchUrlPolicy. */}
+    crates/registry-breg-review/src/lib.rs, router_with_posture, FetchUrlPolicy, Cookies;
+    crates/registry-platform-oidc/src/lib.rs, issuer_fetch_policy, discovered_endpoint_fetch_policy. */}
 
 {/* Generated from products/breg/generated/review-runtime/review-runtime.schema.json,
     through src/data/generated/breg-configuration.json, by

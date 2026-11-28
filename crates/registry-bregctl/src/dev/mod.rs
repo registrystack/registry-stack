@@ -117,6 +117,15 @@ pub struct DevArgs {
     start: StartArgs,
 }
 
+impl DevArgs {
+    pub(super) fn posture_flag(&self) -> Option<&str> {
+        match &self.action {
+            Some(DevAction::Start(args)) => args.posture.flag.as_deref(),
+            _ => self.start.posture.flag.as_deref(),
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum DevAction {
     /// Start or reuse the project's retained local database and services.
@@ -191,6 +200,8 @@ struct TokenArgs {
 
 #[derive(Debug, Args)]
 struct StartArgs {
+    #[command(flatten)]
+    posture: crate::PostureArgs,
     /// Existing authored registry project.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
@@ -1403,7 +1414,7 @@ fn start(args: StartArgs) -> Result<Value> {
     state.failure = None;
     state.save()?;
     let log = log_file(&root, "supervisor")?;
-    let mut supervisor = Command::new(std::env::current_exe()?)
+    let mut supervisor = development_command(std::env::current_exe()?)
         .arg("__dev-supervisor")
         .arg("--dev-root")
         .arg(&root)
@@ -1965,7 +1976,7 @@ const MAX_VERSION: usize = 200;
 /// itself. Diagnostics stay in the owner-only log directory.
 fn binary(root: &Path, path: &Path) -> Result<Binary> {
     let (success, bytes) = output(
-        Command::new(path).arg("--version"),
+        development_command(path).arg("--version"),
         root,
         &format!(
             "version-{}",
@@ -2038,8 +2049,17 @@ fn pump(mut input: impl Read, mut output: impl Write) -> Result<()> {
     }
     Ok(())
 }
+fn development_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.env(
+        registry_platform_config::POSTURE_ENV,
+        registry_platform_config::DEVELOPMENT,
+    );
+    command
+}
+
 fn service(binary: &Path, args: &[&str], config: &Path, root: &Path, name: &str) -> Result<Child> {
-    let mut child = Command::new(binary)
+    let mut child = development_command(binary)
         .args(args)
         .arg(config)
         .env("SSL_CERT_FILE", root.join("tls/ca.pem"))
@@ -2290,16 +2310,21 @@ enum Activation {
 /// not ready for the runtime package, records no activated package, or has
 /// not activated the configured package means activation never committed;
 /// `apply` then decides whether the package may be activated. Every other
-/// refusal is a real prerequisite failure and must stop the start.
+/// refusal is a real prerequisite failure and must stop the start. A posture
+/// mismatch finding also stops the development supervisor.
 fn activation(success: bool, report: &[u8]) -> Result<Activation> {
-    if success {
+    let report: Value = serde_json::from_slice(report)
+        .context("doctor finished without a machine-readable report; inspect private logs")?;
+    let diagnostics = report["diagnostics"].as_array();
+    let posture_mismatch = diagnostics.is_some_and(|entries| {
+        entries
+            .iter()
+            .any(|entry| entry["code"] == registry_breg::migration::POSTURE_MISMATCH_CODE)
+    });
+    if success && !posture_mismatch {
         return Ok(Activation::Activated);
     }
-    let report: Value = serde_json::from_slice(report).context(
-        "doctor refused the runtime configuration without a machine-readable report; inspect private logs",
-    )?;
-    let diagnostics = report["diagnostics"]
-        .as_array()
+    let diagnostics = diagnostics
         .filter(|diagnostics| !diagnostics.is_empty())
         .context("doctor refused without naming a diagnostic; inspect private logs")?;
     if diagnostics.iter().all(|entry| {
@@ -2332,7 +2357,8 @@ fn record_activation_preflight(root: &Path, success: bool, report: &[u8]) -> Res
 }
 
 fn ctl(state: &State) -> Command {
-    let mut command = Command::new(std::env::current_exe().expect("current executable exists"));
+    let mut command =
+        development_command(std::env::current_exe().expect("current executable exists"));
     command
         .arg("--format")
         .arg("json")
@@ -2346,7 +2372,12 @@ fn docker_command(
     args: &[&str],
     input: Option<Input<'_>>,
 ) -> Result<Vec<u8>> {
-    command(Command::new(docker).args(args), &state.root(), name, input)
+    command(
+        development_command(docker).args(args),
+        &state.root(),
+        name,
+        input,
+    )
 }
 
 /// Listing by exact generated name distinguishes absence from a daemon failure
@@ -3027,10 +3058,7 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     let fingerprint = report["schemaFingerprint"]
         .as_str()
         .context("schema-test report has no fingerprint")?;
-    // Packaging runs in this process: the loopback session serves a freshly
-    // initialized project's placeholder identity unchanged, so it packages
-    // without the deployment identity refusals, and no `bregctl package`
-    // spelling can do the same.
+    // The local session can package the authored placeholder identity.
     let args = crate::PackageArgs {
         candidate: crate::PackageCandidateArgs {
             project: root.join("project"),
@@ -3042,7 +3070,7 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         output: root.join("build"),
         revision: None,
     };
-    let report = crate::package(&args, false)
+    let report = crate::package(&args, crate::DEV_POSTURE)
         .map_err(|refusal| in_process_refusal(&root, "package", &refusal))?;
     config::runtime(&root, state, clients, false)?;
     state.package_digest = Some(report.package_digest);
@@ -3283,6 +3311,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
                         );
                     }
                     crate::import_authority_lifecycle::close(
+                        crate::DEV_POSTURE,
                         &crate::import_authority_lifecycle::CloseArguments {
                             runtime_config: &runtime_config,
                             authority_id: &authority_id,
@@ -3306,6 +3335,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
                     // authority; keep the old UUID checkpoint as evidence and
                     // open a fresh authority below.
                     crate::import_authority_lifecycle::close(
+                        crate::DEV_POSTURE,
                         &crate::import_authority_lifecycle::CloseArguments {
                             runtime_config: &runtime_config,
                             authority_id: &authority_id,
@@ -3331,6 +3361,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
             // without a checkpoint no chunk was submitted or committed. It is
             // therefore safe to close and replace this authority.
             crate::import_authority_lifecycle::close(
+                crate::DEV_POSTURE,
                 &crate::import_authority_lifecycle::CloseArguments {
                     runtime_config: &runtime_config,
                     authority_id: &authority_id,
@@ -3363,7 +3394,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
         operator_reference: &operator_reference,
         reason: "load declared local seed",
     };
-    let authority = match crate::import_authority_lifecycle::open(&open_arguments) {
+    let authority = match crate::import_authority_lifecycle::open(crate::DEV_POSTURE, &open_arguments) {
         Err(ImportAuthorityCliError::Authority(ImportAuthorityError::AlreadyOpen)) => {
             // An interruption between the open commit and the journal save
             // below leaves an open authority no local state names, and the
@@ -3376,7 +3407,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
             // before this seed asked to open anything. Without a journaled
             // authority no checkpoint was written and no chunk was submitted,
             // so closing it is safe.
-            let listed = crate::import_authority_lifecycle::list(&runtime_config).map_err(
+            let listed = crate::import_authority_lifecycle::list(crate::DEV_POSTURE, &runtime_config).map_err(
                 |error| anyhow::anyhow!("cannot list import authorities: {error:?}"),
             )?;
             let Some(orphan) = unjournaled_seed_authority(
@@ -3396,8 +3427,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
                     seed.record_type
                 );
             };
-            crate::import_authority_lifecycle::close(
-                &crate::import_authority_lifecycle::CloseArguments {
+            crate::import_authority_lifecycle::close(crate::DEV_POSTURE, &crate::import_authority_lifecycle::CloseArguments {
                     runtime_config: &runtime_config,
                     authority_id: &orphan.to_string(),
                     operator_reference: &operator_reference,
@@ -3407,7 +3437,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
             .map_err(|error| {
                 anyhow::anyhow!("cannot close unjournaled seed authority: {error:?}")
             })?;
-            crate::import_authority_lifecycle::open(&open_arguments)
+            crate::import_authority_lifecycle::open(crate::DEV_POSTURE, &open_arguments)
         }
         opened => opened,
     }
@@ -3441,12 +3471,15 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
             "synthetic import seed did not complete exactly one item; its authority and checkpoint were retained for a safe resume"
         );
     }
-    crate::import_authority_lifecycle::close(&crate::import_authority_lifecycle::CloseArguments {
-        runtime_config: &runtime_config,
-        authority_id: &authority_id,
-        operator_reference: &operator_reference,
-        reason: "finish declared local seed",
-    })
+    crate::import_authority_lifecycle::close(
+        crate::DEV_POSTURE,
+        &crate::import_authority_lifecycle::CloseArguments {
+            runtime_config: &runtime_config,
+            authority_id: &authority_id,
+            operator_reference: &operator_reference,
+            reason: "finish declared local seed",
+        },
+    )
     .map_err(|error| {
         anyhow::anyhow!("cannot close seed import authority after import: {error:?}")
     })?;

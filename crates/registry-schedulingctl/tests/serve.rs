@@ -22,6 +22,7 @@ fn runtime(path: &Path, name: &str, exit: u8) -> PathBuf {
 
 fn run(binary: &Path, capture: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_schedulingctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(arguments)
         .env("SCHEDULING_BIN", binary)
         .env("RUNTIME_CAPTURE", capture)
@@ -50,6 +51,7 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_status_and_lease(
         .env("SCHEDULING_BIN", &binary)
         .env("RUNTIME_CAPTURE", &capture)
         .env("RUNTIME_LEASE_CAPTURE", &lease)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("RSTACK_GENERATION_DIR")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -97,6 +99,7 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
     ))
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_schedulingctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", "/tmp/path.yaml"])
         .env("PATH", path)
         .env("RUNTIME_CAPTURE", &capture)
@@ -139,6 +142,7 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_schedulingctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", "/tmp/managed.yaml"])
         .env("PATH", poisoned_path)
         .env("RUNTIME_CAPTURE", &capture)
@@ -212,4 +216,34 @@ fn serve_rejects_explicit_human_report_format_before_starting_the_runtime() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("--format does not apply"));
     assert!(!capture.exists(), "the runtime must not start");
+}
+
+#[test]
+fn unmanaged_serve_forwards_explicit_development_posture() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = runtime(temp.path(), "scheduling", 0);
+    let capture = temp.path().join("capture");
+    let output = run(
+        &binary,
+        &capture,
+        &[
+            "serve",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--posture",
+            "development",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let captured = fs::read_to_string(capture).unwrap();
+    assert_eq!(
+        captured.lines().skip(1).collect::<Vec<_>>(),
+        [
+            "--runtime-config",
+            "/tmp/runtime.yaml",
+            "--posture",
+            "development",
+            "serve"
+        ]
+    );
 }

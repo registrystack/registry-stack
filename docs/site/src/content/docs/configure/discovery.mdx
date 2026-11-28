@@ -186,7 +186,17 @@ Check the runtime file and its package under development:
 discoveryctl check --runtime-config "$PWD/discovery-project/runtime.yaml" --environment --posture development
 ```
 
-The check verifies the package and reports the loopback catalog and origin URL warnings.
+```text test-expect
+warning[discovery.posture.loopback-catalog-url] <package-index> /origins/0/catalogUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+warning[discovery.posture.loopback-catalog-url] <package-index> /services/0/originUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+0 errors, 2 warnings in 1 file
+```
+
+The check verifies the package and reports the loopback catalog and origin URL warnings. A package that fails verification is reported as `discovery.runtime.package-refused` at `/package/root` and exits 1. A package file the check cannot read exits 3.
 Without `--environment`, the check reads the file without filling its `${NAME}` expressions.
 
 {/* Evidence: crates/registry-discovery/src/runtime_config.rs, check_runtime_with_package;

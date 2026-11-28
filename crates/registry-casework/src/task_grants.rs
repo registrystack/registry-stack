@@ -739,6 +739,7 @@ async fn template_active(
 }
 
 pub(crate) struct TaskAuthority {
+    posture: registry_platform_config::Posture,
     config: crate::TaskAuthorityConfig,
     key: registry_platform_crypto::PrivateJwk,
     identifiers: registry_platform_audit::AuditKeyHasher,
@@ -748,6 +749,7 @@ impl TaskAuthority {
         config: &crate::TaskAuthorityConfig,
         secrets: &registry_platform_config::SecretResolver,
         identifiers: registry_platform_audit::AuditKeyHasher,
+        posture: registry_platform_config::Posture,
     ) -> Result<Self, StoreError> {
         let secret = secrets
             .resolve(&config.signing_key_ref)
@@ -762,6 +764,7 @@ impl TaskAuthority {
             return Err(StoreError::Configuration);
         }
         Ok(Self {
+            posture,
             config: config.clone(),
             key,
             identifiers,
@@ -827,6 +830,9 @@ impl TaskAuthority {
             "registry_purpose":template.purpose,"registry_grant_exp":grant_expires_at,
             "registry_grant_bounds":template.bounds,"registry_approver":approver,
             "scope":template.scopes.join(" "),"identity":subjects});
+        if self.posture == registry_platform_config::Posture::Development {
+            payload[registry_platform_oidc::POSTURE_CLAIM] = json!(self.posture.as_str());
+        }
         if let Some(context) = &template.evidence_context {
             payload["evidence_tags"] = json!(context.requester_tags);
             payload["evidence_audience"] = json!(context.audience);
@@ -1347,6 +1353,7 @@ mod evidence_assertion_tests {
         key.alg = Some("RS256".into());
         key.kid = Some("task-authority-test".into());
         TaskAuthority {
+            posture: registry_platform_config::Posture::Production,
             config: crate::TaskAuthorityConfig {
                 issuer: "https://casework.test".into(),
                 exchange_audience: "https://issuer.test".into(),
@@ -1380,13 +1387,13 @@ mod evidence_assertion_tests {
     }
     #[test]
     fn assertions_keep_credentials_short_and_approver_identity_pseudonymous() {
-        let authority = authority();
+        let production = authority();
         let holder = IssuerPrincipal {
             issuer: "https://people.test".into(),
             subject: "holder-canary".into(),
         };
         let fields = BTreeMap::from([("given_name".into(), json!("Person"))]);
-        let response = authority
+        let response = production
             .assertion_for(Uuid::new_v4(), &template(), &holder, &fields, 1000, 200)
             .unwrap();
         assert_eq!(response.expires_at, 260);
@@ -1397,6 +1404,24 @@ mod evidence_assertion_tests {
                 .unwrap(),
         )
         .unwrap();
+        assert!(payload.get(registry_platform_oidc::POSTURE_CLAIM).is_none());
+        let development = TaskAuthority {
+            posture: registry_platform_config::Posture::Development,
+            ..authority()
+        };
+        let response = development
+            .assertion_for(Uuid::new_v4(), &template(), &holder, &fields, 1000, 200)
+            .unwrap();
+        let payload_development: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(response.assertion.split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            payload_development[registry_platform_oidc::POSTURE_CLAIM],
+            "development"
+        );
         assert_eq!(payload["evidence_tags"], json!(["agency"]));
         assert_eq!(
             payload["evidence_audience"],
@@ -1406,7 +1431,7 @@ mod evidence_assertion_tests {
         assert!(!payload.to_string().contains("https://people.test"));
         assert!(payload.get("registry_grant_authority").is_none());
         assert!(matches!(
-            authority.assertion_for(Uuid::new_v4(), &template(), &holder, &fields, 200, 200),
+            production.assertion_for(Uuid::new_v4(), &template(), &holder, &fields, 200, 200),
             Err(StoreError::Forbidden(FailedCheck::TaskGrantExpired))
         ));
     }

@@ -191,7 +191,7 @@ fn a_local_placeholder_package_cannot_load_for_a_production_database() {
         load_package(
             local.path(),
             &PackageLoadContext {
-                database_initialization_environment: "production",
+                posture: registry_platform_config::Posture::Production,
             },
         ),
         Err(PackageError::DeploymentIdentity)
@@ -199,7 +199,7 @@ fn a_local_placeholder_package_cannot_load_for_a_production_database() {
     load_predecessor_package(
         local.path(),
         &PackageLoadContext {
-            database_initialization_environment: "production",
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .expect("a formerly admitted local identity remains readable for successor recovery");
@@ -208,7 +208,7 @@ fn a_local_placeholder_package_cannot_load_for_a_production_database() {
     load_package(
         deployable.path(),
         &PackageLoadContext {
-            database_initialization_environment: "production",
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .expect("a deployment-ready package loads for production");
@@ -2456,7 +2456,8 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     )
     .expect("compiled claims are accepted");
     let package_lock = RegistryLockKey::derive(&verified_second.manifest().package_id)
-        .expect("verified package lock key derives");
+        .expect("verified package lock key derives")
+        .for_posture(verified_second.posture());
     let mut wrong_record_client = pool
         .get_for_test()
         .await
@@ -3405,9 +3406,9 @@ impl PackageFixture {
         Self { root }
     }
 
-    fn context(&self) -> PackageLoadContext<'static> {
+    fn context(&self) -> PackageLoadContext {
         PackageLoadContext {
-            database_initialization_environment: "production",
+            posture: registry_platform_config::Posture::Production,
         }
     }
 
@@ -3764,9 +3765,9 @@ fn legacy_compiler_fixture(source_revision: &str) -> PackageFixture {
     PackageFixture { root }
 }
 
-fn local_context() -> PackageLoadContext<'static> {
+fn local_context() -> PackageLoadContext {
     PackageLoadContext {
-        database_initialization_environment: "local",
+        posture: registry_platform_config::Posture::Development,
     }
 }
 
@@ -4011,7 +4012,6 @@ identity:
   environment: local
   instanceId: {INSTANCE}
   databaseId: {DATABASE}
-  databaseInitializationEnvironment: local
 secretProviders:
   file:
     root: {}
@@ -4079,11 +4079,17 @@ operationalTimeouts:
             self.secret_root.display(),
             self.package_root.display(),
         );
-        parse_runtime_config(&raw)
-            .expect("upgrade compatibility runtime parses")
-            .activate_event_destinations(registry)
-            .expect("upgrade compatibility destination activates")
-            .compatibility_inventory()
+        parse_runtime_config(
+            &raw,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("upgrade compatibility runtime parses")
+        .activate_event_destinations(registry)
+        .expect("upgrade compatibility destination activates")
+        .compatibility_inventory()
     }
 }
 
@@ -4422,13 +4428,13 @@ fn manifest_file_path(root: &Path, role: PackageFileRole) -> PathBuf {
     )
 }
 
-fn load_error(root: &Path, context: &PackageLoadContext<'_>) -> PackageError {
+fn load_error(root: &Path, context: &PackageLoadContext) -> PackageError {
     load_package(root, context)
         .err()
         .expect("package is refused")
 }
 
-fn predecessor_load_error(root: &Path, context: &PackageLoadContext<'_>) -> PackageError {
+fn predecessor_load_error(root: &Path, context: &PackageLoadContext) -> PackageError {
     load_predecessor_package(root, context)
         .err()
         .expect("predecessor package is refused")

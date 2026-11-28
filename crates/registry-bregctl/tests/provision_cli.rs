@@ -55,7 +55,7 @@ identity:
   environment: test
   instanceId: provision-cli-test
   databaseId: provision-cli-test-db
-  databaseInitializationEnvironment: test
+
 secretProviders:
   file:
     root: {secrets}
@@ -101,6 +101,7 @@ cursor:
 fn ctl(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
         .args(arguments)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .unwrap()
 }
@@ -315,4 +316,27 @@ fn a_missing_ca_bundle_is_refused() {
         loader_refusal(&runtime),
         ("breg.runtime.secret".to_owned(), String::new())
     );
+}
+
+#[test]
+fn print_sql_with_generated_audit_custody_requires_development() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let source = std::fs::read_to_string(&runtime).unwrap();
+    let edited = source.replace(
+        "audit:\n",
+        "audit:\n  hashKeyCustody: development-generated\n",
+    );
+    assert_ne!(source, edited);
+    std::fs::write(&runtime, edited).unwrap();
+    let args = ["provision", "--runtime-config", &runtime, "--print-sql"];
+    let refused = ctl(&args);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("platform.posture.generated-audit-key")
+    );
+    let mut args = args.to_vec();
+    args.extend(["--posture", "development"]);
+    let accepted = ctl(&args);
+    assert!(accepted.status.success(), "{accepted:?}");
 }

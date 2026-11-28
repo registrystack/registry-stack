@@ -587,7 +587,6 @@ impl Breg {
                     "environment": "test",
                     "instanceId": "adapter-connector-proof",
                     "databaseId": "adapter-connector-proof",
-                    "databaseInitializationEnvironment": "test"
                 },
                 "secretProviders": {"file": {"root": service.root}},
                 "database": {

@@ -162,14 +162,16 @@ impl TaskGrantStatusClient {
         base: reqwest::Url,
         token: Arc<PrivateKeyJwt>,
         trusted_roots: Option<&[u8]>,
+        peer_policy: registry_platform_httputil::PeerPolicy,
     ) -> Result<Self, TaskGrantError> {
-        registry_platform_oidc::task_grant::TaskGrantStatusClient::new_without_peer_policy(
+        registry_platform_oidc::task_grant::TaskGrantStatusClient::new(
             source_issuer,
             resource,
             base,
             registry_platform_config::DEFAULT_TASK_GRANT_STATUS_PATH,
             token,
             trusted_roots,
+            peer_policy,
         )
         .map(Self)
     }

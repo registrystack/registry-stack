@@ -129,6 +129,19 @@ def merge_wire_schemas(wire: dict) -> dict:
     result["TaskAuthorityJwks"] = {"type":"object","description":"JSON Web Key Set of the configured task authority's public verification keys.","required":["keys"],"properties":{"keys":{"type":"array","items":{"type":"object"}}}}
     for name,word in (("HealthStatus","ok"),("ReadyStatus","ready")):
         result[name]={"type":"object","description":"Probe answer. Members beside status may be added.","required":["status"],"properties":{"status":{"type":"string","enum":[word]}}}
+    ready = result["ReadyStatus"]
+    ready["required"].extend(["posture", "developmentSettings"])
+    ready["properties"].update({
+        "posture":{"type":"string","enum":["development","production"]},
+        "developmentSettings":{
+            "type":"array",
+            "items":{
+                "type":"object",
+                "required":["code"],
+                "properties":{"code":{"type":"string"},"pointer":{"type":"string"}},
+            },
+        },
+    })
     return result
 
 def parameter(name: str, where: str, schema: dict, required: bool = False, description: str = "") -> dict:

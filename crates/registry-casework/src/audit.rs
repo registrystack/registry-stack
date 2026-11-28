@@ -880,12 +880,35 @@ mod capture {
         }
     }
 
+    #[cfg(test)]
+    #[tokio::test]
+    async fn writes_the_declared_posture_on_each_audit_line() {
+        use registry_platform_config::Posture;
+
+        for posture in [Posture::Production, Posture::Development] {
+            let capture = AuditCapture::default();
+            let writer = AuditWriter::from_line_sink(Box::new(capture.clone()), posture);
+            let audit = CaseworkAudit::new(writer, AuditKeyHasher::unkeyed_dev_only());
+            let request = audit
+                .begin(serde_json::json!({"event": "casework.posture-test"}))
+                .await
+                .unwrap();
+            let entries = capture.entries();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0]["posture"], posture.as_str());
+            drop(request);
+        }
+    }
+
     impl CaseworkAudit {
         /// An audit destination held in memory, for tests.
         #[must_use]
         pub fn capture() -> (Self, AuditCapture) {
             let capture = AuditCapture::default();
-            let writer = AuditWriter::from_line_sink_without_posture(Box::new(capture.clone()));
+            let writer = AuditWriter::from_line_sink(
+                Box::new(capture.clone()),
+                registry_platform_config::Posture::Production,
+            );
             let audit = Self::new(writer.clone(), AuditKeyHasher::unkeyed_dev_only());
             {
                 let mut state = capture.0.lock().expect("audit capture");

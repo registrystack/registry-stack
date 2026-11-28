@@ -19,6 +19,10 @@ use registry_adapter_engine::evidence::{
 };
 use registry_adapter_engine::project_transform::{CompiledProjectTransform, ProjectTransformError};
 use registry_platform_config::{
+    collect_development_settings, DeclaredPosture, DevelopmentSetting, DevelopmentWitness,
+    FoundSetting, Posture, PostureReport, SettingOrigin,
+};
+use registry_platform_config::{
     package::is_envelope_file, require_trusted_runtime_path, sha256_uri, verify_package,
     PackageError, PackageLimits, VerifiedPackage, SUM_FILE,
 };
@@ -328,6 +332,7 @@ impl Codelist {
 /// from partially replacing the package used by a serving process.
 #[derive(Debug, Clone)]
 pub struct Bundle {
+    development_settings: Vec<FoundSetting>,
     authority_snapshot: Option<crate::authority::AuthoritySnapshot>,
     effective_grant_digest: Option<String>,
     root: PathBuf,
@@ -406,6 +411,8 @@ impl SourcePack {
 /// process-local extract is bound by a digest and stable file identity.
 #[derive(Debug, Clone)]
 pub struct RuntimeDocument {
+    pub posture: PostureReport,
+    pub development: Option<DevelopmentWitness>,
     path: PathBuf,
     pub config: RuntimeConfig,
     bytes: Vec<u8>,
@@ -492,7 +499,7 @@ impl SourceExtract {
 }
 
 impl RuntimeDocument {
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, BundleError> {
+    pub fn load(path: impl AsRef<Path>, declared: DeclaredPosture) -> Result<Self, BundleError> {
         let path = path.as_ref();
         if path.file_name().and_then(|name| name.to_str()) != Some(RUNTIME_FILE) {
             return Err(BundleError::InvalidPath);
@@ -518,8 +525,9 @@ impl RuntimeDocument {
         .map_err(|error| error.in_artifact(RUNTIME_FILE))?;
         // `${NAME}` in a string value reads the process environment; the
         // loader refuses it in a secret reference and under secretProviders.
-        let loaded = RuntimeConfig::parse_yaml_with(&bytes, |name| std::env::var(name).ok())
-            .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
+        let loaded =
+            RuntimeConfig::parse_yaml_with(&bytes, declared, |name| std::env::var(name).ok())
+                .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
         let config = loaded.config;
         if let Some(file) = &config.secret_providers.file {
             validate_secret_root(&file.root)?;
@@ -554,6 +562,8 @@ impl RuntimeDocument {
         }
         Ok(Self {
             path: path.to_path_buf(),
+            posture: loaded.posture,
+            development: loaded.development,
             config,
             bytes,
             ca_bundles,
@@ -612,9 +622,18 @@ pub struct DeploymentInputs {
 }
 
 impl DeploymentInputs {
-    pub fn load(runtime_path: impl AsRef<Path>) -> Result<Self, BundleError> {
-        let runtime = RuntimeDocument::load(runtime_path)?;
+    pub fn load(
+        runtime_path: impl AsRef<Path>,
+        declared: DeclaredPosture,
+    ) -> Result<Self, BundleError> {
+        let mut runtime = RuntimeDocument::load(runtime_path, declared)?;
         let mut bundle = Bundle::load_pinned(&runtime.config.package)?;
+        if let Some(conflict) = bundle.record_posture(&mut runtime.posture, Some(&runtime.config)) {
+            return Err(BundleError::Refused(Box::new(Report::new(vec![conflict]))));
+        }
+        runtime.posture.decide(runtime.path()).map_err(|error| {
+            BundleError::Refused(Box::new(Report::new(error.diagnostics().to_vec())))
+        })?;
         bundle.bind_target_authority(runtime.config.authority.as_ref())?;
         validate_runtime_bindings(&bundle, &runtime.config)?;
         Ok(Self { bundle, runtime })
@@ -636,7 +655,98 @@ impl DeploymentInputs {
 
 pub type EvidenceBundle = Bundle;
 
+static LOCAL_ASSURANCE: DevelopmentSetting = DevelopmentSetting {
+    code: "evidence.posture.local-assurance",
+    key: "assuranceProfile",
+    summary: "local assurance permits locally held signing keys",
+    production: "Build a production or evidence-grade package with a Transit signer.",
+};
+
+static CREDENTIAL_FREE_SOURCE: DevelopmentSetting = DevelopmentSetting {
+    code: "evidence.posture.credential-free-source",
+    key: "authentication",
+    summary: "a credential-free source connection provides no client authentication",
+    production: "Bind an mtlsIdentity or configure an authenticated endpoint.",
+};
+
 impl Bundle {
+    /// Record package settings and development-only runtime bindings.
+    pub fn record_posture(
+        &self,
+        report: &mut PostureReport,
+        runtime: Option<&RuntimeConfig>,
+    ) -> Option<registry_platform_yaml::Diagnostic> {
+        use registry_adapter_core::EndpointAuthentication;
+        use registry_platform_yaml::{escape_pointer_segment, Diagnostic};
+
+        for found in &self.development_settings {
+            report.record(found.clone());
+        }
+        let local = self.config.assurance_profile == AssuranceProfile::Local;
+        if local {
+            report.record(FoundSetting {
+                setting: &LOCAL_ASSURANCE,
+                pointer: Some("/assuranceProfile".to_owned()),
+                position: None,
+                origin: SettingOrigin::Package,
+            });
+            if let Some(runtime) = runtime {
+                let mut seen = BTreeSet::new();
+                for (id, source) in self.config.sources.iter() {
+                    let connection = source.connection();
+                    let (Some(pack), Some(policies), Some(bindings)) = (
+                        self.source_packs.get(id),
+                        self.config.source_connections.get(connection),
+                        runtime.source_connections.get(connection),
+                    ) else {
+                        continue;
+                    };
+                    for policy in &policies.endpoints {
+                        let name = policy.endpoint.as_str();
+                        let (Some(endpoint), Some(binding)) =
+                            (pack.pack.endpoints.get(name), bindings.endpoints.get(name))
+                        else {
+                            continue;
+                        };
+                        if matches!(endpoint.authentication, EndpointAuthentication::None {})
+                            && binding.mtls_identity.is_none()
+                            && crate::config::validate_local_unauthenticated_source_origin(
+                                &policy.base_url,
+                            )
+                            .is_ok()
+                            && seen.insert((connection, name))
+                        {
+                            report.record(FoundSetting {
+                                setting: &CREDENTIAL_FREE_SOURCE,
+                                pointer: Some(format!(
+                                    "/sourceConnections/{}/endpoints/{}",
+                                    escape_pointer_segment(connection),
+                                    escape_pointer_segment(name)
+                                )),
+                                position: None,
+                                origin: SettingOrigin::Combination,
+                            });
+                        }
+                    }
+                }
+            }
+        } else if report.posture() == Posture::Development {
+            let mut diagnostic = Diagnostic::error(
+                "evidence.posture.assurance-profile-conflict",
+                "/assuranceProfile",
+                "a development process requires a package built with assuranceProfile: local",
+                "Build the package with assuranceProfile: local for development, or run the current package in production.",
+            );
+            diagnostic.source = Some(registry_platform_yaml::Source {
+                file: self.root.join(CONFIG_FILE).display().to_string(),
+                line: None,
+                column: None,
+            });
+            return Some(diagnostic);
+        }
+        None
+    }
+
     /// Load the same verified package pin used by startup, without requiring an
     /// authority snapshot. Activation uses this before its initial snapshot
     /// exists and must honor the operator's expected package digest too.
@@ -675,7 +785,12 @@ impl Bundle {
     ) -> Result<Self, BundleError> {
         let files = capture_bundle_files(root, verified, capture)?;
         let config_bytes = files.get(CONFIG_FILE).ok_or(BundleError::Unavailable)?;
-        let config = EvidenceConfig::parse_yaml(config_bytes)
+        let (config, mut development_settings) =
+            collect_development_settings(|| EvidenceConfig::parse_yaml(config_bytes));
+        for found in &mut development_settings {
+            found.origin = SettingOrigin::Package;
+        }
+        let config = config
             .map_err(|error| configuration_error(CONFIG_FILE, &root.join(CONFIG_FILE), error))?;
         let source_packs = load_source_packs(&config, &files)?;
         validate_source_authority_paths(&config, &source_packs)?;
@@ -714,6 +829,7 @@ impl Bundle {
         let requirement_revisions = compute_requirement_revisions(&config, &source_packs, &files)?;
 
         Ok(Self {
+            development_settings,
             authority_snapshot: None,
             effective_grant_digest: None,
             root: root.to_path_buf(),
@@ -6177,7 +6293,13 @@ mod tests {
                 } else {
                     runtime_with_ca_bindings(root, None, Some(ca))
                 };
-                RuntimeDocument::load(runtime)
+                RuntimeDocument::load(
+                    runtime,
+                    registry_platform_config::DeclaredPosture {
+                        posture: registry_platform_config::Posture::Development,
+                        source: registry_platform_config::PostureSource::Flag,
+                    },
+                )
             };
 
             let directory = tempfile::tempdir().expect("symlink CA runtime root");
@@ -6225,7 +6347,14 @@ mod tests {
             fs::set_permissions(path, fs::Permissions::from_mode(0o444)).unwrap();
         }
         let runtime_path = runtime_with_ca_bindings(directory.path(), Some(&global), Some(&source));
-        let runtime = RuntimeDocument::load(runtime_path).expect("runtime captures both CA scopes");
+        let runtime = RuntimeDocument::load(
+            runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("runtime captures both CA scopes");
         assert_eq!(runtime.ca_bundles["global-pki"], ORIGINAL);
         assert_eq!(
             runtime.source_ca_bundles["register"]["source-pki"],
@@ -6275,7 +6404,14 @@ mod tests {
         )
         .expect("write runtime document");
 
-        let writable = RuntimeDocument::load(&runtime_path).expect_err("a writable runtime fails");
+        let writable = RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect_err("a writable runtime fails");
         let fault = writable
             .artifact_fault()
             .expect("the refusal names what is writable");
@@ -6283,7 +6419,14 @@ mod tests {
         assert_eq!(fault.fault().cause(), "the runtime file is writable");
         fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
             .expect("lock runtime document");
-        let runtime = RuntimeDocument::load(&runtime_path).expect("runtime loads");
+        let runtime = RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("runtime loads");
         assert_eq!(runtime.ca_bundles.len(), 1);
         assert_eq!(
             runtime.bytes(),
@@ -6292,7 +6435,13 @@ mod tests {
 
         fs::set_permissions(&root, fs::Permissions::from_mode(0o770))
             .expect("make runtime ancestor group-writable");
-        let result = RuntimeDocument::load(&runtime_path);
+        let result = RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        );
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
             .expect("restore runtime ancestor");
         let BundleError::Refused(report) = result.expect_err("a writable ancestor is refused")
@@ -6316,7 +6465,14 @@ mod tests {
         // unnamed immutability failure cost a mode audit of the whole tree.
         fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o750))
             .expect("loosen secret root");
-        let loose = RuntimeDocument::load(&runtime_path).expect_err("a group-readable root fails");
+        let loose = RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect_err("a group-readable root fails");
         let fault = loose
             .artifact_fault()
             .expect("the refusal names what is loose");
@@ -6993,7 +7149,13 @@ sourceConnections:
         let directory = tempfile::tempdir().expect("temporary runtime root");
         let bound = stage(directory.path());
         let runtime_path = locked_runtime_document(directory.path(), &extract_block(&bound));
-        RuntimeDocument::load(&runtime_path)
+        RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
     }
 
     /// The artifact one refusal names, and the value-free cause it carries.
@@ -7015,7 +7177,14 @@ sourceConnections:
         locked_extract(&extract, b"extract-content-one");
         let runtime_path = locked_runtime_document(directory.path(), &extract_block(&extract));
 
-        let first = RuntimeDocument::load(&runtime_path).expect("the runtime document loads");
+        let first = RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the runtime document loads");
         let bound = first
             .source_extracts
             .get(EXTRACT_PROFILE)
@@ -7030,7 +7199,14 @@ sourceConnections:
         );
         let first_digest = bound.digest().to_owned();
 
-        let again = RuntimeDocument::load(&runtime_path).expect("the runtime document reloads");
+        let again = RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the runtime document reloads");
         assert_eq!(
             again
                 .source_extracts
@@ -7046,8 +7222,14 @@ sourceConnections:
         );
 
         locked_extract(&extract, b"extract-content-two");
-        let replaced =
-            RuntimeDocument::load(&runtime_path).expect("the replaced extract still loads");
+        let replaced = RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the replaced extract still loads");
         assert_ne!(
             replaced
                 .source_extracts

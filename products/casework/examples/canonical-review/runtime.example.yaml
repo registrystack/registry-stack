@@ -6,7 +6,7 @@ package:
   root: /srv/registry-casework/package
 listener:
   bind: 127.0.0.1:8100
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
 secretProviders:
   file:

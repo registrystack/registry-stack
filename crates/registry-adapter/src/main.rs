@@ -13,7 +13,11 @@ use tracing_subscriber::prelude::*;
 async fn main() {
     let cli = Cli::parse();
     tracing_subscriber::registry()
-        .with(Targets::new().with_target("registry_adapter", LevelFilter::INFO))
+        .with(
+            Targets::new()
+                .with_target("registry_adapter", LevelFilter::INFO)
+                .with_target("registry_platform_config::posture", LevelFilter::INFO),
+        )
         .with(
             tracing_subscriber::fmt::layer()
                 .json()
@@ -25,6 +29,7 @@ async fn main() {
         .init();
     let result = match cli.command {
         Command::Serve {
+            posture,
             runtime_config,
             project,
             payments_config,
@@ -38,10 +43,12 @@ async fn main() {
             &runtime_config,
             payments_config.as_deref(),
             &payment_provider_pack,
+            resolve_posture(posture.as_deref()),
         )
         .await
         .map_err(|error| error.to_string()),
         Command::EffectiveContract {
+            posture,
             runtime_config,
             project,
             profile,
@@ -51,6 +58,7 @@ async fn main() {
             profile.as_deref(),
             pack.as_deref(),
             &runtime_config,
+            resolve_posture(posture.as_deref()),
         ),
     };
     if let Err(error) = result {
@@ -59,18 +67,32 @@ async fn main() {
     }
 }
 
+fn resolve_posture(flag: Option<&str>) -> registry_platform_config::DeclaredPosture {
+    registry_platform_config::declared(flag).unwrap_or_else(|error| {
+        eprintln!(
+            "adapter: {}: {}\nnext: {}",
+            error.code(),
+            error.message(),
+            error.suggested_action()
+        );
+        std::process::exit(2);
+    })
+}
+
 fn export_effective_contract(
     project: &std::path::Path,
     profile: Option<&std::path::Path>,
     pack: Option<&std::path::Path>,
     runtime_config: &std::path::Path,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(), String> {
-    let loaded = registry_adapter::engine::load::load_with_target(
+    let loaded = registry_adapter::engine::load::load_with_target_in_posture(
         project,
         profile,
         pack,
         runtime_config,
         registry_adapter::govstack::target_attachment,
+        declared,
     )
     .map_err(|error| error.to_string())?;
     let document =

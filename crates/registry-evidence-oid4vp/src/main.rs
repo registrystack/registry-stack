@@ -16,19 +16,56 @@ use registry_evidence_oid4vp::{
     config::{check_file, Oid4vpConfig},
     service::{serve, VerifierService},
 };
+use registry_platform_config::{declared, DeclaredPosture};
 use registry_platform_yaml::{Diagnostic, Report};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    if let Command::Check {
-        config,
-        format,
-        deny_warnings,
-        environment,
-    } = &cli.command
-    {
-        return check(config, *format, *deny_warnings, *environment);
-    }
+    let (flag, command) = match cli.command {
+        Command::Openapi { output } => {
+            return match render_openapi(output) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(message) => {
+                    eprintln!("evidence-oid4vp: {message}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        command @ (Command::Check { .. } | Command::Serve { .. }) => {
+            let flag = match &command {
+                Command::Check { posture, .. } | Command::Serve { posture, .. } => {
+                    posture.as_deref()
+                }
+                Command::Openapi { .. } => unreachable!(),
+            };
+            (declared(flag), command)
+        }
+    };
+    let declared = match flag {
+        Ok(declared) => declared,
+        Err(error) => {
+            eprintln!(
+                "{}: {} {}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let config = match command {
+        Command::Check {
+            config,
+            format,
+            deny_warnings,
+            environment,
+            ..
+        } => {
+            return check(&config, format, deny_warnings, environment, declared);
+        }
+        Command::Serve { config, .. } => config,
+        Command::Openapi { .. } => unreachable!(),
+    };
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -38,7 +75,11 @@ fn main() -> ExitCode {
         .json()
         .init();
 
-    match run(cli) {
+    finish(run(&config, declared))
+}
+
+fn finish(result: Result<(), String>) -> ExitCode {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             // Startup failures name the failing stage, never the key material
@@ -49,62 +90,45 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<(), String> {
-    match cli.command {
-        Command::Check {
-            config,
-            format,
-            deny_warnings,
-            environment,
-        } => {
-            if check(&config, format, deny_warnings, environment) == ExitCode::SUCCESS {
-                Ok(())
-            } else {
-                Err("the configuration check did not pass".to_owned())
-            }
-        }
-        Command::Openapi { output } => {
-            let mut rendered = serde_json::to_string_pretty(
-                &registry_evidence_oid4vp::contracts::openapi_document(),
-            )
+fn run(config: &Path, declared: DeclaredPosture) -> Result<(), String> {
+    let config = load_config(config, declared)?;
+    config.posture.log_startup();
+    let runtime = runtime()?;
+    // Install the stop handlers before binding, so a service that
+    // cannot observe a stop request does not start. The handlers
+    // register with the runtime's reactor, so they are installed
+    // inside it.
+    let shutdown = {
+        let _entered = runtime.enter();
+        registry_platform_httpsec::shutdown_signal()
+            .map_err(|error| format!("the stop signal handlers could not be installed: {error}"))?
+    };
+    runtime.block_on(async move {
+        let service = Arc::new(VerifierService::load(config).await.map_err(|error| {
+            eprint!(
+                "{}",
+                Report::new(vec![error.diagnostic().clone()]).render_human()
+            );
+            format!("the service could not start: {error}")
+        })?);
+        serve(service, shutdown)
+            .await
+            .map_err(|error| format!("the listener failed: {error}"))
+    })
+}
+
+fn render_openapi(output: Option<PathBuf>) -> Result<(), String> {
+    let mut rendered =
+        serde_json::to_string_pretty(&registry_evidence_oid4vp::contracts::openapi_document())
             .map_err(|_| "the OpenAPI contract could not be rendered".to_owned())?;
-            rendered.push('\n');
-            if let Some(output) = output {
-                std::fs::write(output, rendered).map_err(|error| {
-                    format!("the OpenAPI contract could not be written: {error}")
-                })?;
-            } else {
-                print!("{rendered}");
-            }
-            Ok(())
-        }
-        Command::Serve { config } => {
-            let config = load_config(&config)?;
-            let runtime = runtime()?;
-            // Install the stop handlers before binding, so a service that
-            // cannot observe a stop request does not start. The handlers
-            // register with the runtime's reactor, so they are installed
-            // inside it.
-            let shutdown = {
-                let _entered = runtime.enter();
-                registry_platform_httpsec::shutdown_signal().map_err(|error| {
-                    format!("the stop signal handlers could not be installed: {error}")
-                })?
-            };
-            runtime.block_on(async move {
-                let service = Arc::new(VerifierService::load(config).await.map_err(|error| {
-                    eprint!(
-                        "{}",
-                        Report::new(vec![error.diagnostic().clone()]).render_human()
-                    );
-                    format!("the service could not start: {error}")
-                })?);
-                serve(service, shutdown)
-                    .await
-                    .map_err(|error| format!("the listener failed: {error}"))
-            })
-        }
+    rendered.push('\n');
+    if let Some(output) = output {
+        std::fs::write(output, rendered)
+            .map_err(|error| format!("the OpenAPI contract could not be written: {error}"))?;
+    } else {
+        print!("{rendered}");
     }
+    Ok(())
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, String> {
@@ -119,10 +143,10 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 /// A refusal prints the same position-first lines `check` prints to standard
 /// error before the startup failure is logged, and a warning the file carries
 /// is printed the same way without stopping startup.
-fn load_config(path: &Path) -> Result<Oid4vpConfig, String> {
+fn load_config(path: &Path, declared: DeclaredPosture) -> Result<Oid4vpConfig, String> {
     let absolute = absolute_lexical(path)
         .map_err(|_| "the configuration path cannot be resolved".to_owned())?;
-    match Oid4vpConfig::load_reporting(&absolute) {
+    match Oid4vpConfig::load_reporting(&absolute, declared) {
         Ok((config, warnings)) => {
             if !warnings.is_empty() {
                 eprint!(
@@ -151,10 +175,16 @@ const CHECK_REPORT_KIND: &str = "EvidenceCtlReport";
 /// Exits 0 when the file passes, 1 when it breaks a rule or, under
 /// `deny_warnings`, carries a warning, and 3 when it cannot be read. clap
 /// exits 2 for an invalid command line before this runs.
-fn check(path: &Path, format: OutputFormat, deny_warnings: bool, environment: bool) -> ExitCode {
+fn check(
+    path: &Path,
+    format: OutputFormat,
+    deny_warnings: bool,
+    environment: bool,
+    declared: DeclaredPosture,
+) -> ExitCode {
     let (diagnostics, unavailable) = match absolute_lexical(path) {
         Ok(absolute) => {
-            let check = check_file(&absolute, environment);
+            let check = check_file(&absolute, environment, declared);
             (
                 as_given(check.diagnostics, &absolute, path),
                 check.unavailable,
@@ -237,12 +267,8 @@ mod tests {
     fn an_openapi_write_failure_keeps_the_operating_system_cause() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let missing_parent = directory.path().join("missing").join("contract.json");
-        let error = run(Cli {
-            command: Command::Openapi {
-                output: Some(missing_parent),
-            },
-        })
-        .expect_err("writing below a missing directory fails");
+        let error = render_openapi(Some(missing_parent))
+            .expect_err("writing below a missing directory fails");
 
         assert!(
             error.starts_with("the OpenAPI contract could not be written: "),
