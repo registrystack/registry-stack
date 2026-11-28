@@ -11,6 +11,7 @@
 #
 # Files a test may place in the state directory:
 #   port-answer  the exact `docker port` answer (default 127.0.0.1:5432)
+#   replace-volume-on-run  simulate Docker creating an unlabelled mount
 #   never-ready  pg_isready never succeeds
 #
 # Files it leaves for a test to read:
@@ -38,6 +39,14 @@ if [[ $# -gt 0 ]]; then
 	shift
 fi
 case "$verb" in
+info)
+	if [[ -f "$state/daemon-id" ]]; then
+		cat "$state/daemon-id"
+	else
+		printf 'fixture-daemon
+'
+	fi
+	;;
 version)
 	printf '27.0.0\n'
 	;;
@@ -91,7 +100,13 @@ run)
 			env_file="$2"
 			shift 2
 			;;
-		--name | --publish | --platform | -v)
+		-v)
+			if [[ -f "$state/replace-volume-on-run" ]]; then
+				: >"$state/volumes/${2%%:*}"
+			fi
+			shift 2
+			;;
+		--name | --publish | --platform)
 			shift 2
 			;;
 		*)

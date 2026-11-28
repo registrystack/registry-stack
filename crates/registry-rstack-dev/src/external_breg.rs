@@ -15,7 +15,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-use crate::plan::{identifier, issuer_url, require, SemanticRefusal, SemanticResult};
+use crate::plan::{
+    identifier, numeric_loopback_endpoint, require, SemanticRefusal, SemanticResult,
+};
 
 #[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -149,12 +151,25 @@ impl ExternalBreg {
         };
         if let Some(review) = &self.review_authority {
             require(
-                identifier(review.id.as_str()) && identifier(&review.profile) && identifier(&review.producer_id)
-                    && issuer_url(review.endpoint.as_str(), true) && issuer_url(review.token_endpoint.as_str(), true),
+                identifier(review.id.as_str())
+                    && identifier(&review.profile)
+                    && identifier(&review.producer_id),
                 "/externalBreg/reviewAuthority",
-                "The external review connection needs local identifiers and HTTPS or loopback HTTP endpoints.",
+                "The external review connection needs local identifiers.",
                 "Set the exact BReg authority, Casework profile, producer and endpoints.",
             )?;
+            for (field, value) in [
+                (
+                    "/externalBreg/reviewAuthority/endpoint",
+                    review.endpoint.as_str(),
+                ),
+                (
+                    "/externalBreg/reviewAuthority/tokenEndpoint",
+                    review.token_endpoint.as_str(),
+                ),
+            ] {
+                require_loopback_endpoint(field, value)?;
+            }
             check_file(
                 "/externalBreg/reviewAuthority/assertionKeyRef",
                 &review.assertion_key_ref,
@@ -162,12 +177,23 @@ impl ExternalBreg {
         }
         if let Some(grant) = &self.task_grant {
             require(
-                issuer_url(grant.source_issuer.as_str(), true) && issuer_url(grant.status_url.as_str(), true)
-                    && issuer_url(grant.token_endpoint.as_str(), true),
-                "/externalBreg/taskGrant",
-                "The external task grant needs an exact assertion issuer and HTTPS or loopback HTTP endpoints.",
-                "Set the assertion issuer, Casework status URL and token endpoint.",
+                crate::products::is_loopback_run_issuer(grant.source_issuer.as_str()),
+                "/externalBreg/taskGrant/sourceIssuer",
+                "The source issuer must use a numeric loopback HTTP origin.",
+                "Set sourceIssuer to the exact numeric loopback HTTP issuer origin with its port.",
             )?;
+            for (field, value) in [
+                (
+                    "/externalBreg/taskGrant/statusUrl",
+                    grant.status_url.as_str(),
+                ),
+                (
+                    "/externalBreg/taskGrant/tokenEndpoint",
+                    grant.token_endpoint.as_str(),
+                ),
+            ] {
+                require_loopback_endpoint(field, value)?;
+            }
             check_file(
                 "/externalBreg/taskGrant/statusKeyRef",
                 &grant.status_key_ref,
@@ -244,6 +270,15 @@ impl ExternalBreg {
     pub(super) fn hook_key(root: &Path, hook: &Hook) -> Result<Zeroizing<Vec<u8>>> {
         private_fixture(root, &hook.key_ref)
     }
+}
+
+fn require_loopback_endpoint(field: &str, value: &str) -> SemanticResult<()> {
+    require(
+        numeric_loopback_endpoint(value),
+        field,
+        "The endpoint must use numeric loopback HTTP.",
+        "Set this endpoint to http://127.0.0.1:PORT or http://[::1]:PORT and the service path.",
+    )
 }
 
 #[cfg(test)]

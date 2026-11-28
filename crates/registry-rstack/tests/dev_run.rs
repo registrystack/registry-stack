@@ -887,6 +887,53 @@ fn lost_managed_run(state: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[test]
+fn clean_removes_the_retained_state_of_an_ended_managed_run() {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
+    let key = "fedcba9876543210fedcba9876543210";
+    let project = state.join(format!("development-project-{key}"));
+    fs::DirBuilder::new().mode(0o700).create(&project).unwrap();
+    for (name, value) in [
+        ("generation".to_owned(), "generation"),
+        ("docker-daemon".to_owned(), "fixture-daemon"),
+        (format!("run-{RUN_ID}"), key),
+    ] {
+        let path = project.join(name);
+        fs::write(&path, value).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let docker = fake_docker_state(scratch.path(), closed_loopback_port());
+    let volumes = docker.join("volumes");
+    fs::create_dir(&volumes).unwrap();
+    let volume = volumes.join(format!("rstack-development-project-{key}"));
+    fs::write(&volume, format!("org.registrystack.rstack.development-project={key}\norg.registrystack.rstack.generation=generation\n")).unwrap();
+    let clean = || {
+        rstack_dev(&state, true)
+            .env("FAKE_DOCKER_STATE", &docker)
+            .args(["stop", RUN_ID, "--clean"])
+            .output()
+            .unwrap()
+    };
+
+    let lock = fs::File::create(state.join(format!("development-project-{key}.lock"))).unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+    let held = clean();
+    assert_eq!(held.status.code(), Some(1), "{held:?}");
+    assert!(project.exists() && volume.exists());
+    drop(lock);
+
+    let output = clean();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "stopped");
+    assert_eq!(report["cleaned"], true);
+    assert!(!project.exists() && !volume.exists());
+}
+
+#[test]
 fn recover_needs_no_database_url_for_managed_runs() {
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");
@@ -2842,6 +2889,117 @@ fn a_casework_only_run_starts_reports_and_stops_without_breg() {
     let stopped: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
     assert_eq!(stopped["status"], "stopped", "{stopped}");
     assert_eq!(live_runs(&state), Vec::<String>::new());
+}
+
+#[test]
+#[ignore = "requires the managed PostgreSQL Docker image and the BReg runtime"]
+fn managed_clean_accepts_stopped_and_expired_runs_and_blocks_a_racing_start() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    copy_tree(&example_project("breg/examples/minimal"), &project);
+
+    let path = std::env::var_os("PATH").unwrap();
+    let docker = std::env::split_paths(&path)
+        .map(|directory| directory.join("docker"))
+        .find(|docker| docker.is_file())
+        .expect("Docker is on PATH");
+    let shim = scratch.path().join("docker");
+    fs::write(
+        &shim,
+        r#"#!/bin/sh
+set -eu
+if [ "$1 ${2:-}" = "volume rm" ] && [ -f "$RSTACK_TEST_CLEAN_SYNC/hold" ]; then
+    touch "$RSTACK_TEST_CLEAN_SYNC/removing"
+    for attempt in $(seq 1 150); do
+        [ ! -f "$RSTACK_TEST_CLEAN_SYNC/hold" ] && break
+        sleep 0.1
+    done
+fi
+exec "$RSTACK_TEST_DOCKER" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(scratch.path().to_path_buf()).chain(std::env::split_paths(&path)),
+    )
+    .unwrap();
+    let command = |arguments: &[&str]| {
+        let mut command = rstack_dev(&state, true);
+        command
+            .args(arguments)
+            .env("PATH", &path)
+            .env("RSTACK_TEST_DOCKER", &docker)
+            .env("RSTACK_TEST_CLEAN_SYNC", scratch.path())
+            .env("RSTACK_BREG_BIN", host("breg"));
+        command
+    };
+    let output_report = |output: std::process::Output| -> serde_json::Value {
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let start = |ttl| {
+        output_report(
+            command(&["start", utf8(&project), "--ttl", ttl])
+                .output()
+                .unwrap(),
+        )
+    };
+    let stop = |run, clean| {
+        let mut args = vec!["stop", run];
+        if clean {
+            args.push("--clean");
+        }
+        output_report(command(&args).output().unwrap())
+    };
+
+    let first = start("30s");
+    let run = first["run_id"].as_str().unwrap();
+    assert_eq!(stop(run, false)["status"], "stopped");
+    assert_eq!(stop(run, true)["cleaned"], true);
+
+    let expired = start("1s");
+    let run = expired["run_id"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while state.join(run).exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!state.join(run).exists(), "the run did not expire");
+    assert_eq!(stop(run, true)["cleaned"], true);
+
+    let live = start("30s");
+    let run = live["run_id"].as_str().unwrap();
+    let hold = scratch.path().join("hold");
+    fs::write(&hold, "").unwrap();
+    let clean = command(&["stop", run, "--clean"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let removing = scratch.path().join("removing");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !removing.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    let raced = removing.exists().then(|| {
+        command(&["start", utf8(&project), "--ttl", "15s"])
+            .output()
+            .unwrap()
+    });
+    fs::remove_file(hold).unwrap();
+    let cleaned = output_report(clean.wait_with_output().unwrap());
+    assert_eq!(cleaned["cleaned"], true);
+    let raced = raced.expect("the supervisor reached volume removal before returning");
+    assert_eq!(raced.status.code(), Some(1), "{raced:?}");
+    let refusal: serde_json::Value = serde_json::from_slice(&raced.stdout).unwrap();
+    assert!(
+        refusal["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("holds this project"),
+        "{refusal}"
+    );
 }
 
 /// Copies the files under `source` into `target`, keeping the layout.
