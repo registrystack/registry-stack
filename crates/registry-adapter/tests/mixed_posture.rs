@@ -19,10 +19,12 @@ database:
   runtimeUrlRef: secret:env/MIXED_TEST_DB
   migrationUrlRef: secret:env/MIXED_TEST_DB
 oidc:
-  issuer: http://127.0.0.1:9
-  audience: test
-  allowInsecureHttp: true
-allowedClients: [test]
+  issuers:
+    primary:
+      issuer: http://127.0.0.1:9
+      audience: test
+      allowInsecureHttp: true
+      allowedClients: [test]
 allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90
@@ -55,7 +57,7 @@ audit:
         for (code, pointer, file) in [
             (
                 "platform.posture.insecure-issuer-http",
-                "/oidc/allowInsecureHttp",
+                "/oidc/issuers/primary/allowInsecureHttp",
                 "runtime.yaml",
             ),
             (

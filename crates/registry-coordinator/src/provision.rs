@@ -53,34 +53,45 @@ pub(crate) async fn run(
     }
 }
 
-fn load(path: &Path, declared: DeclaredPosture) -> Result<ProvisionInput, Box<Diagnostic>> {
-    let path = crate::cli::absolute_runtime_path(path).map_err(|error| first_diagnostic(&error))?;
-    let runtime = RuntimeConfig::load_with_posture(&path, declared)
-        .map_err(|error| first_diagnostic(&error))?;
+fn load(path: &Path, declared: DeclaredPosture) -> Result<ProvisionInput, Vec<Diagnostic>> {
+    let diagnostics = |error: crate::error::CoordinatorError| {
+        let findings = error.report().into_diagnostics();
+        if findings.is_empty() {
+            vec![*first_diagnostic(&error)]
+        } else {
+            findings
+        }
+    };
+    let path = crate::cli::absolute_runtime_path(path).map_err(diagnostics)?;
+    let runtime = RuntimeConfig::load_with_posture(&path, declared).map_err(diagnostics)?;
     let resolver = runtime.secret_providers.resolver().map_err(|_| {
-        refusal(
+        vec![*refusal(
             "/secretProviders",
             "the secret providers could not be set up",
             "Correct the secretProviders block of the runtime file.",
-        )
+        )]
     })?;
     let database = &runtime.database;
     let migration_url = secret_text(
         &resolver,
         &database.migration_url_ref,
         "/database/migrationUrlRef",
-    )?;
+    )
+    .map_err(|diagnostic| vec![*diagnostic])?;
     let runtime_url = secret_text(
         &resolver,
         &database.runtime_url_ref,
         "/database/runtimeUrlRef",
-    )?;
+    )
+    .map_err(|diagnostic| vec![*diagnostic])?;
     if let Some(deployment) = &runtime.deployment {
-        require_runtime_role(&runtime_url, &deployment.runtime_role)?;
+        require_runtime_role(&runtime_url, &deployment.runtime_role)
+            .map_err(|diagnostic| vec![*diagnostic])?;
     }
     let ca_pem = match &database.ca_bundle_ref {
         Some(reference) => Some(
-            secret_text(&resolver, reference, "/database/caBundleRef")?
+            secret_text(&resolver, reference, "/database/caBundleRef")
+                .map_err(|diagnostic| vec![*diagnostic])?
                 .as_bytes()
                 .to_vec(),
         ),

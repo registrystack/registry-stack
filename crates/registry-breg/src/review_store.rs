@@ -367,6 +367,11 @@ fn feed_backoff_delay(failures: u32) -> Duration {
 }
 
 impl ReviewAuthorityRegistry {
+    #[cfg(test)]
+    pub(crate) fn client_for_test(&self, authority: &str) -> &ReviewClient {
+        &self.authorities[authority].client
+    }
+
     pub(crate) async fn request_progress(
         &self,
         binding: &ReviewProgressBinding,

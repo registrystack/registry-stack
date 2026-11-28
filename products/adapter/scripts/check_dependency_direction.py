@@ -25,6 +25,11 @@ The source check separately refuses facade-only dependencies, including
 Axum and PostgreSQL clients. Evidence and BReg may reach only Adapter core
 and engine.
 
+Adapterctl may directly use the shared CLI report and ThunderID identity
+tooling. The platform config crate may use the shared report type. Adapter
+checks the dependencies of both crates and permits no other direct Adapter
+edge to either helper.
+
 Edges are read with every feature enabled and on every target, so an
 optional dependency no default build enables still cannot escape the
 closure check. A package's own dev-dependencies count, so a test cannot
@@ -58,6 +63,9 @@ ADAPTER_ENGINE = (
 ENGINE_MODULE_DIRECTORY = Path("crates/registry-adapter-engine/src")
 ENGINE_CRATE = "registry-adapter-engine"
 JOB_HOST = "registry-adapter-job"
+CLI_REPORT = "registry-cli-report"
+PLATFORM_CONFIG = "registry-platform-config"
+IDENTITY_TOOLING = "registry-thunderid-tooling"
 
 # The built-in GovStack Consultation wire protocol belongs to the facade host
 # under `registry-adapter::govstack::consultation`. The generic engine may keep
@@ -253,6 +261,15 @@ def package_graph(
             kinds = {kind.get("kind") for kind in dependency.get("dep_kinds", [{}])}
             if kinds - {"dev"}:
                 linked[node["id"]].add(dependency["pkg"])
+    # Keep checking the report crate's dependencies when reached through config.
+    for package, name in names.items():
+        if name != PLATFORM_CONFIG:
+            continue
+        for graph in (every, linked):
+            for dependency in tuple(graph.get(package, ())):
+                if names[dependency] == CLI_REPORT:
+                    graph[package].remove(dependency)
+                    graph[package].update(linked.get(dependency, ()))
     return names, every, linked
 
 
@@ -326,7 +343,9 @@ def authoring_refused(start, names, every, linked) -> set[str]:
             )
         else:
             permits = lambda name: (
-                engine_may_reach("registry-adapterctl", name) or name == "registry-cli-report"
+                engine_may_reach("registry-adapterctl", name)
+                or name == CLI_REPORT
+                or (name == IDENTITY_TOOLING and dependency_name == IDENTITY_TOOLING)
             )
         for reached in {dependency, *linked_closure(dependency, linked)}:
             # The host is the declared authoring edge itself.

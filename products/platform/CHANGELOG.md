@@ -28,6 +28,7 @@
 - The shared signed hook verifier accepts a development envelope when the receiver explicitly allows development. The default verifier checks the signature before refusing the mark with `development-peer`.
 
 - A production hook delivery worker dead-letters development-marked envelopes on their next attempt with `payload-refused`. A development worker can deliver the captured bytes unchanged.
+- The shared `provision` command reports every runtime loader diagnostic in text and JSON and exits 1 on refusal.
 
 - Fetch-based TypeScript clients, generated from each registry's contract, are
   in `clients/typescript/`. They use Fetch and WebCrypto and have no runtime
@@ -113,6 +114,28 @@
   configured kind fails authentication with 401 (`ActorKindConflict`).
   Development responses name `actor-kind` in `failedCheck` for both
   refusals. The operator log gives the corresponding remedy.
+- BREAKING: Registry Adapter uses the shared caller issuer set, access token
+  type, scope claim and caller-kind checks. The facade and payment runtime
+  read named issuer entries under `oidc.issuers`. Each entry has its own
+  signing keys and client list, and all entries share the one audience the
+  effective contract publishes. Startup, `adapterctl check`, provisioning and
+  engine load refuse the top-level `oidc.issuer`, `oidc.audience`,
+  `oidc.jwksSource`, `oidc.allowInsecureHttp` and `allowedClients` keys and
+  name the issuer entry where each now belongs.
+
+- Every Adapter payment 401 carries a `WWW-Authenticate: Bearer` challenge,
+  as the facade's 401 already did. Adapter development refusal bodies include
+  the shared `failedCheck` member.
+
+- `adapterctl generate identity-facts` writes the caller requirements of one
+  Adapter issuer entry. `--payments-config` adds the payment connections'
+  clients and scopes, and `--issuer` selects the entry when the runtime has
+  more than one.
+
+- With one issuer entry, the Adapter journal keeps the caller's subject as
+  its caller reference. With two or more entries, the reference is a SHA-256
+  digest of the verified issuer and subject, so equal subjects from different
+  issuers stay distinct.
 
 - Every URL hook delivery is signed with Standard Webhooks. The signature is
   `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body

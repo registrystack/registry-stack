@@ -200,8 +200,8 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
   await privateFile(runtimePath, { apiVersion: 'id.registrystack.org/formats/adapter/runtime/v1alpha1', kind: 'AdapterRuntimeConfig', id: `payment-native-${suffix}`,
     endpoints: [], listener: { bind: `127.0.0.1:${adapterPort}` }, secretProviders: { file: { root: secrets } },
     database: { runtimeUrlRef: 'secret:file/adapter-runtime', migrationUrlRef: 'secret:file/adapter-migration', caBundleRef: 'secret:file/postgres-ca' },
-    oidc: { issuer: issuer.issuer, audience: 'urn:registry:payment-adapter', jwksSource: { type: 'static', documentRef: 'secret:file/jwks' } },
-    allowedClients: ['coordinator-payments'], allowedPrivateCidrs: ['127.0.0.0/8'], audit: { retentionDays: 90 } });
+    oidc: { issuers: { primary: { issuer: issuer.issuer, audience: 'urn:registry:payment-adapter', jwksSource: { type: 'static', documentRef: 'secret:file/jwks' }, allowedClients: ['coordinator-payments'] } } },
+    allowedPrivateCidrs: ['127.0.0.0/8'], audit: { retentionDays: 90 } });
   await startAdapter(); check('PostgreSQL TLS startup grants the split runtime role its payment privileges');
 
   const bill = await createBill('recovery');
@@ -209,7 +209,7 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
   await collect(bill, 'extra-facts', [422], paymentToken, { amount: 1, paid: true });
   const positionalIntent = [bill.billId, bill.billVersion];
   await exchange('POST', collectionPath, { token: paymentToken, body: positionalIntent, key: 'wrong-body-shape', expected: [422] });
-  await collect(bill, 'missing-scope', [403], issuer.token('payment-coordinator', 'urn:registry:payment-adapter', ''));
+  await collect(bill, 'missing-scope', [403], issuer.token('payment-coordinator', 'urn:registry:payment-adapter', 'other.scope'));
   await collect(bill, 'citizen', [401], null);
   await exchange('POST', collectionPath, { body: positionalIntent, key: 'unauthenticated', expected: [401] });
   assert.equal(ledger().requestCount, 0); check('unpaid issuance, invalid request bodies and unauthorized callers refused');
@@ -236,7 +236,7 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
   check('lost bind/provider responses recover across restarts under original command and binding');
 
   await observe(accepted.collectionId, [404], issuer.token('another-subject', 'urn:registry:payment-adapter', 'payments:collect'));
-  await observe(accepted.collectionId, [403], issuer.token('payment-coordinator', 'urn:registry:payment-adapter', ''));
+  await observe(accepted.collectionId, [403], issuer.token('payment-coordinator', 'urn:registry:payment-adapter', 'other.scope'));
   await collect({ ...bill, billVersion: 2 }, 'original', [409]);
   simControl(['advance', '--steps', '1']);
   assert.equal((await observe(accepted.collectionId)).body.state, 'pending');
@@ -271,7 +271,9 @@ print(json.dumps({'path':str(root), 'python':platform.python_version(), 'files':
       authorization: { tokenEndpoint: `${issuer.origin}/token`, clientAssertionAudience: issuer.issuer, clientId: 'coordinator-payments', signingKeyRef: 'secret:file/coordinator-payments-jwk', resource: 'urn:registry:payment-adapter', scopes: ['payments:collect'] } } },
     deployment: { databaseId: `coordinator-payment-${suffix}`, runtimeRole: coordinatorDb.runtime,
       packages: [{ root: packagePath, expectedDigest: packaged.packageDigest }], listener: { bind: `127.0.0.1:${coordinatorPort}`, tlsTermination: 'development-loopback' },
-      authentication: { issuer: issuer.issuer, audience: 'urn:example:coordinator', scopeClaim: 'scope', jwksSource: { type: 'static', documentRef: 'secret:file/jwks' },
+      authentication: { issuers: { main: {
+        issuer: issuer.issuer, audience: 'urn:example:coordinator', scopeClaim: 'scope',
+        jwksSource: { type: 'static', documentRef: 'secret:file/jwks' }, allowedClients: 'from-policies' } },
         policies: { 'licence-service': { subjects: ['licence-service'], requiredScopes: ['coordinator:start'], workflows: ['payment-collections'], actions: ['start', 'status'] },
           'payment-operator': { subjects: ['payment-operator'], requiredScopes: ['coordinator:operate'], workflows: ['payment-collections'], actions: ['status', 'inspect', 'reconcile', 'retry-same'], operator: true } } },
       auditFile: join(root, 'coordinator-audit.jsonl'), auditKeyRef: 'secret:file/audit-key', activeStateKey: 1, stateKeys: { '1': { keyRef: 'secret:file/state-key' } }, admissionKeyRef: 'secret:file/admission-key' } });

@@ -25,7 +25,7 @@ const GOLDEN: &str = concat!(
 );
 
 fn runtime() -> AdapterRuntimeConfig {
-    serde_json::from_value(json!({
+    crate::serve::test_runtime(json!({
         "id": "payment-refusals",
         "endpoints": [{"endpoint": "tracker", "baseUrl": "https://tracker.example.invalid"}],
         "listener": {"bind": "127.0.0.1:8080"},
@@ -33,16 +33,15 @@ fn runtime() -> AdapterRuntimeConfig {
             "runtimeUrlRef": "secret:file/database-runtime",
             "migrationUrlRef": "secret:file/database-migration"
         },
-        "oidc": {
+        "oidc": {"issuers": {"primary": {
             "issuer": ISSUER,
             "audience": AUDIENCE,
-            "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-keys.json"}
-        },
-        "allowedClients": ["coordinator", "other"],
+            "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-keys.json"},
+            "allowedClients": ["coordinator", "other"]
+        }}},
         "allowedPrivateCidrs": ["10.0.0.0/8"],
         "audit": {"retentionDays": 90}
     }))
-    .expect("the runtime configuration parses")
 }
 
 fn payments() -> PaymentsConfig {
@@ -421,4 +420,36 @@ async fn every_payment_refusal_keeps_its_answer_and_is_counted_under_its_check()
         deltas, wanted,
         "each refusal is counted once under its check"
     );
+}
+
+#[tokio::test]
+async fn the_development_body_names_the_failed_check_and_production_does_not() {
+    use registry_platform_config::Posture;
+
+    for posture in [Posture::Production, Posture::Development] {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let routes = Router::new()
+            .route(
+                "/refusal",
+                get(|| async {
+                    HttpError::refused(Error::Unauthenticated, FailedCheck::CredentialMissing)
+                }),
+            )
+            .layer(middleware::from_fn_with_state(
+                crate::metrics::refusal_recorder(),
+                crate::metrics::record_refusals,
+            ))
+            .layer(registry_platform_httpsec::refusal_detail::name_failed_check(posture));
+        let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+        let (status, _, body) = send(port, "GET", "/refusal", &[], None).await;
+        assert_eq!(status, 401);
+        match posture {
+            Posture::Production => assert!(body.get("failedCheck").is_none(), "{body}"),
+            Posture::Development => assert_eq!(body["failedCheck"], "credential-missing", "{body}"),
+        }
+        server.abort();
+    }
 }

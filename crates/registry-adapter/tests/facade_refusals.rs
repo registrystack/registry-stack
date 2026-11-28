@@ -340,3 +340,127 @@ async fn every_refusal_keeps_its_answer_and_is_counted_and_logged_under_its_chec
     }
     let _ = capture;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_development_body_names_the_failed_check_and_production_does_not() {
+    let upstream = UpstreamDouble::start();
+    let production = Served::start(&upstream.url("")).await;
+    let development = Served::start_development(&upstream.url("")).await;
+    let (status, _, body) = production.get("/v1/records/person/EeBJ3Sn9uLg", None);
+    assert_eq!(status, 401);
+    assert!(body.get("failedCheck").is_none(), "{body}");
+    let (status, _, body) = development.get("/v1/records/person/EeBJ3Sn9uLg", None);
+    assert_eq!(status, 401);
+    assert_eq!(body["failedCheck"], "credential-missing", "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_same_token_is_admitted_in_both_postures() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-found");
+    upstream.respond_with(vec![
+        Response::json(status, &body),
+        Response::json(status, &body),
+    ]);
+    let key = registry_platform_testing::access_token_test_key(jsonwebtoken::Algorithm::ES256);
+    let production = Served::start_in_posture_with_key(&upstream.url(""), None, key.clone()).await;
+    let development =
+        Served::start_in_posture_with_key(&upstream.url(""), Some("development"), key).await;
+    let token = production.token("records.read");
+    let path = "/v1/records/person/EeBJ3Sn9uLg";
+    assert_eq!(production.get(path, Some(&token)).0, 200);
+    assert_eq!(development.get(path, Some(&token)).0, 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cross_signed_token_names_the_signature_check() {
+    let upstream = UpstreamDouble::start();
+    let partner = registry_platform_testing::access_token_test_key(jsonwebtoken::Algorithm::ES256);
+    let served = Served::start_with_partner(&upstream.url(""), &partner).await;
+    let token = served.token_with_key("subject", "records.read", json!({}), &partner);
+    assert_development_refuses(&served, &token, "token-signature");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unconfigured_issuer_names_the_issuer_check() {
+    let upstream = UpstreamDouble::start();
+    let served = Served::start_development(&upstream.url("")).await;
+    let token = served.token_with(
+        "subject",
+        "records.read",
+        json!({"iss":"https://unknown.example.test"}),
+    );
+    assert_development_refuses(&served, &token, "token-issuer");
+}
+
+fn assert_development_refuses(served: &Served, token: &str, check: &str) {
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(token));
+    assert_eq!(status, 401, "{body}");
+    assert_eq!(body["failedCheck"], check, "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_served_scope_refusal_logs_the_verifying_issuers_scope_claim() {
+    let upstream = UpstreamDouble::start();
+    let partner = registry_platform_testing::access_token_test_key(jsonwebtoken::Algorithm::ES256);
+    let served = Served::start_with_partner(&upstream.url(""), &partner).await;
+    let token = served.token_with_key(
+        "subject",
+        "records.read",
+        json!({
+            "iss":"https://partner.example.test", "client_id":"partner-client", "scp":"other.read"
+        }),
+        &partner,
+    );
+    let (status, _, body) = served.get("/v1/records/person/EeBJ3Sn9uLg", Some(&token));
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(body["failedCheck"], "scope", "{body}");
+    let log = served.wait_for_stderr("\"request refused\"", STDERR_WAIT);
+    let refusal = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| event["fields"]["message"] == "request refused")
+        .expect("refusal log");
+    assert_eq!(refusal["fields"]["scope_claim"], "scp", "{refusal}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_journal_qualifies_the_same_subject_at_two_issuers() {
+    let upstream = UpstreamDouble::start();
+    let partner = registry_platform_testing::access_token_test_key(jsonwebtoken::Algorithm::ES256);
+    let single = Served::start_development(&upstream.url("")).await;
+    let multiple = Served::start_with_partner(&upstream.url(""), &partner).await;
+    let path = "/v1/records/person/EeBJ3Sn9uLg";
+    for (served, token) in [
+        (&single, single.token_for("subject", "other.read")),
+        (&multiple, multiple.token_for("subject", "other.read")),
+        (&multiple, multiple.token_with_key("subject", "", json!({
+            "iss":"https://partner.example.test", "client_id":"partner-client", "scp":"other.read"
+        }), &partner)),
+    ] {
+        let (status, _, body) = served.get(path, Some(&token));
+        assert_eq!(status, 403, "{body}");
+    }
+
+    async fn refused_callers(served: &Served) -> Vec<String> {
+        let (database, connection) =
+            tokio_postgres::connect(&served.database, tokio_postgres::NoTls)
+                .await
+                .unwrap();
+        tokio::spawn(connection);
+        database.query(
+            "SELECT DISTINCT caller_ref FROM adapter_journal_events WHERE event_kind = 'callRefused'",
+            &[],
+        ).await.unwrap().iter().map(|row| row.get(0)).collect()
+    }
+
+    assert_eq!(refused_callers(&single).await, ["subject"]);
+    let references = refused_callers(&multiple).await;
+    assert_eq!(references.len(), 2, "{references:?}");
+    assert!(
+        references
+            .iter()
+            .all(|reference| reference.starts_with("sha256:")),
+        "{references:?}"
+    );
+}

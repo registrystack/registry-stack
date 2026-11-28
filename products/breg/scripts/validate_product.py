@@ -84,7 +84,7 @@ POSTGRES_ENTRYPOINT = PRODUCT_ROOT / "scripts/test-postgres.sh"
 POSTGRES_TEST_PACKAGES = frozenset({"registry-breg", "registry-breg-review", "registry-breg-mcp"})
 POSTGRES_POSTURE_TEST_COMMAND = (
     "cargo test --locked -p registry-bregctl --features postgres-test --test cli "
-    "posture_tests::opposite_activation_posture_refuses_planning_and_apply_and_reports_findings -- --exact"
+    "posture_tests::"
 )
 POSTGRES_POSTURE_COMMANDS = (
     POSTGRES_POSTURE_TEST_COMMAND,

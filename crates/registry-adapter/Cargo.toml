@@ -74,7 +74,7 @@ registry-platform-config.workspace = true
 registry-platform-crypto = { workspace = true, features = ["transit"] }
 registry-platform-httputil.workspace = true
 registry-platform-script.workspace = true
-registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httpsec = { workspace = true, features = ["server", "refusal-trace-id"] }
 registry-platform-metrics.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-yaml.workspace = true

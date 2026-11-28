@@ -4,6 +4,32 @@ use super::*;
 
 #[test]
 fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings() {
+    check_activation_posture(None);
+}
+
+#[derive(Clone, Copy)]
+enum Regression {
+    Status,
+    Doctor,
+    ActivationFindings,
+}
+
+#[test]
+fn status_refuses_the_state_posture_when_the_ledger_disagrees() {
+    check_activation_posture(Some(Regression::Status));
+}
+
+#[test]
+fn doctor_reports_maintenance_and_the_recorded_posture() {
+    check_activation_posture(Some(Regression::Doctor));
+}
+
+#[test]
+fn development_plan_and_initial_apply_report_the_relaxed_custody() {
+    check_activation_posture(Some(Regression::ActivationFindings));
+}
+
+fn check_activation_posture(regression: Option<Regression>) {
     let root_url = std::env::var("BREG_TEST_DATABASE_URL")
         .expect("set BREG_TEST_DATABASE_URL for the posture PostgreSQL test");
     let root_url = url::Url::parse(&root_url).expect("the test PostgreSQL URL parses");
@@ -17,6 +43,9 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
             .expect("connect to disposable PostgreSQL");
         let owner = tokio::spawn(connection);
         for (recorded, declared) in [("production", "development"), ("development", "production")] {
+            if regression.is_some() && recorded != "development" {
+                continue;
+            }
             let database = format!("breg_ctl_posture_{}", uuid::Uuid::new_v4().simple());
             let role = format!("{database}_role");
             admin
@@ -50,6 +79,7 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
             .unwrap();
             drop(database_admin);
             database_owner.await.unwrap().unwrap();
+            let database_admin_url = database_url.clone();
             database_url.set_username(&role).unwrap();
             database_url
                 .set_password(Some("synthetic-posture-fixture"))
@@ -139,6 +169,19 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                 );
                 fs::remove_dir(&package).unwrap();
                 prepared.publish_to_directory(&package).unwrap();
+                let planned = if matches!(regression, Some(Regression::ActivationFindings)) {
+                    let source = fs::read_to_string(&config).unwrap().replace(
+                        "audit:\n",
+                        "audit:\n  hashKeyCustody: development-generated\n",
+                    );
+                    fs::write(&config, source).unwrap();
+                    Some(run(&[
+                        "plan", "--runtime-config", path(&config), "--package",
+                        path(&package), "--posture", recorded,
+                    ]))
+                } else {
+                    None
+                };
                 let before = run(&[
                     "apply",
                     "--initial",
@@ -150,6 +193,21 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                     recorded,
                 ]);
                 assert!(before.status.success(), "{}", json_stdout(&before));
+                if let Some(planned) = planned {
+                    let mut missing = Vec::new();
+                    for output in [&planned, &before] {
+                        let report = json_stdout(output);
+                        assert!(output.status.success(), "{report}");
+                        if !report["diagnostics"].as_array().unwrap().iter().any(|item| {
+                            item["code"] == "platform.posture.generated-audit-key"
+                                && item["path"] == "/audit/hashKeyCustody"
+                        }) {
+                            missing.push(report);
+                        }
+                    }
+                    assert!(missing.is_empty(), "{missing:?}");
+                    return;
+                }
                 let status = |posture| {
                     run(&[
                         "status",
@@ -159,6 +217,39 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                         posture,
                     ])
                 };
+                if let Some(regression) = regression {
+                    match regression {
+                        Regression::Status => {
+                            mutate_database(
+                                database_admin_url.clone(),
+                                "UPDATE registry_internal.registry_migrations SET posture = 'production'",
+                            );
+                            let output = status(declared);
+                            let report = json_stdout(&output);
+                            assert_eq!(report["diagnostics"][0]["code"], "breg.activation.posture-mismatch", "{report}");
+                            assert_eq!(output.status.code(), Some(1), "{report}");
+                            assert_eq!(report["status"], "domain-refusal", "{report}");
+                            assert!(report["registryRevision"].is_string(), "{report}");
+                        }
+                        Regression::Doctor => {
+                            mutate_database(
+                                database_admin_url.clone(),
+                                "UPDATE registry_internal.registry_state
+                                 SET maintenance_status = 'failed',
+                                     maintenance_target_package_digest = active_package_digest",
+                            );
+                            let output = run(&["doctor", "--runtime-config", path(&config), "--posture", declared]);
+                            let report = json_stdout(&output);
+                            assert_eq!(output.status.code(), Some(1), "{report}");
+                            let diagnostics = report["diagnostics"].as_array().unwrap();
+                            for code in ["startup.database.unready", "breg.activation.posture-mismatch"] {
+                                assert!(diagnostics.iter().any(|item| item["code"] == code), "{report}");
+                            }
+                        }
+                        Regression::ActivationFindings => unreachable!(),
+                    }
+                    return;
+                }
                 let before = json_stdout(&status(recorded));
                 let unopened_audit = config_root.path().join("audit/must-stay-absent.jsonl");
                 let apply_config = config_root.path().join("refused-apply.yaml");
@@ -205,7 +296,7 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                 }
 
                 let checked = status(declared);
-                assert!(checked.status.success(), "{checked:?}");
+                assert_eq!(checked.status.code(), Some(1), "{checked:?}");
                 let checked = json_stdout(&checked);
                 assert_eq!(
                     checked["diagnostics"][0]["code"], "breg.activation.posture-mismatch",
@@ -324,4 +415,26 @@ externalRefresh:
         drop(admin);
         owner.await.unwrap().unwrap();
     });
+}
+
+fn mutate_database(database_url: url::Url, statement: &'static str) {
+    // Keep the fixture's panic boundary synchronous so cleanup runs on failure.
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (client, connection) =
+                    tokio_postgres::connect(database_url.as_str(), tokio_postgres::NoTls)
+                        .await
+                        .unwrap();
+                let connection = tokio::spawn(connection);
+                client.batch_execute(statement).await.unwrap();
+                drop(client);
+                connection.await.unwrap().unwrap();
+            });
+    })
+    .join()
+    .unwrap();
 }

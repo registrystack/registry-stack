@@ -1587,7 +1587,7 @@ formats:
     check: caseworkctl check {project} --runtime-config {file}
     example: products/casework/examples/canonical-review/runtime.example.yaml
     conformance:
-      requiredText: /authentication/oidc/audience
+      requiredText: /authentication/oidc/issuers/main/audience
       optionalText: /audit/path
       integer: none
       boolean: none
@@ -1598,19 +1598,19 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/networkExposure
         whenOmitted: closed
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /authentication/oidc/revokedKeyIds
+      - pointer: /authentication/oidc/issuers/*/revokedKeyIds
         whenOmitted: open
-      - pointer: /authentication/oidc/maximumTokenLifetimeSeconds
+      - pointer: /authentication/oidc/issuers/*/maximumTokenLifetimeSeconds
         whenOmitted: open
-      - pointer: /authentication/oidc/assertionIssuers
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers]
   - id: casework/fixture
     product: casework
     title: Casework fixture
@@ -4533,12 +4533,26 @@ formats:
         whenOmitted: refused
       - pointer: /database/testOnlyPlaintext
         whenOmitted: closed
-      - pointer: /oidc/issuer
+      - pointer: /oidc/issuers
         whenOmitted: refused
-      - pointer: /oidc/audience
+      - pointer: /oidc/issuers/*/issuer
         whenOmitted: refused
-      - pointer: /oidc/allowInsecureHttp
+      - pointer: /oidc/issuers/*/audience
+        whenOmitted: refused
+      - pointer: /oidc/issuers/*/jwksSource
         whenOmitted: open
+      - pointer: /oidc/issuers/*/allowInsecureHttp
+        whenOmitted: closed
+      - pointer: /oidc/issuers/*/allowedClients
+        whenOmitted: refused
+      - pointer: /oidc/issuers/*/accessTokenType
+        whenOmitted: closed
+      - pointer: /oidc/issuers/*/scopeClaim
+        whenOmitted: closed
+      - pointer: /oidc/issuers/*/actorKind
+        whenOmitted: closed
+      - pointer: /oidc/issuers/*/clientActorKinds
+        whenOmitted: closed
       - pointer: /endpoints/*/baseUrl
         whenOmitted: refused
       - pointer: /endpoints/*/credential
@@ -4547,7 +4561,7 @@ formats:
         whenOmitted: closed
       - pointer: /allowedPrivateCidrs
         whenOmitted: closed
-    restrictingMembers: [/allowedPrivateCidrs, /oidc/audience, /oidc/issuer]
+    restrictingMembers: [/allowedPrivateCidrs, /oidc/issuers/*/audience, /oidc/issuers/*/issuer, /oidc/issuers/*/allowedClients]
 
   - id: adapter/payment-provider-fixture
     product: adapter

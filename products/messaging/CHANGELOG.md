@@ -3,6 +3,7 @@
 ## Unreleased
 
 - When both the flag and the environment declare production, `messagingctl dev` names both settings to remove.
+- `messagingctl provision` reports all diagnostics returned by its runtime configuration loader.
 
 - BREAKING: An undeclared posture is production. Runtime files with development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
 - BREAKING: `check` reports development settings as errors when no posture is declared. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.

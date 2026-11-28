@@ -690,6 +690,7 @@ impl PaymentService {
             return Err(PaymentFailure::scope_refused(
                 &connection.id,
                 &connection.required_scope,
+                &caller.scope_claim,
             ));
         }
         Ok(connection)
@@ -1224,10 +1225,14 @@ impl PaymentFailure {
 
     /// A caller that lacks the scope the connection requires. The recording
     /// layer names the connection and its declared scope on the log line.
-    pub(crate) fn scope_refused(connection_id: &str, required_scope: &str) -> Self {
+    pub(crate) fn scope_refused(
+        connection_id: &str,
+        required_scope: &str,
+        scope_claim: &str,
+    ) -> Self {
         Self {
             declared: Some(
-                DeclaredScope::new(crate::facade::SCOPE_CLAIM)
+                DeclaredScope::new(scope_claim)
                     .with_required_scope(required_scope)
                     .with_access_profile(connection_id),
             ),

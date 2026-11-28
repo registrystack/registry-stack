@@ -3025,7 +3025,7 @@ async fn verify_opened_startup(
     client: &mut Client,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
-    purpose: StartupPurpose<'_>,
+    mut purpose: StartupPurpose<'_>,
 ) -> Result<VerifiedStartup> {
     let manifest = package.manifest();
     let lock_key = RegistryLockKey::derive(&manifest.package_id)
@@ -3100,16 +3100,15 @@ async fn verify_opened_startup(
     if !matches!(purpose, StartupPurpose::Inspect) {
         verify_instance_claim(&transaction).await?;
     }
+    let observer = match &mut purpose {
+        StartupPurpose::ObservePosture(observer) => observer.as_deref_mut(),
+        _ => None,
+    };
     let (expected, recorded) =
-        recorded_startup_identity(&transaction, &package, database_id).await?;
+        recorded_startup_identity(&transaction, &package, database_id, observer).await?;
     let declared = package.posture();
-    match purpose {
-        StartupPurpose::ObservePosture(Some(observer)) => *observer = Some(recorded),
-        StartupPurpose::ObservePosture(None) => {}
-        _ if recorded != declared => {
-            return Err(StartupError::PostureMismatch { recorded, declared });
-        }
-        _ => {}
+    if !matches!(purpose, StartupPurpose::ObservePosture(_)) && recorded != declared {
+        return Err(StartupError::PostureMismatch { recorded, declared });
     }
     verify_single_role_activation(&transaction, &expected, migration_role, runtime_role).await?;
     if verify_catalog_identity_for_catalog(
@@ -3157,6 +3156,7 @@ async fn recorded_startup_identity(
     client: &impl GenericClient,
     package: &VerifiedPackage,
     database_id: &str,
+    observer: Option<&mut Option<registry_platform_config::Posture>>,
 ) -> Result<(ExpectedRegistryIdentity, registry_platform_config::Posture)> {
     let row = client
         .query_opt(
@@ -3177,14 +3177,17 @@ async fn recorded_startup_identity(
     if row.get::<_, String>(1) != database_id {
         return Err(StartupError::DatabaseIdentityMismatch);
     }
+    let recorded = crate::postgres::catalog::recorded_posture(row.get(5));
+    if let Some(observer) = observer {
+        *observer = recorded.as_ref().ok().copied();
+    }
     if row.get::<_, String>(2) != package.package_digest() {
         return Err(StartupError::ActivePackageMismatch);
     }
     if row.get::<_, String>(4) != "ready" {
         return Err(StartupError::DatabaseUnready);
     }
-    let recorded = crate::postgres::catalog::recorded_posture(row.get(5))
-        .map_err(|_| StartupError::DatabaseUnready)?;
+    let recorded = recorded.map_err(|_| StartupError::DatabaseUnready)?;
     Ok((
         ExpectedRegistryIdentity {
             package_id: manifest.package_id.clone(),

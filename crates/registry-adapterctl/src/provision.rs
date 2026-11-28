@@ -7,7 +7,8 @@
 use std::path::Path;
 
 use registry_adapter_core::{
-    AdapterRuntimeConfig, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    AdapterRuntimeConfig, ADAPTER_FACADE_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION,
+    ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
     describe_secret_failure, RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, SecretResolver,
@@ -35,9 +36,12 @@ fn refused(code: &str, path: &str, message: String, action: &str) -> Box<Diagnos
 
 /// Reads the runtime file exactly as `adapter serve` does and resolves the
 /// two database URLs and the CA behind `database.caBundleRef`.
-pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
+pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Vec<Diagnostic>> {
+    let refuse = |code: &str, path: &str, message: String, action: &str| {
+        vec![*refused(code, path, message, action)]
+    };
     let absolute = std::fs::canonicalize(path).map_err(|_| {
-        refused(
+        refuse(
             "config.unresolvable",
             "arguments",
             "the --runtime-config path could not be read".to_owned(),
@@ -48,16 +52,16 @@ pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
         api_version: ADAPTER_RUNTIME_API_VERSION,
         kind: ADAPTER_RUNTIME_KIND,
     })
-    .removed_keys(ADAPTER_REMOVED_KEYS)
+    .removed_keys(ADAPTER_FACADE_REMOVED_KEYS)
     .load::<AdapterRuntimeConfig>(&absolute)
-    .map_err(|error| Box::new(error.deciding_diagnostic().clone()))?
+    .map_err(|error| error.diagnostics().to_vec())?
     .config;
     let secrets = match config.secret_providers.as_ref() {
         Some(providers) => providers.resolver(),
         None => SecretResolver::new([SecretProvider::Environment], ""),
     }
     .map_err(|error| {
-        refused(
+        refuse(
             "config.refused",
             "/secretProviders",
             error.to_string(),
@@ -66,7 +70,7 @@ pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
     })?;
     let resolve = |member: &str, reference: &str| {
         secrets.resolve(reference).map_err(|error| {
-            refused(
+            refuse(
                 "config.refused",
                 &format!("/database/{member}"),
                 describe_secret_failure(&format!("database.{member}"), reference, &error),
@@ -79,7 +83,7 @@ pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
         std::str::from_utf8(secret.expose_secret())
             .map(|text| Zeroizing::new(text.trim().to_owned()))
             .map_err(|_| {
-                refused(
+                refuse(
                     "config.refused",
                     &format!("/database/{member}"),
                     format!("database.{member} is not UTF-8 text"),

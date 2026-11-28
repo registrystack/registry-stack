@@ -422,8 +422,10 @@ impl NativeCoordinator {
                 "databaseId": format!("adapter-native-{suffix}"), "runtimeRole": role,
                 "packages": [{"root": package, "expectedDigest": package_digest}],
                 "listener": {"bind": address.to_string(), "tlsTermination": "development-loopback"},
-                "authentication": {"issuer": issuer.issuer(), "audience": "urn:adapter:coordinator-native",
+                "authentication": {"issuers": {"main": {
+                    "issuer": issuer.issuer(), "audience": "urn:adapter:coordinator-native",
                     "scopeClaim": "scope", "jwksSource": {"type": "uri", "uri": issuer.jwks_uri()},
+                    "allowedClients": "from-policies"}},
                     "policies": {"operator": {"subjects": ["adapter-job-native"], "requiredScopes": ["coordinator:operate"],
                         "workflows": [WORKFLOW], "actions": ["status", "inspect"], "operator": true}}},
                 "auditFile": root.path().join("audit.jsonl"), "auditKeyRef": "secret:file/audit-key",

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `bregctl status` reports an error with code `breg.activation.posture-mismatch` from the database state row and exits 1 on mismatch.
+- The JSON status report for a posture mismatch carries `ok: false` and `status: domain-refusal`. It includes available activation ledger details.
+- `bregctl doctor` includes the recorded posture mismatch alongside startup refusals for maintenance or a different active digest.
+- Successful development `bregctl plan` and `bregctl apply` report development settings in text and in the JSON `diagnostics` array.
+- A package verification refusal reported alongside a posture refusal points to `arguments` when `--package` supplied the candidate.
+
+- `bregctl provision` reports all runtime posture refusals and includes the resolved `posture` in JSON.
+
 - `bregctl init` writes a plan and scenario for `rstack dev`, including projects derived from PublicSchema.
 
 - BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The

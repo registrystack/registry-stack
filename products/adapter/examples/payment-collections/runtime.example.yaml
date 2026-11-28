@@ -9,9 +9,11 @@ database:
   runtimeUrlRef: secret:env/PAYMENT_ADAPTER_DB_RUNTIME
   migrationUrlRef: secret:env/PAYMENT_ADAPTER_DB_MIGRATION
 oidc:
-  issuer: https://issuer.example.invalid
-  audience: urn:registry:payment-adapter
-allowedClients: [coordinator-payments]
+  issuers:
+    primary:
+      issuer: https://issuer.example.invalid
+      audience: urn:registry:payment-adapter
+      allowedClients: [coordinator-payments]
 allowedPrivateCidrs: [127.0.0.0/8]
 audit:
   retentionDays: 90

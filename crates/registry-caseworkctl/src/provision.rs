@@ -34,29 +34,26 @@ pub(crate) fn run(args: ProvisionArgs, json: bool, declared: DeclaredPosture) ->
     )
 }
 
-fn load(path: &Path, declared: DeclaredPosture) -> Result<ProvisionInput, Box<Diagnostic>> {
+fn load(path: &Path, declared: DeclaredPosture) -> Result<ProvisionInput, Vec<Diagnostic>> {
     let config = RuntimeConfig::load(path, declared).map_err(|error| {
-        if let Some(diagnostic) = error
-            .load_diagnostics()
-            .and_then(|diagnostics| diagnostics.first())
-        {
-            return Box::new(diagnostic.clone());
+        if let Some(diagnostics) = error.load_diagnostics().filter(|items| !items.is_empty()) {
+            return diagnostics.to_vec();
         }
-        Box::new(Diagnostic::error(
+        vec![Diagnostic::error(
             error.code(),
             format!("runtime.yaml:{}", error.pointer()),
             "The runtime configuration was refused.",
             error.suggested_action(),
-        ))
+        )]
     })?;
     let config = config.config;
     let secrets = secret_resolver(&config).map_err(|_| {
-        Box::new(Diagnostic::error(
+        vec![Diagnostic::error(
             "casework.runtime.secret-unavailable",
             "runtime.yaml:/secretProviders",
             "The secret provider configuration is invalid.",
             SECRET_ACTION,
-        ))
+        )]
     })?;
     let database = &config.database;
     let migration_url = text_secret(
@@ -64,13 +61,15 @@ fn load(path: &Path, declared: DeclaredPosture) -> Result<ProvisionInput, Box<Di
         "database.migrationUrlRef",
         "/database/migrationUrlRef",
         &database.migration_url_ref,
-    )?;
+    )
+    .map_err(|diagnostic| vec![*diagnostic])?;
     let runtime_url = text_secret(
         &secrets,
         "database.runtimeUrlRef",
         "/database/runtimeUrlRef",
         &database.runtime_url_ref,
-    )?;
+    )
+    .map_err(|diagnostic| vec![*diagnostic])?;
     let ca_pem = database
         .ca_bundle_ref
         .as_deref()
@@ -79,12 +78,12 @@ fn load(path: &Path, declared: DeclaredPosture) -> Result<ProvisionInput, Box<Di
                 .resolve(reference)
                 .map(|secret| secret.expose_secret().to_vec())
                 .map_err(|error| {
-                    secret_diagnostic(
+                    vec![*secret_diagnostic(
                         "database.caBundleRef",
                         "/database/caBundleRef",
                         reference,
                         &error,
-                    )
+                    )]
                 })
         })
         .transpose()?;

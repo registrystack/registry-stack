@@ -342,3 +342,67 @@ fn print_sql_with_generated_audit_custody_requires_development() {
     let accepted = ctl(&args);
     assert!(accepted.status.success(), "{accepted:?}");
 }
+
+#[test]
+fn print_sql_reports_all_production_posture_refusals() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let source = std::fs::read_to_string(&runtime).unwrap();
+    let source = source.replace(
+        "audit:
+",
+        "audit:
+  hashKeyCustody: development-generated
+",
+    );
+    let key = directory.path().join("secrets/dek");
+    std::fs::write(&key, [42_u8; 32]).unwrap();
+    std::fs::set_permissions(key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(
+        &runtime,
+        format!(
+            "{source}
+fieldEncryption:
+  provider:
+    type: local-file
+    dekRef: secret:file/dek
+"
+        ),
+    )
+    .unwrap();
+    let output = ctl(&[
+        "--format",
+        "json",
+        "provision",
+        "--runtime-config",
+        &runtime,
+        "--print-sql",
+        "--posture",
+        "production",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["statements"], serde_json::json!([]));
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    for (code, pointer) in [
+        (
+            "platform.posture.generated-audit-key",
+            "/audit/hashKeyCustody",
+        ),
+        (
+            "breg.posture.local-key-custody",
+            "/fieldEncryption/provider",
+        ),
+    ] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item["code"] == code && item["path"] == pointer),
+            "{report}"
+        );
+    }
+    assert_eq!(
+        report["posture"],
+        serde_json::json!({"value": "production", "source": "flag"})
+    );
+}

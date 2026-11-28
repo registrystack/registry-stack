@@ -125,13 +125,15 @@ database:
   migrationUrlRef: secret:file/migration-database-url
   caBundleRef: secret:file/postgres-ca.pem
 oidc:
-  issuer: https://identity.example.test
-  audience: urn:example:adapter
-  jwksSource:
-    type: static
-    documentRef: secret:file/jwks.json
-allowedClients:
-  - provision-test-client
+  issuers:
+    primary:
+      issuer: https://identity.example.test
+      audience: urn:example:adapter
+      jwksSource:
+        type: static
+        documentRef: secret:file/jwks.json
+      allowedClients:
+      - provision-test-client
 allowedPrivateCidrs:
   - 192.168.0.0/16
 audit:

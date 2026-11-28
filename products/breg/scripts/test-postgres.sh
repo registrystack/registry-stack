@@ -224,7 +224,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
       --lib postgres_posture_
     cargo test --locked -p registry-bregctl --features postgres-test --test cli \
-      posture_tests::opposite_activation_posture_refuses_planning_and_apply_and_reports_findings -- --exact
+      posture_tests::
 
     # The operator proof drives the actual bregctl binary. Build it once and
     # pass Cargo's reported executable explicitly; the test must never find a

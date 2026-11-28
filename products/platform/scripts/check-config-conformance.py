@@ -118,6 +118,38 @@ class Row:
 
 ROWS: tuple[Row, ...] = (
     Row(
+        product="adapter",
+        loader_sources=(
+            "crates/registry-adapter/src",
+            "crates/registry-adapter-engine/src",
+            "crates/registry-adapterctl/src",
+        ),
+        runtime_schema="products/adapter/schemas/runtime.v1alpha1.schema.json",
+        shared_blocks=(
+            "AccessTokenType",
+            "DatabaseConfig",
+            "DatabaseTransport",
+            "DeclaredActorKind",
+            "EnvironmentSecretProviderConfig",
+            "ExternalId",
+            "FileSecretProviderConfig",
+            "IssuerActorKind",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerConfig",
+            "ListenerNetworkExposure",
+            "LocalId",
+            "MetricsListenerConfig",
+            "ScopeClaimName",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "Url",
+        ),
+        reference_refusal=TestRef("crates/registry-adapterctl/tests/check.rs", "the_runtime_file_refuses_an_expression_in_a_reference_member"),
+        authored_refusal=TestRef("crates/registry-adapterctl/tests/check.rs", "an_expression_in_an_authored_file_is_refused_where_it_is_written"),
+        digest_mismatch=TestRef("crates/registry-adapter-core/src/checks.rs", "project_pins_refuse_a_digest_mismatch_even_when_the_version_matches"),
+    ),
+    Row(
         product="coordinator",
         loader_sources=("crates/registry-coordinator/src",),
         runtime_schema="products/coordinator/generated/runtime/runtime.schema.json",
@@ -658,7 +690,7 @@ ROWS: tuple[Row, ...] = (
 EXPECTED_PRODUCTS = frozenset(
     {"render", "discovery", "evidence", "breg", "casework", "scheduling",
      "messaging", "breg-mcp", "breg-review", "evidence-oid4vci", "coordinator",
-     "documents"}
+     "documents", "adapter"}
 )
 
 

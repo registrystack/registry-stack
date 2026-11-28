@@ -19,6 +19,7 @@
 mod check;
 mod compile;
 mod fixtures;
+mod identity_facts;
 mod job;
 mod job_runtime;
 mod mapping;
@@ -70,6 +71,7 @@ enum Command {
     /// Check an authored adapter project, its pinned profile and pack, and
     /// its fixtures, offline, and print the findings.
     Check(check::CheckArgs),
+    Generate(identity_facts::GenerateArgs),
     /// Operate one authored ingestion job.
     Job(job::JobArgs),
     /// Check a mapping model, generate its Rhai script, or preview the
@@ -165,6 +167,7 @@ where
         Command::Init { .. } => "init",
         Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Check(_) => "check",
+        Command::Generate(args) => identity_facts::command_name(args),
         Command::Job(job) => match job.command {
             job::JobCommand::Check(_) => "job check",
             job::JobCommand::Lock(_) => "job lock",
@@ -215,6 +218,7 @@ where
         },
         Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
+        Command::Generate(args) => identity_facts::run(args, format, stdout, stderr),
         Command::Job(job) => match job.command {
             job::JobCommand::Check(args) => job_command(args, format, command_name, stdout, stderr),
             job::JobCommand::Lock(args) => {
@@ -431,6 +435,7 @@ fn check_command(
         }
     };
     let errors = refused(&run.diagnostics, args.deny_warnings);
+    let settings = serde_json::to_value(run.explicit_production_settings).map_err(|_| ())?;
     if errors {
         let mut checked = Report::new(run.diagnostics);
         checked.set_files_checked(run.files_checked);
@@ -442,7 +447,7 @@ fn check_command(
             "diagnostics": checked.to_json_value(),
             "filesChecked": run.files_checked,
             "posture": posture_member(declared),
-            "explicitProductionSettings": run.explicit_production_settings,
+            "explicitProductionSettings": settings,
         });
         return write_configuration_report(
             &checked,
@@ -462,7 +467,7 @@ fn check_command(
         "status": "complete",
         "project": run.project,
         "posture": posture_member(declared),
-        "explicitProductionSettings": run.explicit_production_settings,
+        "explicitProductionSettings": settings,
         "filesChecked": run.files_checked,
         "diagnostics": checked.to_json_value(),
     });

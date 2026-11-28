@@ -304,13 +304,15 @@ database:
   migrationUrlRef: secret:env/EXPERIMENT_DB_URL
   transport: loopback-plaintext
 oidc:
-  issuer: {ISSUER}
-  audience: {AUDIENCE}
-  jwksSource:
-    type: static
-    documentRef: secret:env/EXPERIMENT_JWKS
-allowedClients:
-  - {CLIENT_ID}
+  issuers:
+    primary:
+      issuer: {ISSUER}
+      audience: {AUDIENCE}
+      jwksSource:
+        type: static
+        documentRef: secret:env/EXPERIMENT_JWKS
+      allowedClients:
+      - {CLIENT_ID}
 allowedPrivateCidrs:
   - 192.168.0.0/16
 audit:

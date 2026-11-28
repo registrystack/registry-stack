@@ -206,7 +206,7 @@ pub(crate) struct CheckRun {
     pub diagnostics: Vec<Diagnostic>,
     pub files_checked: usize,
     pub fixtures_checked: usize,
-    pub explicit_production_settings: Vec<serde_json::Value>,
+    pub explicit_production_settings: Vec<registry_cli_report::ExplicitSettingLine>,
     pub project: String,
 }
 
@@ -298,31 +298,45 @@ pub(crate) fn run(
         }
     }
 
-    let runtime = match &args.runtime {
+    let loaded = match &args.runtime {
         Some(path) => {
-            read_runtime_in_posture(path, args.environment, &mut report, &mut files, declared)?
+            load_runtime_for_check(path, args.environment, &mut report, &mut files, declared)?
         }
         None => None,
     };
-
-    let mut posture = registry_platform_config::PostureReport::new(declared);
-    if let Some(runtime) = &runtime {
-        registry_adapter_core::record_endpoint_posture(&runtime.endpoints, &mut posture);
-    }
-    let explicit_production_settings = posture
-        .explicit_settings()
-        .iter()
-        .map(|finding| {
-            serde_json::json!({
-                "code": finding.setting.code,
-                "pointer": finding.pointer,
+    let explicit_production_settings = |report: &Report| {
+        loaded
+            .as_ref()
+            .zip(args.runtime.as_ref())
+            .map(|(loaded, file)| {
+                let file = file.to_string_lossy();
+                loaded
+                    .posture
+                    .explicit_settings()
+                    .iter()
+                    .filter(|setting| {
+                        !setting.pointer.as_deref().is_some_and(|pointer| {
+                            report.diagnostics().iter().any(|diagnostic| {
+                                diagnostic.severity == registry_platform_yaml::Severity::Error
+                                    && (diagnostic.path == pointer
+                                        || diagnostic
+                                            .path
+                                            .strip_prefix(pointer)
+                                            .is_some_and(|suffix| suffix.starts_with('/')))
+                            })
+                        })
+                    })
+                    .map(|setting| setting.report_line(Some(&file)))
+                    .collect()
             })
-        })
-        .collect();
+            .unwrap_or_default()
+    };
+    let runtime = loaded.as_ref().map(|loaded| &loaded.config);
 
     // A document the reader refuses stops the composition: the pure checks
     // need parsed values. The run still reports everything the reader found.
     if report.has_errors() {
+        let explicit_production_settings = explicit_production_settings(&report);
         return Ok(CheckRun {
             diagnostics: report.into_diagnostics(),
             files_checked: files,
@@ -365,7 +379,7 @@ pub(crate) fn run(
         profile: &profile,
         pack: &pack,
         project: &project,
-        runtime: runtime.as_ref(),
+        runtime,
         fixtures: &fixtures,
     };
     for diagnostic in check_workspace(&workspace) {
@@ -378,6 +392,7 @@ pub(crate) fn run(
     }
     check_fixture_bodies(&profile, &project, &fixtures, &mut report);
     check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
+    let explicit_production_settings = explicit_production_settings(&report);
     Ok(CheckRun {
         diagnostics: report.into_diagnostics(),
         files_checked: files,
@@ -872,6 +887,22 @@ pub(crate) fn read_runtime_in_posture(
     files: &mut usize,
     declared: registry_platform_config::DeclaredPosture,
 ) -> Result<Option<registry_adapter_core::AdapterRuntimeConfig>, CheckFailure> {
+    load_runtime_for_check(path, substitute, report, files, declared)
+        .map(|loaded| loaded.map(|loaded| loaded.config))
+}
+
+pub(crate) fn load_runtime_for_check(
+    path: &Path,
+    substitute: bool,
+    report: &mut Report,
+    files: &mut usize,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<
+    Option<
+        registry_platform_config::LoadedRuntimeConfig<registry_adapter_core::AdapterRuntimeConfig>,
+    >,
+    CheckFailure,
+> {
     let shown = path.display().to_string();
     // The loader reads absolute paths whose components are no symbolic
     // link; the canonical form of the path as given satisfies that rule on
@@ -888,11 +919,17 @@ pub(crate) fn read_runtime_in_posture(
         },
         declared,
     )
-    .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS);
-    let check = loader.check_offline::<registry_adapter_core::AdapterRuntimeConfig>(
+    .removed_keys(registry_adapter_core::ADAPTER_FACADE_REMOVED_KEYS);
+    let mut check = loader.check_offline::<registry_adapter_core::AdapterRuntimeConfig>(
         &absolute,
         substitute,
-        |_| DEFAULT_STAND_IN,
+        |pointer| {
+            if pointer.starts_with("/oidc/issuers/") && pointer.ends_with("/issuer") {
+                "https://deferred.invalid"
+            } else {
+                DEFAULT_STAND_IN
+            }
+        },
     );
     *files += 1;
     // Every finding names the file as the loader read it; the report names
@@ -928,6 +965,19 @@ pub(crate) fn read_runtime_in_posture(
         });
     }
     if let Some(loaded) = &check.loaded {
+        let issuers = &loaded.config.oidc.set;
+        let diagnostics = issuers
+            .check_file("/oidc/issuers", &check, ADAPTER_RUNTIME_KIND)
+            .into_iter()
+            .chain(issuers.check_one_audience_file(
+                "/oidc/issuers",
+                "published effective contract",
+                &check,
+                ADAPTER_RUNTIME_KIND,
+            ));
+        for diagnostic in diagnostics {
+            report.push(rewrite(&diagnostic));
+        }
         if let Err(error) = loaded.config.database.check(false) {
             let path = if matches!(
                 error,
@@ -950,7 +1000,34 @@ pub(crate) fn read_runtime_in_posture(
     for diagnostic in &check.diagnostics {
         report.push(rewrite(diagnostic));
     }
-    Ok(check.loaded.map(|loaded| loaded.config))
+    if let Some(loaded) = &check.loaded {
+        let mut endpoints = registry_platform_config::PostureReport::new(declared);
+        registry_adapter_core::record_endpoint_posture(&loaded.config.endpoints, &mut endpoints);
+        let positioned = endpoints
+            .explicit_settings()
+            .iter()
+            .map(|setting| {
+                let mut setting = setting.clone();
+                if let Some(pointer) = &setting.pointer {
+                    let source = check
+                        .error_at(ADAPTER_RUNTIME_KIND, setting.setting.code, pointer, "", "")
+                        .source;
+                    if let Some(source) = source {
+                        setting.position = source.line.zip(source.column).map(|(line, column)| {
+                            registry_platform_yaml::Position { line, column }
+                        });
+                    }
+                }
+                setting
+            })
+            .collect::<Vec<_>>();
+        if let Some(loaded) = &mut check.loaded {
+            for setting in positioned {
+                loaded.posture.record_explicit(setting);
+            }
+        }
+    }
+    Ok(check.loaded)
 }
 
 /// The fixture files of a project directory, in file-name order. A missing

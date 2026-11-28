@@ -93,13 +93,15 @@ database:
   migrationUrlRef: secret:env/CONTRACT_TEST_DB_URL
   testOnlyPlaintext: true
 oidc:
-  issuer: {ISSUER}
-  audience: {AUDIENCE}
-  jwksSource:
-    type: static
-    documentRef: secret:env/CONTRACT_TEST_JWKS
-allowedClients:
-  - synthetic-client
+  issuers:
+    primary:
+      issuer: {ISSUER}
+      audience: {AUDIENCE}
+      jwksSource:
+        type: static
+        documentRef: secret:env/CONTRACT_TEST_JWKS
+      allowedClients:
+      - synthetic-client
 allowedPrivateCidrs:
   - 192.168.0.0/16
 audit:
@@ -149,7 +151,7 @@ cursorKeyRef: secret:env/CONTRACT_TEST_CURSOR_KEY
 async fn protected_readback_is_the_cached_offline_contract_and_checks_journal_readiness() {
     let upstream = UpstreamDouble::start();
     let served = Served::start(&upstream.url("")).await;
-    let token = served.token("");
+    let token = served.token("other.scope");
 
     let unauthenticated = served.get(WELL_KNOWN_PATH, None);
     assert_eq!(unauthenticated.0, 401, "{}", unauthenticated.2);

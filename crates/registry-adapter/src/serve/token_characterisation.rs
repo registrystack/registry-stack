@@ -13,7 +13,7 @@
 use super::*;
 use registry_platform_config::SecretProvider;
 use registry_platform_testing::{
-    ClaimValue, FixtureCase, Outcome, TokenCorpus, TokenFixture, TokenSigner,
+    ClaimValue, Configuration, FixtureCase, Outcome, TokenCorpus, TokenFixture, TokenSigner,
 };
 use serde_json::{json, Value};
 
@@ -35,8 +35,41 @@ fn client_of(fixture: &TokenFixture) -> Option<String> {
 }
 
 fn runtime_for(case: &FixtureCase) -> AdapterRuntimeConfig {
-    let client = client_of(&case.fixture).unwrap_or_else(|| PLACEHOLDER_CLIENT.into());
-    serde_json::from_value(json!({
+    let client = client_of(&case.fixture);
+    let mut issuer = json!({
+        "issuer": case.issuer,
+        "audience": case.audience,
+        "jwksSource": {"type": "static", "documentRef": format!("secret:file/{KEY_FILE}")},
+        "allowedClients": [client.as_deref().unwrap_or(PLACEHOLDER_CLIENT)]
+    });
+    let recipe = case.configuration == Configuration::Recipe;
+    if case.configuration == Configuration::JwtAccepted
+        || (recipe
+            && case
+                .fixture
+                .header
+                .as_ref()
+                .and_then(|header| header.typ.as_deref())
+                == Some("JWT"))
+    {
+        issuer["accessTokenType"] = json!("JWT");
+    }
+    if recipe && case.fixture.claims.contains_key("scp") {
+        issuer["scopeClaim"] = json!("scp");
+    }
+    if let Some(kind) = case.declared_kind {
+        let kind = match kind {
+            registry_platform_oidc::ActorKind::Human => "human",
+            registry_platform_oidc::ActorKind::Agent => "agent",
+            registry_platform_oidc::ActorKind::Service => "service",
+        };
+        if let Some(client) = client {
+            issuer["clientActorKinds"] = json!({(client): kind});
+        } else {
+            issuer["actorKind"] = json!(kind);
+        }
+    }
+    test_runtime(json!({
         "id": "token-characterisation",
         "endpoints": [{"endpoint": "tracker", "baseUrl": "https://tracker.example.invalid"}],
         "listener": {"bind": "127.0.0.1:8080"},
@@ -44,20 +77,14 @@ fn runtime_for(case: &FixtureCase) -> AdapterRuntimeConfig {
             "runtimeUrlRef": "secret:file/database-runtime",
             "migrationUrlRef": "secret:file/database-migration"
         },
-        "oidc": {
-            "issuer": case.issuer,
-            "audience": case.audience,
-            "jwksSource": {"type": "static", "documentRef": format!("secret:file/{KEY_FILE}")}
-        },
-        "allowedClients": [client],
+        "oidc": {"issuers": {"primary": issuer}},
         "allowedPrivateCidrs": ["10.0.0.0/8"],
         "audit": {"retentionDays": 90}
     }))
-    .expect("the runtime configuration parses")
 }
 
 async fn observe(authenticator: &Authenticator, token: &str) -> Outcome {
-    let verdict = authenticator.verifier.verify(token).await;
+    let verdict = authenticator.issuers.verify(token).await;
     let admission = authenticator.authenticate(token).await;
     match (admission, verdict) {
         (Ok(_), Ok(_)) => Outcome::Admitted(None),
@@ -68,7 +95,7 @@ async fn observe(authenticator: &Authenticator, token: &str) -> Outcome {
                 error.failed_check(),
                 "the refusal carries the check the verifier named"
             );
-            Outcome::refused_by(&error)
+            Outcome::refused_by(&error.error)
         }
         (Err(CallerRefusal::Unauthenticated(_)), Ok(_)) => {
             "refused/claims".parse().expect("result value")

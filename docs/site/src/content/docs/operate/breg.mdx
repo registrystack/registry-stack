@@ -271,6 +271,12 @@ roles and databases. The runtime file's `package.root` must be a readable direct
 bregctl provision --runtime-config /etc/breg/runtime.yaml --admin-url-file /etc/breg/admin-url
 ```
 
+Pass `--posture` to declare the deployment posture. Provision lists all runtime
+configuration refusals before it prints SQL or opens a database connection.
+Its JSON report includes the resolved `posture` and its source.
+
+{/* Evidence: crates/registry-bregctl/tests/provision_cli.rs, print_sql_reports_all_production_posture_refusals. */}
+
 The `admin-url` file holds one PostgreSQL URL for that administrator, for example
 `postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE`
 and `CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable
@@ -555,23 +561,32 @@ Planned the first activation on this registry; nothing was changed. Run `bregctl
   checks passed             migration-role, runtime-write-authority, prerequisites, uninitialized-database
 ```
 
-Use `--posture` on `plan`, `apply`, `status` and `doctor` to declare the posture
-of your deployment. Use `bregctl package --posture development` to build a
+Use `--posture` to declare the deployment posture when you run
+`plan`, `apply`, `status` or `doctor`. Use `bregctl package --posture development` to build a
 laptop package with a placeholder `canonicalBaseIri`.
 
-The first activation fixes the database's posture. Startup, plan and apply
-refuse a mismatch with the active activation. Reconciliation also refuses a
+The first activation records the database's posture. Startup, plan and apply
+refuse a mismatch with that posture. Reconciliation also refuses a
 posture that differs from the failed apply's recorded posture.
-{/* Evidence: crates/registry-breg/tests/postgres_migration.rs, real_postgres_reconcile_refuses_a_different_posture. */} Status and doctor report the
-mismatch as a finding. Databases activated before
-posture was recorded read as production. Use a fresh database and apply the
-package in the other posture if you need to switch.
-If doctor exits 0 with `breg.activation.posture-mismatch`, startup still
-refuses that database in the declared posture. Doctor keeps the finding when
-a later dependency check refuses. Doctor, plan and apply report development
-settings from both the runtime file and the selected package.
-{/* Evidence: crates/registry-bregctl/tests/cli.rs, startup_operators_report_runtime_and_selected_package_posture_together. */}
-{/* Evidence: crates/registry-bregctl/tests/cli/posture.rs, opposite_activation_posture_refuses_planning_and_apply_and_reports_findings. */}
+{/* Evidence: crates/registry-breg/tests/postgres_migration.rs, real_postgres_reconcile_refuses_a_different_posture. */}
+
+Status reads the posture from the database state and exits 1 with
+`breg.activation.posture-mismatch` if it differs from the declaration.
+Databases activated before posture was recorded read as production.
+Use a fresh database and apply the package in the other posture if you
+need to switch.
+
+Doctor reports the mismatch as a finding. Startup refuses the database in
+the declared posture even if doctor exits 0. Doctor includes the finding
+alongside a maintenance refusal or a later dependency refusal.
+
+Successful development plans and applies list the development settings found
+in the runtime file and the selected package. If the selected `--package`
+directory cannot be verified while the runtime file has posture refusals,
+the package diagnostic points to the command arguments.
+
+{/* Evidence: crates/registry-bregctl/tests/cli.rs, startup_operators_report_runtime_and_selected_package_posture_together, posture_refusal_points_to_the_explicit_package_argument. */}
+{/* Evidence: crates/registry-bregctl/tests/cli/posture.rs, opposite_activation_posture_refuses_planning_and_apply_and_reports_findings, status_refuses_the_state_posture_when_the_ledger_disagrees, doctor_reports_maintenance_and_the_recorded_posture, development_plan_and_initial_apply_report_the_relaxed_custody. */}
 
 Then activate. `--initial` is for the first package in a database that has never had one:
 

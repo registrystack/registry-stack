@@ -12,14 +12,15 @@ use std::time::{Duration, SystemTime};
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_adapter_core::AdapterRuntimeConfig;
-use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
+use registry_platform_authcommon::{validate_compact_access_token, FailedCheck, RefusalNote};
 use registry_platform_config::{
-    DatabaseConfig, JwksSource, SecretReference as ConfigSecretReference, SecretResolver,
+    DatabaseConfig, JwksSource, OidcIssuerConfig, SecretReference as ConfigSecretReference,
+    SecretResolver,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
+    fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm, ClaimNames, DeclaredKinds,
+    IssuerEntry, IssuerNetworkPolicy, IssuerSet, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, OidcError, TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
 use registry_platform_yaml::SecretReference;
 use thiserror::Error;
@@ -37,9 +38,6 @@ use crate::idempotent::{
 };
 use crate::journal;
 use crate::metrics::Metrics;
-
-/// The access token media type the facade admits (RFC 9068).
-const ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
 #[derive(Debug, Error)]
 pub enum ServeError {
@@ -64,20 +62,21 @@ pub enum ServeError {
 
 /// A verified caller.
 pub struct Caller {
-    /// The verified subject, journaled as the caller reference.
+    /// The verified subject.
     pub reference: String,
     /// The verified issuer and admitted acting client remain process-local;
     /// the idempotency store receives only their namespace digest.
     pub issuer: String,
     pub client_id: String,
     pub scopes: Vec<String>,
+    pub scope_claim: Arc<str>,
 }
 
 /// Why a request has no caller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CallerRefusal {
     /// The credential is absent or was refused, at the named check.
-    Unauthenticated(FailedCheck),
+    Unauthenticated(RefusalNote),
     /// The verifier could not reach a verdict (issuer or key set outage).
     Unavailable,
 }
@@ -86,10 +85,18 @@ impl CallerRefusal {
     /// The check the request failed, for the operator-side counter and log.
     #[must_use]
     pub const fn failed_check(self) -> FailedCheck {
+        self.note().check
+    }
+
+    pub(crate) const fn note(self) -> RefusalNote {
         match self {
-            Self::Unauthenticated(check) => check,
-            Self::Unavailable => FailedCheck::KeySourceUnavailable,
+            Self::Unauthenticated(note) => note,
+            Self::Unavailable => RefusalNote::new(FailedCheck::KeySourceUnavailable),
         }
+    }
+
+    pub(crate) const fn unauthenticated(check: FailedCheck) -> Self {
+        Self::Unauthenticated(RefusalNote::new(check))
     }
 }
 
@@ -97,16 +104,35 @@ impl CallerRefusal {
 const MAXIMUM_SUBJECT_BYTES: usize = 256;
 
 pub struct Authenticator {
-    verifier: TokenVerifier,
+    issuers: IssuerSet,
+    scope_claims: HashMap<Arc<str>, Arc<str>>,
 }
 
 impl Authenticator {
+    /// The journal keeps the original subject for a single issuer. With
+    /// multiple issuers the digest binds the verified issuer and subject.
+    pub(crate) fn journal_reference(&self, caller: &Caller) -> String {
+        if self.scope_claims.len() > 1 {
+            // Both verified members exclude NUL. The digest fits the
+            // existing journal bound.
+            let principal = format!(
+                "adapter-journal-caller-v1\0{}\0{}",
+                caller.issuer, caller.reference
+            );
+            registry_platform_config::sha256_uri(principal.as_bytes())
+        } else {
+            caller.reference.clone()
+        }
+    }
+
     pub async fn authenticate(&self, token: &str) -> Result<Caller, CallerRefusal> {
         validate_compact_access_token(token)
-            .map_err(|_| CallerRefusal::Unauthenticated(FailedCheck::CredentialMalformed))?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            let check = error.failed_check();
-            match error {
+            .map_err(|_| CallerRefusal::unauthenticated(FailedCheck::CredentialMalformed))?;
+        let caller = self
+            .issuers
+            .verify(token)
+            .await
+            .map_err(|refusal| match refusal.error {
                 OidcError::Transport(_)
                 | OidcError::BoundedRead(_)
                 | OidcError::FetchUrl(_)
@@ -117,14 +143,20 @@ impl Authenticator {
                 | OidcError::EmptyKeySet
                 | OidcError::MissingIssuer
                 | OidcError::ConflictingEndpointConfiguration => CallerRefusal::Unavailable,
-                _ => CallerRefusal::Unauthenticated(check),
-            }
-        })?;
+                _ => {
+                    let mut note = RefusalNote::new(refusal.failed_check());
+                    if let Some(remedy) = refusal.remedy {
+                        note = note.with_remedy(remedy);
+                    }
+                    CallerRefusal::Unauthenticated(note)
+                }
+            })?;
+        let verified = caller.token;
         // An exchanged token names the authority whose assertion produced
         // it. This runtime declares no assertion authority, so it admits
         // no exchanged token.
         if verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM) {
-            return Err(CallerRefusal::Unauthenticated(
+            return Err(CallerRefusal::unauthenticated(
                 FailedCheck::TokenAssertionIssuer,
             ));
         }
@@ -137,7 +169,7 @@ impl Authenticator {
                     && issuer.len() <= MAX_CALLER_ISSUER_BYTES
                     && !issuer.contains('\0')
             })
-            .ok_or(CallerRefusal::Unauthenticated(FailedCheck::TokenClaims))?;
+            .ok_or(CallerRefusal::unauthenticated(FailedCheck::TokenClaims))?;
         let client_id = verified
             .matched_client_id()
             .ok()
@@ -148,7 +180,7 @@ impl Authenticator {
                     && !client.contains('\0')
             })
             .map(str::to_owned)
-            .ok_or(CallerRefusal::Unauthenticated(FailedCheck::TokenClient))?;
+            .ok_or(CallerRefusal::unauthenticated(FailedCheck::TokenClient))?;
         let reference = verified
             .claims
             .sub
@@ -158,12 +190,18 @@ impl Authenticator {
                     && subject.len() <= MAXIMUM_SUBJECT_BYTES
                     && !subject.contains('\0')
             })
-            .ok_or(CallerRefusal::Unauthenticated(FailedCheck::TokenClaims))?;
+            .ok_or(CallerRefusal::unauthenticated(FailedCheck::TokenClaims))?;
+        let scope_claim = self
+            .scope_claims
+            .get(&caller.issuer_id)
+            .cloned()
+            .ok_or(CallerRefusal::unauthenticated(FailedCheck::TokenClaims))?;
         Ok(Caller {
             reference,
             issuer,
             client_id,
             scopes: verified.scopes,
+            scope_claim,
         })
     }
 }
@@ -172,11 +210,45 @@ pub(crate) async fn authenticator(
     runtime: &AdapterRuntimeConfig,
     resolver: &SecretResolver,
 ) -> Result<Authenticator, ServeError> {
-    let oidc = &runtime.oidc;
+    let invalid = |what: &str| ServeError::Configuration(format!("oidc: {what}"));
+    let mut entries = Vec::with_capacity(runtime.oidc.set.len());
+    let mut scope_claims = HashMap::with_capacity(runtime.oidc.set.len());
+    for (id, entry) in runtime.oidc.set.iter() {
+        let id: Arc<str> = Arc::from(id.as_str());
+        let core = &entry.core;
+        if scope_claims
+            .insert(id.clone(), Arc::from(core.scope_claim.get().as_str()))
+            .is_some()
+        {
+            return Err(invalid(&format!("two issuer entries share the id {id}")));
+        }
+        let config = TokenVerifierConfig::for_caller_issuer(core, accepted_algorithms(), None)
+            .map_err(|error| invalid(&error.to_string()))?;
+        let declared =
+            DeclaredKinds::from_core(core).map_err(|error| invalid(&error.to_string()))?;
+        let keys = issuer_keys(&core.provider, resolver).await?;
+        entries.push(IssuerEntry::new(
+            id,
+            TokenVerifier::new(config, Arc::new(keys)),
+            declared,
+        ));
+    }
+    let issuers = IssuerSet::new(entries, ClaimNames::default())
+        .map_err(|error| invalid(&error.to_string()))?;
+    Ok(Authenticator {
+        issuers,
+        scope_claims,
+    })
+}
+
+async fn issuer_keys(
+    oidc: &OidcIssuerConfig,
+    resolver: &SecretResolver,
+) -> Result<JwksFetcher, ServeError> {
     let invalid = |what: &str| ServeError::Configuration(format!("oidc: {what}"));
     let network = IssuerNetworkPolicy::new(oidc.issuer.as_str(), oidc.allow_insecure_http)
         .map_err(|_| invalid("the issuer was refused"))?;
-    let keys = match &oidc.jwks_source {
+    Ok(match &oidc.jwks_source {
         JwksSource::Discovery {} => {
             let (discovery, policy) = fetch_discovery_for_issuer(
                 &OidcDiscoveryConfig {
@@ -216,22 +288,6 @@ pub(crate) async fn authenticator(
             })?;
             JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
         }
-    };
-    let config = TokenVerifierConfig::access_token_profile(
-        oidc.issuer.to_string(),
-        vec![oidc.audience.clone()],
-        accepted_algorithms(),
-        access_token_typ_set(ACCESS_TOKEN_TYPE),
-    )
-    .with_allowed_clients(
-        runtime
-            .allowed_clients
-            .iter()
-            .map(|client| client.as_str().to_owned())
-            .collect(),
-    );
-    Ok(Authenticator {
-        verifier: TokenVerifier::new(config, Arc::new(keys)),
     })
 }
 
@@ -1048,12 +1104,25 @@ pub(crate) fn load_serve_configuration(
         },
         declared,
     )
-    .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS)
+    .removed_keys(registry_adapter_core::ADAPTER_FACADE_REMOVED_KEYS)
     .check_offline::<AdapterRuntimeConfig>(&path, true, |_| "");
     let payments = payments_path.map(|path| crate::payments::http::load_config(path, declared));
+    let oidc_diagnostics = runtime
+        .loaded
+        .as_ref()
+        .map(|loaded| {
+            let issuers = &loaded.config.oidc.set;
+            let mut diagnostics = issuers.check("/oidc/issuers");
+            diagnostics.extend(
+                issuers.check_one_audience("/oidc/issuers", "published effective contract"),
+            );
+            diagnostics
+        })
+        .unwrap_or_default();
     let diagnostics = runtime
         .diagnostics
         .into_iter()
+        .chain(oidc_diagnostics)
         .chain(
             payments
                 .iter()
@@ -1119,11 +1188,15 @@ pub(crate) fn load_serve_configuration(
         explicit_production_settings = runtime.posture.explicit_settings().len(),
         "posture declared"
     );
+    let file = runtime_path.to_string_lossy();
     for setting in runtime.posture.explicit_settings() {
+        let line = setting.report_line(Some(&file));
         tracing::info!(
-            setting_code = setting.setting.code,
-            pointer = setting.pointer.as_deref().unwrap_or(""),
-            file = %path.display(),
+            setting_code = line.code,
+            pointer = line.pointer.as_deref().unwrap_or(""),
+            file = line.file.as_deref().unwrap_or(""),
+            line = line.line,
+            column = line.column,
             "explicit production setting in use"
         );
     }
@@ -1420,6 +1493,7 @@ async fn run_facade(
         Some(payments) => router(state).merge(payments),
         None => router(state),
     }
+    .layer(registry_platform_httpsec::refusal_detail::name_failed_check(declared.posture))
     .layer(registry_platform_httpsec::posture_mark(declared.posture));
     let serving = axum::serve(listener, routes).with_graceful_shutdown(async move {
         let _closed = server_shutdown.changed().await;
@@ -1503,14 +1577,515 @@ fn tolerate_metrics_shutdown_timeout(result: std::io::Result<()>) -> std::io::Re
 }
 
 #[cfg(test)]
+pub(crate) fn test_runtime(mut value: serde_json::Value) -> AdapterRuntimeConfig {
+    use registry_platform_config::{
+        DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+    };
+    let envelope = RuntimeEnvelope {
+        api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
+        kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
+    };
+    value["apiVersion"] = serde_json::json!(envelope.api_version);
+    value["kind"] = serde_json::json!(envelope.kind);
+    RuntimeConfigLoader::new(
+        envelope,
+        DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Flag,
+        },
+    )
+    .parse_str::<AdapterRuntimeConfig>(&value.to_string(), |_| None)
+    .unwrap_or_else(|error| panic!("runtime: {:?}", error.diagnostics()))
+    .config
+}
+
+#[cfg(test)]
 mod token_characterisation;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const STAFF_ISSUER: &str = "https://staff.example.test";
+    const PARTNER_ISSUER: &str = "https://partner.example.test";
+
+    async fn issuer_fixture(
+        extra: serde_json::Value,
+        second: bool,
+    ) -> (
+        Authenticator,
+        registry_platform_crypto::PrivateJwk,
+        registry_platform_crypto::PrivateJwk,
+    ) {
+        use registry_platform_testing::access_token_test_key;
+        let staff = access_token_test_key(jsonwebtoken::Algorithm::ES256);
+        let partner = access_token_test_key(jsonwebtoken::Algorithm::RS256);
+        let auth =
+            issuer_fixture_with_ids(extra, second, ["staff", "partner"], [&staff, &partner]).await;
+        (auth, staff, partner)
+    }
+
+    async fn issuer_fixture_with_ids(
+        extra: serde_json::Value,
+        second: bool,
+        ids: [&str; 2],
+        keys: [&registry_platform_crypto::PrivateJwk; 2],
+    ) -> Authenticator {
+        use registry_platform_testing::jwks_from_private_jwk;
+        use serde_json::json;
+        use std::os::unix::fs::PermissionsExt;
+
+        let [staff_id, partner_id] = ids;
+        let directory = tempfile::tempdir().expect("key directory");
+        let root = directory.path().canonicalize().expect("physical directory");
+        for (name, key) in ["staff", "partner"].into_iter().zip(keys) {
+            let file = root.join(format!("{name}.json"));
+            std::fs::write(&file, jwks_from_private_jwk(key).to_string()).expect("write key set");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))
+                .expect("owner-only key file");
+        }
+        let mut runtime = json!({
+            "id": "caller-contract",
+            "endpoints": [],
+            "listener": {"bind": "127.0.0.1:8080"},
+            "database": {"runtimeUrlRef": "secret:env/DB", "migrationUrlRef": "secret:env/DB"},
+            "oidc": {"issuers": {
+                (staff_id): {
+                    "issuer": STAFF_ISSUER,
+                    "audience": "staff-api",
+                    "allowedClients": ["staff-client"],
+                    "jwksSource": {"type": "static", "documentRef": "secret:file/staff.json"}
+                }
+            }},
+            "allowedPrivateCidrs": ["10.0.0.0/8"],
+            "audit": {"retentionDays": 90}
+        });
+        runtime["oidc"]["issuers"][staff_id]
+            .as_object_mut()
+            .expect("issuer object")
+            .extend(extra.as_object().expect("issuer overrides").clone());
+        if second {
+            runtime["oidc"]["issuers"][partner_id] = json!({
+                "issuer": PARTNER_ISSUER,
+                "audience": "staff-api",
+                "allowedClients": ["partner-client"],
+                "scopeClaim": "scp",
+                "jwksSource": {"type": "static", "documentRef": "secret:file/partner.json"}
+            });
+        }
+        let config = test_runtime(runtime);
+        let resolver = SecretResolver::new([registry_platform_config::SecretProvider::File], root)
+            .expect("resolver");
+        authenticator(&config, &resolver)
+            .await
+            .expect("authenticator")
+    }
+
+    fn issuer_token(
+        key: &registry_platform_crypto::PrivateJwk,
+        typ: &str,
+        issuer: &str,
+        overrides: serde_json::Value,
+    ) -> String {
+        use serde_json::json;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs();
+        let (audience, client) = if issuer == PARTNER_ISSUER {
+            ("staff-api", "partner-client")
+        } else {
+            ("staff-api", "staff-client")
+        };
+        let mut claims = json!({
+            "iss": issuer, "aud": audience, "client_id": client, "sub": "subject",
+            "iat": now, "nbf": now, "exp": now + 120, "scope": "records.read", "jti": "request"
+        });
+        claims
+            .as_object_mut()
+            .expect("claims object")
+            .extend(overrides.as_object().expect("claim overrides").clone());
+        registry_platform_testing::sign_compact_jwt_with_key(
+            key,
+            typ,
+            "canary-resource-key",
+            claims,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_token_from_each_configured_issuer_is_verified_under_its_own_rules() {
+        use serde_json::json;
+        let (auth, staff, partner) = issuer_fixture(json!({}), true).await;
+        let staff_token = issuer_token(&staff, "application/at+jwt", STAFF_ISSUER, json!({}));
+        let partner_token = issuer_token(
+            &partner,
+            "at+jwt",
+            PARTNER_ISSUER,
+            json!({"scp": "partner.read"}),
+        );
+        let staff = auth.authenticate(&staff_token).await.expect("staff caller");
+        let partner = auth
+            .authenticate(&partner_token)
+            .await
+            .expect("partner caller");
+        assert_eq!(
+            (staff.issuer.as_str(), staff.client_id.as_str()),
+            (STAFF_ISSUER, "staff-client")
+        );
+        assert_eq!(staff.scopes, ["records.read"]);
+        assert_eq!(&*staff.scope_claim, "scope");
+        assert_eq!(
+            (partner.issuer.as_str(), partner.client_id.as_str()),
+            (PARTNER_ISSUER, "partner-client")
+        );
+        assert_eq!(partner.scopes, ["partner.read"]);
+        assert_eq!(&*partner.scope_claim, "scp");
+    }
+
+    #[tokio::test]
+    async fn a_jwt_typed_token_is_admitted_when_the_issuer_states_it() {
+        use serde_json::json;
+        let (auth, staff, _) = issuer_fixture(json!({"accessTokenType": "JWT"}), false).await;
+        let token = issuer_token(&staff, "JWT", STAFF_ISSUER, json!({}));
+        assert!(auth.authenticate(&token).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_id_token_is_refused_whether_or_not_jwt_is_admitted() {
+        use serde_json::json;
+        for (typ, config) in [
+            ("JWT", json!({})),
+            ("JWT", json!({"accessTokenType": "JWT"})),
+        ] {
+            let (auth, staff, _) = issuer_fixture(config, false).await;
+            let token = issuer_token(&staff, typ, STAFF_ISSUER, json!({"nonce": "sample"}));
+            assert_eq!(
+                auth.authenticate(&token)
+                    .await
+                    .err()
+                    .map(CallerRefusal::failed_check),
+                Some(FailedCheck::TokenType),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declared_client_kind_admits_a_token_without_a_kind() {
+        use serde_json::json;
+        let (auth, staff, _) = issuer_fixture(
+            json!({"clientActorKinds": {"staff-client": "service"}}),
+            false,
+        )
+        .await;
+        let token = issuer_token(&staff, "at+jwt", STAFF_ISSUER, json!({"scope": "openid"}));
+        assert!(auth.authenticate(&token).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_token_kind_that_contradicts_the_declared_kind_is_refused() {
+        use serde_json::json;
+        let (auth, staff, _) = issuer_fixture(json!({"actorKind": "service"}), false).await;
+        let token = issuer_token(
+            &staff,
+            "at+jwt",
+            STAFF_ISSUER,
+            json!({"registry_actor_kind": "human"}),
+        );
+        assert_eq!(
+            auth.authenticate(&token)
+                .await
+                .err()
+                .map(CallerRefusal::failed_check),
+            Some(FailedCheck::ActorKind),
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_client_is_refused() {
+        use serde_json::json;
+        let (auth, staff, _) = issuer_fixture(json!({}), true).await;
+        let token = issuer_token(
+            &staff,
+            "at+jwt",
+            STAFF_ISSUER,
+            json!({"client_id": "unknown"}),
+        );
+        assert_eq!(
+            auth.authenticate(&token)
+                .await
+                .err()
+                .map(CallerRefusal::failed_check),
+            Some(FailedCheck::TokenClient),
+        );
+    }
+
+    #[tokio::test]
+    async fn an_identity_only_token_is_refused_without_a_declared_kind() {
+        use serde_json::json;
+        let (auth, staff, _) = issuer_fixture(json!({}), false).await;
+        let token = issuer_token(
+            &staff,
+            "at+jwt",
+            STAFF_ISSUER,
+            json!({
+                "scope": "openid profile email address phone offline_access"
+            }),
+        );
+        assert_eq!(
+            auth.authenticate(&token)
+                .await
+                .err()
+                .map(CallerRefusal::failed_check),
+            Some(FailedCheck::ActorKind),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_client_listed_only_by_the_other_issuer_is_refused() {
+        use serde_json::json;
+        let (auth, _, partner) = issuer_fixture(json!({}), true).await;
+        let token = issuer_token(
+            &partner,
+            "at+jwt",
+            PARTNER_ISSUER,
+            json!({
+                "client_id": "staff-client", "scp": "payments:collections"
+            }),
+        );
+        assert_eq!(
+            auth.authenticate(&token)
+                .await
+                .err()
+                .map(CallerRefusal::failed_check),
+            Some(FailedCheck::TokenClient),
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exchanged_token_from_either_issuer_is_refused() {
+        use serde_json::json;
+        let (auth, staff, partner) = issuer_fixture(json!({}), true).await;
+        for (key, issuer) in [(&staff, STAFF_ISSUER), (&partner, PARTNER_ISSUER)] {
+            let token = issuer_token(
+                key,
+                "at+jwt",
+                issuer,
+                json!({
+                    (ASSERTION_ISSUER_CLAIM): "https://assertion.example.test",
+                    "scp": "records.read"
+                }),
+            );
+            assert_eq!(
+                auth.authenticate(&token)
+                    .await
+                    .err()
+                    .map(CallerRefusal::failed_check),
+                Some(FailedCheck::TokenAssertionIssuer),
+            );
+        }
+    }
+
+    const STARTUP_PREFIX: &str = "\
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: callers
+endpoints: []
+listener: {bind: '127.0.0.1:8080'}
+database: {runtimeUrlRef: 'secret:env/DB', migrationUrlRef: 'secret:env/DB'}
+allowedPrivateCidrs: ['10.0.0.0/8']
+audit: {retentionDays: 90}
+";
+
+    fn startup_refusal(oidc: &str) -> String {
+        let directory = tempfile::tempdir().expect("runtime directory");
+        let file = directory.path().join("runtime.yaml");
+        std::fs::write(&file, format!("{STARTUP_PREFIX}{oidc}")).expect("runtime file");
+        let declared = registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Flag,
+        };
+        match load_serve_configuration(&file, None, declared) {
+            Err(ServeError::Configuration(message)) => message,
+            _ => panic!("expected configuration refusal"),
+        }
+    }
+
+    #[test]
+    fn two_issuers_cannot_list_the_same_client_at_startup() {
+        let message = startup_refusal(
+            "oidc:\n  issuers:\n    staff: {issuer: 'https://staff.example.test', audience: api, allowedClients: [shared-client]}\n    partner: {issuer: 'https://partner.example.test', audience: api, allowedClients: [shared-client]}\n",
+        );
+        assert!(
+            message.contains("platform.oidc.client-in-two-issuers"),
+            "{message}"
+        );
+        assert!(
+            message.contains("/oidc/issuers/staff/allowedClients/0"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn test_issuer_key_source_requires_development_at_startup() {
+        let oidc = "oidc:\n  issuers:\n    staff: {issuer: 'https://staff.example.test', audience: api, allowedClients: [staff-client], jwksSource: {type: test-issuer, documentRef: 'secret:env/TEST_JWKS'}}\n";
+        let message = startup_refusal(oidc);
+        assert!(
+            message.contains("platform.posture.test-issuer"),
+            "{message}"
+        );
+        assert!(
+            message.contains("/oidc/issuers/staff/jwksSource"),
+            "{message}"
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("runtime.yaml");
+        std::fs::write(&file, format!("{STARTUP_PREFIX}{oidc}")).unwrap();
+        let declared = registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        };
+        assert!(load_serve_configuration(&file, None, declared).is_ok());
+    }
+
+    #[tokio::test]
+    async fn journal_caller_reference_keeps_the_single_issuer_subject() {
+        let (auth, staff, _) = issuer_fixture(serde_json::json!({}), false).await;
+        let token = issuer_token(&staff, "at+jwt", STAFF_ISSUER, serde_json::json!({}));
+        let caller = auth.authenticate(&token).await.unwrap();
+        assert_eq!(auth.journal_reference(&caller), "subject");
+    }
+
+    #[tokio::test]
+    async fn journal_caller_references_depend_on_issuer_urls_instead_of_entry_ids() {
+        use serde_json::json;
+
+        let (auth, staff, partner) = issuer_fixture(json!({}), true).await;
+        let staff_token = issuer_token(&staff, "at+jwt", STAFF_ISSUER, json!({}));
+        let partner_token = issuer_token(
+            &partner,
+            "at+jwt",
+            PARTNER_ISSUER,
+            json!({"scp": "records.read"}),
+        );
+        async fn references(auth: &Authenticator, first: &str, second: &str) -> [String; 2] {
+            [
+                auth.journal_reference(&auth.authenticate(first).await.unwrap()),
+                auth.journal_reference(&auth.authenticate(second).await.unwrap()),
+            ]
+        }
+        let original = references(&auth, &staff_token, &partner_token).await;
+        assert_ne!(original[0], original[1]);
+
+        let renamed =
+            issuer_fixture_with_ids(json!({}), true, ["alpha", "zulu"], [&staff, &partner]).await;
+        assert_eq!(
+            references(&renamed, &staff_token, &partner_token).await,
+            original
+        );
+    }
+
+    #[test]
+    fn two_issuers_with_the_same_iss_refuse_at_startup() {
+        let message = startup_refusal(
+            "oidc:\n  issuers:\n    staff: {issuer: 'https://staff.example.test', audience: api, allowedClients: [staff-client]}\n    partner: {issuer: 'https://staff.example.test', audience: api, allowedClients: [partner-client]}\n",
+        );
+        assert!(
+            message.contains("platform.oidc.duplicate-issuer"),
+            "{message}"
+        );
+        assert!(message.contains("/oidc/issuers/staff/issuer"), "{message}");
+    }
+
+    #[test]
+    fn issuer_entries_with_different_audiences_are_refused_at_startup() {
+        let message = startup_refusal(
+            "oidc:\n  issuers:\n    staff: {issuer: 'https://staff.example.test', audience: staff-api, allowedClients: [staff-client]}\n    partner: {issuer: 'https://partner.example.test', audience: partner-api, allowedClients: [partner-client]}\n",
+        );
+        assert!(
+            message.contains("platform.oidc.audiences-differ"),
+            "{message}"
+        );
+        assert!(
+            message.contains("published effective contract"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn moved_oidc_members_name_their_place_in_the_issuer_entry() {
+        for (key, value) in [
+            ("issuer", "https://legacy.example.test"),
+            ("audience", "legacy-api"),
+            ("jwksSource", "{type: discovery}"),
+            ("allowInsecureHttp", "false"),
+        ] {
+            let message = startup_refusal(&format!("oidc:\n  {key}: {value}\n"));
+            assert!(message.contains(&format!("/oidc/{key}")), "{message}");
+            assert!(
+                message.contains("Declare it under oidc.issuers.ISSUER_ID."),
+                "{message}"
+            );
+        }
+        let message = startup_refusal("allowedClients: [legacy]\n");
+        assert!(message.contains("/allowedClients"), "{message}");
+        assert!(
+            message.contains("Declare it under oidc.issuers.ISSUER_ID.allowedClients."),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn unrestricted_clients_is_refused_at_the_issuer_entry() {
+        let message = startup_refusal(
+            "oidc:\n  issuers:\n    staff: {issuer: 'https://staff.example.test', audience: api, allowedClients: unrestricted}\n",
+        );
+        assert!(
+            message.contains("/oidc/issuers/staff/allowedClients"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_jwt_typed_token_is_refused_by_default_and_the_log_names_the_setting() {
+        use serde_json::json;
+        let (auth, staff, _) = issuer_fixture(json!({}), false).await;
+        let token = issuer_token(&staff, "JWT", STAFF_ISSUER, json!({}));
+        let refusal = auth
+            .authenticate(&token)
+            .await
+            .err()
+            .expect("token refused");
+        assert_eq!(refusal.failed_check(), FailedCheck::TokenType);
+        let recorder = registry_platform_authcommon::RefusalRecorder::new("adapter").unwrap();
+        let log = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(log.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            registry_platform_authcommon::record_refusal!(recorder, refusal.note());
+        });
+        let line = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(line.contains("accessTokenType"), "{line}");
+        assert!(!line.contains(&token), "{line}");
+    }
+
+    #[tokio::test]
+    async fn a_token_without_a_kind_authenticates_as_unspecified() {
+        use serde_json::json;
+        let (auth, staff, _) = issuer_fixture(json!({}), false).await;
+        let token = issuer_token(&staff, "at+jwt", STAFF_ISSUER, json!({}));
+        assert!(auth.authenticate(&token).await.is_ok());
+        assert_eq!(
+            auth.issuers.verify(&token).await.expect("verified").kind,
+            registry_platform_oidc::CallerKind::Unspecified,
+        );
+    }
+
     fn static_key_runtime() -> AdapterRuntimeConfig {
-        serde_json::from_value(serde_json::json!({
+        test_runtime(serde_json::json!({
             "id": "static-key-set",
             "endpoints": [{"endpoint": "tracker", "baseUrl": "https://tracker.example.invalid"}],
             "listener": {"bind": "127.0.0.1:8080"},
@@ -1518,16 +2093,15 @@ mod tests {
                 "runtimeUrlRef": "secret:file/database-runtime",
                 "migrationUrlRef": "secret:file/database-migration"
             },
-            "oidc": {
+            "oidc": {"issuers": {"primary": {
                 "issuer": "https://issuer.example.test",
                 "audience": "registry-adapter-test",
-                "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-keys.json"}
-            },
-            "allowedClients": ["coordinator"],
+                "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-keys.json"},
+                "allowedClients": ["coordinator"]
+            }}},
             "allowedPrivateCidrs": ["10.0.0.0/8"],
             "audit": {"retentionDays": 90}
         }))
-        .expect("the runtime configuration parses")
     }
 
     async fn authenticator_over(keys: &serde_json::Value) -> Result<Authenticator, ServeError> {

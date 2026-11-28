@@ -2016,25 +2016,33 @@ mod tests {
             serde_json::from_str::<AdapterEndpointBindings>(job_json).is_err(),
             "a facade member refuses a job bindings document"
         );
-        let facade_json = r#"{
-                "id": "case-deployment",
-                "endpoints": [],
-                "allowedPrivateCidrs": ["10.0.0.0/8"],
-                "listener": { "bind": "127.0.0.1:8080" },
-                "database": {
-                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
-                    "migrationUrlRef": "secret:env/DB_MIGRATION"
-                },
-                "oidc": { "issuer": "https://issuer.example.invalid", "audience": "case-api" },
-                "allowedClients": ["case-portal"],
-                "audit": { "retentionDays": 90 },
-                "sources": { "file": {} }
-            }"#;
-        assert!(
-            serde_json::from_str::<registry_adapter_core::AdapterRuntimeConfig>(facade_json)
-                .is_err(),
-            "the sources block refuses a facade document"
+        let facade_yaml = r#"apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: case-deployment
+endpoints: []
+allowedPrivateCidrs: ['10.0.0.0/8']
+listener: {bind: '127.0.0.1:8080'}
+database:
+  runtimeUrlRef: secret:env/DB_RUNTIME
+  migrationUrlRef: secret:env/DB_MIGRATION
+oidc:
+  issuers:
+    primary: {issuer: 'https://issuer.example.invalid', audience: case-api, allowedClients: [case-portal]}
+audit: {retentionDays: 90}
+sources: {file: {}}
+"#;
+        let loader = registry_platform_config::RuntimeConfigLoader::new(
+            registry_platform_config::RuntimeEnvelope {
+                api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
+                kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
+            },
+            PRODUCTION,
         );
+        let refused = loader
+            .parse_str::<registry_adapter_core::AdapterRuntimeConfig>(facade_yaml, |_| None)
+            .expect_err("the sources block refuses a facade document");
+        assert_eq!(refused.diagnostics()[0].code, "config.unknown-key");
+        assert_eq!(refused.diagnostics()[0].path, "/sources");
     }
 
     /// The postgres source's CA bundle member is spelled `caBundleFile`,

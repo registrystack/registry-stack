@@ -2530,6 +2530,7 @@ struct SchemaFingerprintReport {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApplySuccessReport {
+    diagnostics: Vec<ToolDiagnostic>,
     ok: bool,
     command: &'static str,
     activation: ApplyActivation,
@@ -2541,6 +2542,7 @@ struct ApplySuccessReport {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanSuccessReport {
+    diagnostics: Vec<ToolDiagnostic>,
     ok: bool,
     command: &'static str,
     /// Whether `bregctl apply` would record an activation.
@@ -2570,7 +2572,7 @@ enum PlanActivation {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StatusSuccessReport {
+struct StatusReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     ok: bool,
@@ -3556,7 +3558,7 @@ where
         Command::Provision(args) => return provision(posture, &args, format),
         Command::Status(args) => {
             return match status(posture, &args) {
-                Ok(report) => write_status_success(&report, format, stdout, stderr),
+                Ok(report) => write_status(&report, format, stdout, stderr),
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
         }
@@ -7153,6 +7155,7 @@ fn apply(posture: DeclaredPosture, args: &ApplyArgs) -> Result<ApplySuccessRepor
     )
     .map_err(|error| lifecycle_refusal("apply", error))?;
     Ok(ApplySuccessReport {
+        diagnostics: runtime_posture_findings(outcome.diagnostics),
         ok: true,
         command: "apply",
         activation: match outcome.activation {
@@ -7172,8 +7175,11 @@ fn apply(posture: DeclaredPosture, args: &ApplyArgs) -> Result<ApplySuccessRepor
 fn provision(posture: DeclaredPosture, args: &ProvisionCommand, format: OutputFormat) -> ExitCode {
     let shared = match format {
         OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
-        OutputFormat::Json | OutputFormat::JsonWithPosture(_) => {
-            registry_platform_provision::cli::OutputFormat::Json
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+        OutputFormat::JsonWithPosture(declared) => {
+            registry_platform_provision::cli::OutputFormat::JsonWithReport(Box::new(
+                move |report| report.with_posture(declared),
+            ))
         }
     };
     registry_platform_provision::run_provision(
@@ -7197,6 +7203,7 @@ fn plan(posture: DeclaredPosture, args: &PlanArgs) -> Result<PlanSuccessReport, 
     )
     .map_err(|error| lifecycle_refusal("plan", error))?;
     Ok(PlanSuccessReport {
+        diagnostics: runtime_posture_findings(outcome.diagnostics),
         ok: true,
         command: "plan",
         pending: outcome.plan.activation.is_pending(),
@@ -7218,22 +7225,20 @@ fn plan(posture: DeclaredPosture, args: &PlanArgs) -> Result<PlanSuccessReport, 
     })
 }
 
-fn status(
-    posture: DeclaredPosture,
-    args: &StatusArgs,
-) -> Result<StatusSuccessReport, FailureReport> {
+fn status(posture: DeclaredPosture, args: &StatusArgs) -> Result<StatusReport, FailureReport> {
     let status = apply_lifecycle::status(posture, &args.runtime_config)
         .map_err(status_lifecycle_failure)?
         .ok_or_else(|| status_lifecycle_failure(ApplyLifecycleError::Uninitialized))?;
     let active = status.active_entry().cloned();
-    let diagnostics = active
-        .as_ref()
-        .filter(|entry| entry.posture != posture.posture)
-        .map(|entry| activation_posture_finding(entry.posture))
-        .into_iter()
-        .collect();
-    Ok(StatusSuccessReport {
-        ok: true,
+    let diagnostics = if status.posture == posture.posture {
+        Vec::new()
+    } else {
+        let mut finding = activation_posture_finding(status.posture);
+        finding.severity = registry_platform_yaml::Severity::Error;
+        vec![finding]
+    };
+    Ok(StatusReport {
+        ok: diagnostics.is_empty(),
         command: "status",
         diagnostics,
         package_id: status.identity.package_id,
@@ -14808,30 +14813,30 @@ fn write_apply_success(
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
-        render_report(
-            match report.activation {
-                ApplyActivation::Initial => "Activated the first package on this registry.",
-                ApplyActivation::Successor => "Activated the package over its predecessor.",
-                ApplyActivation::RoleChange => {
-                    "Activated the active package again with the configured database roles."
+        let mut lines = report::Lines::new();
+        lines.lead(match report.activation {
+            ApplyActivation::Initial => "Activated the first package on this registry.",
+            ApplyActivation::Successor => "Activated the package over its predecessor.",
+            ApplyActivation::RoleChange => {
+                "Activated the active package again with the configured database roles."
+            }
+        });
+        lines.pairs(&[
+            (
+                "activation",
+                match report.activation {
+                    ApplyActivation::Initial => "initial",
+                    ApplyActivation::Successor => "successor",
+                    ApplyActivation::RoleChange => "role-change",
                 }
-            },
-            &[
-                (
-                    "activation",
-                    match report.activation {
-                        ApplyActivation::Initial => "initial",
-                        ApplyActivation::Successor => "successor",
-                        ApplyActivation::RoleChange => "role-change",
-                    }
-                    .to_owned(),
-                ),
-                ("package digest", report.package_digest.clone()),
-                ("schema fingerprint", report.schema_fingerprint.clone()),
-                ("activation id", report.activation_id.clone()),
-            ],
-            stdout,
-        )
+                .to_owned(),
+            ),
+            ("package digest", report.package_digest.clone()),
+            ("schema fingerprint", report.schema_fingerprint.clone()),
+            ("activation id", report.activation_id.clone()),
+        ]);
+        lines.findings(&report_findings(&report.diagnostics));
+        stdout.write_all(lines.finish().as_bytes())
     };
     write_result(result, stderr)
 }
@@ -14903,6 +14908,7 @@ fn write_plan_success(
                 lines.item_at(1, binding);
             }
         }
+        lines.findings(&report_findings(&report.diagnostics));
         stdout.write_all(lines.finish().as_bytes())
     };
     write_result(result, stderr)
@@ -14998,8 +15004,8 @@ fn activation_posture_finding(recorded: Posture) -> registry_platform_yaml::Diag
     )
 }
 
-fn write_status_success(
-    report: &StatusSuccessReport,
+fn write_status(
+    report: &StatusReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -15074,7 +15080,11 @@ fn write_status_success(
             }
         })
     };
-    write_result(result, stderr)
+    if result.is_ok() && !report.ok {
+        ExitCode::from(DOMAIN_REFUSAL_EXIT)
+    } else {
+        write_result(result, stderr)
+    }
 }
 
 fn write_result(result: io::Result<()>, stderr: &mut dyn Write) -> ExitCode {

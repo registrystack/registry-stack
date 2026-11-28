@@ -919,7 +919,7 @@ pub(crate) fn load_verified_startup_config(
                     };
                     let mut diagnostic = Diagnostic::error(
                         "startup.package.refused",
-                        "/package/root",
+                        if selected_package.is_some() { "arguments" } else { "/package/root" },
                         message,
                         "Verify the selected package directory and deploy the complete reviewed package.",
                     );
@@ -5122,17 +5122,51 @@ mod tests {
         });
 
         let runtime = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml");
+        let secrets = tempfile::tempdir().unwrap();
+        let token_file = secrets.path().join("review-token");
+        std::fs::write(&token_file, "synthetic-review-token").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let runtime = runtime.replace("/var/lib/breg/secrets", secrets.path().to_str().unwrap());
+        let runtime = format!(
+            "{runtime}
+reviewAuthorities:
+  test-review:
+    endpoint: {endpoint}
+    profile: review-producer
+    producerId: synthetic-producer
+    recoveryDays: 7
+    tokenRef: secret:file/review-token
+"
+        );
+        let project = crate::contract::parse_project_yaml(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap();
+        let compiled = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
         let token = BearerToken::new("synthetic-review-token").unwrap();
         for posture in [Posture::Production, Posture::Development] {
             let config = super::parse_runtime_config(
-                runtime,
+                &runtime,
                 DeclaredPosture {
                     posture,
                     source: PostureSource::Flag,
                 },
             )
             .unwrap();
-            let client = config.review_client(endpoint.parse().unwrap()).unwrap();
+            let registry = config
+                .activate_review_authorities(&compiled)
+                .unwrap()
+                .unwrap();
+            let client = registry.client_for_test("test-review");
             let result = client
                 .request(
                     ReviewAuth::new(&token, "review-producer"),

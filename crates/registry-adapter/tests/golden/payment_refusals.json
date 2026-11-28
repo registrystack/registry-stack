@@ -11,7 +11,7 @@
     "retry-after": null,
     "status": 401,
     "traceparent-present": true,
-    "www-authenticate": null,
+    "www-authenticate": "Bearer",
     "x-content-type-options": "nosniff"
   },
   "client-not-allowed": {
@@ -41,7 +41,7 @@
     "retry-after": null,
     "status": 401,
     "traceparent-present": true,
-    "www-authenticate": null,
+    "www-authenticate": "Bearer",
     "x-content-type-options": "nosniff"
   },
   "no-authorization": {
@@ -56,7 +56,7 @@
     "retry-after": null,
     "status": 401,
     "traceparent-present": true,
-    "www-authenticate": null,
+    "www-authenticate": "Bearer",
     "x-content-type-options": "nosniff"
   },
   "not-a-compact-token": {
@@ -71,7 +71,7 @@
     "retry-after": null,
     "status": 401,
     "traceparent-present": true,
-    "www-authenticate": null,
+    "www-authenticate": "Bearer",
     "x-content-type-options": "nosniff"
   },
   "scope-not-held": {
@@ -101,7 +101,7 @@
     "retry-after": null,
     "status": 401,
     "traceparent-present": true,
-    "www-authenticate": null,
+    "www-authenticate": "Bearer",
     "x-content-type-options": "nosniff"
   },
   "unknown-attempt": {
@@ -161,7 +161,7 @@
     "retry-after": null,
     "status": 401,
     "traceparent-present": true,
-    "www-authenticate": null,
+    "www-authenticate": "Bearer",
     "x-content-type-options": "nosniff"
   },
   "unlisted-client": {
@@ -176,7 +176,7 @@
     "retry-after": null,
     "status": 401,
     "traceparent-present": true,
-    "www-authenticate": null,
+    "www-authenticate": "Bearer",
     "x-content-type-options": "nosniff"
   }
 }

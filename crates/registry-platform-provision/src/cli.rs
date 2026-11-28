@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 
+use registry_cli_report::Report;
 use registry_platform_yaml::Diagnostic;
 use serde::Serialize;
 use tokio_postgres::config::Host;
@@ -29,13 +30,17 @@ pub const REPORT_API_VERSION: &str =
     "id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1";
 pub const REPORT_KIND: &str = "PlatformCliDatabaseProvisionReport";
 
+type ReportDecorator = dyn for<'a> Fn(Report<'a>) -> Report<'a> + Send;
+
 /// How the command writes its result. A tool maps its own global `--format`
 /// (`human | json`) onto this.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Default)]
 pub enum OutputFormat {
     #[default]
     Human,
     Json,
+    /// JSON with additional members supplied by the tool through the shared report.
+    JsonWithReport(Box<ReportDecorator>),
 }
 
 /// The flags of `<tool> provision`. The output format is the tool's own global
@@ -69,8 +74,7 @@ pub struct ProvisionArgs {
     pub posture: Option<String>,
 }
 
-/// What a product's loader hands the runner. A loader refuses with one
-/// diagnostic, boxed because the diagnostic is large.
+/// What a product's loader hands the runner after validating its runtime file.
 pub struct ProvisionInput {
     pub product: ProductDatabase,
     pub migration_url: Zeroizing<String>,
@@ -635,8 +639,12 @@ impl Output<'_> {
         let Ok(value) = serde_json::to_value(report) else {
             return false;
         };
-        let Ok(envelope) = registry_cli_report::Report::new(&value, self.version) else {
+        let Ok(envelope) = Report::new(&value, self.version) else {
             return false;
+        };
+        let envelope = match &self.format {
+            OutputFormat::JsonWithReport(decorate) => decorate(envelope),
+            _ => envelope,
         };
         serde_json::to_writer_pretty(&mut *self.stdout, &envelope).is_ok()
             && writeln!(self.stdout).is_ok()
@@ -645,7 +653,7 @@ impl Output<'_> {
     /// A refusal: the JSON report on stdout, or the diagnostics on stderr.
     fn refusal(&mut self, report: &PlatformCliDatabaseProvisionReport) -> u8 {
         let written = match self.format {
-            OutputFormat::Json => self.json(report),
+            OutputFormat::Json | OutputFormat::JsonWithReport(_) => self.json(report),
             OutputFormat::Human => {
                 // A run that stopped part-way shows what it had already done.
                 let ran = report
@@ -683,7 +691,7 @@ fn run_with(
     version: &'static str,
     args: &ProvisionArgs,
     format: OutputFormat,
-    load: impl FnOnce(&Path) -> Result<ProvisionInput, Box<Diagnostic>>,
+    load: impl FnOnce(&Path) -> Result<ProvisionInput, Vec<Diagnostic>>,
     backend: Backend<'_>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -717,14 +725,8 @@ fn run_with(
 
     let input = match load(&args.runtime_config) {
         Ok(input) => input,
-        Err(diagnostic) => {
-            refused(
-                &mut report,
-                Refusal {
-                    status: ReportStatus::DomainRefusal,
-                    diagnostic,
-                },
-            );
+        Err(diagnostics) => {
+            report.diagnostics = diagnostics;
             return output.refusal(&report);
         }
     };
@@ -783,12 +785,12 @@ fn run_with(
     if args.print_sql {
         report.ok = true;
         report.status = ReportStatus::Complete;
-        let written = match format {
+        let written = match output.format {
             OutputFormat::Human => output
                 .stdout
                 .write_all(render_script(&plan).as_bytes())
                 .is_ok(),
-            OutputFormat::Json => output.json(&report),
+            OutputFormat::Json | OutputFormat::JsonWithReport(_) => output.json(&report),
         };
         return output.write_failed(written);
     }
@@ -842,8 +844,8 @@ fn run_with(
             report.ok = true;
             report.status = ReportStatus::Complete;
             report.statements = report_statements(&plan, &outcome.statements);
-            let written = match format {
-                OutputFormat::Json => output.json(&report),
+            let written = match output.format {
+                OutputFormat::Json | OutputFormat::JsonWithReport(_) => output.json(&report),
                 OutputFormat::Human => write_summary(output.stdout, &report, outcome.single_role),
             };
             output.write_failed(written)
@@ -914,7 +916,7 @@ pub fn run_provision(
     version: &'static str,
     args: &ProvisionArgs,
     format: OutputFormat,
-    load: impl FnOnce(&Path) -> Result<ProvisionInput, Box<Diagnostic>>,
+    load: impl FnOnce(&Path) -> Result<ProvisionInput, Vec<Diagnostic>>,
 ) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1101,7 +1103,7 @@ mod tests {
     fn execute_run(
         arguments: &[&str],
         admin_file: Option<&str>,
-        input: Result<ProvisionInput, Box<Diagnostic>>,
+        input: Result<ProvisionInput, Vec<Diagnostic>>,
         backend: Backend<'_>,
     ) -> Run {
         let directory = tempfile::tempdir().expect("scratch directory");
@@ -2238,29 +2240,40 @@ mod tests {
     }
 
     #[test]
-    fn the_loader_diagnostic_is_reported_as_given() {
-        let diagnostic = Diagnostic::error(
-            "platform.runtime-config.unsafe-file",
-            "",
-            "the runtime file is unsafe",
-            "Fix the file.",
-        );
-        let run = execute_run(
-            &["--print-sql", "--format", "json"],
-            None,
-            Err(Box::new(diagnostic)),
-            &must_not_run,
-        );
-        assert_eq!(run.exit, 1);
-        let report = run.json();
-        assert_eq!(report["status"], "domain-refusal");
-        assert_eq!(report["executed"], false);
-        assert_eq!(report["statements"], serde_json::json!([]));
-        assert!(report.get("product").is_none());
-        assert_eq!(
-            report["diagnostics"][0]["code"],
-            "platform.runtime-config.unsafe-file"
-        );
+    fn all_loader_diagnostics_reach_both_report_formats() {
+        let diagnostics = [
+            ("platform.runtime-config.unsafe-file", "/first"),
+            ("platform.posture.generated-audit-key", "/second"),
+        ];
+        for format in ["human", "json"] {
+            let findings = diagnostics.map(|(code, path)| {
+                Diagnostic::error(code, path, "The runtime file was refused.", "Fix the file.")
+            });
+            let run = execute_run(
+                &["--print-sql", "--format", format],
+                None,
+                Err(Vec::from(findings)),
+                &must_not_run,
+            );
+            assert_eq!(run.exit, 1);
+            if format == "json" {
+                let report = run.json();
+                assert_eq!(report["status"], "domain-refusal");
+                assert_eq!(report["executed"], false);
+                assert_eq!(report["statements"], serde_json::json!([]));
+                assert!(report.get("product").is_none());
+                for (index, (code, path)) in diagnostics.into_iter().enumerate() {
+                    assert_eq!(report["diagnostics"][index]["code"], code);
+                    assert_eq!(report["diagnostics"][index]["path"], path);
+                }
+            } else {
+                assert!(run.stdout.is_empty());
+                for (code, path) in diagnostics {
+                    assert!(run.stderr.contains(code), "{}", run.stderr);
+                    assert!(run.stderr.contains(path), "{}", run.stderr);
+                }
+            }
+        }
     }
 
     #[test]

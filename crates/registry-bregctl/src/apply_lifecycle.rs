@@ -69,6 +69,7 @@ pub(crate) enum ApplyLifecycleActivation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApplyLifecycleOutcome {
+    pub diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     pub package_digest: String,
     pub schema_fingerprint: String,
     pub activation_id: String,
@@ -79,6 +80,7 @@ pub(crate) struct ApplyLifecycleOutcome {
 /// after the checks it runs passed and were rolled back.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlanLifecycleOutcome {
+    pub diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     pub package_digest: String,
     pub registry_revision: String,
     pub active_package_digest: Option<String>,
@@ -467,6 +469,7 @@ fn execute(
             provider, secrets,
         ));
     }
+    let diagnostics = config.posture_report().diagnostics(request.runtime_config);
     if mode == LifecycleMode::Plan {
         let plan = runtime
             .block_on(plan_verified_package(apply))
@@ -475,6 +478,7 @@ fn execute(
             .migration_summary()
             .map_err(ApplyLifecycleError::TargetPackage)?;
         return Ok(Executed::Planned(PlanLifecycleOutcome {
+            diagnostics,
             package_digest: target.package_digest().to_owned(),
             registry_revision: target.registry().revision().to_owned(),
             active_package_digest: current_identity.map(|current| current.package_digest),
@@ -486,6 +490,7 @@ fn execute(
         .block_on(apply_verified_package(apply))
         .map_err(ApplyLifecycleError::Apply)?;
     Ok(Executed::Applied(ApplyLifecycleOutcome {
+        diagnostics,
         package_digest: activated.package_digest,
         schema_fingerprint: activated.schema_fingerprint,
         activation_id: activated.activation_id,

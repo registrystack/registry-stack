@@ -6924,13 +6924,16 @@ pub fn check_endpoint_bindings(
 #[must_use]
 pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
     let mut findings = check_endpoint_bindings(workspace, &runtime.endpoint_bindings());
-    if let Err(error) = runtime.oidc.check("oidc") {
-        findings.push(finding(
-            CheckCode::RuntimeInvalidOrigin,
-            "/oidc",
-            &format!("the OIDC issuer block was refused: {error}"),
-            "Declare an https issuer without credentials, query, or fragment, a bounded audience, and a key source the platform accepts; plain http beyond loopback needs allowInsecureHttp: true.",
-        ));
+    for (id, entry) in runtime.oidc.set.iter() {
+        let field = format!("oidc.issuers.{id}");
+        if let Err(error) = entry.core.provider.check(&field) {
+            findings.push(finding(
+                CheckCode::RuntimeInvalidOrigin,
+                &format!("/{}", error.field().replace('.', "/")),
+                &format!("the OIDC issuer block was refused: {error}"),
+                "Declare an https issuer without credentials, query, or fragment, a bounded audience, and a key source the platform accepts.",
+            ));
+        }
     }
     findings
 }
@@ -13824,12 +13827,7 @@ mod tests {
                 }"#,
             )
             .expect("database"),
-            oidc: serde_json::from_str(
-                r#"{ "issuer": "https://issuer.example.invalid", "audience": "case-api" }"#,
-            )
-            .expect("oidc"),
-            allowed_clients: UniqueList::new(vec![ExternalId::new("case-portal").expect("id")])
-                .expect("unique"),
+            oidc: crate::runtime::test_oidc("https://issuer.example.invalid"),
             audit: AuditRetention {
                 retention_days: BoundedU32::<1, 3_650>::new(90).expect("retention"),
             },
@@ -13838,6 +13836,40 @@ mod tests {
             cursor_ttl_seconds: None,
             idempotency: None,
         }
+    }
+
+    #[test]
+    fn a_second_issuer_error_is_located_at_its_issuer_member() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![], vec![]);
+        let project = project_builder(&pack);
+        let mut runtime = runtime_builder(vec![]);
+        let entry = |issuer: &str, client: &str| {
+            serde_json::json!({
+                "registry-platform-yaml/shared-block/oidc-issuer-core": {
+                    "registry-platform-yaml/shared-block/oidc-issuer": {
+                        "issuer": issuer, "audience": "case-api"
+                    },
+                    "allowedClients": [client]
+                }
+            })
+        };
+        runtime.oidc = serde_json::from_value(serde_json::json!({
+            "registry-platform-yaml/shared-block/oidc-issuers": {
+                "issuers": {
+                    "first": entry("https://first.example.invalid", "first-client"),
+                    "second": entry("https://second.example.invalid?query", "second-client")
+                }
+            }
+        }))
+        .unwrap();
+        let findings = check_runtime(&workspace(&profile, &pack, &project), &runtime);
+        let paths: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.code == CheckCode::RuntimeInvalidOrigin.code())
+            .map(|finding| finding.path.as_str())
+            .collect();
+        assert_eq!(paths, ["/oidc/issuers/second/issuer"]);
     }
 
     fn oauth_binding(base: &str) -> EndpointBinding {
@@ -14108,10 +14140,7 @@ mod tests {
             "http://issuer.example.invalid",
         ] {
             let mut runtime = runtime_builder(vec![oauth_binding("https://cases.example.invalid")]);
-            runtime.oidc = serde_json::from_str(&format!(
-                r#"{{ "issuer": "{issuer}", "audience": "case-api" }}"#
-            ))
-            .expect("oidc");
+            runtime.oidc = crate::runtime::test_oidc(issuer);
             let mut ws = workspace(&profile, &pack, &project);
             ws.runtime = Some(&runtime);
             assert_has(

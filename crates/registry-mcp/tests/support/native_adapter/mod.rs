@@ -711,13 +711,15 @@ database:
   migrationUrlRef: secret:env/TEST_DB_URL
   testOnlyPlaintext: true
 oidc:
-  issuer: {issuer}
-  audience: {ADAPTER_AUDIENCE}
-  allowInsecureHttp: true
-  jwksSource:
-    type: uri
-    uri: {jwks}
-allowedClients: [{MACHINE_CLIENT}]
+  issuers:
+    primary:
+      issuer: {issuer}
+      audience: {ADAPTER_AUDIENCE}
+      allowInsecureHttp: true
+      jwksSource:
+        type: uri
+        uri: {jwks}
+      allowedClients: [{MACHINE_CLIENT}]
 allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90

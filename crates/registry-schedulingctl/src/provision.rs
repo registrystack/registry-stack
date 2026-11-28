@@ -36,9 +36,12 @@ fn refused(code: &str, path: &str, message: String, action: &str) -> Box<Diagnos
 pub(crate) fn load(
     path: &Path,
     declared: registry_platform_config::DeclaredPosture,
-) -> Result<ProvisionInput, Box<Diagnostic>> {
+) -> Result<ProvisionInput, Vec<Diagnostic>> {
+    let refuse = |code: &str, path: &str, message: String, action: &str| {
+        vec![*refused(code, path, message, action)]
+    };
     let absolute = std::path::absolute(path).map_err(|_| {
-        refused(
+        refuse(
             "config.unresolvable",
             "arguments",
             "the --runtime-config path could not be resolved against the working directory"
@@ -48,11 +51,9 @@ pub(crate) fn load(
     })?;
     let config =
         RuntimeConfig::load(&absolute, declared).map_err(|error| {
-            match startup_report(&absolute, &error, declared)
-                .and_then(|report| report.diagnostics().first().cloned())
-            {
-                Some(diagnostic) => Box::new(diagnostic),
-                None => refused(
+            match startup_report(&absolute, &error, declared) {
+                Some(report) => report.into_diagnostics(),
+                None => refuse(
                     "config.refused",
                     "",
                     error.to_string(),
@@ -61,7 +62,7 @@ pub(crate) fn load(
             }
         })?;
     let secrets = config.secret_providers.resolver().map_err(|error| {
-        refused(
+        refuse(
             "config.refused",
             "/secretProviders",
             error.to_string(),
@@ -70,7 +71,7 @@ pub(crate) fn load(
     })?;
     let resolve = |member: &str, reference: &str| {
         secrets.resolve(reference).map_err(|error| {
-            refused(
+            refuse(
                 "config.refused",
                 &format!("/database/{member}"),
                 describe_secret_failure(&format!("database.{member}"), reference, &error),
@@ -83,7 +84,7 @@ pub(crate) fn load(
         std::str::from_utf8(secret.expose_secret())
             .map(|text| Zeroizing::new(text.trim().to_owned()))
             .map_err(|_| {
-                refused(
+                refuse(
                     "config.refused",
                     &format!("/database/{member}"),
                     format!("database.{member} is not UTF-8 text"),

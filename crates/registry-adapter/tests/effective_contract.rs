@@ -71,13 +71,15 @@ database:
   migrationUrlRef: secret:env/TEST_DB_URL
   testOnlyPlaintext: true
 oidc:
-  issuer: http://127.0.0.1:9
-  audience: registry-adapter-test
-  jwksSource:
-    type: static
-    documentRef: secret:env/TEST_JWKS
-allowedClients:
-  - synthetic-client
+  issuers:
+    primary:
+      issuer: http://127.0.0.1:9
+      audience: registry-adapter-test
+      jwksSource:
+        type: static
+        documentRef: secret:env/TEST_JWKS
+      allowedClients:
+      - synthetic-client
 allowedPrivateCidrs:
   - 192.168.0.0/16
 audit:
@@ -96,6 +98,15 @@ fn run_export(
 ) -> std::process::Output {
     let scratch = tempfile::tempdir().expect("scratch directory");
     let runtime = runtime_file(scratch.path());
+    run_export_with_runtime(project, profile, pack, &runtime)
+}
+
+fn run_export_with_runtime(
+    project: &std::path::Path,
+    profile: Option<&std::path::Path>,
+    pack: &std::path::Path,
+    runtime: &std::path::Path,
+) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_adapter"));
     command
         .arg("effective-contract")
@@ -510,4 +521,26 @@ fn schema_accepts_every_plain_string_version_the_cli_accepts() {
         validator.is_valid(&export),
         "the schema accepts every version value the CLI accepts"
     );
+}
+
+#[test]
+fn one_or_two_issuers_publish_the_same_effective_contract_audience() {
+    let root = repo_root();
+    let project = root.join("products/adapter/examples/dhis2-consultation");
+    let pack = root.join("products/adapter/packs/dhis2-tracker/pack.yaml");
+    let scratch = tempfile::tempdir().expect("scratch directory");
+    let file = runtime_file(scratch.path());
+    let published = |file: &std::path::Path| {
+        let result = run_export_with_runtime(&project, None, &pack, file);
+        assert!(result.status.success(), "{result:?}");
+        let contract: Value = serde_json::from_slice(&result.stdout).expect("contract JSON");
+        contract["contract"]["authentication"]["audience"].clone()
+    };
+    assert_eq!(published(&file), "registry-adapter-test");
+    let runtime = fs::read_to_string(&file).unwrap().replace(
+        "allowedPrivateCidrs:\n",
+        "    partner: {issuer: 'https://partner.example.test', audience: registry-adapter-test, allowedClients: [partner-client]}\nallowedPrivateCidrs:\n",
+    );
+    fs::write(&file, runtime).unwrap();
+    assert_eq!(published(&file), "registry-adapter-test");
 }

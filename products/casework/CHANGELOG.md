@@ -46,7 +46,8 @@
 - Production `caseworkctl provider add` refuses runtime check warnings,
   including `platform.runtime-config.check-incomplete`, with exit 1.
   A refusal for a staged runtime example names the destination in `source.file`.
-- The unrestricted OAuth client refusal points to `/authentication/oidc/allowedClients`.
+- The unrestricted OAuth client refusal points to the issuer entry's
+  `allowedClients`, `/authentication/oidc/issuers/ISSUER_ID/allowedClients`.
 - Casework's BReg context provider follows the deployment's peer policy.
   Development accepts marked development BReg responses, and production refuses them.
 - BREAKING: `allowedClients: unrestricted` requires development on every
