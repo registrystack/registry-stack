@@ -65,10 +65,12 @@ database:
   migrationUrlRef: secret:file/migration-database-url
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:documents
-    scopeClaim: scope
-    allowedClients: [civil-registry-app]
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:documents
+        scopeClaim: scope
+        allowedClients: [civil-registry-app]
 audit:
   destination: file
   path: {audit}

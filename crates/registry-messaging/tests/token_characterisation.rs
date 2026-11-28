@@ -10,9 +10,8 @@
 //! `MessagingAuthenticator::authenticate`. No database is involved.
 //!
 //! The authenticator reports a verifier refusal as one error. The stage of that
-//! refusal is read by running the same token through a second verifier built
-//! from the same configuration and keys, so the stage is the shared verifier's
-//! own label.
+//! refusal is read from the authenticator's own `verify`, so the stage is the
+//! shared verifier's own label.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

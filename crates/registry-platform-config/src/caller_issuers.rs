@@ -543,6 +543,52 @@ impl Finding {
     }
 }
 
+/// Findings as unpositioned errors.
+fn report(findings: Vec<Finding>) -> Vec<Diagnostic> {
+    findings
+        .into_iter()
+        .map(|finding| {
+            Diagnostic::error(
+                finding.code,
+                finding.pointer,
+                finding.message,
+                finding.action,
+            )
+        })
+        .collect()
+}
+
+/// Findings as errors positioned in `file`, skipping each one that compares a
+/// member holding an expression the check did not fill.
+fn report_file<T>(
+    findings: Vec<Finding>,
+    file: &RuntimeFileCheck<T>,
+    artifact: &str,
+) -> Vec<Diagnostic> {
+    findings
+        .into_iter()
+        .filter(|finding| {
+            !finding
+                .compares
+                .iter()
+                .any(|pointer| file.defers_within(pointer))
+        })
+        .map(|finding| {
+            let mut diagnostic = file.error_at(
+                artifact,
+                finding.code,
+                &finding.pointer,
+                finding.message,
+                finding.action,
+            );
+            if let Some((pointer, note)) = finding.related {
+                file.add_related_at(&mut diagnostic, &pointer, note);
+            }
+            diagnostic
+        })
+        .collect()
+}
+
 impl<E: CallerIssuerEntry> CallerIssuers<E> {
     /// Check the set and report every problem found. `field` is the JSON
     /// pointer of the `issuers` member, such as `/authentication/oidc/issuers`.
@@ -567,17 +613,7 @@ impl<E: CallerIssuerEntry> CallerIssuers<E> {
     /// `platform.oidc.actor-kind-for-unadmitted-client`.
     #[must_use]
     pub fn check(&self, field: &str) -> Vec<Diagnostic> {
-        self.findings(field)
-            .into_iter()
-            .map(|finding| {
-                Diagnostic::error(
-                    finding.code,
-                    finding.pointer,
-                    finding.message,
-                    finding.action,
-                )
-            })
-            .collect()
+        report(self.findings(field))
     }
 
     /// [`Self::check`] for an offline check of `file`, whose document kind
@@ -592,26 +628,59 @@ impl<E: CallerIssuerEntry> CallerIssuers<E> {
         file: &RuntimeFileCheck<T>,
         artifact: &str,
     ) -> Vec<Diagnostic> {
-        self.findings(field)
-            .into_iter()
-            .filter(|finding| {
-                !finding
-                    .compares
-                    .iter()
-                    .any(|pointer| file.defers_within(pointer))
-            })
-            .map(|finding| {
-                let mut diagnostic = file.error_at(
-                    artifact,
-                    finding.code,
-                    &finding.pointer,
-                    finding.message,
-                    finding.action,
-                );
-                if let Some((pointer, note)) = finding.related {
-                    file.add_related_at(&mut diagnostic, &pointer, note);
-                }
-                diagnostic
+        report_file(self.findings(field), file, artifact)
+    }
+
+    /// Check that every entry names the same audience, for a product setting
+    /// that checks every token against one audience. `needed_by` names that
+    /// setting as the file writes it, such as `taskGrantStatus`. Each entry
+    /// whose audience differs from the first entry's, in issuer id order, is
+    /// an error `platform.oidc.audiences-differ` at its `audience`, naming the
+    /// first entry. A product runs it only where it has such a setting. Once
+    /// it passes, any entry's audience is the set's audience.
+    #[must_use]
+    pub fn check_one_audience(&self, field: &str, needed_by: &str) -> Vec<Diagnostic> {
+        report(self.audience_findings(field, needed_by))
+    }
+
+    /// [`Self::check_one_audience`] for an offline check of `file`, in the
+    /// form of [`Self::check_file`]: positioned, with the first entry's
+    /// audience in `related`, and skipped where either audience holds an
+    /// expression the check did not fill.
+    #[must_use]
+    pub fn check_one_audience_file<T>(
+        &self,
+        field: &str,
+        needed_by: &str,
+        file: &RuntimeFileCheck<T>,
+        artifact: &str,
+    ) -> Vec<Diagnostic> {
+        report_file(self.audience_findings(field, needed_by), file, artifact)
+    }
+
+    fn audience_findings(&self, field: &str, needed_by: &str) -> Vec<Finding> {
+        let audience_of =
+            |id: &LocalId| format!("{field}/{}/audience", escape_pointer_segment(id.as_str()));
+        let mut entries = self.issuers.iter();
+        let Some((first_id, first)) = entries.next() else {
+            return Vec::new();
+        };
+        let first_audience = &first.core().provider.audience;
+        entries
+            .filter(|(_, entry)| &entry.core().provider.audience != first_audience)
+            .map(|(id, _)| {
+                Finding::new(
+                    "platform.oidc.audiences-differ",
+                    audience_of(id),
+                    format!(
+                        "the audience differs from the entry {first_id}'s, and {needed_by} checks every token against one audience"
+                    ),
+                    "Give every issuer entry the same audience, or remove the setting that needs one audience.",
+                )
+                .related(
+                    audience_of(first_id),
+                    format!("the entry {first_id} names the first audience"),
+                )
             })
             .collect()
     }

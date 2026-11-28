@@ -192,9 +192,10 @@ impl Scheduling {
                 "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback"},
                 "secretProviders":{"file":{"root":root.path()}},
                 "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/database","testOnlyPlaintext":true},
-                "authentication":{"oidc":{"issuer":"https://scheduling-issuer.example.invalid","audience":AUDIENCE,
-                    "scopeClaim":"scope","readsScope":"scheduling:read","allowedClients":[CLIENT],
-                    "jwksSource":{"type":"static","documentRef":"secret:file/jwks"}}},
+                "authentication":{"oidc":{"readsScope":"scheduling:read","issuers":{"main":{
+                    "issuer":"https://scheduling-issuer.example.invalid","audience":AUDIENCE,
+                    "scopeClaim":"scope","allowedClients":[CLIENT],
+                    "jwksSource":{"type":"static","documentRef":"secret:file/jwks"}}}}},
                 "taskGrantStatus":"unchecked-final-fifteen-minutes",
                 "audit":{"destination":"file","path":root.path().join("audit/scheduling.ndjson"),"hashKeyRef":"secret:file/audit-key"},
                 "destinations":destinations,

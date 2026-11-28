@@ -131,7 +131,7 @@ impl MessagingAuthenticator {
         let settings = self
             .settings
             .get(&*verified.issuer_id)
-            .expect("every issuer entry has settings");
+            .ok_or(AuthenticationError::Refused(FailedCheck::TokenIssuer))?;
         let claims = &verified.token.claims;
         // An exchanged token names the authority whose assertion produced it.
         // The platform applies no rule while the entry's map is empty, so an

@@ -490,6 +490,7 @@ where
                     stdout,
                     stderr,
                     posture,
+                    configuration_explicit_settings(&error),
                 )
                 .is_err()
                 {
@@ -846,6 +847,18 @@ pub(crate) fn configuration_report(error: &anyhow::Error) -> Option<&Report> {
     })
 }
 
+/// The explicit production settings the runtime file of a refused check
+/// states, when it loaded.
+fn configuration_explicit_settings(
+    error: &anyhow::Error,
+) -> Option<Vec<registry_cli_report::ExplicitSettingLine>> {
+    error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<project::RuntimeConfigRefusal>()
+            .and_then(|refusal| refusal.explicit_settings.clone())
+    })
+}
+
 /// The exit code of a configuration refusal: an operational failure when the
 /// runtime file could not be read at all, and otherwise a domain refusal.
 fn configuration_exit(error: &anyhow::Error) -> u8 {
@@ -864,6 +877,7 @@ fn configuration_exit(error: &anyhow::Error) -> u8 {
 /// Print a configuration refusal unchanged: the CFG-DIAG-2 lines on stderr,
 /// or, with `--format json`, the CFG-DIAG-1 diagnostics in the report
 /// envelope on stdout.
+#[allow(clippy::too_many_arguments)]
 fn write_configuration_report(
     report: &Report,
     format: OutputFormat,
@@ -872,6 +886,7 @@ fn write_configuration_report(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
     posture: Option<DeclaredPosture>,
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 ) -> io::Result<()> {
     if format == OutputFormat::Json {
         let mut envelope = json!({
@@ -883,12 +898,33 @@ fn write_configuration_report(
         if let Some(files) = report.files_checked() {
             envelope["filesChecked"] = json!(files);
         }
-        report::write_with_posture(&envelope, stdout, posture)
+        report::write_with_settings(&envelope, stdout, posture, explicit_settings)
     } else {
         write_check_verdict(command, stderr);
         let _ = write!(stderr, "{}", report.render_human());
+        for setting in explicit_settings.iter().flatten() {
+            write_explicit_setting(
+                setting.code.as_str(),
+                setting.pointer.as_deref().unwrap_or_default(),
+                setting.summary.as_str(),
+                stderr,
+            )?;
+        }
         Ok(())
     }
+}
+
+/// The line that states one explicit production setting.
+fn write_explicit_setting(
+    code: &str,
+    pointer: &str,
+    summary: &str,
+    out: &mut dyn io::Write,
+) -> io::Result<()> {
+    writeln!(
+        out,
+        "Explicit production setting {code} at {pointer}. {summary}."
+    )
 }
 
 /// The line that opens a refused check, as the other check commands print it.
@@ -1145,7 +1181,7 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
         for (key, value) in fields {
             if matches!(
                 key.as_str(),
-                "ok" | "command" | "diagnostics" | "filesChecked"
+                "ok" | "command" | "diagnostics" | "filesChecked" | "explicitProductionSettings"
             ) || value.is_null()
             {
                 continue;
@@ -1159,6 +1195,18 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     }
     if let Some(checked) = checked_diagnostics(report)? {
         write!(stdout, "{}", checked.render_human())?;
+    }
+    for setting in report["explicitProductionSettings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        write_explicit_setting(
+            setting["code"].as_str().unwrap_or_default(),
+            setting["pointer"].as_str().unwrap_or_default(),
+            setting["summary"].as_str().unwrap_or_default(),
+            stdout,
+        )?;
     }
     Ok(())
 }
@@ -2524,6 +2572,173 @@ mod tests {
         ]);
         assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
         assert_eq!(report["status"], "operational-failure");
+    }
+
+    /// `check --runtime-config` lists the settings the file states on purpose
+    /// as facts for a reviewer. They never change the verdict.
+    #[test]
+    fn check_lists_the_explicit_production_settings_the_runtime_states() {
+        let (root, project) = initialized("standalone-exact-time");
+        let runtime = runtime_config(root.path(), &project);
+        let project = project.to_str().unwrap();
+        let runtime_text = std::fs::read_to_string(&runtime).unwrap();
+        let runtime = runtime.to_str().unwrap();
+
+        let (exit, report, _) = run_json(&["check", project, "--runtime-config", runtime]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert_eq!(report["explicitProductionSettings"], json!([]));
+
+        let marker = "        allowedClients: [scheduling-booking-agent]\n";
+        assert!(runtime_text.contains(marker), "{runtime_text}");
+        std::fs::write(
+            runtime,
+            runtime_text.replace(
+                marker,
+                &format!("{marker}        accessTokenType: JWT\n        scopeClaim: scp\n"),
+            ),
+        )
+        .unwrap();
+        let (exit, report, _) = run_json(&["check", project, "--runtime-config", runtime]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        let settings = report["explicitProductionSettings"].as_array().unwrap();
+        let listed: Vec<(&str, &str)> = settings
+            .iter()
+            .map(|line| {
+                (
+                    line["code"].as_str().unwrap(),
+                    line["pointer"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (
+                    "platform.posture.jwt-access-token",
+                    "/authentication/oidc/issuers/main/accessTokenType"
+                ),
+                (
+                    "platform.posture.scope-claim",
+                    "/authentication/oidc/issuers/main/scopeClaim"
+                ),
+            ]
+        );
+        assert!(settings.iter().all(|line| line["line"].is_u64()));
+        assert!(settings.iter().all(|line| line["file"] == json!(runtime)));
+        // A setting is a fact for the reviewer, never a finding.
+        assert_eq!(report["diagnostics"], json!([]));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                "schedulingctl",
+                "check",
+                project,
+                "--runtime-config",
+                runtime,
+            ]
+            .map(OsString::from),
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let text = String::from_utf8(stdout).unwrap();
+        assert!(
+            text.contains(
+                "Explicit production setting platform.posture.jwt-access-token at /authentication/oidc/issuers/main/accessTokenType."
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_check_writes_the_explicit_production_settings_after_the_posture_even_when_refused() {
+        let (root, project) = initialized("standalone-exact-time");
+        let runtime = runtime_config(root.path(), &project);
+        let project = project.to_str().unwrap();
+        let text = std::fs::read_to_string(&runtime).unwrap();
+        let marker = "        allowedClients: [scheduling-booking-agent]\n";
+        assert!(text.contains(marker), "{text}");
+        let stating = text.replace(marker, &format!("{marker}        accessTokenType: JWT\n"));
+        let runtime = runtime.to_str().unwrap();
+
+        let after_posture = |raw: &str| {
+            assert_eq!(
+                raw.matches("\"explicitProductionSettings\"").count(),
+                1,
+                "{raw}"
+            );
+            let posture = raw.find("\"posture\"").expect("a posture member");
+            let settings = raw
+                .find("\"explicitProductionSettings\"")
+                .expect("the settings member");
+            assert!(posture < settings, "{raw}");
+        };
+        let raw_check = || {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = main_entry_from(
+                [
+                    "schedulingctl",
+                    "--format=json",
+                    "check",
+                    project,
+                    "--runtime-config",
+                    runtime,
+                ]
+                .map(OsString::from),
+                &mut stdout,
+                &mut stderr,
+            );
+            (exit, String::from_utf8(stdout).unwrap())
+        };
+
+        std::fs::write(runtime, &stating).unwrap();
+        let (exit, raw) = raw_check();
+        assert_eq!(exit, ExitCode::SUCCESS, "{raw}");
+        after_posture(&raw);
+
+        // A refused file that states a setting still lists it.
+        // A relative audit path is a rule the loaded file breaks, so the
+        // refusal still has settings to list.
+        let audit_path = format!("  path: {}/audit.ndjson", root.path().display());
+        assert!(stating.contains(&audit_path), "{stating}");
+        std::fs::write(
+            runtime,
+            stating.replace(&audit_path, "  path: audit.ndjson"),
+        )
+        .unwrap();
+        let (exit, raw) = raw_check();
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{raw}");
+        after_posture(&raw);
+        let report: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(report["ok"], false, "{raw}");
+        assert_eq!(
+            report["explicitProductionSettings"][0]["code"], "platform.posture.jwt-access-token",
+            "{raw}"
+        );
+
+        // A setting the product refuses outright is a refusal, never a stated
+        // production setting.
+        std::fs::write(
+            runtime,
+            text.replace(
+                "allowedClients: [scheduling-booking-agent]",
+                "allowedClients: unrestricted",
+            ),
+        )
+        .unwrap();
+        let (exit, raw) = raw_check();
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{raw}");
+        assert!(
+            raw.contains("scheduling.runtime.allowed-clients-required"),
+            "{raw}"
+        );
+        assert!(
+            !raw.contains("platform.posture.unrestricted-clients"),
+            "{raw}"
+        );
     }
 
     /// A records document that does not hold together is refused at its

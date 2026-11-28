@@ -628,3 +628,93 @@ fn a_list_only_client_rule_refuses_unrestricted_and_an_empty_list() {
             .is_err());
     }
 }
+
+#[test]
+fn one_audience_holds_for_one_entry_and_for_entries_that_agree() {
+    let set = load(&document(&staff(""))).authentication.oidc.set;
+    assert!(set.check_one_audience(FIELD, "taskGrantStatus").is_empty());
+
+    let agreeing = partners("").replace("api://registry", "registry-api");
+    let set = load(&document(&format!("{}{agreeing}", staff(""))))
+        .authentication
+        .oidc
+        .set;
+    assert!(set.check_one_audience(FIELD, "taskGrantStatus").is_empty());
+}
+
+#[test]
+fn entries_naming_different_audiences_are_refused_where_one_audience_is_needed() {
+    let set = load(&document(&format!("{}{}", staff(""), partners(""))))
+        .authentication
+        .oidc
+        .set;
+    assert!(set.check(FIELD).is_empty(), "the set alone allows them");
+    let diagnostics = set.check_one_audience(FIELD, "taskGrantStatus");
+    assert_eq!(
+        codes(&diagnostics),
+        [(
+            "platform.oidc.audiences-differ",
+            "/authentication/oidc/issuers/staff/audience"
+        )]
+    );
+    let found = &diagnostics[0];
+    assert_eq!(found.severity, Severity::Error);
+    assert!(found.message.contains("partners"), "{}", found.message);
+    assert!(
+        found.message.contains("taskGrantStatus"),
+        "{}",
+        found.message
+    );
+    assert!(!found.message.contains("registry-api"), "{}", found.message);
+    assert!(
+        !found.message.contains("api://registry"),
+        "{}",
+        found.message
+    );
+}
+
+#[test]
+fn the_file_check_positions_a_differing_audience_and_relates_the_first_entry() {
+    let text = document(&format!("{}{}", staff(""), partners("")));
+    let file = check_offline(&text, |_| crate::DEFAULT_STAND_IN);
+    let config = &file.loaded.as_ref().expect("loads").config;
+    let diagnostics = config.authentication.oidc.set.check_one_audience_file(
+        FIELD,
+        "taskGrantStatus",
+        &file,
+        "ExampleRuntimeConfig",
+    );
+    assert_eq!(
+        codes(&diagnostics),
+        [(
+            "platform.oidc.audiences-differ",
+            "/authentication/oidc/issuers/staff/audience"
+        )]
+    );
+    let found = &diagnostics[0];
+    let source = found.source.as_ref().expect("positioned");
+    assert_eq!((source.line, source.column), at(&text, 8, "registry-api"));
+    let related = &found.related[0];
+    assert_eq!(
+        related.path,
+        "/authentication/oidc/issuers/partners/audience"
+    );
+    assert_eq!(
+        (related.line, related.column),
+        at(&text, 12, "api://registry")
+    );
+}
+
+#[test]
+fn the_file_check_skips_an_audience_it_did_not_fill() {
+    let first = staff("").replace("audience: registry-api", "audience: ${STAFF_AUDIENCE}");
+    let text = document(&format!("{first}{}", partners("")));
+    let file = check_offline(&text, |_| crate::DEFAULT_STAND_IN);
+    let config = &file.loaded.as_ref().expect("loads").config;
+    assert!(config
+        .authentication
+        .oidc
+        .set
+        .check_one_audience_file(FIELD, "taskGrantStatus", &file, "ExampleRuntimeConfig")
+        .is_empty());
+}

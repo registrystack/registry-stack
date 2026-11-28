@@ -4,7 +4,7 @@
 //! configuration, confirms the database answers over the runtime
 //! credential and that its activation ledger names the deployed package
 //! for this deployment, opens the audit journal, activates content storage and the
-//! content verifier, loads the token issuer's signing keys, binds the
+//! content verifier, loads each token issuer's signing keys, binds the
 //! listener, suspends every version verified under another verifier
 //! binding, and serves the HTTP surface beside the content verification
 //! worker, the erasure worker, and the cleanup pass.
@@ -65,6 +65,7 @@ use crate::verification::{
     Graces, ReplayError, ReplayFailure, ReplayRefusal, Replayed, VerdictSource, VerificationStore,
     VerificationTransport,
 };
+use registry_platform_httpsec::refusal_detail::name_failed_check;
 
 /// The most verification attempts one process runs at once.
 const WORKER_CONCURRENCY: NonZeroUsize = match NonZeroUsize::new(4) {
@@ -414,7 +415,7 @@ async fn prepare_with(
         audit: audit.clone(),
     };
     let project = Arc::new(package.project);
-    let keys = config.jwks_fetcher(&secrets).await?;
+    let sources = config.issuer_sources(&secrets, &project).await?;
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(RuntimeError::Listen)?;
@@ -436,9 +437,6 @@ async fn prepare_with(
         )),
         None => None,
     };
-    let admitted = config
-        .admitted_clients(&project)
-        .map_err(|finding| RuntimeConfigError::Refused(vec![finding]))?;
     // The sweep changes what the instances already serving release, so it
     // runs only once every step that could refuse this start has succeeded.
     let suspended = sweep_bindings(&store, verifier.binding_digest())
@@ -453,12 +451,10 @@ async fn prepare_with(
             "versions verified under another verifier binding were suspended for verification again"
         );
     }
-    let authenticator = Arc::new(DocumentsAuthenticator::new(
-        config.verifier_profile(&admitted),
-        keys,
-        AccessProfiles::new(&project),
-        config.binds_assertion_issuers(),
-    ));
+    let authenticator = Arc::new(
+        DocumentsAuthenticator::new(sources, AccessProfiles::new(&project))
+            .map_err(|_| config.issuer_set_refusal())?,
+    );
     let service = Arc::new(DocumentService::new(
         store,
         project,
@@ -883,6 +879,18 @@ impl Prepared {
         self
     }
 
+    /// This runtime serving under the posture `declared`, so a suite can see
+    /// the answers of a posture it was not started under.
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    pub fn with_declared_posture(
+        mut self,
+        declared: registry_platform_config::DeclaredPosture,
+    ) -> Self {
+        self.routes.posture = registry_platform_config::PostureReport::new(declared);
+        self
+    }
+
     /// The router this runtime serves, authentication included.
     pub fn router(&self) -> axum::Router {
         serving_app(self.routes.clone(), Arc::clone(&self.metrics))
@@ -1045,10 +1053,13 @@ impl Prepared {
 /// The serving router with every answered request counted under the route
 /// template it matched. It never answers `/metrics`.
 fn serving_app(routes: DocumentRoutes, metrics: Arc<Metrics>) -> axum::Router {
-    router(routes).layer(axum::middleware::from_fn_with_state(
-        metrics,
-        count_requests,
-    ))
+    let posture = routes.posture.posture();
+    router(routes)
+        .layer(axum::middleware::from_fn_with_state(
+            metrics,
+            count_requests,
+        ))
+        .layer(name_failed_check(posture))
 }
 
 /// Serve the metrics listener until `stopped` turns true, then give it

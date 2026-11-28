@@ -526,6 +526,9 @@ struct Outcome {
     exit: u8,
     view: View,
     raw_json: Option<Vec<u8>>,
+    /// The explicit production settings a checked runtime file states,
+    /// written after `posture` when set.
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 }
 
 #[derive(Clone, Copy)]
@@ -555,6 +558,7 @@ impl Outcome {
             exit: 0,
             view,
             raw_json: None,
+            explicit_settings: None,
         }
     }
 
@@ -575,6 +579,7 @@ impl Outcome {
             exit,
             view: View::Check,
             raw_json: None,
+            explicit_settings: None,
         }
     }
 
@@ -596,6 +601,7 @@ impl Outcome {
             exit,
             view: View::Diagnostics,
             raw_json: None,
+            explicit_settings: None,
         }
     }
 }
@@ -1433,6 +1439,17 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
         (None, None) => CheckedAgainst::NamedPackage,
     };
     let runtime = check_runtime_file(&absolute, against, args.environment, declared);
+    // The settings the operator stated on purpose are facts for a reviewer,
+    // not findings, so they never change the verdict. An empty list says none
+    // were stated, and a file that did not load reports no list.
+    let named = path.display().to_string();
+    let settings = runtime.config().map(|_| {
+        runtime
+            .explicit_settings()
+            .iter()
+            .map(|found| found.report_line(Some(&named)))
+            .collect::<Vec<_>>()
+    });
     let mut report = runtime_report(path, &absolute, &runtime);
     if let Some((refused_exit, mut combined)) = refused.take() {
         combined.extend(report);
@@ -1444,7 +1461,9 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
         } else {
             refused_exit
         };
-        return Outcome::diagnosed(exit, &combined);
+        let mut outcome = Outcome::diagnosed(exit, &combined);
+        outcome.explicit_settings = settings;
+        return outcome;
     }
     if let Some(root) = &args.project {
         registry_platform_config::apply_check_acceptances(root, &mut report);
@@ -1456,7 +1475,9 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
         } else {
             DOMAIN_REFUSAL_EXIT
         };
-        return Outcome::diagnosed(exit, &report);
+        let mut outcome = Outcome::diagnosed(exit, &report);
+        outcome.explicit_settings = settings;
+        return outcome;
     }
     let package = given
         .as_ref()
@@ -1472,15 +1493,6 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
     checked["runtimeConfig"] = json!(path);
     checked["filesChecked"] = json!(report.files_checked());
     checked["diagnostics"] = report.to_json_value();
-    // The settings the operator stated on purpose are facts for a reviewer,
-    // not findings, so they never change the verdict. An empty list says none
-    // were stated.
-    let named = path.display().to_string();
-    checked["explicitProductionSettings"] = json!(runtime
-        .explicit_settings()
-        .iter()
-        .map(|found| found.report_line(Some(&named)))
-        .collect::<Vec<_>>());
     if let Some(config) = runtime.config() {
         if !runtime.defers_within("/listener") {
             checked["listener"] = json!(config.listener.bind.socket_addr().to_string());
@@ -1495,7 +1507,9 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
             checked["retention"] = config.retention.report();
         }
     }
-    Outcome::new(checked, View::Check)
+    let mut outcome = Outcome::new(checked, View::Check);
+    outcome.explicit_settings = settings;
+    outcome
 }
 
 /// The findings of an offline runtime check, each naming the file as its
@@ -1614,6 +1628,7 @@ fn preview(args: &PreviewArgs, declared: DeclaredPosture) -> Outcome {
         exit: 0,
         view: View::Preview,
         raw_json: Some(bytes),
+        explicit_settings: None,
     }
 }
 
@@ -1717,6 +1732,7 @@ fn plan(path: &Path, declared: DeclaredPosture) -> Outcome {
                     exit: DOMAIN_REFUSAL_EXIT,
                     view: View::Activation,
                     raw_json: None,
+                    explicit_settings: None,
                 }
             } else {
                 Outcome::new(report, View::Activation)
@@ -1901,6 +1917,7 @@ fn activation_refused(refusals: Vec<ActivationRefusal>) -> Outcome {
         exit: DOMAIN_REFUSAL_EXIT,
         view: View::Activation,
         raw_json: None,
+        explicit_settings: None,
     }
 }
 
@@ -2291,6 +2308,7 @@ fn finish_with_posture(
             &completed(&outcome.report, command, outcome.exit),
             stdout,
             posture,
+            outcome.explicit_settings.clone(),
         ),
         (OutputFormat::Human, _) => render_human(outcome, command, stdout, stderr),
     };
@@ -2370,7 +2388,11 @@ fn render_human(
         View::GenerateTemplates => render_generate_templates(report, stdout),
         View::GenerateIdentityFacts => render_generate_identity_facts(report, stdout),
         View::Check | View::Diagnostics => {
-            render_check(report, stdout)?;
+            render_check(
+                report,
+                outcome.explicit_settings.as_deref().unwrap_or_default(),
+                stdout,
+            )?;
             if report.get("filesChecked").is_some() && !warned {
                 writeln!(stdout, "{}", shared_report(report).summary())?;
             }
@@ -2468,7 +2490,11 @@ fn render_init(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     Ok(())
 }
 
-fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+fn render_check(
+    report: &Value,
+    settings: &[registry_cli_report::ExplicitSettingLine],
+    stdout: &mut dyn io::Write,
+) -> io::Result<()> {
     if let Some(path) = report["devState"].as_str() {
         return writeln!(stdout, "ok: {path}");
     }
@@ -2529,17 +2555,13 @@ fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             retention["receiptRetentionDays"]
         )?;
     }
-    for setting in report["explicitProductionSettings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
+    for setting in settings {
         writeln!(
             stdout,
             "Explicit production setting {} at {}. {}.",
-            text(&setting["code"]),
-            text(&setting["pointer"]),
-            text(&setting["summary"])
+            setting.code,
+            setting.pointer.as_deref().unwrap_or_default(),
+            setting.summary
         )?;
     }
     Ok(())
@@ -2938,6 +2960,60 @@ audit:
     }
 
     #[test]
+    fn a_check_writes_the_explicit_production_settings_after_the_posture_even_when_refused() {
+        fn raw_check(path: &Path) -> (ExitCode, String) {
+            let (exit, stdout, _) = run(&[
+                OsStr::new("--format"),
+                OsStr::new("json"),
+                OsStr::new("check"),
+                OsStr::new("--runtime-config"),
+                path.as_os_str(),
+            ]);
+            (exit, stdout)
+        }
+        fn assert_after_posture(stdout: &str) {
+            assert_eq!(
+                stdout.matches("\"explicitProductionSettings\"").count(),
+                1,
+                "{stdout}"
+            );
+            let posture = stdout.find("\"posture\"").expect("a posture member");
+            let settings = stdout
+                .find("\"explicitProductionSettings\"")
+                .expect("the settings member");
+            assert!(posture < settings, "{stdout}");
+        }
+
+        let (_root, path) = project("");
+        let marker = "        allowedClients: [operations-console]\n";
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(marker), "{text}");
+
+        let (exit, stdout) = raw_check(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}");
+        assert_after_posture(&stdout);
+
+        // A refused file that states a setting still lists it.
+        std::fs::write(
+            &path,
+            text.replace(
+                marker,
+                "        allowedClients: [unknown-client]\n        accessTokenType: JWT\n",
+            ),
+        )
+        .unwrap();
+        let (exit, stdout) = raw_check(&path);
+        assert_ne!(exit, ExitCode::SUCCESS, "{stdout}");
+        assert_after_posture(&stdout);
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["ok"], false, "{stdout}");
+        assert_eq!(
+            report["explicitProductionSettings"][0]["code"], "platform.posture.jwt-access-token",
+            "{stdout}"
+        );
+    }
+
+    #[test]
     fn a_refusal_without_a_position_opens_with_the_verdict_and_ends_with_the_summary() {
         let outcome = Outcome::refused(
             OPERATIONAL_FAILURE_EXIT,
@@ -3284,6 +3360,7 @@ audit:
             &report,
             &mut written,
             Some(registry_messaging::config::DEFAULT_POSTURE),
+            None,
         )
         .unwrap();
         let committed = std::fs::read_to_string(

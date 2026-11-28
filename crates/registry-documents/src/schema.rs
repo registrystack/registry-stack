@@ -818,13 +818,13 @@ fn install_runtime_constraints(schema: &mut Value) {
         set_definition_property(schema, definition, property, "pattern", json!("^/"));
     }
     // Every access profile resolves its caller from the matched client, so
-    // a Document Store deployment always states the clients it admits. The
-    // shared block also admits the keyword `unrestricted`, which this
-    // runtime refuses in every mode, so the member is restated as
-    // `from-package` or the list and the shared definition is dropped.
-    if let Some(clients) = schema.pointer_mut("/$defs/OidcConfig/properties/allowedClients") {
+    // every issuer entry states the clients it admits. The shared block
+    // also admits the keyword `unrestricted`, which this runtime refuses in
+    // every mode, so the member is restated as `from-package` or the list
+    // and the shared definition is dropped.
+    if let Some(clients) = schema.pointer_mut("/$defs/IssuerConfig/properties/allowedClients") {
         *clients = json!({
-            "description": "The clients whose access tokens are admitted. Required in every\nfile: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client must cover them. An\nomitted or empty list, an empty or repeated client, and `unrestricted` are\nrefused.",
+            "description": "The clients whose access tokens this issuer admits. Required in every\nentry: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client admits those clients.\nA client belongs to one issuer, and the lists of all entries together must\ncover every client a profile names. An omitted or empty list, an empty or\nrepeated client, and `unrestricted` are refused.",
             "oneOf": [
                 {"type": "string", "const": "from-package"},
                 {
@@ -835,11 +835,6 @@ fn install_runtime_constraints(schema: &mut Value) {
                 },
             ],
         });
-    }
-    if let Some(issuers) =
-        schema.pointer_mut("/$defs/OidcConfig/properties/assertionIssuers/description")
-    {
-        *issuers = json!("Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.");
     }
     if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
         definitions.remove("OidcAllowedClients");
@@ -948,7 +943,7 @@ mod tests {
                 "{definition}.{property} must be absolute"
             );
         }
-        let clients = &document["$defs"]["OidcConfig"]["properties"]["allowedClients"];
+        let clients = &document["$defs"]["IssuerConfig"]["properties"]["allowedClients"];
         let forms = clients["oneOf"].as_array().expect("two written forms");
         assert_eq!(forms.len(), 2, "{clients}");
         assert_eq!(forms[0], json!({"type": "string", "const": "from-package"}));

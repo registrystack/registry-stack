@@ -7,7 +7,9 @@
 //! matter to a client, and the body without its trace, for every refusal of
 //! authentication or authority, against `tests/golden/refusals.json`. The
 //! file records the answers the runtime gave before refusals were counted by
-//! the check they failed. It must not change when the recording changes.
+//! the check they failed. It must not change when the recording changes. The
+//! suite serves under the development posture, so it drops the `failedCheck`
+//! member that posture adds before it compares.
 //!
 //! The second proves the operator's side of the same refusals: each one adds
 //! one to `documents_request_refusals_total` under the fixed check it failed,
@@ -469,6 +471,15 @@ async fn observe(api: &Api, fixture: &Fixture) -> (Answer, Value) {
         "{}: the answer carries a trace",
         fixture.name
     );
+    // The suite serves under the development posture, whose refusals also
+    // name the check that failed. Production answers without that member, so
+    // the golden file holds the answer without it.
+    assert_eq!(
+        body.as_object_mut().unwrap().remove("failedCheck"),
+        Some(json!(fixture.check.as_str())),
+        "{}: the development answer names the failed check",
+        fixture.name
+    );
     let headers: BTreeMap<&str, &str> = HEADERS
         .iter()
         .filter_map(|name| {
@@ -520,6 +531,30 @@ async fn every_refusal_answers_the_bytes_the_golden_file_holds() {
         "a refusal answers differently than the golden file holds:\n{}",
         serde_json::to_string_pretty(&observed).unwrap()
     );
+}
+
+#[tokio::test]
+async fn the_served_router_names_the_failed_check_in_development_alone() {
+    let world = world().await;
+    let request = || {
+        Request::builder()
+            .uri("/v1/documents")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let development = world.api.call(request()).await;
+    let development: Value = serde_json::from_slice(&development.body).unwrap();
+    assert_eq!(
+        development["failedCheck"],
+        json!(FailedCheck::CredentialMissing.as_str())
+    );
+    let production = world
+        .prepared
+        .with_declared_posture(registry_documents::config::DEFAULT_POSTURE);
+    let production = Api::new(&production).call(request()).await;
+    assert_eq!(production.status, 401);
+    let production: Value = serde_json::from_slice(&production.body).unwrap();
+    assert!(production.get("failedCheck").is_none(), "{production}");
 }
 
 /// The count `documents_request_refusals_total` holds for `check`.

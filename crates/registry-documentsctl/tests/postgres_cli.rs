@@ -97,10 +97,12 @@ database:
   transport: loopback-plaintext
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:documents
-    scopeClaim: scope
-    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:documents
+        scopeClaim: scope
+        allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
 audit:
   destination: file
   path: {audit}

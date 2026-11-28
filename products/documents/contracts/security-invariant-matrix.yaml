@@ -80,17 +80,24 @@ invariants:
       Any client the issuer knows can call the Document Store because the
       operator never named the clients the deployment serves.
     enforcementPoint: >-
-      The runtime configuration requires allowedClients: an explicit list that
-      covers every requester client the package names, or from-package, which
-      admits exactly those clients. The unrestricted form is refused.
+      Each issuer entry of the runtime configuration requires allowedClients:
+      an explicit list, or from-package, which admits exactly the requester
+      clients the package names. Together the entries cover every requester
+      client the package names, and a client belongs to one entry. The
+      unrestricted form is refused.
     refusal: >-
       Refuse with documents.runtime.allowed-clients-required at
-      /authentication/oidc/allowedClients. An explicit list that omits a
-      requester client a package profile names is refused with
-      documents.runtime.profile-client-not-allowed, held by
+      /authentication/oidc/issuers/ISSUER_ID/allowedClients. Entries whose
+      lists together omit a requester client a package profile names are
+      refused with documents.runtime.profile-client-not-allowed, held by
       explicit_list_missing_a_package_client_is_refused and
       from_package_admits_exactly_the_package_clients in
-      crates/registry-documents/src/config.rs (DOCUMENTS-DEC-36).
+      crates/registry-documents/src/config.rs (DOCUMENTS-DEC-36). A client
+      listed by two entries, or by an entry beside one that reads its clients
+      from the package, is refused with platform.oidc.client-in-two-issuers,
+      held by a_client_listed_by_two_issuers_is_refused_and_the_check_names_the_other_entry
+      and every_conflict_of_a_package_client_beside_from_package_is_reported in
+      crates/registry-documents/src/config.rs.
     negativeTest:
       path: crates/registry-documents/src/config.rs
       name: unrestricted_clients_are_refused
@@ -968,9 +975,10 @@ invariants:
       ownership, and grants, which are matched by issuer, subject, and kind
       alone.
     enforcementPoint: >-
-      Project check. Every profile accepts the deployment's one issuer, so
-      the project is refused when two profiles of one actorKind name
-      different principalClaim values.
+      Project check. Custody, ownership, and grants are matched by issuer,
+      subject, and kind, so the same subject at two issuers is two principals.
+      The project is refused when two profiles of one actorKind name
+      different principalClaim values, whatever issuer admits their clients.
     refusal: >-
       Refuse the project with documents.project.mixed-principal-claim at the
       later profile's principalClaim.

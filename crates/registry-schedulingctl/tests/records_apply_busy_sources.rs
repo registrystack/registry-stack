@@ -107,9 +107,9 @@ fn write_runtime(
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
              identity:\n  databaseId: busy-records-test\n\
-             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
-             \x20   audience: urn:example:scheduling\n\
-             \x20   allowedClients: [scheduling-test-client]\n\
+             authentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://identity.example.test\n\
+             \x20       audience: urn:example:scheduling\n\
+             \x20       allowedClients: [scheduling-test-client]\n\
              \x20   busyImportProfiles:\n\
              \x20     staff-calendar:\n\
              \x20       scope: scheduling-busy-write\n\

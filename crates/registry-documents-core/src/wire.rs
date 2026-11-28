@@ -108,8 +108,7 @@ impl schemars::JsonSchema for DocumentLabel {
     }
 }
 
-/// The custodian a reservation names: a subject at the configured token
-/// issuer.
+/// The custodian a reservation names: a subject at the caller's issuer.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -191,8 +190,8 @@ pub struct IssueGrantRequest {
     pub expiry_hours: Option<u32>,
 }
 
-/// The recipient a grant names: a subject at the configured token issuer,
-/// and the actor kind a caller must resolve to for the grant to release
+/// The recipient a grant names: a subject at the caller's issuer, and the
+/// actor kind a caller must resolve to for the grant to release
 /// anything to it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

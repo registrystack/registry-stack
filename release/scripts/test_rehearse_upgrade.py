@@ -925,8 +925,38 @@ class MessagingUpgradeTest(unittest.TestCase):
             with unittest.mock.patch.object(MODULE, "dump_yaml") as dump:
                 messaging.author(unittest.mock.Mock(release=None))
         document = dump.call_args.args[1]
-        claim = document["authentication"]["oidc"]["scopeClaim"]
+        claim = document["authentication"]["oidc"]["issuers"]["main"]["scopeClaim"]
         self.assertEqual(MODULE.MESSAGING_SENDER[claim], "messaging:send")
+
+    def test_each_side_reads_the_issuer_in_the_shape_its_release_defines(self) -> None:
+        # Fixed releases, so a threshold set to the wrong release fails here.
+        for release, as_set in (
+            ((0, 48, 0), False),
+            ((0, 49, 0), True),
+            (None, True),
+        ):
+            with self.subTest(release=release):
+                self.assertEqual(MODULE.messaging_uses_issuer_set(release), as_set)
+
+    def test_the_upgrade_moves_the_issuer_into_the_set_the_old_side_wrote_flat(self) -> None:
+        earlier = (0, 48, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messaging = self.messaging(root)
+            messaging.project, messaging.package = root / "project", root / "package"
+            messaging.secrets, messaging.audit, messaging.port = root, root, 1
+            with unittest.mock.patch.object(MODULE, "dump_yaml", dump_json), \
+                    unittest.mock.patch.object(MODULE, "load_yaml", load_json):
+                messaging.author(unittest.mock.Mock(release=earlier))
+                written = dict(load_json(messaging.runtime)["authentication"]["oidc"])
+                messaging.move_issuer_into_set(unittest.mock.Mock(release=None))
+                upgraded = dict(load_json(messaging.runtime)["authentication"]["oidc"])
+                # The move is idempotent: a file already in the set stays.
+                messaging.move_issuer_into_set(unittest.mock.Mock(release=None))
+                again = dict(load_json(messaging.runtime)["authentication"]["oidc"])
+        self.assertNotIn("issuers", written)
+        self.assertEqual(upgraded, {"issuers": {"main": written}})
+        self.assertEqual(again, upgraded)
 
     def test_each_side_reads_the_database_ca_bundle_under_its_own_key(self) -> None:
         # Fixed releases, so a threshold set to the wrong release fails here.

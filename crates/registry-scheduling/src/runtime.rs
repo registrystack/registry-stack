@@ -278,7 +278,7 @@ pub async fn serve_from_path(
         .await
         .map_err(|_| RuntimeError::HookDelivery)?;
 
-    let (verifier, keys) = config.oidc_verifier(&secrets).await?;
+    let sources = config.issuer_sources(&secrets).await?;
     let peer_policy = match declared.posture {
         registry_platform_config::Posture::Production => {
             registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
@@ -288,7 +288,10 @@ pub async fn serve_from_path(
         }
     };
     let authenticator = Arc::new(
-        SchedulingAuthenticator::new(&config.authentication.oidc, verifier, keys)
+        SchedulingAuthenticator::new(&config.authentication.oidc, sources)
+            .map_err(|error| RuntimeConfigError::InvalidIssuerSet {
+                message: error.to_string(),
+            })?
             .with_peer_policy(peer_policy),
     );
 
@@ -302,7 +305,7 @@ pub async fn serve_from_path(
         Some(TaskGrantStatus::Authorities(authorities)) => Some(Arc::new(
             TaskGrantStatusRegistry::activate(
                 &crate::config::task_grant_status_endpoints(authorities),
-                &config.authentication.oidc.provider.audience,
+                config.task_grant_resource(),
                 &secrets,
                 peer_policy,
             )
@@ -321,6 +324,7 @@ pub async fn serve_from_path(
             audit_hasher,
             audit,
             config.retention.receipt_retention_days,
+            &authenticator,
         )
         .with_hooks(hooks)
         .with_task_grant_status(task_grant_status),

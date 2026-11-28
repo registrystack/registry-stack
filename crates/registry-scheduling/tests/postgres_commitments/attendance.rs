@@ -14,7 +14,10 @@ fn attendance_token(subject: &str, actions: &[&str], now: DateTime<Utc>) -> Stri
         "sub": subject,
         "azp": CLIENT,
         "exp": now.timestamp() + 600,
-        "registry_scopes": "",
+        // No route reads this scope: the task grant alone is the authority. A
+        // token that granted no scope at all and only claimed its kind is an
+        // identity-only token, which authentication refuses.
+        "registry_scopes": "scheduling-commit",
         "registry_actor_kind": "agent",
     });
     claims.as_object_mut().expect("claims object").extend(

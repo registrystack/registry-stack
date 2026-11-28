@@ -398,11 +398,9 @@ impl AccessProfiles {
         if first_missing_scope(profile, token).is_some() {
             return Err(AccessRefusal::Profile);
         }
-        // A malformed actor-kind claim is a malformed credential whatever the
-        // profile demands; an absent one only matters to a profile that names
-        // a kind.
+        // An absent actor-kind claim only matters to a profile that names a
+        // kind.
         let claimed = match token.actor_kind {
-            ActorKindClaim::Malformed => return Err(AccessRefusal::Claims),
             ActorKindClaim::Absent => None,
             ActorKindClaim::Present(kind) => Some(kind),
         };
@@ -515,7 +513,6 @@ fn check_profile(profile: &AccessProfile) -> Result<(), AccessProfileError> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActorKindClaim {
     Absent,
-    Malformed,
     Present(ActorKind),
 }
 
@@ -809,16 +806,6 @@ mod tests {
         token.actor_kind = ActorKindClaim::Absent;
         let caller = profiles().resolve(&token.facts()).unwrap();
         assert_eq!(caller.actor_kind, None);
-    }
-
-    #[test]
-    fn a_malformed_actor_kind_is_an_invalid_claim_for_every_profile() {
-        let mut token = Token::standing("clinic-backend", &["messaging-send"]);
-        token.actor_kind = ActorKindClaim::Malformed;
-        assert_eq!(
-            profiles().resolve(&token.facts()),
-            Err(AccessRefusal::Claims)
-        );
     }
 
     #[test]

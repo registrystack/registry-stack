@@ -156,10 +156,49 @@ pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()
     write_with_posture(report, stdout, None)
 }
 
+/// The explicit production settings a report carries as its
+/// `explicitProductionSettings` member, as the shared report writes them.
+fn settings_member(report: &Value) -> Option<Vec<registry_cli_report::ExplicitSettingLine>> {
+    let text = |line: &Value, key: &str| line[key].as_str().map(str::to_owned);
+    let position = |line: &Value, key: &str| {
+        line[key]
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+    };
+    Some(
+        report
+            .get("explicitProductionSettings")?
+            .as_array()?
+            .iter()
+            .map(|line| registry_cli_report::ExplicitSettingLine {
+                code: text(line, "code").unwrap_or_default(),
+                file: text(line, "file"),
+                pointer: text(line, "pointer"),
+                line: position(line, "line"),
+                column: position(line, "column"),
+                summary: text(line, "summary").unwrap_or_default(),
+            })
+            .collect(),
+    )
+}
+
+/// Write one report with the posture the command ran under, and its explicit
+/// production settings, when it carries them, after `posture`.
 pub(crate) fn write_with_posture(
     report: &Value,
     stdout: &mut dyn io::Write,
     posture: Option<registry_platform_config::DeclaredPosture>,
+) -> io::Result<()> {
+    write_with_settings(report, stdout, posture, settings_member(report))
+}
+
+/// [`write_with_posture`] with the explicit production settings given, for a
+/// report that is built without them.
+pub(crate) fn write_with_settings(
+    report: &Value,
+    stdout: &mut dyn io::Write,
+    posture: Option<registry_platform_config::DeclaredPosture>,
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 ) -> io::Result<()> {
     let value = envelope(report)?;
     let report =
@@ -167,6 +206,11 @@ pub(crate) fn write_with_posture(
             .map_err(io::Error::other)?;
     let report = if let Some(declared) = posture {
         report.with_posture(declared)
+    } else {
+        report
+    };
+    let report = if let Some(settings) = explicit_settings {
+        report.explicit_settings(settings)
     } else {
         report
     };

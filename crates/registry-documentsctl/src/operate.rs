@@ -35,13 +35,13 @@ use crate::{guidance, Job, Outcome, View};
 
 /// The runtime configuration a database command reads, resolved against the
 /// working directory, as an operator means a relative path.
-struct Runtime {
+pub(crate) struct Runtime {
     given: PathBuf,
     absolute: PathBuf,
-    config: RuntimeConfig,
+    pub(crate) config: RuntimeConfig,
 }
 
-fn load(path: &Path, declared: DeclaredPosture) -> Result<Runtime, Outcome> {
+pub(crate) fn load(path: &Path, declared: DeclaredPosture) -> Result<Runtime, Outcome> {
     let Ok(absolute) = std::path::absolute(path) else {
         return Err(Outcome::refused(
             OPERATIONAL_FAILURE_EXIT,

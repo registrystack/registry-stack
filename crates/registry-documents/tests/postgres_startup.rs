@@ -238,6 +238,30 @@ async fn a_runtime_that_admits_the_package_clients_serves_a_call_from_each() {
     server.await.unwrap().unwrap();
 }
 
+/// A runtime whose issuer lists leave a package client unreachable is refused
+/// at startup, with the finding that names it.
+#[tokio::test]
+async fn a_runtime_whose_clients_leave_a_package_client_unreachable_does_not_start() {
+    let mut deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.admit_clients("[civil-registry-app]");
+    deployment.migrate().await;
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
+        .await
+        .expect_err("startup is refused");
+    let RuntimeError::ConfigurationRefused(report) = error else {
+        panic!("a refused configuration, not {error}");
+    };
+    let codes: Vec<_> = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect();
+    assert!(
+        codes.contains(&"documents.runtime.profile-client-not-allowed"),
+        "{codes:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_runtime_whose_database_refuses_the_credential_does_not_start() {
     let mut refused = Url::parse(&database_url()).unwrap();

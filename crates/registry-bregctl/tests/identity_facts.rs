@@ -316,7 +316,7 @@ fn an_agent_profile_is_left_out_and_named() {
 }
 
 #[test]
-fn a_scopeless_agent_profile_still_generates_facts() {
+fn a_scopeless_agent_profile_does_not_block_the_facts() {
     let scratch = tempfile::tempdir().unwrap();
     let runtime = runtime(scratch.path());
     edit_runtime(
@@ -655,16 +655,23 @@ fn a_renamed_scope_claim_selects_each_profile_by_its_scopes() {
 
 #[test]
 fn a_scope_claim_the_facts_reader_reserves_is_refused_naming_the_setting() {
-    for reserved in ["scp", "roles"] {
+    for reserved in ["scp", "roles", "registry-scopes"] {
         let scratch = tempfile::tempdir().unwrap();
         let runtime = runtime_with_scope_claim(scratch.path(), reserved);
         let output = runtime.parent().unwrap().join("facts.yaml");
         let (ok, stdout, stderr) = generate(&runtime, &output);
         assert!(!ok, "{reserved}: {stdout}\n{stderr}");
         assert!(!output.exists());
-        let report = format!("{stdout}{stderr}");
+        let report = format!("{stdout}{stderr}")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             report.contains("authentication.oidc.issuers.primary.scopeClaim"),
+            "{reserved}: {report}"
+        );
+        assert!(
+            report.contains("a name with characters other than letters, digits and `_`"),
             "{reserved}: {report}"
         );
     }
@@ -742,10 +749,25 @@ fn the_generator_refuses_a_renamed_scope_claim_that_exceeds_the_grants() {
             .any(|diagnostic| diagnostic.code == "identity.deployment.scope-claim-exceeds-grants"),
         "{report:?}"
     );
+
+    // An extra scope that selects no other profile is refused by that check alone.
+    let extra = run_generator(
+        &output,
+        &deployment_stating("[registry:generic:read, registry:other:extra]"),
+    )
+    .expect_err("an extra scope is refused");
+    let codes: Vec<String> = extra
+        .report()
+        .expect("a report")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.clone())
+        .collect();
+    assert_eq!(codes, ["identity.deployment.scope-claim-exceeds-grants"]);
 }
 
 #[test]
-fn a_single_entry_refuses_a_requester_client_it_does_not_admit_without_naming_it() {
+fn a_single_entry_refuses_a_requester_client_it_does_not_list_without_naming_it() {
     let scratch = tempfile::tempdir().unwrap();
     let runtime = runtime(scratch.path());
     edit_runtime(
@@ -758,6 +780,10 @@ fn a_single_entry_refuses_a_requester_client_it_does_not_admit_without_naming_it
     let (ok, stdout, stderr) = generate_for(&project, &runtime, &output);
     assert!(!ok, "{stdout}\n{stderr}");
     assert!(!output.exists());
+    assert!(
+        format!("{stdout}{stderr}").contains("identity-facts.unstatable"),
+        "{stdout}{stderr}"
+    );
     let report = format!("{stdout}{stderr}")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -773,7 +799,7 @@ fn a_single_entry_refuses_a_requester_client_it_does_not_admit_without_naming_it
 }
 
 #[test]
-fn a_requester_client_no_entry_admits_is_refused_with_the_runtime_code() {
+fn a_requester_client_no_entry_lists_is_refused() {
     let scratch = tempfile::tempdir().unwrap();
     let runtime = two_issuer_runtime(scratch.path());
     edit_runtime(
@@ -788,7 +814,43 @@ fn a_requester_client_no_entry_admits_is_refused_with_the_runtime_code() {
     assert!(!ok, "{stdout}\n{stderr}");
     assert!(!output.exists());
     let report = format!("{stdout}{stderr}");
-    assert!(report.contains("breg.runtime.clients-unlisted"), "{report}");
+    assert!(report.contains("identity-facts.unstatable"), "{report}");
     assert!(report.contains("authentication.oidc.issuers"), "{report}");
     assert!(!report.contains("generic-registry-client"), "{report}");
+}
+
+#[test]
+fn an_unrestricted_entry_does_not_list_a_named_requester_client() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = two_issuer_runtime(scratch.path());
+    edit_runtime(
+        &runtime,
+        "allowedClients: [generic-registry-client]",
+        "allowedClients: unrestricted",
+    );
+    let project = project_requiring(runtime.parent().unwrap(), "human");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) =
+        generate_with(&project, &runtime, &output, &["--issuer", "partners"]);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(!output.exists());
+    let report = format!("{stdout}{stderr}");
+    assert!(report.contains("identity-facts.unstatable"), "{report}");
+    assert!(report.contains("authentication.oidc.issuers"), "{report}");
+}
+
+#[test]
+fn a_single_unrestricted_entry_does_not_list_a_named_requester_client() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    edit_runtime(
+        &runtime,
+        "allowedClients: [generic-registry-client]",
+        "allowedClients: unrestricted",
+    );
+    let project = project_requiring(runtime.parent().unwrap(), "human");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate_for(&project, &runtime, &output);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(!output.exists());
 }

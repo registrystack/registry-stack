@@ -1569,3 +1569,72 @@ async fn a_duplicate_key_on_one_window_refuses_a_booking_on_another() {
         .await;
     assert_eq!(status, StatusCode::CREATED, "{other}");
 }
+
+/// A caller whose grant covers the offering but who does not own a hold is
+/// answered as not authorized whatever has become of the hold's window: the
+/// answer never says the window is unpublished. The owner is told.
+#[tokio::test]
+async fn a_non_owner_is_not_told_that_the_window_of_a_hold_is_unpublished() {
+    let first = session(FIRST_WINDOW, 1, session_start(2), 2);
+    let fx = sessions_fixture(vec![first.clone()]).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "unpublished-hold",
+            session_admission(&fx, first.start, 1, None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold identifier");
+
+    // The window record is gone from the tables, underneath the store's own
+    // refusal to withdraw a window that holds a claim: the shape a
+    // hand-edited table can leave behind.
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "DELETE FROM scheduling_windows WHERE window_id=$1",
+            &[&FIRST_WINDOW],
+        )
+        .await
+        .expect("remove the window record");
+    commit_current_test_writer(&fx.admin).await;
+
+    let other = agent_token_for("principal-other");
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &other,
+            "unpublished-non-owner-confirm",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    let (status, problem) = fx.delete(&format!("/v1/holds/{hold_id}"), &other).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    // Each refused attempt leaves one denied record, as every other refusal
+    // of a caller holding a grant does.
+    let mut refused: Vec<String> = fx
+        .capture
+        .records("response")
+        .into_iter()
+        .filter(|record| record["reason"] == "authorization.refused")
+        .map(|record| record["operation"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    refused.sort();
+    assert_eq!(refused, ["appointment.create", "hold.release"]);
+
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unpublished-owner-confirm",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    assert_eq!(problem["code"], "schedule.unpublished");
+}

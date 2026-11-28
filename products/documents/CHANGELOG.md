@@ -10,6 +10,30 @@
   without one. The OpenAPI `ReserveDocumentRequest` no longer requires
   `custodian`.
 - Development Document Store hook captures include `"posture":"development"` in the signed canonical body. Production capture and replay of unmarked deliveries keep their original wire form. A production worker dead-letters a retained development-marked envelope with `payload-refused` before sending.
+- BREAKING: The runtime accepts access tokens from several issuers. The issuer
+  members move under `authentication.oidc.issuers.ISSUER_ID`, one entry per
+  issuer: `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`,
+  `allowedClients`, `assertionIssuers` and `scopeClaim`. The old flat members
+  under `authentication.oidc` are refused with the entry they move under. A
+  client belongs to one entry, and two entries that name one issuer are
+  refused. The same subject at two issuers is two callers. Custody a service
+  places, and a grant's recipient, are scoped to the caller's issuer entry: a
+  person who signs in through another entry does not see them.
+  Migration: Wrap the members of `authentication.oidc` in `issuers.main`, then run `documentsctl check`.
+
+- BREAKING: An access token typed `JWT` is refused unless the issuer entry sets `accessTokenType: JWT`. Under either type an ID token is refused, and a resolved package client equal to the audience is refused under `JWT`.
+  Migration: Set `accessTokenType: JWT` on the entry of an issuer that types its access tokens `JWT`.
+
+- BREAKING: A token that grants only OpenID Connect scopes, or none, is refused at authentication unless the issuer entry or the client declares an actor kind. A kind the token claims does not exempt it. Every access profile requires a scope, so such a token used to be refused with 403 `profile.not-authorized` and is now refused with 401 `authentication.refused`.
+  Migration: Declare `actorKind` or `clientActorKinds` on the issuer entry, or issue tokens that carry the scopes the access profile requires.
+
+- An issuer entry can declare the actor kind of its tokens with `actorKind`, or of each client's tokens with `clientActorKinds`. A token that names another kind than the declared one is refused. A caller with no kind is refused by every access profile with 403, because every profile pins a kind.
+
+- A refusal in development carries `failedCheck` in the problem body, naming the check that failed. Production answers are unchanged.
+
+- `documentsctl generate identity-facts PROJECT --runtime-config FILE --output FILE` writes the identity facts one issuer entry states. With more than one entry, `--issuer ISSUER_ID` names it, and a missing or unknown id is refused with `identity.facts.issuer-required` or `identity.facts.unknown-issuer`.
+
+- `documentsctl check` reports `explicitProductionSettings`, right after `posture`: each explicit setting of the runtime file that is valid in every posture and worth a reviewer's attention, such as `accessTokenType: JWT` or a non-default `scopeClaim`.
 
 - BREAKING: Document Store hook deliveries use Standard Webhooks. Each POST
   carries `accept`, `content-type`, `webhook-id`, `webhook-timestamp` and
@@ -70,7 +94,7 @@
 - BREAKING: `documents.posture.content-verification-disabled` and `platform.database.test-only-plaintext` replace the corresponding runtime refusal codes.
   Migration: Update scripts that match the old codes.
 
-- `authentication.oidc.allowedClients` accepts the keyword `from-package`,
+- An issuer entry's `allowedClients` accepts the keyword `from-package`,
   which admits the requester clients of the package's access profiles, so the
   clients are written once, in the package. The member stays required, and an
   omitted member, an empty list and `unrestricted` are still refused. A list
@@ -87,7 +111,7 @@
   refusal's line also names the scope claim the deployment configured, the
   scope the access profile requires and the profile's id, as `scope_claim`,
   `required_scope` and `access_profile`, and carries a fixed remedy that names
-  `authentication.oidc.scopeClaim`. No value from the token is written.
+  `scopeClaim` on the issuer entry. No value from the token is written.
   Refusal statuses, headers and bodies are unchanged.
 - A static key set with a private key member or a repeated member name is
   refused at startup, and the error names the rule it broke, and the key's

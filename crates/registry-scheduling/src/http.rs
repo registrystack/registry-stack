@@ -38,6 +38,7 @@ use registry_platform_authcommon::{
     parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
     RefusalRecorder,
 };
+use registry_platform_httpsec::refusal_detail::name_failed_check;
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
     FrameworkRejection, ProblemBody, TraceContext,
@@ -56,7 +57,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::auth::{AuthenticationError, SchedulingAuthenticator};
+use crate::auth::{AuthenticationError, AuthenticationFailure, SchedulingAuthenticator};
 use crate::metrics::{serve_metrics, Metrics, MetricsState, METRICS_PATH};
 use crate::service::{
     Caller, CommitmentAnswer, DetailAdmission, RefusalCode, SchedulingService, ServiceError,
@@ -130,7 +131,8 @@ pub fn router(state: HttpState) -> Router {
                 .route(APPOINTMENT_HISTORY_ROUTE, get(appointment_history))
                 .route(APPOINTMENT_ATTENDANCE_ROUTE, put(record_attendance)),
             refusals,
-        ),
+        )
+        .layer(name_failed_check(posture)),
         posture,
     )
     .with_state(state)
@@ -189,10 +191,7 @@ async fn authenticate_busy_source(
         .authenticator
         .authenticate_busy_source(token, profile)
         .await
-        .map_err(|error| {
-            authentication_problem(error)
-                .with_declared_scope(state.authenticator.declared_busy_scope(profile))
-        })
+        .map_err(authentication_problem)
 }
 
 fn busy_request_problem(error: BusyRequestError) -> HttpError {
@@ -894,11 +893,7 @@ async fn authenticate_read(state: &HttpState, headers: &HeaderMap) -> Result<Cal
         .authenticator
         .authenticate_read(token)
         .await
-        .map_err(|error| {
-            authentication_problem(error)
-                .with_scope_remedy()
-                .with_declared_scope(state.authenticator.declared_reads_scope())
-        })
+        .map_err(|failure| authentication_problem(failure).with_scope_remedy())
 }
 
 async fn authenticate_appointment_detail(
@@ -910,10 +905,7 @@ async fn authenticate_appointment_detail(
         .authenticator
         .authenticate_appointment_detail(token)
         .await
-        .map_err(|error| {
-            authentication_problem(error)
-                .with_declared_scope(state.authenticator.declared_reads_scope())
-        })
+        .map_err(authentication_problem)
 }
 
 async fn authenticate_explain(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
@@ -922,11 +914,7 @@ async fn authenticate_explain(state: &HttpState, headers: &HeaderMap) -> Result<
         .authenticator
         .authenticate_explain(token)
         .await
-        .map_err(|error| {
-            authentication_problem(error)
-                .with_scope_remedy()
-                .with_declared_scope(state.authenticator.declared_explain_scope())
-        })
+        .map_err(|failure| authentication_problem(failure).with_scope_remedy())
 }
 
 async fn authenticate_mutate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
@@ -954,7 +942,23 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, HttpError> {
     })
 }
 
-fn authentication_problem(error: AuthenticationError) -> HttpError {
+/// The answer for a refused authentication, carrying the values and the
+/// sentence the operator's log line names. Neither enters the response body.
+fn authentication_problem(failure: AuthenticationFailure) -> HttpError {
+    let AuthenticationFailure {
+        error,
+        declared,
+        remedy,
+    } = failure;
+    let mut problem = authentication_error_problem(error);
+    problem.declared = declared;
+    if let Some(remedy) = remedy {
+        problem.note = problem.note.map(|note| note.with_remedy(remedy));
+    }
+    problem
+}
+
+fn authentication_error_problem(error: AuthenticationError) -> HttpError {
     match error {
         AuthenticationError::Refused(check) | AuthenticationError::Claims(check) => {
             HttpError::refused(RefusalCode::AuthenticationRefused, check)
@@ -1142,14 +1146,6 @@ impl HttpError {
         }
     }
 
-    /// Attach the values the operator declared for the scope this route
-    /// demands. They ride in the response extensions and are written to the
-    /// log line only for a scope refusal.
-    fn with_declared_scope(mut self, declared: DeclaredScope) -> Self {
-        self.declared = Some(declared);
-        self
-    }
-
     /// Name the setting the operator checks when this is a scope refusal of
     /// a read or explain route.
     fn with_scope_remedy(mut self) -> Self {
@@ -1165,7 +1161,8 @@ impl HttpError {
 }
 
 /// The fixed operator hint on a read or explain scope refusal.
-const SCOPE_REMEDY: &str = "check authentication.oidc.scopeClaim and readsScope or explainScope";
+const SCOPE_REMEDY: &str =
+    "check scopeClaim on the issuer entry under authentication.oidc.issuers, and readsScope or explainScope";
 
 impl From<ServiceError> for HttpError {
     fn from(error: ServiceError) -> Self {
@@ -1412,11 +1409,13 @@ mod tests {
             "credential-malformed" => {
                 bearer_token(&headers_with(AUTHORIZATION, "Bearer a b")).unwrap_err()
             }
-            "token-signature" => {
-                authentication_problem(AuthenticationError::Refused(FailedCheck::TokenSignature))
+            "token-signature" => authentication_error_problem(AuthenticationError::Refused(
+                FailedCheck::TokenSignature,
+            )),
+            "scope" => {
+                authentication_error_problem(AuthenticationError::Profile(FailedCheck::Scope))
+                    .with_scope_remedy()
             }
-            "scope" => authentication_problem(AuthenticationError::Profile(FailedCheck::Scope))
-                .with_scope_remedy(),
             "operation" => {
                 HttpError::refused(RefusalCode::ProfileNotAuthorized, FailedCheck::Operation)
             }
@@ -1434,7 +1433,9 @@ mod tests {
                 RefusalCode::GrantLifetimeTooLong,
                 FailedCheck::TaskGrantLifetime,
             ),
-            "key-source-unavailable" => authentication_problem(AuthenticationError::Unavailable),
+            "key-source-unavailable" => {
+                authentication_error_problem(AuthenticationError::Unavailable)
+            }
             "plain" => HttpError::plain(ProblemCode::RequestInvalid),
             "grant-peer" => ServiceError::DevelopmentGrantPeer.into(),
             "grant-unavailable" => ServiceError::Problem(ProblemCode::ServiceUnavailable).into(),
@@ -1919,7 +1920,7 @@ mod tests {
         // material cannot be reached, nothing has been learned about the
         // credential, so the caller is told to come back instead of being sent
         // to rotate a working token.
-        let problem = authentication_problem(AuthenticationError::Unavailable);
+        let problem = authentication_error_problem(AuthenticationError::Unavailable);
         assert!(matches!(
             problem,
             HttpError {
@@ -1946,7 +1947,7 @@ mod tests {
             AuthenticationError::Claims(FailedCheck::TokenClaims),
         ] {
             assert!(matches!(
-                authentication_problem(refusal),
+                authentication_error_problem(refusal),
                 HttpError {
                     problem: ProblemCode::AuthenticationRefused,
                     ..
@@ -1954,7 +1955,7 @@ mod tests {
             ));
         }
         assert!(matches!(
-            authentication_problem(AuthenticationError::Profile(FailedCheck::Scope)),
+            authentication_error_problem(AuthenticationError::Profile(FailedCheck::Scope)),
             HttpError {
                 problem: ProblemCode::ProfileNotAuthorized,
                 ..

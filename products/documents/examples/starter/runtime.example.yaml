@@ -34,19 +34,47 @@ database:
   # caBundleRef: secret:file/postgres-ca.pem
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:documents
-    scopeClaim: scope
-    # Required; `unrestricted` is a startup refusal.
-    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
-    # Signing keys come from the issuer's discovery document by default. A
-    # static key set suits a host that cannot reach the issuer, or a local
-    # test issuer: it is read once at startup and never rotates, so replace
-    # the secret and restart to change keys. It holds RSA or EC public keys,
-    # each with a distinct non-empty `kid`.
-    # jwksSource:
-    #   type: static
-    #   documentRef: secret:file/jwks.json
+    # The issuers whose access tokens this runtime accepts, each under an id
+    # of your choice. A client belongs to one issuer. The entries' clients
+    # together cover every client an access profile in documents.yaml names.
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:documents
+        # The access-token type admitted: `at+jwt` when omitted. An issuer
+        # that types its access tokens `JWT` is named here. An ID token is
+        # refused under either type, so the audience names this service and
+        # no client.
+        # accessTokenType: at+jwt
+        # The claim carrying the accepted OAuth scopes, `scope` when omitted.
+        # An issuer that emits `scp` or `roles` names it here.
+        # scopeClaim: scope
+        # The OAuth clients this issuer admits: a list, or `from-package` for
+        # the clients the access profiles in documents.yaml name. The list is
+        # never empty, and `unrestricted` is refused.
+        allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+        # The caller kind of every token from this issuer, or of each named
+        # client's tokens, when the issuer does not emit one. Write one of
+        # the two. A token that names another kind is refused. Every access
+        # profile names a kind, so a token with no kind is refused by the
+        # profile unless the operator declares one here.
+        # actorKind: service
+        # clientActorKinds:
+        #   civil-registry-app: service
+        # `assertionIssuers` maps a client id to the assertion authorities it
+        # may exchange a subject token from. A deployment that performs no
+        # token exchange leaves it empty, and an exchanged token is then
+        # refused.
+        # assertionIssuers:
+        #   civil-registry-app: [https://issuer.example.test/assertions]
+        # Signing keys come from the issuer's discovery document by default. A
+        # static key set suits a host that cannot reach the issuer, or a local
+        # test issuer: it is read once at startup and never rotates, so replace
+        # the secret and restart to change keys. It holds RSA or EC public keys,
+        # each with a distinct non-empty `kid`.
+        # jwksSource:
+        #   type: static
+        #   documentRef: secret:file/jwks.json
 audit:
   destination: file
   path: /var/lib/registry-documents/audit.ndjson

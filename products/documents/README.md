@@ -18,12 +18,19 @@ are delivered to after-commit URL observers.
 
 Every document route carries the API's major version, `/v1/`, in its path;
 the probes `GET /health` and `GET /ready` are unversioned. Every route but
-the probes takes a bearer access token the configured issuer signed. The token's client, scopes, and actor kind select one access
+the probes takes a bearer access token one of the configured issuers signed.
+The token's client, scopes, and actor kind select one access
 profile in `documents.yaml`; the profile and the document policy decide what
-the caller may do. The token is an RFC 9068 `at+jwt` access token signed with
+the caller may do. The token is an RFC 9068 `at+jwt` access token (an issuer
+that types its tokens `JWT` says so with `accessTokenType: JWT`) signed with
 `RS256` or `ES256`, whose `azp` or `client_id` is in a profile's
 `requesterClients`, whose scopes include the profile's `requiredScopes`, and
-whose `registry_actor_kind` is the profile's `actorKind`; the
+whose actor kind is the profile's `actorKind`. The kind comes from the token's
+`registry_actor_kind`, or from the `actorKind` or `clientActorKinds` the
+operator declared for the issuer entry. A caller with no kind is refused by
+every profile. Custody and grants are scoped to the caller's issuer entry: a
+service places custody for, and grants to, subjects at its own issuer, and a
+person who signs in through another entry does not see them. The
 [Deploy and operate the Document Store](https://docs.registrystack.org/operate/documents/#access-tokens)
 guide states every rule.
 `generated/registry-documents.openapi.json` is the full contract.
@@ -47,7 +54,7 @@ guide states every rule.
 The two routes that create a resource, `POST /v1/documents` and
 `POST /v1/documents/{documentId}/grants`, refuse a request without an
 `Idempotency-Key` of 1 to 128 printable ASCII characters as
-`request.invalid` (400). A key belongs to its caller, by issuer, actor kind, and subject,
+`request.invalid` (400). A key belongs to its caller, by issuer, actor kind, and subject (the same subject at two issuers is two callers),
 and to its operation, for a grant the document it names. A retry under the
 same key with the same body, compared in canonical JSON after parsing,
 answers `201` with the resource the first request created, changes nothing,

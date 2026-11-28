@@ -1070,6 +1070,20 @@ def database_ca_bundle_key(release: tuple[int, int, int] | None) -> str:
     return "caBundleRef"
 
 
+# The first release whose Messaging runtime holds its OIDC issuers under
+# `authentication.oidc.issuers`. Earlier releases write the issuer members
+# directly under `authentication.oidc`, and an operator moves them into an
+# entry before upgrading, as the Messaging CHANGELOG says.
+MESSAGING_ISSUER_SET_INTRODUCED = (0, 49, 0)
+MESSAGING_ISSUER_ID = "main"
+
+
+def messaging_uses_issuer_set(release: tuple[int, int, int] | None) -> bool:
+    """Whether the binaries of `release` read the issuer set; None is a build
+    of this source."""
+    return release is None or release >= MESSAGING_ISSUER_SET_INTRODUCED
+
+
 MESSAGING_ISSUER = "https://issuer.upgrade-rehearsal.invalid"
 MESSAGING_AUDIENCE = "urn:upgrade-rehearsal:messaging"
 MESSAGING_KID = "upgrade-rehearsal-messaging-rsa"
@@ -1170,6 +1184,15 @@ class Messaging:
         side.run("messagingctl", "check", "--project", str(self.project))
         side.run("messagingctl", "package", str(self.project), "--output", str(self.package))
         side.run("messagingctl", "check", "--package", str(self.package))
+        issuer = {
+            "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
+            "allowedClients": ["case-system", "operations-console"],
+            # The scope claim default differs between releases, and one
+            # runtime file serves both sides, so it is named explicitly.
+            "scopeClaim": "registry_scopes",
+            "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"}}
+        oidc = ({"issuers": {MESSAGING_ISSUER_ID: issuer}}
+                if messaging_uses_issuer_set(side.release) else issuer)
         dump_yaml(self.runtime, {
             "apiVersion": "id.registrystack.org/formats/messaging/runtime/v1alpha1",
             "kind": "MessagingRuntimeConfig",
@@ -1182,13 +1205,7 @@ class Messaging:
             "database": {"runtimeUrlRef": "secret:file/runtime-database-url",
                          "migrationUrlRef": "secret:file/migration-database-url",
                          database_ca_bundle_key(side.release): "secret:file/postgres-ca.pem"},
-            "authentication": {"oidc": {
-                "issuer": MESSAGING_ISSUER, "audience": MESSAGING_AUDIENCE,
-                "allowedClients": ["case-system", "operations-console"],
-                # The scope claim default differs between releases, and one
-                # runtime file serves both sides, so it is named explicitly.
-                "scopeClaim": "registry_scopes",
-                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"}}},
+            "authentication": {"oidc": oidc},
             "audit": {"path": str(self.audit / MESSAGING_AUDIT),
                       "hashKeyRef": "secret:file/messaging-audit-key"},
         })
@@ -1203,6 +1220,18 @@ class Messaging:
             if key != wanted and key in database:
                 database[wanted] = database.pop(key)
         dump_yaml(self.runtime, runtime)
+
+    def move_issuer_into_set(self, side: Side) -> None:
+        """Move the runtime file's issuer members into an issuer entry when
+        `side` reads the issuer set, the edit an operator makes before
+        upgrading."""
+        if not messaging_uses_issuer_set(side.release):
+            return
+        runtime = load_yaml(self.runtime)
+        oidc = runtime["authentication"]["oidc"]
+        if "issuers" not in oidc:
+            runtime["authentication"]["oidc"] = {"issuers": {MESSAGING_ISSUER_ID: oidc}}
+            dump_yaml(self.runtime, runtime)
 
     def rewrite_in_map_form(self, side: Side) -> str | None:
         """Rewrite the keyed collections the previous release wrote as lists
@@ -1342,6 +1371,7 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     # rebuilds the package first, so the upgrade activates that package over
     # the previous one and the ledger must then name it.
     messaging.rename_database_ca_bundle(new)
+    messaging.move_issuer_into_set(new)
     rebuilt = messaging.rewrite_in_map_form(new)
     differences = messaging.upgrade(new, activated, rebuilt)
     differences += dispatch_shape_differences(postgres.sql("messaging", """

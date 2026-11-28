@@ -165,13 +165,14 @@ fn envelope(report: &Value) -> io::Result<Value> {
 /// Write one report, envelope members first, and its trailing newline.
 #[cfg(test)]
 pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    write_with_posture(report, stdout, None)
+    write_with_posture(report, stdout, None, None)
 }
 
 pub(crate) fn write_with_posture(
     report: &Value,
     stdout: &mut dyn io::Write,
     posture: Option<registry_platform_config::DeclaredPosture>,
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 ) -> io::Result<()> {
     let value = envelope(report)?;
     let report =
@@ -179,6 +180,11 @@ pub(crate) fn write_with_posture(
             .map_err(io::Error::other)?;
     let report = if let Some(declared) = posture {
         report.with_posture(declared)
+    } else {
+        report
+    };
+    let report = if let Some(settings) = explicit_settings {
+        report.explicit_settings(settings)
     } else {
         report
     };

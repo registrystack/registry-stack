@@ -166,7 +166,10 @@ impl AuthorizationAuditEvent {
     }
 
     fn validate(&self) -> Result<(), AuthorizationAuditError> {
-        if !matches!(self.actor_kind.as_str(), "human" | "agent" | "service") {
+        if !matches!(
+            self.actor_kind.as_str(),
+            "human" | "agent" | "service" | "unspecified"
+        ) {
             return Err(AuthorizationAuditError::InvalidActorKind);
         }
         if !valid_pseudonym(&self.principal_pseudonym)
@@ -351,6 +354,27 @@ mod tests {
         .expect_err("unsupported actor kind is not accepted");
 
         assert_eq!(error, AuthorizationAuditError::InvalidActorKind);
+    }
+
+    #[test]
+    fn a_caller_of_unspecified_kind_is_recorded_as_unspecified() {
+        let event = AuthorizationAuditEvent::new(
+            "unspecified",
+            format!("sha256:{}", digest('a')),
+            format!("sha256:{}", digest('b')),
+            None,
+            None,
+            "benefit-review",
+            "get",
+            AuthorizationOutcome::Denied,
+            "authorization.profile",
+        )
+        .expect("a caller whose kind is not known is still audited");
+
+        assert_eq!(
+            serde_json::to_value(&event).unwrap()["actorKind"],
+            "unspecified"
+        );
     }
 
     #[test]
