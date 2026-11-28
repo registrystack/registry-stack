@@ -117,10 +117,10 @@ For source disclosure, the institution explicitly grants the BReg agent profile
 its reviewer population and permitted fields/rows. That profile does not
 automatically intersect with each represented person's human BReg permissions.
 
-Configure Casework's `authentication.oidc.humanIdentity` against an issuer-verified
-claim about the represented person, and preserve that claim through both
-exchanges. The native fixture uses a separate subject-human claim: the gateway's
-current actor category can correctly be `service` while its represented subject
-is human. Preserve the principal, purpose and jurisdiction claims selected by
+Configure `representedHuman` on the Casework `delegatedStaffReaders` binding
+against an issuer-verified claim about the represented person, and preserve that
+claim through both exchanges. The native fixture uses a separate subject-human
+claim: the gateway's current actor category can correctly be `service` while its
+represented subject is human. Preserve the principal, purpose and jurisdiction claims selected by
 the source profile as well. Tokens must derive these claims from the verified
 subject; tool arguments cannot supply them.

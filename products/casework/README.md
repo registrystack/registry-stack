@@ -310,8 +310,9 @@ The source-built `registry-mcp` supporting service can use the default-off
 `delegatedStaffReaders` contract for assigned-task listing and context reads at
 `/v1/delegated-staff`. Each reader explicitly admits a trusted gateway,
 represented staff profile, required scopes, short token lifetime and optional
-source profiles. Ordinary staff and producer routes retain their own
-authentication. Current-source context additionally requires
+source profiles, and names in `representedHuman` the claim that says the
+represented person is human. Ordinary staff and producer routes retain their
+own authentication. Current-source context additionally requires
 `delegatedDisplayExchange` and an institution-approved source agent profile;
 the Casework bearer is never forwarded to BReg. See
 [the MCP gateway configuration](https://docs.registrystack.org/configure/breg-mcp/) and
@@ -392,16 +393,16 @@ caseworkctl generate identity-facts ./casework \
   --runtime-config /etc/registry-casework/runtime.yaml --output ./casework.identity-facts.yaml
 ```
 
-The facts state the issuer, audience and admitted clients from
-`authentication.oidc`, the human-actor claim, each access profile's scopes
+The facts state the issuer, audience and admitted clients from the issuer
+entry under `authentication.oidc.issuers`, the human-actor claim, each access profile's scopes
 and whether it requires a human (as Casework does for a profile that does not
 act as a requester, or that initiates reviews), and, when `taskAuthority` is configured, the task authority as an
 assertion issuer, a status profile limited to its `statusClients`, and the
 exchange profile for the clients that present its assertions. The assertion
 issuer's key location is `<taskAuthority.issuer>/.well-known/jwks.json`, where
-the Casework service publishes it. The command refuses a `humanIdentity` other
-than the claim `registry_actor_kind` with the value `human`, refuses an existing
-output file, opens no secret, and prints only the output path and counts.
+the Casework service publishes it. The command refuses a runtime file with
+more than one issuer entry or a `scopeClaim` other than `scope`, refuses an
+existing output file, opens no secret, and prints only the output path and counts.
 
 `check --runtime-config` checks authored configuration offline. `check
 --production` also reads the exact package input closure and points an unpaired

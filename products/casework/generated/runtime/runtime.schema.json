@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "AccessTokenType": {
+      "description": "The access-token type an issuer entry admits.",
+      "oneOf": [
+        {
+          "const": "at+jwt",
+          "description": "RFC 9068 access tokens, typed `at+jwt` or `application/at+jwt`.",
+          "type": "string"
+        },
+        {
+          "const": "JWT",
+          "description": "Access tokens typed `JWT`, from a provider that does not type them\n`at+jwt`. An ID token stays refused.",
+          "type": "string"
+        }
+      ]
+    },
     "AuditConfig": {
       "additionalProperties": false,
       "description": "The audit journal: where it is written and the key its hashes use.",
@@ -176,6 +191,141 @@
       ],
       "type": "object"
     },
+    "CaseworkIssuer": {
+      "additionalProperties": false,
+      "description": "One entry of `authentication.oidc.issuers`.",
+      "properties": {
+        "accessTokenType": {
+          "$ref": "#/$defs/AccessTokenType",
+          "default": "at+jwt",
+          "description": "The access-token type the entry admits. Absent reads `at+jwt`.",
+          "x-registry-explicit-production": [
+            "platform.posture.jwt-access-token"
+          ]
+        },
+        "actorKind": {
+          "$ref": "#/$defs/IssuerActorKind",
+          "description": "The kind every token from this issuer is treated as. Absent declares\nnone.",
+          "x-registry-explicit-production": [
+            "platform.posture.issuer-actor-kind"
+          ]
+        },
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
+        },
+        "allowedClients": {
+          "anyOf": [
+            {
+              "const": "unrestricted",
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          ],
+          "description": "The clients whose tokens the entry admits.",
+          "x-registry-development-only": [
+            "casework.posture.unrestricted-clients"
+          ]
+        },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": "The assertion authorities each client may exchange a subject token\nfrom, keyed by client identifier. Omitted, no assertion-issuer rule\napplies. Written, it lists at least one client, each with at least one\nauthority, and a client that is not listed may exchange from no\nauthority.",
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "type": "object"
+        },
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "clientActorKinds": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DeclaredActorKind"
+          },
+          "description": "The kind tokens from each named client are treated as. Absent declares\nnone. Not combined with `actorKind`.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-explicit-production": [
+            "platform.posture.client-actor-kinds"
+          ]
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "type": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
+        },
+        "maximumTokenLifetimeSeconds": {
+          "description": "The longest lifetime, in seconds, an access token from this issuer may\ndeclare, independently of the issuer's own policy.",
+          "format": "uint64",
+          "maximum": 7200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "revokedKeyIds": {
+          "description": "Signing-key identifiers Casework refuses for this issuer, even while\nthe issuer still publishes them. Listing a key does not revoke it at\nthe issuer. Omitted, no key is refused. Written, the list is non-empty.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "scopeClaim": {
+          "$ref": "#/$defs/ScopeClaimName",
+          "default": "scope",
+          "description": "The claim that carries scopes. Absent reads `scope`.",
+          "x-registry-explicit-production": [
+            "platform.posture.scope-claim"
+          ]
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "allowedClients"
+      ],
+      "type": "object"
+    },
     "DatabaseConfig": {
       "additionalProperties": false,
       "description": "The PostgreSQL connection a stateful runtime uses. Both URLs are secret\nreferences and may name the same secret.",
@@ -230,6 +380,15 @@
           "type": "string"
         }
       ]
+    },
+    "DeclaredActorKind": {
+      "description": "An actor kind an operator declares for a caller.",
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
     },
     "DelegatedDisplayExchangeBinding": {
       "additionalProperties": false,
@@ -294,6 +453,10 @@
         "profile": {
           "$ref": "#/$defs/LocalId"
         },
+        "representedHuman": {
+          "$ref": "#/$defs/RepresentedHumanConfig",
+          "description": "The claim, and the value it holds, that says the person this\ndelegated token represents is human. The token's own actor kind is\nthe gateway's and does not stand for the represented person."
+        },
         "requiredScope": {
           "type": "string"
         },
@@ -311,6 +474,7 @@
         "profile",
         "client",
         "actorSubject",
+        "representedHuman",
         "assertionIssuer",
         "requiredScope",
         "maximumTokenLifetimeSeconds"
@@ -349,20 +513,6 @@
       ],
       "type": "object"
     },
-    "HumanIdentityConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "claim": {
-          "default": "registry_actor_kind",
-          "type": "string"
-        },
-        "value": {
-          "default": "human",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "HumanSourceAuthentication": {
       "additionalProperties": false,
       "properties": {
@@ -390,6 +540,10 @@
         "databaseId"
       ],
       "type": "object"
+    },
+    "IssuerActorKind": {
+      "$ref": "#/$defs/DeclaredActorKind",
+      "description": "The kind every token from one issuer is treated as."
     },
     "JwksSource": {
       "description": "Where a runtime obtains the OIDC issuer's signing keys.",
@@ -500,68 +654,10 @@
       ],
       "type": "object"
     },
-    "OidcAllowedClients": {
-      "anyOf": [
-        {
-          "const": "unrestricted",
-          "description": "Admit a token from every client the issuer verifies.",
-          "type": "string"
-        },
-        {
-          "description": "Admit a token only from a listed client.",
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        }
-      ],
-      "description": "How `allowedClients` is written (CFG-EMPTY-2): the keyword `unrestricted`,\nor a list of at least one client. An empty list is refused, because it\nreads as both \"none\" and \"any\"."
-    },
     "OidcConfig": {
       "additionalProperties": false,
-      "description": "The access tokens this runtime accepts: the issuer and its keys, the\nclients admitted, the scope claim, and the claim that marks a human actor.",
+      "description": "The access tokens this runtime accepts: the issuers it trusts, each with\nits own keys, rules and clients, and the delegated staff readers.",
       "properties": {
-        "allowInsecureHttp": {
-          "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
-          "type": "boolean",
-          "x-registry-development-only": [
-            "platform.posture.insecure-issuer-http"
-          ]
-        },
-        "allowedClients": {
-          "$ref": "#/$defs/OidcAllowedClients",
-          "description": "The OAuth clients whose access tokens are admitted: `unrestricted` to\nadmit a token from every client the issuer verifies, or a list of at\nleast one distinct client. A runtime decides whether `unrestricted`\nis acceptable in production."
-        },
-        "assertionIssuers": {
-          "additionalProperties": {
-            "items": {
-              "maxLength": 512,
-              "minLength": 1,
-              "type": "string"
-            },
-            "maxItems": 16,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.",
-          "maxProperties": 64,
-          "minProperties": 1,
-          "propertyNames": {
-            "$ref": "#/$defs/ExternalId",
-            "maxLength": 128
-          },
-          "type": "object"
-        },
-        "audience": {
-          "description": "The audience every accepted access token must carry in `aud`.",
-          "maxLength": 512,
-          "minLength": 1,
-          "type": "string"
-        },
         "delegatedStaffReaders": {
           "additionalProperties": {
             "$ref": "#/$defs/DelegatedStaffReaderConfig"
@@ -572,49 +668,20 @@
           },
           "type": "object"
         },
-        "humanIdentity": {
-          "$ref": "#/$defs/HumanIdentityConfig"
-        },
-        "issuer": {
-          "$ref": "#/$defs/Url",
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
-        },
-        "jwksSource": {
-          "$ref": "#/$defs/JwksSource",
-          "default": {
-            "type": "discovery"
+        "issuers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CaseworkIssuer"
           },
-          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
-          "x-registry-development-only": [
-            "platform.posture.test-issuer"
-          ]
-        },
-        "maximumTokenLifetimeSeconds": {
-          "description": "Optional deployment bound on the lifetime declared by an incoming\naccess token, independently of the issuer's own policy.",
-          "format": "uint64",
-          "maximum": 7200,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "revokedKeyIds": {
-          "description": "Signing-key identifiers Casework refuses locally, even while the issuer\nstill publishes them; listing a key does not revoke it at the issuer.\nOmitted, no key is refused; written, the list is non-empty.",
-          "items": {
-            "$ref": "#/$defs/ExternalId"
+          "description": "The issuers a token may come from, by issuer id.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
           },
-          "maxItems": 128,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
-        "scopeClaim": {
-          "default": "registry_scopes",
-          "type": "string"
+          "type": "object"
         }
       },
       "required": [
-        "issuer",
-        "audience",
-        "allowedClients"
+        "issuers"
       ],
       "type": "object"
     },
@@ -636,6 +703,27 @@
       "required": [
         "bind",
         "tlsTermination"
+      ],
+      "type": "object"
+    },
+    "RepresentedHumanConfig": {
+      "additionalProperties": false,
+      "description": "A claim of a delegated token, and the exact value it holds, that says the\nrepresented person is human.",
+      "properties": {
+        "claim": {
+          "description": "The claim name.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "value": {
+          "description": "The exact string value the claim holds for a human.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim",
+        "value"
       ],
       "type": "object"
     },
@@ -698,6 +786,10 @@
         "root"
       ],
       "type": "object"
+    },
+    "ScopeClaimName": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The name of the claim that carries scopes."
     },
     "SecretProvidersConfig": {
       "additionalProperties": false,
@@ -831,11 +923,17 @@
             "properties": {
               "oidc": {
                 "properties": {
-                  "jwksSource": {
-                    "properties": {
-                      "documentRef": {
-                        "not": {
-                          "pattern": "^secret:env/"
+                  "issuers": {
+                    "additionalProperties": {
+                      "properties": {
+                        "jwksSource": {
+                          "properties": {
+                            "documentRef": {
+                              "not": {
+                                "pattern": "^secret:env/"
+                              }
+                            }
+                          }
                         }
                       }
                     }
@@ -951,11 +1049,17 @@
             "properties": {
               "oidc": {
                 "properties": {
-                  "jwksSource": {
-                    "properties": {
-                      "documentRef": {
-                        "not": {
-                          "pattern": "^secret:file/"
+                  "issuers": {
+                    "additionalProperties": {
+                      "properties": {
+                        "jwksSource": {
+                          "properties": {
+                            "documentRef": {
+                              "not": {
+                                "pattern": "^secret:file/"
+                              }
+                            }
+                          }
                         }
                       }
                     }

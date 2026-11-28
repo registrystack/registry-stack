@@ -2,22 +2,23 @@
 //! Runs the token fixture corpus through Casework's real authentication path
 //! and asserts each result against the `casework` column of `expected.yaml`.
 //!
-//! The access-token verifier profile and the key source come from a runtime
-//! file parsed by `RuntimeConfig::loader` and built by
-//! `RuntimeConfig::oidc_verifier`, as at startup, with the signer's public
-//! keys served as a static key set. Casework verifies RS256 and ES256 only, so
-//! the key set the file points at holds those two keys.
+//! The issuer entry and its key source come from a runtime file parsed by
+//! `RuntimeConfig::loader` and built by `RuntimeConfig::issuer_verifiers`, as
+//! at startup, with the signer's public keys served as a static key set.
+//! Casework verifies RS256 and ES256 only, so the key set the file points at
+//! holds those two keys.
 
 use std::path::Path;
-use std::sync::Arc;
 
-use registry_casework::{secret_resolver, CaseworkAuthenticator, RuntimeConfig};
+use registry_casework::{
+    secret_resolver, AuthenticationError, CaseworkAuthenticator, RuntimeConfig,
+};
 use registry_casework_core::{
     AccessProfile, CaseworkActsAs, CaseworkProject, InboxPolicy, ProjectIdentity, QueuePolicy,
     CASEWORK_API_VERSION, CASEWORK_KIND,
 };
 use registry_platform_authcommon::FailedCheck;
-use registry_platform_oidc::JwksFetcher;
+use registry_platform_oidc::ActorKind;
 use registry_platform_testing::{
     Against, ClaimValue, Configuration, FixtureCase, Outcome, Stage, TokenCorpus, TokenFixture,
     TokenSigner,
@@ -82,13 +83,20 @@ impl Secrets {
     }
 }
 
-/// What a configuration changes in the runtime file's `authentication.oidc`
-/// block, derived from the fixture the way `expected.yaml` describes.
+/// What a configuration changes in the runtime file's issuer entry, derived
+/// from the fixture the way `expected.yaml` describes.
 struct Shape {
-    /// `None` leaves `scopeClaim` out, as the runner's own file does.
+    /// `None` leaves `scopeClaim` out, so the entry reads `scope`.
     scope_claim: Option<&'static str>,
+    /// `true` writes `accessTokenType: JWT`. Otherwise the member is left
+    /// out and the entry admits `at+jwt` only.
+    jwt_access_token: bool,
     /// Empty writes `allowedClients: unrestricted`.
     clients: Vec<String>,
+    /// The client the fixture names, if any.
+    client: Option<String>,
+    /// The actor kind the operator declares under `recipe-declared-kind`.
+    declared_kind: Option<ActorKind>,
     /// The scope the access profile requires.
     scope: String,
 }
@@ -102,20 +110,62 @@ impl Shape {
             (true, false) => Some("scope"),
             (false, _) => None,
         };
+        // The recipe states the type the provider writes. An entry admits
+        // `at+jwt` unless it says `JWT`.
+        let jwt_access_token = match case.configuration {
+            Configuration::Recipe => {
+                fixture
+                    .header
+                    .as_ref()
+                    .and_then(|header| header.typ.as_deref())
+                    == Some("JWT")
+            }
+            Configuration::JwtAccepted => true,
+            Configuration::Default => false,
+        };
         let client = literal_text(fixture, "client_id").or_else(|| literal_text(fixture, "azp"));
-        let clients = match (client, recipe) {
-            (Some(client), _) => vec![client],
+        let clients = match (&client, recipe) {
+            (Some(client), _) => vec![client.clone()],
             (None, true) => Vec::new(),
             (None, false) => vec![LISTED_CLIENT.to_owned()],
         };
         let scope = fixture
-            .read_scope(scope_claim.unwrap_or("registry_scopes"))
+            .read_scope(scope_claim.unwrap_or("scope"))
             .unwrap_or_else(|| FALLBACK_SCOPE.to_owned());
         Self {
             scope_claim,
+            jwt_access_token,
             clients,
+            client,
+            declared_kind: case.declared_kind,
             scope,
         }
+    }
+
+    /// The entry's `accessTokenType`, `scopeClaim` and declared-kind members,
+    /// each on its own line, or nothing where the row leaves them out.
+    fn optional_members(&self) -> String {
+        let mut members = String::new();
+        if self.jwt_access_token {
+            members.push_str("        accessTokenType: JWT\n");
+        }
+        if let Some(claim) = self.scope_claim {
+            members.push_str(&format!("        scopeClaim: {claim}\n"));
+        }
+        if let Some(kind) = self.declared_kind {
+            let kind = kind.as_str();
+            // A kind is declared for the fixture's client, or for the whole
+            // issuer where the token names no client.
+            match &self.client {
+                Some(client) => {
+                    // JSON is YAML flow syntax, so any client id stays one key.
+                    let declared = json!({ client.as_str(): kind });
+                    members.push_str(&format!("        clientActorKinds: {declared}\n"));
+                }
+                None => members.push_str(&format!("        actorKind: {kind}\n")),
+            }
+        }
+        members
     }
 
     fn runtime_yaml(&self, case: &FixtureCase, root: &Path) -> String {
@@ -124,10 +174,6 @@ impl Shape {
         } else {
             json!(self.clients).to_string()
         };
-        let scope_claim = self
-            .scope_claim
-            .map(|claim| format!("    scopeClaim: {claim}\n"))
-            .unwrap_or_default();
         format!(
             "apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
 kind: CaseworkRuntimeConfig
@@ -138,16 +184,19 @@ secretProviders: {{file: {{root: {root}/secrets}}, environment: {{}}}}
 database: {{runtimeUrlRef: secret:env/RUNTIME, migrationUrlRef: secret:env/MIGRATION}}
 authentication:
   oidc:
-    issuer: {issuer}
-    audience: {audience}
-    allowedClients: {clients}
-{scope_claim}    jwksSource: {{type: static, documentRef: secret:file/{JWKS_FILE}}}
+    issuers:
+      main:
+        issuer: {issuer}
+        audience: {audience}
+        allowedClients: {clients}
+{members}        jwksSource: {{type: static, documentRef: secret:file/{JWKS_FILE}}}
 audit: {{path: {root}/audit.ndjson, hashKeyRef: secret:file/audit}}
 contextProviders: {{}}
 ",
             root = root.display(),
             issuer = case.issuer,
             audience = case.audience,
+            members = self.optional_members(),
         )
     }
 
@@ -211,16 +260,12 @@ async fn observe(case: FixtureCase, secrets: &Secrets) -> Outcome {
     .expect("the runtime file for this row parses");
     let config = loaded.config;
     let resolver = secret_resolver(&config).expect("the secret providers resolve");
-    let (verifier, keys): (_, Arc<JwksFetcher>) = config
-        .oidc_verifier(&resolver, loaded.development.as_ref())
+    let verifiers = config
+        .issuer_verifiers(&resolver, loaded.development.as_ref())
         .await
-        .expect("the verifier profile builds");
-    let authenticator = CaseworkAuthenticator::new(
-        &shape.project(),
-        verifier,
-        keys,
-        config.authentication.oidc.human_identity.clone(),
-    );
+        .expect("the issuer verifiers build");
+    let authenticator =
+        CaseworkAuthenticator::new(&shape.project(), verifiers).expect("the issuer set builds");
 
     let profile = match case.against {
         Against::PlainRead => "requester",
@@ -231,6 +276,9 @@ async fn observe(case: FixtureCase, secrets: &Secrets) -> Outcome {
         .await
     {
         Ok(_) => Outcome::Admitted(None),
+        // The person-only rule of the selected profile is a profile refusal.
+        // The verifier's own actor-kind refusals are the actor-kind stage.
+        Err(AuthenticationError::NotHuman(_)) => Outcome::Refused(Stage::Profile),
         Err(error) => Outcome::Refused(stage_of(error.failed_check())),
     }
 }
@@ -248,7 +296,8 @@ fn stage_of(check: FailedCheck) -> Stage {
         FailedCheck::TokenTime => Stage::Time,
         FailedCheck::TokenClient | FailedCheck::TokenAssertionIssuer => Stage::Client,
         FailedCheck::Scope => Stage::Scope,
-        FailedCheck::AccessProfile | FailedCheck::ActorKind => Stage::Profile,
+        FailedCheck::AccessProfile => Stage::Profile,
+        FailedCheck::ActorKind => Stage::ActorKind,
         FailedCheck::KeySourceUnavailable => Stage::Unavailable,
         FailedCheck::TokenClaims => Stage::Claims,
         other => panic!("the corpus has no stage for the check {}", other.as_str()),

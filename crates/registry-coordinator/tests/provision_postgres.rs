@@ -196,7 +196,7 @@ async fn run(superuser_url: String, ca_pem: Vec<u8>, owner_password: String, nam
     d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
     d["admissionKeyRef"] = json!("secret:file/admission-key");
     d["auditKeyRef"] = json!("secret:file/audit-key");
-    d["authentication"] = json!({"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"policies":{"producer":{"subjects":["owner-a"],"requiredScopes":["coordinator:start"],"workflows":[DELAYED],"actions":["start","status"]}}});
+    d["authentication"] = json!({"issuers":{"main":{"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"allowedClients":"from-policies"}},"policies":{"producer":{"subjects":["owner-a"],"requiredScopes":["coordinator:start"],"workflows":[DELAYED],"actions":["start","status"]}}});
     let path = root_path.join("runtime.yaml");
     fs::write(&path, serde_norway::to_string(&doc).unwrap()).unwrap();
 

@@ -107,6 +107,7 @@ mod state_key_map {
 }
 impl DeploymentConfig {
     pub fn validate(&self, secrets: &SecretProvidersConfig) -> Result<()> {
+        self.authentication.validate(secrets)?;
         self.findings(secrets)
             .into_iter()
             .next()
@@ -207,7 +208,7 @@ impl DeploymentConfig {
         {
             errors.push(config_fail("deployment.stateKeys", "configure 1..=16 deployment.stateKeys with canonical nonzero u32 versions and select an existing version in deployment.activeStateKey"));
         }
-        errors.extend(self.authentication.findings(secrets));
+        errors.extend(self.authentication.findings());
         for (field, r) in [
             ("deployment.auditKeyRef", &self.audit_key_ref),
             ("deployment.admissionKeyRef", &self.admission_key_ref),

@@ -32,10 +32,13 @@ deployment:
     bind: 127.0.0.1:8108
     tlsTermination: operator-controlled-upstream
   authentication:
-    issuer: https://issuer.example.org
-    audience: urn:example:coordinator
-    jwksSource: {type: discovery}
-    scopeClaim: scope
+    issuers:
+      main:
+        issuer: https://issuer.example.org
+        audience: urn:example:coordinator
+        jwksSource: {type: discovery}
+        scopeClaim: scope
+        allowedClients: from-policies
     policies:
       benefits-service:
         subjects: [benefits-service]

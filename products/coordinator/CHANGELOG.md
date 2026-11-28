@@ -8,6 +8,16 @@
 
 - Start a local development run from the starter with `rstack dev start`.
 - Typed remote mutations probe the Coordinator API through an unauthenticated `GET /v1/doctor`. Production commands refuse a development or malformed posture mark before sending the mutation.
+- BREAKING: Configure OIDC issuer entries under `deployment.authentication.issuers` and keep the client policies under `deployment.authentication.policies`.
+  Migration: Move `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`, `assertionIssuers`, and `scopeClaim` to a named entry and set its `allowedClients` to `from-policies` or list the clients explicitly.
+- BREAKING: An issuer entry reads scopes from `scope` by default.
+  Migration: Write `scopeClaim: registry_scopes` in an entry if its issuer uses that claim.
+- BREAKING: An entry that states `accessTokenType: JWT` refuses tokens carrying ID-token markers.
+  Migration: Present an access token addressed to the Coordinator.
+- BREAKING: Tokens without a caller kind and without a scope beyond OpenID Connect identity scopes are refused.
+  Migration: Have the issuer grant the scope the Coordinator policy requires or declare the caller kind for the appropriate issuer or client.
+- `coordinatorctl generate identity-facts` writes the clients and access profiles of one configured issuer.
+- Development refusal bodies include `failedCheck`, the check that refused the request.
 
 - BREAKING: An undeclared posture is production.
   Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.

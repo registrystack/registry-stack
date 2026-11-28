@@ -200,6 +200,7 @@ fn http_edge(
         .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(refusals, record_refusals))
+        .layer(registry_platform_httpsec::refusal_detail::name_failed_check(posture))
         .layer(middleware::from_fn(http_boundary))
         .layer(headers)
 }
@@ -285,10 +286,16 @@ pub(crate) fn problem(error: CoordinatorError) -> Response {
     };
     let mut response = problem_response_at(problem, pointer);
     if let Some(check) = check {
-        response.extensions_mut().insert(RefusalNote::new(check));
-        if let Some(declared) = error.declared {
-            response.extensions_mut().insert(*declared);
+        use crate::error::RefusalDetail;
+        let mut note = RefusalNote::new(check);
+        match error.refusal_detail.map(|detail| *detail) {
+            Some(RefusalDetail::Remedy(remedy)) => note = note.with_remedy(remedy),
+            Some(RefusalDetail::Scope(scope)) => {
+                response.extensions_mut().insert(scope);
+            }
+            None => {}
         }
+        response.extensions_mut().insert(note);
     }
     response
 }
@@ -2130,7 +2137,7 @@ pub fn openapi() -> Value {
 }
 
 #[cfg(test)]
-mod refusal_recording_tests {
+pub(crate) mod refusal_recording_tests {
     use super::*;
     use registry_platform_metrics::Exposition;
     use std::sync::Mutex;
@@ -2189,6 +2196,13 @@ mod refusal_recording_tests {
     /// Send one request through the edge. Returns the status, the body, the
     /// counter exposition and the captured log.
     async fn refused(error: CoordinatorError) -> (StatusCode, Value, String, String) {
+        refused_in(error, registry_platform_config::Posture::Production).await
+    }
+
+    pub(crate) async fn refused_in(
+        error: CoordinatorError,
+        posture: registry_platform_config::Posture,
+    ) -> (StatusCode, Value, String, String) {
         use tower::ServiceExt as _;
         let recorder = Arc::new(RefusalRecorder::new("coordinator").unwrap());
         let error = Arc::new(Mutex::new(Some(error)));
@@ -2199,7 +2213,7 @@ mod refusal_recording_tests {
             ),
             Router::new(),
             recorder.clone(),
-            registry_platform_config::Posture::Production,
+            posture,
             false,
         );
         let captured = Captured::default();
@@ -2229,6 +2243,21 @@ mod refusal_recording_tests {
         let body = serde_json::from_slice(&bytes).unwrap();
         let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
         (status, body, exposition(&recorder), log)
+    }
+
+    #[tokio::test]
+    async fn the_development_body_names_the_failed_check_and_production_does_not() {
+        let error = || crate::access::unauthenticated(FailedCheck::TokenSignature);
+        let (production_status, production, _, _) = refused(error()).await;
+        let (development_status, mut development, _, _) =
+            refused_in(error(), registry_platform_config::Posture::Development).await;
+        assert_eq!(production_status, development_status);
+        assert!(production.get("failedCheck").is_none());
+        assert_eq!(
+            development.as_object_mut().unwrap().remove("failedCheck"),
+            Some(json!("token-signature")),
+        );
+        assert_eq!(development, production);
     }
 
     #[tokio::test]

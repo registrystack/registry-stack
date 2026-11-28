@@ -19,6 +19,13 @@ fn example(name: &str) -> PathBuf {
         .unwrap()
 }
 
+fn check_example_runtime(root: &Path) -> registry_platform_config::RuntimeFileCheck<RuntimeConfig> {
+    let copy = tempfile::tempdir().unwrap();
+    let config = copy.path().join("runtime.yaml");
+    std::fs::copy(root.join("runtime.yaml"), &config).unwrap();
+    RuntimeConfig::check_file(&config, false)
+}
+
 const SCENARIOS_MODELINE: &str = "# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json";
 
 #[test]
@@ -337,7 +344,7 @@ fn action_scenarios_cannot_invent_a_read_only_receipt() {
 fn directory_examples_follow_the_configured_response_contract_offline() {
     let root = example("external-directory");
     let (definition, document) = fixture("external-directory");
-    let checked = RuntimeConfig::check_file(&root.join("runtime.yaml"), false);
+    let checked = check_example_runtime(&root);
     assert!(
         checked
             .diagnostics
@@ -445,7 +452,7 @@ fn scenario_recovery_and_reply_names_must_resolve_to_call_steps() {
 #[test]
 fn both_example_deployments_check_without_resolving_credentials() {
     for name in ["governed-action-follow-up", "external-directory"] {
-        let checked = RuntimeConfig::check_file(&example(name).join("runtime.yaml"), false);
+        let checked = check_example_runtime(&example(name));
         assert!(
             checked
                 .diagnostics

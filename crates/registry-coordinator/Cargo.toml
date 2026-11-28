@@ -136,6 +136,7 @@ base64.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 clap.workspace = true
 registry-cli-api.workspace = true
+registry-cli-report.workspace = true
 deadpool-postgres.workspace = true
 hex.workspace = true
 jsonschema.workspace = true

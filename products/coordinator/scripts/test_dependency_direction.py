@@ -23,6 +23,7 @@ NAMES = {
     "cli-docs": "registry-cli-docs",
     "cli-api": "registry-cli-api",
     "cli-report": "registry-cli-report",
+    "identity-tooling": "registry-thunderid-tooling",
     "breg": "registry-breg",
     "breg-client": "registry-breg-client",
     "bregctl": "registry-bregctl",
@@ -140,6 +141,11 @@ class RuntimeTests(unittest.TestCase):
             cli_report=["bregctl"],
         )
         self.assertIn("registry-bregctl", found)
+
+    def test_identity_facts_tooling_may_reach_only_permitted_crates(self):
+        runtime = [*INTENDED["runtime"], "identity-tooling"]
+        self.assertEqual(failures(runtime=runtime), "")
+        self.assertIn("registry-bregctl", failures(runtime=runtime, identity_tooling=["bregctl"]))
 
     def test_intended_direction_is_accepted(self):
         self.assertEqual(MODULE.violations(metadata()), [])

@@ -253,12 +253,12 @@ audit:
   path: $audit_file
 authentication:
   oidc:
-    issuer: $issuer
-    audience: urn:example:casework-restore
-    allowedClients: [requester, staff, administrator]
-    scopeClaim: scope
-    humanIdentity: {claim: registry_actor_kind, value: human}
-    jwksSource: {type: static, documentRef: secret:file/jwks}
+    issuers:
+      main:
+        issuer: $issuer
+        audience: urn:example:casework-restore
+        allowedClients: [requester, staff, administrator]
+        jwksSource: {type: static, documentRef: secret:file/jwks}
 YAML
 run_json "$work/apply.json" "$caseworkctl" --format json apply --runtime-config "$runtime_config"
 start_server

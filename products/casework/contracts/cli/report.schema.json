@@ -962,6 +962,52 @@
       ],
       "type": "object"
     },
+    "ExplicitSettingData": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "column": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pointer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "summary"
+      ],
+      "type": "object"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
@@ -2612,6 +2658,11 @@
               },
               {
                 "required": [
+                  "explicitProductionSettings"
+                ]
+              },
+              {
+                "required": [
                   "filesChecked"
                 ]
               },
@@ -2675,6 +2726,15 @@
             "$ref": "#/$defs/Diagnostic"
           },
           "type": "array"
+        },
+        "explicitProductionSettings": {
+          "items": {
+            "$ref": "#/$defs/ExplicitSettingData"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "filesChecked": {
           "format": "uint",

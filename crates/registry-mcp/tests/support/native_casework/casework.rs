@@ -126,14 +126,16 @@ impl Casework {
                 "secretProviders":{"file":{"root":root}},
                 "database":{"runtimeUrlRef":"secret:file/casework-database-url","migrationUrlRef":"secret:file/casework-database-url","testOnlyPlaintext":true},
                 "authentication":{"oidc":{
-                    "issuer":issuer.issuer(),"audience":CASEWORK_AUDIENCE,"allowInsecureHttp":true,
-                    "allowedClients":["registry-mcp","casework-human","facility-registry"],
-                    "assertionIssuers":{"registry-mcp":[issuer.issuer()]},
-                    "scopeClaim":"scope","humanIdentity":{"claim":HUMAN_IDENTITY_CLAIM,"value":HUMAN_IDENTITY_VALUE},
-                    "maximumTokenLifetimeSeconds":300,
+                    "issuers":{"main":{
+                        "issuer":issuer.issuer(),"audience":CASEWORK_AUDIENCE,"allowInsecureHttp":true,
+                        "allowedClients":["registry-mcp","casework-human","facility-registry"],
+                        "assertionIssuers":{"registry-mcp":[issuer.issuer()]},
+                        "maximumTokenLifetimeSeconds":300
+                    }},
                     "delegatedStaffReaders":{
                         READER_POLICY:{
                             "profile":STAFF_PROFILE,"client":"registry-mcp","actorSubject":"registry-mcp",
+                            "representedHuman":{"claim":HUMAN_IDENTITY_CLAIM,"value":HUMAN_IDENTITY_VALUE},
                             "assertionIssuer":issuer.issuer(),"requiredScope":"casework:staff:delegated-read","maximumTokenLifetimeSeconds":300,
                             "sourceProfiles":[SOURCE_PROFILE]
                         }

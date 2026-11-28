@@ -15,8 +15,8 @@ use axum::{
     Router,
 };
 use registry_casework::{
-    router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
-    PostgresStore, ReviewResultRead, ReviewTaskDecisionRequest,
+    router, CaseworkAuthenticator, CaseworkIssuerVerifier, CaseworkService, DatabaseConfig,
+    HttpState, PostgresStore, ReviewResultRead, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
     AccessProfile, ActorContext, CaseworkActsAs, CaseworkProject, ContentDigest, DecisionKind,
@@ -32,7 +32,7 @@ use registry_platform_crypto::delivery_signature::{
     sign, verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
 };
 use registry_platform_httputil::FetchUrlPolicy;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{DeclaredKinds, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::json;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
@@ -628,14 +628,18 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
     let expected_policy = project.compile_policy("payment-batch").unwrap().binding();
     let authenticator = CaseworkAuthenticator::new(
         &project,
-        oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
-        Arc::new(JwksFetcher::new_with_fetch_url_policy(
-            idp.jwks_uri(),
-            JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::https_or_loopback(),
-        )),
-        HumanIdentityConfig::default(),
-    );
+        vec![CaseworkIssuerVerifier {
+            id: "main".to_owned(),
+            verifier: oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
+            keys: Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                idp.jwks_uri(),
+                JwksFetcherConfig::defaults(),
+                FetchUrlPolicy::https_or_loopback(),
+            )),
+            declared: DeclaredKinds::None,
+        }],
+    )
+    .expect("one issuer entry");
     let casework = LoopbackServer::start(router(HttpState {
         posture: registry_platform_config::PostureReport::new(
             registry_platform_config::DeclaredPosture {
