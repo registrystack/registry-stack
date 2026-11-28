@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { basename, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { checkInstalledClient, generatedVersionComment, packageName, packageVersion } from './generator-package.ts'
+
 type Node = Record<string, any>
 const quote = JSON.stringify
 const escape = (key: string) => key.replaceAll('~', '~0').replaceAll('/', '~1')
@@ -442,6 +444,10 @@ export function generate(source: string, settings: Settings = {}): string {
   const reviewedActions = new Set<string>()
   const invoke: { id: string; operation: string; body: string; keys: string[]; profile: string; attachments: boolean }[] = []
   const actionInputs: Record<string, Node> = {}
+  const availability: { id: string; operation: string; profile: string; targets: { name: string; input: string }[] }[] = []
+  const accessProfiles = new Set<string>()
+  const availabilityReasons = new Set<string>()
+  const proposalActions: { id: string; operation: string; slots: string[] }[] = []
   const conditions: { id: string; operation: string; body: string; profile: string; result: string }[] = []
   const seen = new Set<string>()
   function deref(value: Node, pointer: string): Node {
@@ -520,6 +526,7 @@ export function generate(source: string, settings: Settings = {}): string {
       const inputs: string[] = ['CallOptions']
       const profiles = operation['x-registry-accessProfiles'] as string[] | undefined
         ?? (typeof operation['x-registry-accessProfile'] === 'string' ? [operation['x-registry-accessProfile']] : undefined)
+      if (breg) for (const name of profiles ?? []) accessProfiles.add(name)
       const profile = profiles?.length ? profiles.map(value => quote(value)).join(' | ') : 'never'
       const parameterMap = new Map<string, { value: Node; pointer: string }>()
       for (const [base, list] of [[pathPointer, item.parameters ?? []], [pointer, operation.parameters ?? []]] as const) {
@@ -595,6 +602,7 @@ export function generate(source: string, settings: Settings = {}): string {
       definition.mutating = method !== 'get' && !(method === 'post' && safePost)
       if (title === 'Registry Messaging API') definition.messaging = true
       let requestType = ''
+      let availabilityRequest: { schema: Node; pointer: string } | undefined
       let hasAttachments = false
       if (operation.requestBody) {
         const bodyPointer = child(pointer, 'requestBody')
@@ -605,6 +613,9 @@ export function generate(source: string, settings: Settings = {}): string {
           const at = child(child(child(bodyPointer, 'content'), media), 'schema')
           requestType = describe(spec.schema, at)
           assertRequestSchema(spec.schema, at)
+          if (breg && operation['x-registry-routeKind'] === 'availability' && isJson(media)) {
+            availabilityRequest = { schema: deref(spec.schema, at), pointer: spec.schema.$ref?.slice(1) ?? at }
+          }
           hasAttachments ||= Boolean(deref(spec.schema, at).properties?.attachments)
           if (!isJson(media)) requestType = media === 'application/x-www-form-urlencoded' ? 'string' : 'Uint8Array | Blob | string'
           if (definition.signed) requestType = 'Uint8Array'
@@ -663,6 +674,12 @@ export function generate(source: string, settings: Settings = {}): string {
           if (media !== 'application/json' || status !== '200') continue
           const schema = deref(spec.schema, schemaAt)
           const props = schema.properties ?? {}
+          if (breg && operation['x-registry-routeKind'] === 'availability') {
+            for (const variant of props.availability?.oneOf ?? []) {
+              const reason = variant.properties?.reason?.const
+              if (typeof reason === 'string') availabilityReasons.add(reason)
+            }
+          }
           const items = props.items ? 'items' : props.runs ? 'runs' : undefined
           const cursor = props.pageInfo?.properties?.nextCursor ? 'pageInfo.nextCursor' : props.nextCursor ? 'nextCursor' : undefined
           if (items && cursor && props[items].items) {
@@ -774,7 +791,36 @@ export function generate(source: string, settings: Settings = {}): string {
         if (typeof action.id === 'string' && Array.isArray(action.inputs)) {
           actionInputs[action.id] = { display: action.display, inputMode: action.inputMode, inputs: action.inputs }
         }
-        if (routeKind === 'invoke' && operation['x-registry-operation'] === 'start') reviewedActions.add(action.id)
+        if (routeKind === 'invoke' && operation['x-registry-operation'] === 'start') {
+          reviewedActions.add(action.id)
+          proposalActions.push({ id: action.id, operation: id, slots: (action.attachments ?? []).map((slot: Node) => slot.id) })
+        }
+        if (routeKind === 'availability') {
+          const request = availabilityRequest ?? fail(pointer, 'availability needs a JSON request schema')
+          const input = request.schema.properties?.input
+          const branches: Node[] = request.schema.oneOf ?? []
+          if (!input?.properties || !branches.length) fail(request.pointer, 'availability needs input fields and target variants')
+          const inputPath = child(child(child(request.pointer, 'properties'), 'input'), 'properties')
+          const targets = branches.map((branch, index) => {
+            const name = branch.properties?.targetInput?.const
+            const branchInput = branch.properties?.input
+            const required = new Set<string>([...(input.required ?? []), ...(branchInput?.required ?? [])])
+            if (typeof name !== 'string' || !required.has(name) || [...required].some(key => !Object.hasOwn(input.properties, key))) {
+              fail(request.pointer, 'availability target variant needs a declared required input')
+            }
+            const branchPath = child(child(request.pointer, 'oneOf'), String(index))
+            const branchFieldsPath = child(child(child(branchPath, 'properties'), 'input'), 'properties')
+            const fields = members(input.properties).map(([key, schema]) => {
+              const commonType = describe(schema, child(inputPath, key))
+              const branchSchema = branchInput?.properties?.[key]
+              const branchType = branchSchema === undefined ? commonType : describe(branchSchema, child(branchFieldsPath, key))
+              const fieldType = commonType === branchType ? commonType : commonType + ' & ' + branchType
+              return quote(key) + (required.has(key) ? '' : '?') + ': ' + fieldType
+            })
+            return { name, input: '{ ' + fields.join('; ') + ' }' }
+          })
+          availability.push({ id: action.id, operation: id, profile, targets })
+        }
         if (routeKind === 'invoke' && operation['x-registry-operation'] === 'invoke') {
           invoke.push({ id: action.id, operation: id, body: requestType, keys: action.requiredConditionKeys, profile, attachments: hasAttachments })
         }
@@ -807,6 +853,33 @@ export function generate(source: string, settings: Settings = {}): string {
         '\n' + [...reviewedActions].map(id => '      case ' + quote(id) + ':').join('\n') +
         (reviewedActions.size ? '\n        throw new TypeError("This Action starts a proposal. Use proposals to start it.")' : '') +
         '\n      default: throw new TypeError("Unknown Action")\n    }\n  }')
+    }
+    for (const action of availability) {
+      const multiple = action.targets.length > 1
+      const answer = 'Operations[' + quote(action.operation) + ']["output"]["availability"]'
+      for (const target of action.targets) {
+        actionMethods.push('  available(action: ' + quote(action.id) + ', input: ' + target.input +
+          ', options' + (multiple ? '' : '?') + ': CallOptions & DescribeOptions & { accessProfile?: ' + action.profile +
+          '; targetInput' + (multiple ? '' : '?') + ': ' + quote(target.name) +
+          ' }): Promise<ActionAvailability<Extract<' + answer + ', { missingInputs: string[] }>["missingInputs"][number]>>')
+      }
+    }
+    if (availability.length) {
+      actionMethods.push('  async available(action: string, input: object, options: CallOptions & DescribeOptions & { accessProfile?: string; targetInput?: string } = {}): Promise<ActionAvailability> {')
+      actionMethods.push('    const { accessProfile, targetInput, clientSentences, guardLabels, ...call } = options')
+      actionMethods.push('    switch (action) {')
+      for (const action of availability) {
+        actionMethods.push('      case ' + quote(action.id) + ': {')
+        const target = action.targets.length === 1 ? 'targetInput ?? ' + quote(action.targets[0]!.name) : 'targetInput'
+        actionMethods.push('        const { data: { availability } } = await this.#call<Operations[' + quote(action.operation) +
+          ']["output"]>(' + quote(action.operation) + ', { ...call, query: { accessProfile }, body: { input, targetInput: ' + target + ' } })')
+        actionMethods.push('        return actionAvailability(availability, { clientSentences, guardLabels })')
+        actionMethods.push('      }')
+      }
+      actionMethods.push('      default: throw new TypeError("Unknown Action availability")', '    }', '  }')
+    }
+    if (conditions.length) {
+      actionMethods.push('  get conditions(): Client["targetConditions"] { return this.targetConditions.bind(this) }')
     }
     for (const action of conditions) {
       actionMethods.push('  targetConditions(action: ' + quote(action.id) + ', input: (' + action.body + ')["input"], options' +
@@ -843,18 +916,28 @@ export function generate(source: string, settings: Settings = {}): string {
   const compiledRules = [...validationRoots].sort().map(pointer => [pointer, compileRule(pointer)] as const)
   const sourceHash = createHash('sha256').update(source).digest('hex')
   return [
+    generatedVersionComment,
     '// Source SHA-256 ' + sourceHash,
     ...[...used].sort().map(pointer => '// Unconstrained JSON ' + pointer),
-    'import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from ' + quote(settings.coreImport ?? '../core.ts'),
-    'import { validator } from ' + quote(settings.schemaImport ?? '../schema.ts'),
+    'import { assertClientVersion, type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from ' + quote(settings.coreImport ?? packageName + '/core'),
+    ...(availability.length ? ['import { actionAvailability, type ActionAvailability, type DescribeOptions } from ' + quote(settings.coreImport ?? packageName + '/core')] : []),
+    ...(availabilityReasons.size ? ['import { sentence } from ' + quote(settings.coreImport ?? packageName + '/core')] : []),
+    'import { validator } from ' + quote(settings.schemaImport ?? packageName + '/schema'),
     ...(listTypes.length ? [
       'import { listPage, listQuery, type FieldValue, type Filter, type ListPage, type ListRequest, type ListRules } from ' +
-        quote(settings.coreImport ?? '../core.ts'),
+        quote(settings.coreImport ?? packageName + '/core'),
     ] : []),
     '',
     ...[...types].map(([name, type]) => 'export type ' + name + ' = ' + type),
     '',
     'export interface Operations {', ...opTypes, '}',
+    ...(proposalActions.length ? [
+      '',
+      'export interface ProposalActions {',
+      ...proposalActions.map(action => '  ' + quote(action.id) + ': { input: Operations[' + quote(action.operation) +
+        ']["input"]["body"]["input"]; slot: ' + (action.slots.map(value => quote(value)).join(' | ') || 'never') + ' }'),
+      '}',
+    ] : []),
     ...(listTypes.length ? [
       '',
       '// The row each list returns, and the list options its query profiles allow.',
@@ -899,8 +982,11 @@ export function generate(source: string, settings: Settings = {}): string {
     '}',
     '',
     'export class Client {',
-    '  readonly #transport: Transport',
-    '  constructor(transport: Transport) { this.#transport = transport }',
+    '  readonly #transport: ' + (breg ? 'Pick<Transport, "call" | "profile">' : 'Transport'),
+    '  constructor(transport: ' + (breg ? 'Pick<Transport, "call" | "profile">' : 'Transport') + ') {',
+    '    assertClientVersion(' + quote(packageVersion) + ')',
+    '    this.#transport = transport',
+    '  }',
     '  async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<' +
       (conditionalAnswers.length ? 'OperationAnswer<K>' : 'Answer<Operations[K]["output"]>') + '> {',
     '    return this.#call(operation, args[0])' + (conditionalAnswers.length ? ' as Promise<OperationAnswer<K>>' : ''),
@@ -948,6 +1034,12 @@ export function generate(source: string, settings: Settings = {}): string {
     ...actionMethods, '}',
     '',
     ...(breg ? [
+      'export const profiles = ' + JSON.stringify([...accessProfiles].sort()) + ' as const',
+      'export type AccessProfile = typeof profiles[number]',
+      'export const reasons = {',
+      ...[...availabilityReasons].sort().map(reason => '  ' + quote(reason) + ': sentence(' + quote('availability.' + reason) + '),'),
+      '} as const',
+      '',
       '// Each Action\'s display text and inputs exactly as the source document declares them.',
       'export const actionInputs = ' + JSON.stringify(Object.fromEntries(Object.entries(actionInputs).sort(([a], [b]) => a < b ? -1 : 1)), null, 2) + ' as const',
       '',
@@ -960,14 +1052,16 @@ export function checkOutput(expected: string, actual: string, path: string): voi
 }
 
 export function generateFile(
-  input: string, output: string, check: boolean, breg?: boolean, allowUnconstrained: readonly string[] = [],
+  input: string, output: string, check: boolean, breg?: boolean, allowUnconstrained: readonly string[] = [], localImports = false,
 ): void {
+  if (!localImports) checkInstalledClient(resolve(output))
   const local = (name: string) => {
     const path = relative(dirname(resolve(output)), fileURLToPath(new URL(name, import.meta.url))).split('\\').join('/')
     return path.startsWith('.') ? path : './' + path
   }
   const result = generate(readFileSync(input, 'utf8'), {
-    breg, product: basename(output, '.ts'), coreImport: local('core.ts'), schemaImport: local('schema.ts'), allowUnconstrained,
+    breg, product: basename(output, '.ts'), allowUnconstrained,
+    ...(localImports ? { coreImport: local('core.ts'), schemaImport: local('schema.ts') } : {}),
   })
   if (check) checkOutput(result, readFileSync(output, 'utf8'), output)
   else writeFileSync(output, result)
@@ -979,10 +1073,10 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   try {
     const prefix = '--allow-unconstrained='
     const allowed = flags.filter(arg => arg.startsWith(prefix)).map(arg => arg.slice(prefix.length))
-    if (files.length !== 2 || flags.some(arg => arg.startsWith('--') && arg !== '--check' && arg !== '--breg' && !arg.startsWith(prefix))) {
-      throw new Error('Usage: node generate.ts [--check] [--breg] [--allow-unconstrained=/pointer] source.json client.ts')
+    if (files.length !== 2 || flags.some(arg => arg.startsWith('--') && arg !== '--check' && arg !== '--breg' && arg !== '--local-imports' && !arg.startsWith(prefix))) {
+      throw new Error('Usage: node generate.ts [--check] [--breg] [--local-imports] [--allow-unconstrained=/pointer] source.json client.ts')
     }
-    generateFile(files[0]!, files[1]!, flags.includes('--check'), flags.includes('--breg') || undefined, allowed)
+    generateFile(files[0]!, files[1]!, flags.includes('--check'), flags.includes('--breg') || undefined, allowed, flags.includes('--local-imports'))
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
     process.exitCode = 1

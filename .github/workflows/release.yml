@@ -1432,28 +1432,39 @@ jobs:
             fi
             sleep 10
           done
-          root_tarball="dist/${root_package}"
-          root_state="$(python3 release/scripts/client_registry.py npm-state \
-            --tarball "${root_tarball}")"
-          if [[ "${root_state}" == absent ]]; then
-            require_unexpired_candidate
-            npm publish "./${root_tarball}" --access public --provenance
-          else
-            test "${root_state}" = present
+          root_packages=("${root_package}")
+          if [[ "${client}" == stack ]]; then
+            web_package="$(python3 release/scripts/client_registry.py web-npm-name --version "${version}")"
+            if [[ -n "${web_package}" ]]; then
+              python3 release/scripts/client_registry.py validate-web-npm \
+                --directory dist --version "${version}"
+              root_packages+=("${web_package}")
+            fi
           fi
-          root_deadline=$((SECONDS + 600))
-          while true; do
-            observed="$(python3 release/scripts/client_registry.py npm-state \
+          for root_package in "${root_packages[@]}"; do
+            root_tarball="dist/${root_package}"
+            root_state="$(python3 release/scripts/client_registry.py npm-state \
               --tarball "${root_tarball}")"
-            if [[ "${observed}" == present ]]; then
-              break
+            if [[ "${root_state}" == absent ]]; then
+              require_unexpired_candidate
+              npm publish "./${root_tarball}" --access public --provenance
+            else
+              test "${root_state}" = present
             fi
-            test "${observed}" = absent
-            if (( SECONDS >= root_deadline )); then
-              echo "npm did not expose exact root package ${root_package}" >&2
-              exit 1
-            fi
-            sleep 10
+            root_deadline=$((SECONDS + 600))
+            while true; do
+              observed="$(python3 release/scripts/client_registry.py npm-state \
+                --tarball "${root_tarball}")"
+              if [[ "${observed}" == present ]]; then
+                break
+              fi
+              test "${observed}" = absent
+              if (( SECONDS >= root_deadline )); then
+                echo "npm did not expose exact root package ${root_package}" >&2
+                exit 1
+              fi
+              sleep 10
+            done
           done
 
   publish_client_pypi:

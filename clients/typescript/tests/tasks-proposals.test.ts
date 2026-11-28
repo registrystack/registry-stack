@@ -343,6 +343,44 @@ test('attach sends the bytes with the slot link condition, the file type and a d
   assert.equal(view.attachments['supporting-document']?.status, 'attached')
 })
 
+test('attach infers PDF from an untyped filename and sends the resolved content type', async () => {
+  const { seen, commands } = register({
+    [`GET ${P}`]: () => ok(fixture('proposal-draft-optional')),
+    [`PATCH ${P}/attachments/supporting-document`]: () => ok(fixture('proposal-draft-attached')),
+  })
+  const draft = await commands.get('prop-1')
+  const file = new File(['bytes'], 'support.PDF')
+  assert.equal(file.type, '')
+  await commands.attach(draft, 'supporting-document', file)
+  assert.equal(seen.find(request => request.method === 'PATCH')?.headers.get('content-type'), 'application/pdf')
+  const error = await refusal(commands.attach(draft, 'supporting-document', new File(['x'], 'support.unknown')), 'client.file-type')
+  assert.match(error.detail!, /accepts application\/pdf/u)
+  assert.equal(seen.filter(request => request.method === 'PATCH').length, 1)
+})
+
+test('attach normalises JPEG aliases and refuses a PDF filename on a PNG-only slot', async () => {
+  const doc = fixture('proposal-draft-optional')
+  const slot = doc.attachments!['supporting-document']!
+  const contentTypes: string[] = []
+  const commands = proposalCommands({
+    call: async (operation: string, input: ProposalCallValues) => {
+      if (operation.endsWith('.patch')) contentTypes.push(input.contentType!)
+      return { data: doc }
+    },
+  }, { accessProfile })
+  slot.contentTypes = ['image/jpeg']
+  const jpeg = await commands.get('prop-1')
+  for (const alias of ['image/jpg', 'image/pjpeg']) {
+    await commands.attach(jpeg, 'supporting-document', new File(['x'], 'photo.unknown', { type: alias }))
+  }
+  assert.deepEqual(contentTypes, ['image/jpeg', 'image/jpeg'])
+  slot.contentTypes = ['image/png']
+  const png = await commands.get('prop-1')
+  const error = await refusal(commands.attach(png, 'supporting-document', new File(['x'], 'support.pdf')), 'client.file-type')
+  assert.match(error.detail!, /accepts image\/png/u)
+  assert.equal(contentTypes.length, 2)
+})
+
 test('the attach key follows the file bytes', async () => {
   const keys: string[] = []
   for (const fill of [1, 1, 2]) {
@@ -604,8 +642,8 @@ test('a retry after a submit that landed but lost its answer returns the submitt
   assert.deepEqual([server.count.revise, server.count.submit], [1, 1])
 })
 
-test('a retry after a failure between revise and submit continues from the draft', async () => {
-  const file = pdf()
+test('a retry after a failure between revise and submit matches the resolved type on the draft', async () => {
+  const file = new File([pdf()], 'support.pdf')
   const server = resubmitServer({ failSubmitOnce: true, sha256: await hex(file) })
   const p = await server.commands.get('prop-1')
   const options = { changes: changed, files: { 'supporting-document': file } }
@@ -613,6 +651,7 @@ test('a retry after a failure between revise and submit continues from the draft
   const view = await server.commands.resubmit(p, options)
   assert.equal(view.status, 'in-review')
   assert.deepEqual([server.count.revise, server.count.patch, server.count.submit], [1, 1, 2])
+  assert.equal(server.seen.find(request => request.method === 'PATCH')?.headers.get('content-type'), 'application/pdf')
 })
 
 test('a fresh instance after a failure in the middle continues from the draft', async () => {

@@ -1142,6 +1142,11 @@ class PublicReleaseVerifierTest(TestCase):
             ),
             mock.patch.object(
                 self.module.client_registry,
+                "validate_web_npm",
+                return_value=Path(temporary) / "web.tgz",
+            ) as validate_web,
+            mock.patch.object(
+                self.module.client_registry,
                 "npm_metadata",
                 return_value={},
             ),
@@ -1149,7 +1154,7 @@ class PublicReleaseVerifierTest(TestCase):
                 self.module.client_registry,
                 "npm_registry_state",
                 return_value="present",
-            ),
+            ) as npm_state,
             mock.patch.object(
                 self.module.client_registry,
                 "wheel_paths",
@@ -1167,9 +1172,21 @@ class PublicReleaseVerifierTest(TestCase):
             ),
         ):
             self.assertEqual(
-                2,
-                self.module.verify_client_registries(Path(temporary), "1.2.3"),
+                3,
+                self.module.verify_client_registries(Path(temporary), "0.49.0"),
             )
+            validate_web.assert_called_once_with(Path(temporary), "0.49.0")
+            npm_state.assert_called_with(Path(temporary) / "web.tgz", {})
+            npm_state.side_effect = ["present", "absent"]
+            with self.assertRaisesRegex(self.module.PublicReleaseError, "web.tgz"):
+                self.module.verify_client_registries(Path(temporary), "0.49.0")
+            npm_state.side_effect = None
+            validate_web.reset_mock()
+            self.assertEqual(
+                2,
+                self.module.verify_client_registries(Path(temporary), "0.48.0"),
+            )
+            validate_web.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import { RegistryError, availabilityMessages, sentence, type DescribeOptions, type JsonValue } from '../core.ts'
-import { clientError, downloadedBlob, refusal as refuse, sha256Hex, type ProgressCallback } from './shared.ts'
+import { clientError, downloadedBlob, refusal as refuse, resolveFileType, sha256Hex, type ProgressCallback } from './shared.ts'
 
 export type JsonObject = Record<string, JsonValue>
 export type ProposalState = 'draft' | 'submitted' | 'applied' | 'cancelled' | 'rejected'
@@ -110,9 +110,9 @@ export interface AttachmentView {
 }
 
 /** Plain JSON-safe data. `served` keeps the links, with their conditions, for the next command. */
-export interface Proposal {
+export interface Proposal<Action extends string = string> {
   id: string
-  actionId: string
+  actionId: Action
   actionRevision: string
   state: ProposalState
   turn: Turn
@@ -151,7 +151,7 @@ interface TransferOptions extends Options { onProgress?: ProgressCallback }
 export interface ProposalCommands {
   start(actionId: string, input?: JsonObject, opts?: Options & { idempotencyKey?: string }): Promise<Proposal>
   get(id: string, opts?: Options): Promise<Proposal>
-  list(filter?: ProposalListFilter, opts?: Options): Promise<{ items: Proposal[]; nextCursor: string | null }>
+  list(filter?: ProposalListFilter, opts?: Options): Promise<{ items: ProposalListRow[]; nextCursor: string | null }>
   edit(p: Proposal, changes: JsonChanges, opts?: Options): Promise<Proposal>
   rebase(p: Proposal, changes?: JsonChanges, opts?: Options): Promise<Proposal>
   attach(p: Proposal, slot: string, file: Blob, opts?: TransferOptions): Promise<Proposal>
@@ -160,6 +160,47 @@ export interface ProposalCommands {
   cancel(p: Proposal, opts?: Options): Promise<Proposal>
   download(p: Proposal, slot: string, opts?: TransferOptions): Promise<Blob>
 }
+
+export type ProposalListRow = Proposal
+
+type ProposalForActions<Actions> = {
+  [Action in keyof Actions & string]: Proposal<Action>
+}[keyof Actions & string]
+
+// A slot can be used only when every possible Action declares it.
+type CommonProposalSlot<Actions extends Record<Action, { slot: string }>, Action extends keyof Actions> = {
+  [Slot in Actions[Action]['slot']]: {
+    [Id in Action]: Slot extends Actions[Id]['slot'] ? never : Id
+  }[Action] extends never ? Slot : never
+}[Actions[Action]['slot']]
+
+/** Narrows generated services to the actions and slots in their register contract. */
+export type TypedProposalCommands<Actions extends Record<keyof Actions, { input: JsonObject; slot: string }>> =
+  Omit<ProposalCommands, 'start' | 'get' | 'list' | 'edit' | 'rebase' | 'attach' | 'submit' | 'resubmit' | 'cancel' | 'download'> & {
+    get(id: string, opts?: Options): Promise<ProposalForActions<Actions>>
+    list(filter?: ProposalListFilter, opts?: Options): Promise<{ items: ProposalForActions<Actions>[]; nextCursor: string | null }>
+    start<Action extends keyof Actions & string>(
+      actionId: Action,
+      ...args: {} extends Actions[Action]['input']
+        ? [input?: Actions[Action]['input'], opts?: Options & { idempotencyKey?: string }]
+        : [input: Actions[Action]['input'], opts?: Options & { idempotencyKey?: string }]
+    ): Promise<Proposal<Action>>
+    edit<Action extends string>(proposal: Proposal<Action>, changes: JsonChanges, opts?: Options): Promise<Proposal<Action>>
+    rebase<Action extends string>(proposal: Proposal<Action>, changes?: JsonChanges, opts?: Options): Promise<Proposal<Action>>
+    submit<Action extends string>(proposal: Proposal<Action>, opts?: Options): Promise<Proposal<Action>>
+    cancel<Action extends string>(proposal: Proposal<Action>, opts?: Options): Promise<Proposal<Action>>
+    attach<Action extends keyof Actions & string>(
+      proposal: Proposal<Action>, slot: CommonProposalSlot<Actions, NoInfer<Action>>, file: Blob, opts?: TransferOptions,
+    ): Promise<Proposal<Action>>
+    download<Action extends keyof Actions & string>(
+      proposal: Proposal<Action>, slot: CommonProposalSlot<Actions, NoInfer<Action>>, opts?: TransferOptions,
+    ): Promise<Blob>
+    resubmit<Action extends keyof Actions & string>(
+      proposal: Proposal<Action>,
+      opts?: TransferOptions & { changes?: JsonChanges; files?: [CommonProposalSlot<Actions, NoInfer<Action>>] extends [never]
+        ? never : Partial<Record<CommonProposalSlot<Actions, NoInfer<Action>>, Blob>> },
+    ): Promise<Proposal<Action>>
+  }
 
 // The `can.*` sentences live in the one words table in core, and are re-exported here. A programme's
 // replacement table is passed to `proposalFromServed` and `proposalCommands`, and to `describeError`.
@@ -335,16 +376,16 @@ function slotOf(served: ServedProposal, slot: string): ServedSlot {
   return found
 }
 
-function checkFile(served: ServedProposal, slot: string, file: Blob): ServedSlot {
+function checkFile(served: ServedProposal, slot: string, file: Blob) {
   const descriptor = slotOf(served, slot)
-  // The register compares the content type exactly and allows no wildcards, so this does too.
-  if (!descriptor.contentTypes.includes(file.type)) {
+  const contentType = resolveFileType(file, descriptor.contentTypes)
+  if (contentType === undefined) {
     throw refuse('client.file-type', `The slot "${slot}" accepts ${descriptor.contentTypes.join(', ')}. This file is ${file.type || 'of no known type'}.`)
   }
   if (file.size > descriptor.maximumBytes) {
     throw refuse('client.file-too-large', `The slot "${slot}" accepts files up to ${descriptor.maximumBytes} bytes. This file is ${file.size} bytes.`)
   }
-  return descriptor
+  return { descriptor, contentType }
 }
 
 function downloadVersion(link: ServedLink, slot: ServedSlot): number {
@@ -461,19 +502,20 @@ export function proposalCommands(client: ProposalClient, options: { accessProfil
 
   async function sendFile(served: ServedProposal, slot: string, prepared: Prepared, signal?: AbortSignal, onProgress?: ProgressCallback): Promise<Proposal> {
     const { file, sha256 } = prepared
-    const descriptor = checkFile(served, slot, file)
+    const { descriptor, contentType } = checkFile(served, slot, file)
     const link = requireLink(words, descriptor.links['upload'], 'attach', 'upload')
-    const idempotencyKey = await derivedKey(['attach', served.id, link.ifMatch, { slot, sha256, contentType: file.type }])
+    const idempotencyKey = await derivedKey(['attach', served.id, link.ifMatch, { slot, sha256, contentType }])
     await send(`proposals.attachments.${slot}.patch`, {
       path: { proposal_id: served.id }, query: { accessProfile: link.accessProfile },
-      headers: { 'If-Match': link.ifMatch }, body: file, contentType: file.type, idempotencyKey, signal, onProgress,
+      headers: { 'If-Match': link.ifMatch }, body: file, contentType, idempotencyKey, signal, onProgress,
     })
     return readAfterWrite(served.id, idempotencyKey, signal)
   }
 
   function holdsFile(served: ServedProposal, slot: string, { file, sha256 }: Prepared): boolean {
-    const value = served.attachments?.[slot]?.value
-    return value !== undefined && digestOf(value.sha256) === sha256 && value.contentType === file.type
+    const descriptor = served.attachments?.[slot]
+    return descriptor?.value !== undefined && digestOf(descriptor.value.sha256) === sha256
+      && descriptor.value.contentType === resolveFileType(file, descriptor.contentTypes)
   }
 
   async function start(actionId: string, input: JsonObject, opts: Options & { idempotencyKey?: string }): Promise<Proposal> {

@@ -54,7 +54,9 @@ test('each sentence in the table is plain words: no product name, quoted value, 
 
 test('the table holds no problem code that arrives on the wire', () => {
   assert.ok(!Object.hasOwn(clientSentences, 'attachment.required'))
-  for (const key of Object.keys(clientSentences)) assert.ok(!key.includes('.') || key.startsWith('client.'), key)
+  for (const key of Object.keys(clientSentences)) {
+    assert.match(key, /^(?:[^.]+$|(?:client|availability|proposal\.status)\.[^.]+$)/u)
+  }
 })
 
 for (const code of helperCodes) {

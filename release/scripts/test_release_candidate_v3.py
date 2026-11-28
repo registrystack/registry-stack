@@ -287,6 +287,12 @@ class ReleaseCandidateV3Test(TestCase):
                 }
             ],
         }
+        web_version = "0.49.0"
+        web_package = self.module.client_registry.web_npm_tarball(web_version)
+        self.assertEqual(
+            "client-package",
+            self.module.stack_payload_inventory(web_version, [component])[web_package],
+        )
         inventory = self.module.stack_payload_inventory(version, [component])
         image_names = self.module.stack_image_names(version, [component])
         registry = self.module.release_units.load_registry()

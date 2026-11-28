@@ -1,5 +1,6 @@
-// Source SHA-256 5f474bc27c918a57e56cd83314bbc6907a370925b1e6d287e3121a67b59a272e
-import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+// Generated for Stack version 0.49.0, client version 0.49.0.
+// Source SHA-256 47ae564eac3f55b3dd98d570fd8fe3801f489a8ed6a1b19f02448b2ffa31ec62
+import { assertClientVersion, type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
 import { validator } from "../schema.ts"
 
 export type Schema_CredentialOffer = ({ "credential_configuration_ids": (Array<(string)>); "credential_issuer": (string); "grants": ({ "urn:ietf:params:oauth:grant-type:pre-authorized_code": Schema_PreAuthorizedCodeGrant }) })
@@ -48,7 +49,10 @@ for (const [id, definition] of Object.entries(definitions)) {
 
 export class Client {
   readonly #transport: Transport
-  constructor(transport: Transport) { this.#transport = transport }
+  constructor(transport: Transport) {
+    assertClientVersion("0.49.0")
+    this.#transport = transport
+  }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<Answer<Operations[K]["output"]>> {
     return this.#call(operation, args[0])
   }

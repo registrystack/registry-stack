@@ -507,6 +507,13 @@ version = "1.1.0"
                 client_root / "index.js",
                 binding_loader("1.1.0"),
             )
+        web_client = self.root / "clients/typescript"
+        web_identity = {"name": "@registrystack/web-client", "version": "1.1.0"}
+        write_json(web_client / "package.json", web_identity)
+        write_json(
+            web_client / "package-lock.json",
+            {"version": "1.1.0", "lockfileVersion": 3, "packages": {"": web_identity}},
+        )
         unified_node = self.root / "crates/registry-stack-client-node"
         write_json(
             unified_node / "package.json",
@@ -1053,6 +1060,15 @@ version = "1.0.0"
         stale_wasi = self.prepare()
         self.assertEqual(1, stale_wasi.returncode)
         self.assertIn("expected-version diagnostics", stale_wasi.stderr)
+
+    def test_prepare_rejects_stale_web_client_lock_version(self) -> None:
+        path = self.repo.root / "clients/typescript/package-lock.json"
+        lock = json.loads(path.read_text(encoding="utf-8"))
+        lock["packages"][""]["version"] = "1.0.0"
+        write_json(path, lock)
+        result = self.prepare()
+        self.assertEqual(1, result.returncode)
+        self.assertIn("clients/typescript package and lock must identify", result.stderr)
 
     def test_prepare_rejects_stale_client_platform_package_version(self) -> None:
         for client in ("evidence", "discovery"):

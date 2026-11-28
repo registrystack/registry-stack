@@ -100,6 +100,7 @@
           "domainData": {
             "type": "object",
             "additionalProperties": false,
+            "required": ["licenceNumber"],
             "properties": {
               "holderId": {
                 "type": "string",
@@ -476,6 +477,31 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LicencePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/records/licences/{record_id}": {
+      "get": {
+        "operationId": "records.licence.get",
+        "x-registry-operation": "get",
+        "x-registry-recordType": "licence",
+        "x-registry-responseShape": "RegistryRecordSingleV1",
+        "parameters": [
+          { "name": "record_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Record returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["data"],
+                  "properties": { "data": { "$ref": "#/components/schemas/Licence" } }
                 }
               }
             }

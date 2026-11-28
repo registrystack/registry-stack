@@ -1,16 +1,17 @@
-// Source SHA-256 904443887f75ac4272caac21c800bead5308e7b0b52d25c45315fc6d5d70322f
+// Generated for Stack version 0.49.0, client version 0.49.0.
+// Source SHA-256 e6637b4eb2d22bd84eb664b2240cb2d6bdd2e6393376af77af421443ff3182f8
 // Unconstrained JSON /components/schemas/HookEnvelope/properties/data
 // Unconstrained JSON /components/schemas/RunStatus/properties/output
 // Unconstrained JSON /components/schemas/Start/properties/input
 // Unconstrained JSON /components/schemas/WorkflowContract/properties/input
-import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+import { assertClientVersion, type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
 import { validator } from "../schema.ts"
 
 export type Schema_AdmissionHold = ({ "admissionsHold": (boolean) })
 export type Schema_AdmissionRelease = ({ "admissionHistoryComplete": (boolean); "priorDeploymentFenced": (boolean); "recoveryReference": (string) })
 export type Schema_CheckNow = ({ "step": (string) })
 export type Schema_CheckNowResult = ({ "nextObservationAt": (string | null); "observationLimit": (number); "observations": (number); "runId": (string); "step": (string) })
-export type Schema_Doctor = ({ "activationReady": (boolean); "state": ({ "admissionsHold": (boolean); "auditReady": (boolean); "databaseId": (string); "heldRunCount": (number); "heldRuns": Schema_HeldRuns; "oldestDueAt"?: (string | null); "oldestTerminalPayloadAt": (string | null); "proposalWaitsByTurn": Schema_ProposalWaitsByTurn; "restoreHold": (boolean); "restoreReviewRequired": (number); "schemaVersion": (number); "states": (Record<string, (number)>); "terminalPayloads": (number); "uncertain": (number) }) })
+export type Schema_Doctor = ({ "activationReady": (boolean); "findings": (Array<({ "code": "platform.activation.posture-mismatch"; "message": (string); "suggestedAction": (string) })>); "state": ({ "admissionsHold": (boolean); "auditReady": (boolean); "databaseId": (string); "heldRunCount": (number); "heldRuns": Schema_HeldRuns; "oldestDueAt"?: (string | null); "oldestTerminalPayloadAt": (string | null); "proposalWaitsByTurn": Schema_ProposalWaitsByTurn; "restoreHold": (boolean); "restoreReviewRequired": (number); "schemaVersion": (number); "states": (Record<string, (number)>); "terminalPayloads": (number); "uncertain": (number) }) })
 export type Schema_EffectStatus = ({ "operation": Schema_OperationIdentity; "operationRevision": (string); "state": ("accepted" | "unknown") & (string); "step": (string) })
 export type Schema_Erased = ({ "erased": (number) })
 export type Schema_ExecutionRecovery = ({ "executionHistoryComplete": (boolean); "priorDeploymentFenced": (boolean); "recoveryReference": (string) })
@@ -36,7 +37,7 @@ export type Schema_WorkflowContract = ({ "input": JsonValue; "outcomes": (Record
 
 export interface Operations {
   "live": { input: CallOptions & { accept?: "application/json" | "*/*" }; required: false; output: ({ "live": (boolean); "status": "ok" }) }
-  "ready": { input: CallOptions & { accept?: "application/json" | "*/*" }; required: false; output: ({ "ready": (boolean); "status": "ready" }) }
+  "ready": { input: CallOptions & { accept?: "application/json" | "*/*" }; required: false; output: ({ "developmentSettings": (Array<({ "code": (string); "pointer": (string) })>); "posture": ("production" | "development"); "ready": (boolean); "status": "ready" }) }
   "completeExecutionRecovery": { input: CallOptions & ({ body: Schema_ExecutionRecovery }) & { accept?: "application/json" | "*/*" }; required: true; output: Schema_ExecutionReviewed }
   "doctor": { input: CallOptions & { accept?: "application/json" | "*/*" }; required: false; output: Schema_Doctor }
   "admitEvent": { input: CallOptions & { path: { "workflow": (string); "trigger": (string) } } & { headers: { "webhook-id": (string); "webhook-timestamp": (string); "webhook-signature": (string) } } & ({ body: Uint8Array }); required: true; output: undefined }
@@ -61,7 +62,7 @@ const rules: Record<string, unknown> = Object.fromEntries([
   ["/components/schemas/AdmissionRelease", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"admissionHistoryComplete\":{\"type\":\"boolean\"},\"priorDeploymentFenced\":{\"type\":\"boolean\"},\"recoveryReference\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"recoveryReference\",\"admissionHistoryComplete\",\"priorDeploymentFenced\"],\"type\":\"object\"}")],
   ["/components/schemas/CheckNow", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"step\":{\"maxLength\":64,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9_-]+$\",\"type\":\"string\"}},\"required\":[\"step\"],\"type\":\"object\"}")],
   ["/components/schemas/CheckNowResult", JSON.parse("{\"properties\":{\"nextObservationAt\":{\"type\":[\"string\",\"null\"]},\"observationLimit\":{\"minimum\":1,\"type\":\"integer\"},\"observations\":{\"minimum\":0,\"type\":\"integer\"},\"runId\":{\"type\":\"string\"},\"step\":{\"type\":\"string\"}},\"required\":[\"runId\",\"step\",\"nextObservationAt\",\"observations\",\"observationLimit\"],\"type\":\"object\"}")],
-  ["/components/schemas/Doctor", JSON.parse("{\"properties\":{\"activationReady\":{\"type\":\"boolean\"},\"state\":{\"properties\":{\"admissionsHold\":{\"type\":\"boolean\"},\"auditReady\":{\"type\":\"boolean\"},\"databaseId\":{\"type\":\"string\"},\"heldRunCount\":{\"minimum\":0,\"type\":\"integer\"},\"heldRuns\":{\"$ref\":\"/components/schemas/HeldRuns\"},\"oldestDueAt\":{\"type\":[\"string\",\"null\"]},\"oldestTerminalPayloadAt\":{\"type\":[\"string\",\"null\"]},\"proposalWaitsByTurn\":{\"$ref\":\"/components/schemas/ProposalWaitsByTurn\"},\"restoreHold\":{\"type\":\"boolean\"},\"restoreReviewRequired\":{\"minimum\":0,\"type\":\"integer\"},\"schemaVersion\":{\"type\":\"integer\"},\"states\":{\"additionalProperties\":{\"type\":\"integer\"},\"type\":\"object\"},\"terminalPayloads\":{\"minimum\":0,\"type\":\"integer\"},\"uncertain\":{\"type\":\"integer\"}},\"required\":[\"databaseId\",\"schemaVersion\",\"restoreHold\",\"auditReady\",\"admissionsHold\",\"restoreReviewRequired\",\"states\",\"uncertain\",\"terminalPayloads\",\"oldestTerminalPayloadAt\",\"proposalWaitsByTurn\",\"heldRunCount\",\"heldRuns\"],\"type\":\"object\"}},\"required\":[\"activationReady\",\"state\"],\"type\":\"object\"}")],
+  ["/components/schemas/Doctor", JSON.parse("{\"properties\":{\"activationReady\":{\"type\":\"boolean\"},\"findings\":{\"items\":{\"properties\":{\"code\":{\"const\":\"platform.activation.posture-mismatch\"},\"message\":{\"type\":\"string\"},\"suggestedAction\":{\"type\":\"string\"}},\"required\":[\"code\",\"message\",\"suggestedAction\"],\"type\":\"object\"},\"maxItems\":1,\"type\":\"array\"},\"state\":{\"properties\":{\"admissionsHold\":{\"type\":\"boolean\"},\"auditReady\":{\"type\":\"boolean\"},\"databaseId\":{\"type\":\"string\"},\"heldRunCount\":{\"minimum\":0,\"type\":\"integer\"},\"heldRuns\":{\"$ref\":\"/components/schemas/HeldRuns\"},\"oldestDueAt\":{\"type\":[\"string\",\"null\"]},\"oldestTerminalPayloadAt\":{\"type\":[\"string\",\"null\"]},\"proposalWaitsByTurn\":{\"$ref\":\"/components/schemas/ProposalWaitsByTurn\"},\"restoreHold\":{\"type\":\"boolean\"},\"restoreReviewRequired\":{\"minimum\":0,\"type\":\"integer\"},\"schemaVersion\":{\"type\":\"integer\"},\"states\":{\"additionalProperties\":{\"type\":\"integer\"},\"type\":\"object\"},\"terminalPayloads\":{\"minimum\":0,\"type\":\"integer\"},\"uncertain\":{\"type\":\"integer\"}},\"required\":[\"databaseId\",\"schemaVersion\",\"restoreHold\",\"auditReady\",\"admissionsHold\",\"restoreReviewRequired\",\"states\",\"uncertain\",\"terminalPayloads\",\"oldestTerminalPayloadAt\",\"proposalWaitsByTurn\",\"heldRunCount\",\"heldRuns\"],\"type\":\"object\"}},\"required\":[\"activationReady\",\"state\",\"findings\"],\"type\":\"object\"}")],
   ["/components/schemas/EffectStatus", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"operation\":{\"$ref\":\"/components/schemas/OperationIdentity\"},\"operationRevision\":{\"type\":\"string\"},\"state\":{\"enum\":[\"accepted\",\"unknown\"],\"type\":\"string\"},\"step\":{\"type\":\"string\"}},\"required\":[\"step\",\"operation\",\"operationRevision\",\"state\"],\"type\":\"object\"}")],
   ["/components/schemas/Erased", JSON.parse("{\"properties\":{\"erased\":{\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"erased\"],\"type\":\"object\"}")],
   ["/components/schemas/ExecutionRecovery", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"executionHistoryComplete\":{\"type\":\"boolean\"},\"priorDeploymentFenced\":{\"type\":\"boolean\"},\"recoveryReference\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"recoveryReference\",\"executionHistoryComplete\",\"priorDeploymentFenced\"],\"type\":\"object\"}")],
@@ -89,7 +90,7 @@ const rules: Record<string, unknown> = Object.fromEntries([
   ["/components/schemas/WorkflowContract", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"input\":true,\"outcomes\":{\"maxProperties\":64,\"minProperties\":1,\"type\":\"object\"},\"workflow\":{\"type\":\"string\"},\"workflowRevision\":{\"pattern\":\"^sha256:[0-9a-f]{64}$\",\"type\":\"string\"}},\"required\":[\"workflow\",\"workflowRevision\",\"input\",\"outcomes\"],\"type\":\"object\"}")],
   ["/paths/~1health/get/responses/200/content/application~1json/schema", JSON.parse("{\"properties\":{\"live\":{\"type\":\"boolean\"},\"status\":{\"const\":\"ok\"}},\"required\":[\"live\",\"status\"],\"type\":\"object\"}")],
   ["/paths/~1health/get/responses/405/content/application~1problem+json/schema", JSON.parse("{\"allOf\":[{\"$ref\":\"/components/schemas/Problem\"},{\"properties\":{\"code\":{\"enum\":[\"request.method-not-allowed\"]}}}]}")],
-  ["/paths/~1ready/get/responses/200/content/application~1json/schema", JSON.parse("{\"properties\":{\"ready\":{\"type\":\"boolean\"},\"status\":{\"const\":\"ready\"}},\"required\":[\"ready\",\"status\"],\"type\":\"object\"}")],
+  ["/paths/~1ready/get/responses/200/content/application~1json/schema", JSON.parse("{\"properties\":{\"developmentSettings\":{\"items\":{\"properties\":{\"code\":{\"type\":\"string\"},\"pointer\":{\"type\":\"string\"}},\"required\":[\"code\",\"pointer\"],\"type\":\"object\"},\"type\":\"array\"},\"posture\":{\"enum\":[\"production\",\"development\"]},\"ready\":{\"type\":\"boolean\"},\"status\":{\"const\":\"ready\"}},\"required\":[\"ready\",\"status\",\"posture\",\"developmentSettings\"],\"type\":\"object\"}")],
   ["/paths/~1ready/get/responses/405/content/application~1problem+json/schema", JSON.parse("{\"allOf\":[{\"$ref\":\"/components/schemas/Problem\"},{\"properties\":{\"code\":{\"enum\":[\"request.method-not-allowed\"]}}}]}")],
   ["/paths/~1v1~1complete-execution-recovery/post/responses/200/content/application~1json/schema", JSON.parse("{\"$ref\":\"/components/schemas/ExecutionReviewed\"}")],
   ["/paths/~1v1~1complete-execution-recovery/post/responses/400/content/application~1problem+json/schema", JSON.parse("{\"allOf\":[{\"$ref\":\"/components/schemas/Problem\"},{\"properties\":{\"code\":{\"enum\":[\"request.invalid\",\"request.reason-invalid\"]}}}]}")],
@@ -279,7 +280,10 @@ for (const [id, definition] of Object.entries(definitions)) {
 
 export class Client {
   readonly #transport: Transport
-  constructor(transport: Transport) { this.#transport = transport }
+  constructor(transport: Transport) {
+    assertClientVersion("0.49.0")
+    this.#transport = transport
+  }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<Answer<Operations[K]["output"]>> {
     return this.#call(operation, args[0])
   }

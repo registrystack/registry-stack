@@ -1,9 +1,10 @@
-// Source SHA-256 d6cecd502062be04c49927fab37350294acbf11953092b7ad8e63df775b3c985
-import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../../core.ts"
+// Generated for Stack version 0.49.0, client version 0.49.0.
+// Source SHA-256 83c0c6d43067951a1ca4126f45c023cd084387b327e70f035bebd2d1bb324048
+import { assertClientVersion, type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../../core.ts"
 import { validator } from "../../schema.ts"
 import { listPage, listQuery, type FieldValue, type Filter, type ListPage, type ListRequest, type ListRules } from "../../core.ts"
 
-export type Schema_Licence = ({ "domainData": ({ "holderId"?: (string); "holderName"?: (string); "licenceNumber"?: (string); "region"?: ("north" | "east" | "south" | "west") & (string); "status"?: ("active" | "suspended" | "expired") & (string); "expiresOn"?: (string); "fee"?: (number); "suspendedOn"?: (string | null) }); "recordIdentifier": (string); "revisionIdentifier": (string) })
+export type Schema_Licence = ({ "domainData": ({ "holderId"?: (string); "holderName"?: (string); "licenceNumber": (string); "region"?: ("north" | "east" | "south" | "west") & (string); "status"?: ("active" | "suspended" | "expired") & (string); "expiresOn"?: (string); "fee"?: (number); "suspendedOn"?: (string | null) }); "recordIdentifier": (string); "revisionIdentifier": (string) })
 export type Schema_LicencePage = ({ "count"?: (number); "items": (Array<Schema_Licence>); "pageInfo": ({ "nextCursor": (string | null) }) })
 export type Schema_Site = ({ "domainData": ({ "label"?: (string); "siteCode"?: (string) }); "recordIdentifier": (string); "revisionIdentifier": (string) })
 export type Schema_SitePage = ({ "items": (Array<Schema_Site>); "pageInfo": ({ "nextCursor": (string | null) }) })
@@ -12,6 +13,7 @@ export type Schema_PermitPage = ({ "items": (Array<Schema_Permit>); "pageInfo": 
 
 export interface Operations {
   "records.licence.list": { input: CallOptions & { query?: { "accessProfile"?: "licence-holder" | "licence-officer"; "$select"?: (string); "$filter"?: (string); "$orderby"?: (string); "$top"?: (number); "$count"?: (boolean); "$skiptoken"?: (string) } } & { accept?: "application/json" | "*/*" }; required: false; output: Schema_LicencePage }
+  "records.licence.get": { input: CallOptions & { path: { "record_id": (string) } } & { accept?: "application/json" | "*/*" }; required: true; output: ({ "data": Schema_Licence }) }
   "records.site.list": { input: CallOptions & { query?: { "$select"?: (string); "$filter"?: (string); "$orderby"?: (string); "$top"?: (number); "$skiptoken"?: (string) } } & { accept?: "application/json" | "*/*" }; required: false; output: Schema_SitePage }
   "records.permit.list": { input: CallOptions & { query?: { "accessProfile"?: "permit-clerk"; "$select"?: (string); "$filter"?: (string); "$orderby"?: (string); "$top"?: (number); "$skiptoken"?: (string) } } & { accept?: "application/json" | "*/*" }; required: false; output: Schema_PermitPage }
 }
@@ -29,6 +31,14 @@ export interface ListOptions {
 }
 const listRules: Record<string, ListRules & { operation: string }> = JSON.parse("{\"licence\":{\"operation\":\"records.licence.list\",\"requiresAccessProfile\":false,\"accessProfileParameter\":true,\"recordProperties\":[\"expiresOn\",\"fee\",\"holderId\",\"holderName\",\"licenceNumber\",\"region\",\"status\",\"suspendedOn\"],\"profiles\":{\"licence-holder\":{\"maximumPageSize\":20,\"allowCount\":false,\"selectable\":[\"licenceNumber\",\"status\"],\"filterable\":{\"holderId\":[\"equals\"],\"licenceNumber\":[\"equals\",\"in\"],\"status\":[\"equals\"]},\"sortable\":{},\"requiredFilters\":[[\"holderId\"],[\"licenceNumber\",\"status\"]]},\"licence-officer\":{\"maximumPageSize\":50,\"allowCount\":true,\"selectable\":[\"expiresOn\",\"fee\",\"holderName\",\"licenceNumber\",\"region\",\"status\"],\"filterable\":{\"expiresOn\":[\"range\"],\"fee\":[\"equals\",\"range\"],\"holderName\":[\"prefix\",\"contains\"],\"region\":[\"equals\",\"in\"],\"status\":[\"equals\",\"in\"],\"suspendedOn\":[\"is-null\",\"is-not-null\"]},\"sortable\":{\"expiresOn\":[\"asc\"],\"holderName\":[\"asc\",\"desc\"]}}}},\"site\":{\"operation\":\"records.site.list\",\"requiresAccessProfile\":false,\"accessProfileParameter\":false,\"recordProperties\":[\"label\",\"siteCode\"],\"profiles\":{\"site-planner\":{\"maximumPageSize\":10,\"allowCount\":false,\"selectable\":[\"label\",\"siteCode\"],\"filterable\":{\"siteCode\":[\"equals\"]},\"sortable\":{\"label\":[\"asc\"]}}}},\"permit\":{\"operation\":\"records.permit.list\",\"requiresAccessProfile\":true,\"accessProfileParameter\":true,\"recordProperties\":[\"label\",\"permitCode\"],\"profiles\":{\"permit-clerk\":{\"maximumPageSize\":10,\"allowCount\":false,\"selectable\":[\"label\",\"permitCode\"],\"filterable\":{\"permitCode\":[\"equals\"]},\"sortable\":{\"label\":[\"asc\"]}}}}}")
 
+interface ReadRows {
+  "licence": Operations["records.licence.get"]["output"]["data"]
+}
+export interface ReadOptions {
+  "licence": CallOptions & { accessProfile?: never }
+}
+const readRoutes: Record<string, { operation: string; takesProfile: boolean; required: boolean; profiles?: string[] }> = JSON.parse("{\"licence\":{\"operation\":\"records.licence.get\",\"takesProfile\":false,\"required\":false}}")
+
 type RecordEnvelope = { recordIdentifier: string; revisionIdentifier: string; domainData: unknown }
 export interface RecordRow<Data> { id: string; revision: string; data: Data }
 function recordRow<Data>(record: RecordEnvelope & { domainData: Data }): RecordRow<Data> {
@@ -36,13 +46,14 @@ function recordRow<Data>(record: RecordEnvelope & { domainData: Data }): RecordR
 }
 
 const rules: Record<string, unknown> = Object.fromEntries([
-  ["/components/schemas/Licence", JSON.parse("{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"domainData\",\"recordIdentifier\",\"revisionIdentifier\"],\"properties\":{\"domainData\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"holderId\":{\"type\":\"string\"},\"holderName\":{\"type\":\"string\",\"maxLength\":160},\"licenceNumber\":{\"type\":\"string\",\"maxLength\":40},\"region\":{\"type\":\"string\",\"enum\":[\"north\",\"east\",\"south\",\"west\"]},\"status\":{\"type\":\"string\",\"enum\":[\"active\",\"suspended\",\"expired\"]},\"expiresOn\":{\"type\":\"string\"},\"fee\":{\"type\":\"integer\",\"minimum\":0},\"suspendedOn\":{\"type\":[\"string\",\"null\"]}}},\"recordIdentifier\":{\"type\":\"string\"},\"revisionIdentifier\":{\"type\":\"string\"}}}")],
+  ["/components/schemas/Licence", JSON.parse("{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"domainData\",\"recordIdentifier\",\"revisionIdentifier\"],\"properties\":{\"domainData\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"licenceNumber\"],\"properties\":{\"holderId\":{\"type\":\"string\"},\"holderName\":{\"type\":\"string\",\"maxLength\":160},\"licenceNumber\":{\"type\":\"string\",\"maxLength\":40},\"region\":{\"type\":\"string\",\"enum\":[\"north\",\"east\",\"south\",\"west\"]},\"status\":{\"type\":\"string\",\"enum\":[\"active\",\"suspended\",\"expired\"]},\"expiresOn\":{\"type\":\"string\"},\"fee\":{\"type\":\"integer\",\"minimum\":0},\"suspendedOn\":{\"type\":[\"string\",\"null\"]}}},\"recordIdentifier\":{\"type\":\"string\"},\"revisionIdentifier\":{\"type\":\"string\"}}}")],
   ["/components/schemas/LicencePage", JSON.parse("{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"items\",\"pageInfo\"],\"properties\":{\"count\":{\"type\":\"integer\",\"minimum\":0},\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"/components/schemas/Licence\"}},\"pageInfo\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"nextCursor\"],\"properties\":{\"nextCursor\":{\"type\":[\"string\",\"null\"],\"maxLength\":10978}}}}}")],
   ["/components/schemas/Permit", JSON.parse("{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"domainData\",\"recordIdentifier\",\"revisionIdentifier\"],\"properties\":{\"domainData\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"label\":{\"type\":\"string\"},\"permitCode\":{\"type\":\"string\"}}},\"recordIdentifier\":{\"type\":\"string\"},\"revisionIdentifier\":{\"type\":\"string\"}}}")],
   ["/components/schemas/PermitPage", JSON.parse("{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"items\",\"pageInfo\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"/components/schemas/Permit\"}},\"pageInfo\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"nextCursor\"],\"properties\":{\"nextCursor\":{\"type\":[\"string\",\"null\"],\"maxLength\":10978}}}}}")],
   ["/components/schemas/Site", JSON.parse("{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"domainData\",\"recordIdentifier\",\"revisionIdentifier\"],\"properties\":{\"domainData\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"label\":{\"type\":\"string\"},\"siteCode\":{\"type\":\"string\"}}},\"recordIdentifier\":{\"type\":\"string\"},\"revisionIdentifier\":{\"type\":\"string\"}}}")],
   ["/components/schemas/SitePage", JSON.parse("{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"items\",\"pageInfo\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"/components/schemas/Site\"}},\"pageInfo\":{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"nextCursor\"],\"properties\":{\"nextCursor\":{\"type\":[\"string\",\"null\"],\"maxLength\":10978}}}}}")],
   ["/paths/~1v1~1records~1licences/get/responses/200/content/application~1json/schema", JSON.parse("{\"$ref\":\"/components/schemas/LicencePage\"}")],
+  ["/paths/~1v1~1records~1licences~1{record_id}/get/responses/200/content/application~1json/schema", JSON.parse("{\"type\":\"object\",\"required\":[\"data\"],\"properties\":{\"data\":{\"$ref\":\"/components/schemas/Licence\"}}}")],
   ["/paths/~1v1~1records~1permits/get/responses/200/content/application~1json/schema", JSON.parse("{\"$ref\":\"/components/schemas/PermitPage\"}")],
   ["/paths/~1v1~1records~1sites/get/responses/200/content/application~1json/schema", JSON.parse("{\"$ref\":\"/components/schemas/SitePage\"}")],
 ])
@@ -50,6 +61,7 @@ const routes: Record<string, Operation> = Object.create(null)
 type Definition = Omit<Operation, "responses"> & { problems?: Record<string, string>; responses: Record<number, Array<ResponseVariant & { rule?: string }>> }
 const definitions: Record<string, Definition> = Object.fromEntries([
   ["records.licence.list", JSON.parse("{\"method\":\"GET\",\"path\":\"/v1/records/licences\",\"responses\":{\"200\":[{\"mediaType\":\"application/json\",\"mode\":\"json\",\"rule\":\"/paths/~1v1~1records~1licences/get/responses/200/content/application~1json/schema\"}]},\"accessProfileParameter\":true,\"keyed\":false,\"mutating\":false}")],
+  ["records.licence.get", JSON.parse("{\"method\":\"GET\",\"path\":\"/v1/records/licences/{record_id}\",\"responses\":{\"200\":[{\"mediaType\":\"application/json\",\"mode\":\"json\",\"rule\":\"/paths/~1v1~1records~1licences~1{record_id}/get/responses/200/content/application~1json/schema\"}]},\"keyed\":false,\"mutating\":false}")],
   ["records.site.list", JSON.parse("{\"method\":\"GET\",\"path\":\"/v1/records/sites\",\"responses\":{\"200\":[{\"mediaType\":\"application/json\",\"mode\":\"json\",\"rule\":\"/paths/~1v1~1records~1sites/get/responses/200/content/application~1json/schema\"}]},\"keyed\":false,\"mutating\":false}")],
   ["records.permit.list", JSON.parse("{\"method\":\"GET\",\"path\":\"/v1/records/permits\",\"responses\":{\"200\":[{\"mediaType\":\"application/json\",\"mode\":\"json\",\"rule\":\"/paths/~1v1~1records~1permits/get/responses/200/content/application~1json/schema\"}]},\"accessProfileParameter\":true,\"accessProfileRequired\":true,\"keyed\":false,\"mutating\":false}")],
 ])
@@ -62,8 +74,11 @@ for (const [id, definition] of Object.entries(definitions)) {
 }
 
 export class Client {
-  readonly #transport: Transport
-  constructor(transport: Transport) { this.#transport = transport }
+  readonly #transport: Pick<Transport, "call" | "profile">
+  constructor(transport: Pick<Transport, "call" | "profile">) {
+    assertClientVersion("0.49.0")
+    this.#transport = transport
+  }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<Answer<Operations[K]["output"]>> {
     return this.#call(operation, args[0])
   }
@@ -98,7 +113,28 @@ export class Client {
     const page = listPage(data)
     return { ...page, items: page.items.map(recordRow) }
   }
+  read<K extends keyof ReadOptions>(recordType: K, id: string, ...args: {} extends ReadOptions[K] ? [options?: ReadOptions[K]] : [options: ReadOptions[K]]): Promise<RecordRow<ReadRows[K]["domainData"]>>
+  async read(recordType: string, id: string, options: CallOptions & { accessProfile?: string } = {}): Promise<RecordRow<unknown>> {
+    const route = Object.hasOwn(readRoutes, recordType) ? readRoutes[recordType] : undefined
+    if (!route) throw new TypeError("Unknown record type for read")
+    const { accessProfile: explicitProfile, ...call } = options
+    const accessProfile = route.takesProfile && explicitProfile === undefined ? this.#transport.profile : explicitProfile
+    if (route.required && accessProfile === undefined) throw new TypeError("Reading " + recordType + " needs an access profile.")
+    if (accessProfile !== undefined) {
+      if (!route.takesProfile) throw new TypeError("Reading " + recordType + " takes no access profile.")
+      if (typeof accessProfile !== "string" || (route.profiles && !route.profiles.includes(accessProfile))) {
+        throw new TypeError(explicitProfile === undefined ? "The client's default access profile is not one this record type publishes, so name one on the call." : "Unknown access profile for reading " + recordType + ".")
+      }
+    }
+    const { data } = await this.#call<{ data: RecordEnvelope }>(route.operation, { ...call, path: { record_id: id }, query: { accessProfile } })
+    return recordRow(data.data)
+  }
 }
+
+export const profiles = ["licence-holder","licence-officer","permit-clerk","site-planner"] as const
+export type AccessProfile = typeof profiles[number]
+export const reasons = {
+} as const
 
 // Each Action's display text and inputs exactly as the source document declares them.
 export const actionInputs = {} as const

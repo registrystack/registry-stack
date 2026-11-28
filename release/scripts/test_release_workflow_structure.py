@@ -1702,6 +1702,26 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
             self.assertNotIn(forbidden, text)
 
+    def test_web_client_is_packed_once_and_promoted_from_the_sealed_bundle(self) -> None:
+        _, candidate = workflow("release-candidate.yml")
+        pack = step_run(candidate, "clients", "Pack and smoke the web client")
+        self.assertIn("matrix.asset", next(step["if"] for step in candidate["jobs"]["clients"]["steps"]
+            if step.get("name") == "Pack and smoke the web client"))
+        self.assertIn("npm pack --ignore-scripts", pack)
+        self.assertIn("validate-web-npm", pack)
+        assemble = step_run(candidate, "assemble", "Assemble public payload and validate version-appropriate install inputs")
+        self.assertIn('echo "${web_package}"', assemble)
+        self.assertIn('validate-web-npm', assemble)
+        seal = step_run(candidate, "assemble", "Seal compact candidate manifest and bundle")
+        self.assertIn('"${web_package}"|', seal)
+
+        _, publication = workflow("release.yml")
+        publish = step_run(publication, "publish_client_npm", "Reconcile platform packages, then publish the root package")
+        self.assertIn('root_packages+=("${web_package}")', publish)
+        self.assertLess(publish.index('for name in "${platform_packages[@]}"'),
+                        publish.index('for root_package in "${root_packages[@]}"'))
+        self.assertNotIn("npm pack", publish)
+
     @mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_candidate_client_smoke_counts_and_internal_wheel_names(self) -> None:
         _, document = workflow("release-candidate.yml")
