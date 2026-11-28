@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -12,7 +12,7 @@ const { name, version } = JSON.parse(readFileSync(join(root, 'package.json'), 'u
 const fixture = fileURLToPath(new URL('./fixtures/breg-list.openapi.json', import.meta.url))
 
 for (const scenario of ['success', 'two registers', 'missing bregctl', 'failed compile', 'inside package', 'duplicate', 'incompatible package', 'compatible patch',
-  'old Node', 'missing package', 'invalid author profile', 'blocked register'] as const) {
+  'old Node', 'missing package', 'invalid author profile', 'blocked register', 'different compiler patch', 'older compiler minor', 'newer compiler minor', 'browser import map'] as const) {
   test('project generator: ' + scenario, t => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'registry-project-')))
     t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -20,10 +20,16 @@ for (const scenario of ['success', 'two registers', 'missing bregctl', 'failed c
     const second = join(dir, 'second')
     mkdirSync(project)
     mkdirSync(second)
+    const [major, minor] = version.split('.').map(Number)
+    const compilerVersion = scenario === 'different compiler patch' ? major + '.' + minor + '.1'
+      : scenario === 'older compiler minor' ? major + '.' + (minor! - 1) + '.0'
+      : scenario === 'newer compiler minor' ? major + '.' + (minor! + 1) + '.0'
+      : version
     const stub = join(dir, 'bregctl')
     writeFileSync(stub, [
       '#!/bin/sh',
       'set -eu',
+      '[ "$1" != --version ] || { printf "bregctl %s\\n" "$BREG_TEST_VERSION"; exit 0; }',
       '[ "$1" = generate ] && [ "$2" = openapi ] && [ -d "$3" ] && [ "$4" = --output ] || exit 2',
       scenario === 'failed compile' ? 'exit 14' : 'mkdir -p "$5/generated"',
       'cp "$BREG_TEST_OPENAPI" "$5/generated/openapi.json"',
@@ -38,7 +44,12 @@ for (const scenario of ['success', 'two registers', 'missing bregctl', 'failed c
         name, version: scenario === 'incompatible package' ? '999.0.0' : scenario === 'compatible patch' ? version.replace(/\.\d+$/u, '.999') : version,
       }))
     }
-    const args = ['--register', 'licences=' + project, '--products', 'casework', '--output', output]
+    const products = scenario === 'browser import map' ? 'documents,casework,evidence' : 'casework'
+    const args = ['--register', 'licences=' + project, '--products', products, '--output', output]
+    if (scenario === 'browser import map') args.push('--author-profile', 'licences=facility-correction-author')
+    const openapi = scenario === 'browser import map'
+      ? fileURLToPath(new URL('../../../products/breg/generated/facility/generated/openapi.json', import.meta.url))
+      : fixture
     if (scenario === 'two registers') args.push('--register', 'other=' + second, '--route-prefix', 'other=/other')
     if (scenario === 'duplicate') args.push('--register', 'licences=' + second)
     if (scenario === 'invalid author profile') args.push('--author-profile', 'licences=x')
@@ -52,7 +63,7 @@ for (const scenario of ['success', 'two registers', 'missing bregctl', 'failed c
       : []
     const result = spawnSync(process.execPath, [...preload, cli, ...args], { encoding: 'utf8', env: {
       ...process.env, RSTACK_BREGCTL_BIN: scenario === 'missing bregctl' || scenario === 'inside package' || scenario === 'incompatible package'
-        ? join(dir, 'missing') : stub, BREG_TEST_OPENAPI: fixture,
+        ? join(dir, 'missing') : stub, BREG_TEST_OPENAPI: openapi, BREG_TEST_VERSION: compilerVersion,
     } })
     const failure = {
       'missing bregctl': /bregctl.*PATH.*RSTACK_BREGCTL_BIN/u,
@@ -63,9 +74,55 @@ for (const scenario of ['success', 'two registers', 'missing bregctl', 'failed c
       'old Node': /^.*requires Node(?:\.js)? 24 or later\.\n$/u,
       'missing package': /install @registrystack\/client in the application/iu,
       'invalid author profile': /cannot start Proposals in licences/u,
+      'older compiler minor': /bregctl version .* is incompatible with client version /u,
+      'newer compiler minor': /bregctl version .* is incompatible with client version /u,
       'blocked register': /rename.*service\.other\.ts/u,
     }
-    if (scenario === 'success' || scenario === 'two registers' || scenario === 'compatible patch') {
+    if (scenario === 'browser import map') {
+      assert.equal(result.status, 0, result.stderr)
+      const readme = readFileSync(join(root, 'README.md'), 'utf8')
+      const importMap = /<script type="importmap">\s*([\s\S]*?)\s*<\/script>/u.exec(readme)?.[1]
+      assert.ok(importMap, 'The README must document the import map')
+      const tsc = join(root, 'node_modules/typescript/bin/tsc')
+      const installed = join(dir, 'node_modules', name)
+      const publicDir = join(dir, 'public')
+      writeFileSync(join(installed, 'package.json'), readFileSync(join(root, 'package.json')))
+      const built = join(installed, 'dist')
+      const build = spawnSync(process.execPath, [tsc, '-p', join(root, 'tsconfig.browser.json'), '--outDir', built],
+        { encoding: 'utf8' })
+      assert.equal(build.status, 0, build.stdout + build.stderr)
+      const compile = spawnSync(process.execPath, [tsc, '--strict', '--target', 'ES2023', '--module', 'ESNext',
+        '--moduleResolution', 'Bundler', '--outDir', publicDir, output], { encoding: 'utf8' })
+      assert.equal(compile.status, 0, compile.stdout + compile.stderr)
+      writeFileSync(join(publicDir, 'package.json'), '{"type":"module"}')
+      cpSync(built, join(publicDir, 'vendor/registry-client'), { recursive: true })
+      const run = spawnSync(process.execPath, ['--input-type=module', '-', publicDir, importMap], {
+        encoding: 'utf8',
+        input: `
+import assert from 'node:assert/strict'
+import { registerHooks } from 'node:module'
+import { pathToFileURL } from 'node:url'
+const base = pathToFileURL(process.argv[2] + '/')
+const { imports } = JSON.parse(process.argv[3])
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith('@registrystack/')) {
+      assert.ok(Object.hasOwn(imports, specifier), 'Missing import map entry for ' + specifier)
+      specifier = new URL(imports[specifier].slice(1), base).href
+    }
+    return nextResolve(specifier, context)
+  },
+})
+const { createRegistryClient } = await import(new URL('service.js', base).href)
+const client = createRegistryClient({ baseUrl: 'https://registry.example' })
+assert.equal(typeof client.licences.proposals.attach, 'function')
+assert.equal(typeof client.documents.upload, 'function')
+`,
+      })
+      assert.equal(run.status, 0, run.stdout + run.stderr)
+      return
+    }
+    if (scenario === 'success' || scenario === 'two registers' || scenario === 'compatible patch' || scenario === 'different compiler patch') {
       assert.equal(result.status, 0, result.stderr)
       const service = readFileSync(output, 'utf8')
       assert.match(service, /licences: member0/u)
@@ -111,6 +168,16 @@ for (const scenario of ['success', 'two registers', 'missing bregctl', 'failed c
     } else {
       assert.equal(result.status, 1, result.stdout + result.stderr)
       assert.match(result.stderr, failure[scenario])
+      if (scenario === 'older compiler minor' || scenario === 'newer compiler minor') {
+        assert.ok(result.stderr.includes(compilerVersion))
+        assert.ok(result.stderr.includes(version))
+        const readme = readFileSync(join(root, 'README.md'), 'utf8')
+        const documented = /^bregctl version (\d+\.\d+\.\d+) is incompatible with client version (\d+\.\d+\.\d+)\. .*$/mu.exec(readme)
+        assert.ok(documented, 'The README must show the generator refusal')
+        const expected = documented[0].replace('bregctl version ' + documented[1], 'bregctl version ' + compilerVersion)
+          .replace('client version ' + documented[2], 'client version ' + version)
+        assert.equal(result.stderr.trim(), expected)
+      }
       if (scenario === 'blocked register') {
         assert.ok(existsSync(join(dir, 'app', 'service.licences.ts')))
         assert.equal(readFileSync(output, 'utf8'), '// Previous service')

@@ -25,8 +25,9 @@ binding, isolation and recovery.
 
 From the application, run `npm install @registrystack/client`, then run
 `rstack client generate --help` for the register, product and output options.
-The command looks for the installed generator starting at the output path and uses
-the same BReg CLI as `rstack dev`. See the [TypeScript client reference](../../reference/typescript-clients/).
+The command looks for the installed `@registrystack/client` package starting at the output file's directory.
+Like `rstack dev`, it sets `RSTACK_BREGCTL_BIN` to the selected release's `bregctl` when an installed release is selected.
+See the [TypeScript client reference](../../reference/typescript-clients/).
 
 {/* Evidence: crates/registry-rstack/src/cli.rs, generate_client(); clients/typescript/package.json. */}
 

@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { generate } from './generate.ts'
 import { checkRegisterMember, generateService, type RegisterDescription, type ServiceSettings } from './generate-service.ts'
-import { checkInstalledClient, packageFile } from './generator-package.ts'
+import { compatibleClientVersions } from './version.ts'
+import { checkInstalledClient, packageFile, packageVersion } from './generator-package.ts'
 
 const packageRoot = dirname(realpathSync(fileURLToPath(packageFile)))
 const usage = 'Usage: registry-generate --register member=/path/to/project [--register member=/other/project] '
@@ -30,6 +31,20 @@ function outsidePackage(path: string): void {
     return !isAbsolute(fromPackage) && fromPackage !== '..' && !fromPackage.startsWith('..' + sep)
   }
   if (inside(path) || inside(physicalPath(path))) throw new Error('The output is inside the package: ' + path)
+}
+
+function checkCompilerVersion(compiler: string): void {
+  const result = spawnSync(compiler, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+    throw new Error('Cannot find bregctl on PATH or at RSTACK_BREGCTL_BIN.')
+  }
+  if (result.error || result.status !== 0) throw new Error('Cannot read the bregctl version. Run bregctl --version.')
+  const reported = /^bregctl (\S+)$/u.exec(result.stdout.trim())?.[1]
+  if (!reported) throw new Error('Cannot read the bregctl version. Run bregctl --version.')
+  if (!compatibleClientVersions(packageVersion, reported)) {
+    throw new Error('bregctl version ' + reported + ' is incompatible with client version ' + packageVersion
+      + '. Use bregctl from a compatible Registry Stack release.')
+  }
 }
 
 function generateProject(): void {
@@ -71,6 +86,8 @@ function generateProject(): void {
   for (const member of requested.keys()) outsidePackage(output.slice(0, -3) + '.' + member + '.ts')
 
   checkInstalledClient(physicalPath(output))
+  const compiler = process.env.RSTACK_BREGCTL_BIN || 'bregctl'
+  checkCompilerVersion(compiler)
   const workspace = mkdtempSync(join(tmpdir(), 'registry-openapi-'))
   const registers: Record<string, RegisterDescription> = Object.create(null)
   const settings: Record<string, NonNullable<ServiceSettings['registers']>[string]> = Object.create(null)
@@ -78,7 +95,7 @@ function generateProject(): void {
   try {
     for (const [member, { project, authors, routePrefix }] of requested) {
       const artifacts = join(workspace, member)
-      const result = spawnSync(process.env.RSTACK_BREGCTL_BIN || 'bregctl',
+      const result = spawnSync(compiler,
         ['generate', 'openapi', project, '--output', artifacts], { stdio: ['ignore', 'inherit', 'inherit'] })
       if (result.error) {
         if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') {

@@ -491,13 +491,13 @@ def validate_web_npm(directory: Path, version: str) -> Path:
         or metadata.get("private")
         or metadata.get("license") != "Apache-2.0"
         or metadata.get("types") != "./dist/browser.d.ts"
-        or metadata.get("bin") != {"registry-generate": "./dist/generate-project.js"}
+        or metadata.get("bin") != {"registry-generate": "./registry-generate.js"}
     ):
         raise ClientRegistryError(f"npm package {path.name} has invalid web client metadata")
     required = {
         "package/LICENSE", "package/README.md", "package/package.json",
         "package/dist/browser.js", "package/dist/browser.d.ts",
-        "package/dist/generate-project.js",
+        "package/registry-generate.js", "package/dist/generate-project.js",
         "package/dist/generate.js", "package/dist/generate-service.js",
     }
     if not required.issubset(names) or any(

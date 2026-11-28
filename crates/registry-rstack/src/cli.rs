@@ -179,6 +179,9 @@ enum Command {
 #[derive(Subcommand)]
 enum ClientCommand {
     /// Run the registry-generate bin installed in the application project.
+    #[command(
+        after_help = "When an installed release is selected, rstack sets RSTACK_BREGCTL_BIN to that release's bregctl."
+    )]
     Generate(ClientGenerate),
 }
 
@@ -916,10 +919,8 @@ fn generate_client(cli: &Cli, arguments: &ClientGenerate) -> Result<(), CliFailu
         .skip(1)
         .find_map(|candidate| candidate.canonicalize().ok().filter(|path| path.is_dir()));
     let generator = output_directory
-        .iter()
-        .flat_map(|directory| directory.ancestors())
-        .map(|directory| directory.join("node_modules/.bin/registry-generate"))
-        .find(|candidate| candidate.is_file())
+        .as_deref()
+        .and_then(installed_client_generator)
         .ok_or_else(|| {
             CliFailure::domain(
                 "rstack.client.generator-missing: run npm install @registrystack/client in the application project".into(),
@@ -935,13 +936,14 @@ fn generate_client(cli: &Cli, arguments: &ClientGenerate) -> Result<(), CliFailu
                 && value.is_some_and(|path| std::path::Path::new(path).is_file())
         }) {
             return Err(CliFailure::domain(
-                "component breg is missing; run rstack install breg".into(),
+                "rstack.client.bregctl-missing: component breg is missing; run rstack install breg"
+                    .into(),
             ));
         }
         inherit_invocation_lease(lease)?;
     } else if source_dev_binary(BREG_DEV_HOST.tool_variable).is_none() {
         return Err(CliFailure::domain(
-            "run rstack install breg or set RSTACK_BREGCTL_BIN to an existing bregctl binary"
+            "rstack.client.bregctl-missing: run rstack install breg or set RSTACK_BREGCTL_BIN to an existing bregctl binary"
                 .into(),
         ));
     }
@@ -964,6 +966,34 @@ fn generate_client(cli: &Cli, arguments: &ClientGenerate) -> Result<(), CliFailu
     Err(CliFailure::operational(format!(
         "cannot launch registry-generate: {error}"
     )))
+}
+
+fn installed_client_generator(output_directory: &std::path::Path) -> Option<PathBuf> {
+    #[derive(serde::Deserialize)]
+    struct ClientPackage {
+        name: String,
+        bin: std::collections::BTreeMap<String, PathBuf>,
+    }
+
+    let mut manifests = output_directory
+        .ancestors()
+        .map(|directory| directory.join("node_modules/@registrystack/client/package.json"));
+    // Stop at the first manifest, including an invalid one.
+    let manifest = manifests.find(|path| {
+        !matches!(fs::symlink_metadata(path), Err(error) if error.kind() == io::ErrorKind::NotFound)
+    })?;
+    let package_directory = manifest.parent()?.canonicalize().ok()?;
+    let manifest = manifest.canonicalize().ok()?;
+    if !manifest.starts_with(&package_directory) || !manifest.is_file() {
+        return None;
+    }
+    let package: ClientPackage = serde_json::from_slice(&fs::read(manifest).ok()?).ok()?;
+    let bin = package.bin.get("registry-generate")?;
+    if package.name != "@registrystack/client" || bin.is_absolute() {
+        return None;
+    }
+    let generator = package_directory.join(bin).canonicalize().ok()?;
+    (generator.starts_with(&package_directory) && generator.is_file()).then_some(generator)
 }
 
 /// The tool of the selected release that writes a product's identity facts:

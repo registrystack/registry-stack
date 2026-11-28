@@ -158,7 +158,10 @@ test('a product 401 keeps its validated problem and identifies the module', asyn
       ['refused', 'configuration', false, 'authentication.refused'])
     assert.match(error.message, /casework service refused this page's session/u)
     assert.equal(error.product, 'casework')
-    assert.equal(describeError(error), 'This service is not available from this page right now, so try again later.')
+    assert.equal(describeError(error), 'You are signed in, but this page is not available to your account.')
+    assert.equal(describeError(error, {
+      clientSentences: { 'client.page-access-refused': 'Access to this page is restricted.' },
+    }), 'Access to this page is restricted.')
     assert.ok(!/casework|configuration/iu.test(describeError(error)))
     return true
   })

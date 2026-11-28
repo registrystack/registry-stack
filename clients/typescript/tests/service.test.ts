@@ -188,6 +188,58 @@ test('a register with Proposal reads but no starts refuses a declared author pro
     { registers: { facility: { source } } }), /quiet-author.*start.*none/u)
 })
 
+test('generated Proposal commands infer attachment slots for one Action and narrow multiple Actions', t => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'service-proposal-slots-')))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const source = join(directory, 'breg-facility.ts')
+  const openapi = join(directory, 'openapi.json')
+  const service = join(directory, 'service.ts')
+  const root = fileURLToPath(new URL('../', import.meta.url))
+  const contract = JSON.parse(readFileSync(new URL('../../../products/breg/generated/facility/generated/openapi.json', import.meta.url), 'utf8'))
+  const settings = {
+    registers: { facility: { source, import: './breg-facility.ts' } }, coreImport: relative(directory, join(root, 'core.ts')),
+    tasksImport: relative(directory, join(root, 'tasks/index.ts')),
+  }
+  const factory = description('breg-facility', [], ['facility-correction-author'])
+  delete contract.paths['/v1/actions/deactivate-facility/proposals']
+  writeFileSync(openapi, JSON.stringify(contract))
+  generateFile(openapi, source, false, true, [], true)
+  generateServiceFile(factory, service, false, settings)
+  const compile = join(directory, 'example.ts')
+  writeFileSync(compile, `
+import { createRegistryClient as createSingle, type FacilityProposal } from './service.ts'
+// @ts-expect-error generated services expose the member type, not a wide Proposal
+import type { Proposal } from './service.ts'
+import { createRegistryClient as createMultiple } from ${JSON.stringify(relative(directory, join(root, 'generated/services/breg-facility-documents-casework-evidence.ts')))}
+const single = createSingle({ baseUrl: '/registry' }).facility.proposals
+const multiple = createMultiple({ baseUrl: '/registry' }).facility.proposals
+async function check(id: string, file: Blob) {
+  const found = await single.get(id)
+  await single.attach(found, 'supporting-document', file)
+  const { items } = await single.list()
+  for (const proposal of items) {
+    const row: FacilityProposal = proposal
+    await single.attach(row, 'supporting-document', file)
+    await single.resubmit(row, { files: { 'supporting-document': file } })
+    // @ts-expect-error this slot was never declared
+    await single.attach(proposal, 'unknown-slot', file)
+  }
+  const proposal = await multiple.get(id)
+  // @ts-expect-error the slot is not declared on every Action
+  await multiple.attach(proposal, 'supporting-document', file)
+  // @ts-expect-error the slot is not declared on every Action
+  await multiple.resubmit(proposal, { files: { 'supporting-document': file } })
+  if (proposal.actionId === 'correct-address') {
+    await multiple.attach(proposal, 'supporting-document', file)
+    await multiple.resubmit(proposal, { files: { 'supporting-document': file } })
+  }
+}
+`)
+  execFileSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '--strict', '--noEmit',
+    '--allowImportingTsExtensions', '--target', 'ES2023', '--module', 'NodeNext',
+    '--typeRoots', join(root, 'node_modules/@types'), compile], { stdio: 'inherit' })
+})
+
 test('generated author profiles have separate queues, send their own profiles and compile the README example', { timeout: 15_000 }, async t => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'service-authors-')))
   t.after(() => rmSync(directory, { recursive: true, force: true }))

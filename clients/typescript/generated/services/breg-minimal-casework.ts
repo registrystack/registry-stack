@@ -6,12 +6,13 @@ import { Client as Register0, type AccessProfile as Profile0, type ProposalActio
 import { Client as CaseworkClient } from "../casework.ts"
 import { proposalCommands, type TypedProposalCommands } from '../../tasks/index.ts'
 
-export type { Proposal, ProposalStatus, AttachmentView } from '../../tasks/index.ts'
+export type { ProposalStatus, AttachmentView } from '../../tasks/index.ts'
 export interface RegisterProposalActions {
   directory: Actions0
 }
+export type DirectoryProposal = Awaited<ReturnType<TypedProposalCommands<Actions0>["get"]>>
 export type ProposalActions = Actions0
-export type ProposalListRow = Awaited<ReturnType<TypedProposalCommands<ProposalActions>["list"]>>["items"][number]
+export type ProposalListRow = DirectoryProposal
 export type ProposalSlot<Action extends keyof ProposalActions = keyof ProposalActions> = ProposalActions[Action]["slot"]
 
 type RegisterOptions<Profile> = { routePrefix?: string; profile?: Profile }
