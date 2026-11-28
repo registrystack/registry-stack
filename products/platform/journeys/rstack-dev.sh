@@ -226,12 +226,36 @@ recipe() {
 		CALL_METHOD=GET
 		CALL_PATH=/v1/evidence-definitions
 		;;
-	scheduling) PERSON=reader; CALL_METHOD=GET; CALL_PATH=/v1/offerings ;;
-	documents) PERSON=reader; CALL_METHOD=GET; CALL_PATH=/v1/document-policies ;;
-	coordinator) PERSON=reader; CALL_METHOD=GET; CALL_PATH=/v1/workflows/delayed-follow-up ;;
-	adapter) PERSON=reader; CALL_METHOD=GET; CALL_PATH=/.well-known/registry-adapter/effective-contract ;;
-	render) PERSON=reader; CALL_METHOD=GET; CALL_PATH=/v1/documents ;;
-	discovery) PERSON=''; CALL_METHOD=GET; CALL_PATH=/v1/services ;;
+	scheduling)
+		PERSON=reader
+		CALL_METHOD=GET
+		CALL_PATH=/v1/offerings
+		;;
+	documents)
+		PERSON=reader
+		CALL_METHOD=GET
+		CALL_PATH=/v1/document-policies
+		;;
+	coordinator)
+		PERSON=reader
+		CALL_METHOD=GET
+		CALL_PATH=/v1/workflows/delayed-follow-up
+		;;
+	adapter)
+		PERSON=reader
+		CALL_METHOD=GET
+		CALL_PATH=/.well-known/registry-adapter/effective-contract
+		;;
+	render)
+		PERSON=reader
+		CALL_METHOD=GET
+		CALL_PATH=/v1/documents
+		;;
+	discovery)
+		PERSON=''
+		CALL_METHOD=GET
+		CALL_PATH=/v1/services
+		;;
 	esac
 }
 
@@ -308,14 +332,15 @@ journey_at_cleanup stop_adapter_source
 
 start_evidence_source() {
 	local project=$1 port
-	port=$(python3 - <<'PYPORT'
+	port=$(
+		python3 - <<'PYPORT'
 import socket
 
 with socket.socket() as listener:
     listener.bind(("127.0.0.1", 0))
     print(listener.getsockname()[1])
 PYPORT
-)
+	)
 	perl -pi -e "s@http://127[.]0[.]0[.]1:8081@http://127.0.0.1:$port@" "$project/local-target.yaml"
 	python3 "$JOURNEY_ROOT/products/evidence/examples/standalone/serve-source.py" --port "$port" &
 	EVIDENCE_SOURCE_PID=$!
@@ -398,9 +423,9 @@ write_keep() {
 	[[ "$product" != breg ]] || step=hook
 	journey_http "$step" "${options[@]}" --data-file "$work/keep-body.json" --capture "$field" saved_id "$method" "$url$path" || unexpected_answer "$step"
 	case "$product" in
-		breg|documents|coordinator) KEEP_PATH=$path/$saved_id ;;
-		casework) KEEP_PATH=$path/$saved_id ;;
-		adapter) KEEP_PATH=$path ;;
+	breg | documents | coordinator) KEEP_PATH=$path/$saved_id ;;
+	casework) KEEP_PATH=$path/$saved_id ;;
+	adapter) KEEP_PATH=$path ;;
 	esac
 	KEEP_EXPECT=$saved_id
 }
@@ -496,14 +521,14 @@ walk_product() {
 
 	# start: one command, after supplying the optional fixture endpoints.
 	case "$product" in
-		breg) add_contact_hook "$project" ;;
-		casework)
-			# Use the generated test person's issuer for the starter's
-			# trusted producer on this disposable project.
-			perl -pi -e 's@^    issuer: http://127[.]0[.]0[.]1:8093$@    issuer: https://identity.casework.example.test@' "$project/casework.yaml"
-			;;
-		adapter) start_adapter_source "$project" "$work" ;;
-		evidence) start_evidence_source "$project" ;;
+	breg) add_contact_hook "$project" ;;
+	casework)
+		# Use the generated test person's issuer for the starter's
+		# trusted producer on this disposable project.
+		perl -pi -e 's@^    issuer: http://127[.]0[.]0[.]1:8093$@    issuer: https://identity.casework.example.test@' "$project/casework.yaml"
+		;;
+	adapter) start_adapter_source "$project" "$work" ;;
+	evidence) start_evidence_source "$project" ;;
 	esac
 	start_run start "$project" || status=$?
 	if [[ $status -ne 0 ]]; then
@@ -556,8 +581,8 @@ walk_product() {
 	local -a call_options=()
 	[[ -z "$PERSON" ]] || call_options+=(--bearer token)
 	case "$product" in
-		coordinator) call_options+=(--capture '.workflowRevision' workflow_revision) ;;
-		casework) call_options+=(--header 'Registry-Casework-Profile: staff') ;;
+	coordinator) call_options+=(--capture '.workflowRevision' workflow_revision) ;;
+	casework) call_options+=(--header 'Registry-Casework-Profile: staff') ;;
 	esac
 	if [[ -n "$CALL_BODY" ]]; then
 		printf '%s\n' "$CALL_BODY" | journey_write_file "$work/call-body.json"
@@ -585,11 +610,11 @@ walk_product() {
 		fi
 		local audit='' first_start_file=$START_FILE
 		case "$product" in
-			breg) audit=$(jq -er '.audit.path' "$runtime_file") ;;
-			scheduling)
-				audit=$(jq -er '.audit.path' "$runtime_file")
-				audit=${audit%.jsonl}.schedulingctl.jsonl
-				;;
+		breg) audit=$(jq -er '.audit.path' "$runtime_file") ;;
+		scheduling)
+			audit=$(jq -er '.audit.path' "$runtime_file")
+			audit=${audit%.jsonl}.schedulingctl.jsonl
+			;;
 		esac
 		journey_step keep --typed "rstack dev stop $run" -- rstack_dev stop "$run"
 		LIVE_RUNS=$(printf '%s' "$LIVE_RUNS" | grep -vx -- "$run" || true)
