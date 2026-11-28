@@ -246,6 +246,7 @@ authentication:
         accessTokenType: JWT
         scopeClaim: scope
         scopeSeparator: " "
+        actorKind: service
         allowedClients: [registry-adopter-client]
         maximumTokenLifetimeSeconds: 3600
         leewayMilliseconds: 60000

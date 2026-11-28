@@ -666,6 +666,7 @@ authentication:
         accessTokenType: JWT
         scopeClaim: scope
         scopeSeparator: " "
+        actorKind: service
         allowedClients: unrestricted
         maximumTokenLifetimeSeconds: 3600
         leewayMilliseconds: 60000
