@@ -28,6 +28,8 @@ use tokio_postgres::NoTls;
 use tracing::instrument::WithSubscriber;
 use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
+#[path = "support/source_ask_answers.rs"]
+mod source_ask_answers;
 
 struct Fixture {
     service_v1: CaseworkService,
@@ -85,6 +87,7 @@ impl ReviewContextProvider for ReviewSource {
             return Err(ReviewContextError::BindingMoved);
         }
         Ok(HumanDisplayObservation {
+            answers: Default::default(),
             identity: request.identity.clone(),
             reviewable: *self.state.lock().unwrap(),
             display_reference: None,

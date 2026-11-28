@@ -110,6 +110,9 @@ pub struct HumanDisplayObservation {
     pub reviewable: bool,
     pub display_reference: Option<String>,
     pub fields: BTreeMap<String, Value>,
+    /// Read live for task-context disclosure, never part of authored display fields.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub answers: BTreeMap<uuid::Uuid, crate::ReviewContextAnswer>,
 }
 
 /// Status deliberately contains no business fields or display reference.
@@ -343,6 +346,27 @@ mod tests {
             observation.check(&request),
             Err(ReviewContextError::Invalid)
         );
+    }
+
+    #[test]
+    fn human_source_answers_are_a_sibling_of_authored_fields() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let ask = uuid::Uuid::new_v4();
+        let value = serde_json::json!({
+            "identity":{"subject":{"source":"source","type":"proposal","id":"subject","version":"1","digest":digest},
+                "contract":{"id":"urn:context","revision":digest,"schemaDigest":digest}},
+            "reviewable":true,"displayReference":null,"fields":{"summary":"Synthetic summary"},
+            "answers":{(ask.to_string()):{"text":"Synthetic answer","documents":[],"answeredAt":"2026-11-27T10:00:00Z"}}
+        });
+        let observed = serde_json::from_value::<HumanDisplayObservation>(value.clone());
+        assert!(
+            observed.is_ok(),
+            "intrinsic answers must not be authored fields: {:?}",
+            observed.err()
+        );
+        let emitted = serde_json::to_value(observed.unwrap()).unwrap();
+        assert_eq!(emitted["answers"], value["answers"]);
+        assert_eq!(emitted["fields"], value["fields"]);
     }
 
     #[test]

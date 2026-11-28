@@ -2833,6 +2833,74 @@
         ],
         "type": "object"
       },
+      "ReviewAnswerDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "byteSize": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "download": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewAnswerDownload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "verificationStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "sha256",
+          "contentType",
+          "byteSize"
+        ],
+        "type": "object"
+      },
+      "ReviewAnswerDownload": {
+        "additionalProperties": false,
+        "properties": {
+          "accessProfile": {
+            "type": "string"
+          },
+          "method": {
+            "pattern": "^GET$",
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "operation",
+          "accessProfile",
+          "path"
+        ],
+        "type": "object"
+      },
       "ReviewAsk": {
         "additionalProperties": false,
         "description": "A reviewer's request for more from the subject's owner. The provider owns\nthe ask; the producer reads it and reports only that it was answered.",
@@ -3455,10 +3523,50 @@
         ],
         "type": "string"
       },
+      "ReviewContextAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "answeredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewAnswerDocument"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "text": {
+            "maxLength": 2000,
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-maximum-utf8-bytes": 2000
+          }
+        },
+        "required": [
+          "documents",
+          "answeredAt"
+        ],
+        "type": "object"
+      },
       "ReviewContextAsk": {
         "additionalProperties": false,
         "description": "An ask as a reviewer reads it in the task context.",
         "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewContextAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Live source content. Casework retains only its own answer notification time."
+          },
           "answeredAt": {
             "format": "date-time",
             "type": [

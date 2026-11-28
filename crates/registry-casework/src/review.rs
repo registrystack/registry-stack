@@ -2,6 +2,7 @@ mod ask_clocks;
 mod asks;
 mod inbox;
 mod maintenance;
+mod source_answers;
 mod staffing;
 use asks::close_open_asks;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -1030,6 +1031,7 @@ impl CaseworkService {
                 && task.decided_by_caller == Some(true)
         };
         let mut retained_author_required = false;
+        let mut live_answers = std::collections::BTreeMap::new();
         let context = match record.context.as_ref().ok_or(ReviewRuntimeError::Corrupt)? {
             ReviewContext::Submitted { snapshot } => ReviewTaskContextData::Submitted {
                 snapshot: snapshot.clone(),
@@ -1090,6 +1092,9 @@ impl CaseworkService {
                     .policy
                     .validate_display(&serde_json::to_value(&view.fields)?)
                     .map_err(|error| invalid_provider_display(&record.policy, error))?;
+                if delegated.is_none() {
+                    live_answers = view.answers;
+                }
                 ReviewTaskContextData::CurrentSource {
                     reference: binding.reference.clone(),
                     binding_status: ReviewSourceBindingStatus::Current,
@@ -1107,11 +1112,18 @@ impl CaseworkService {
         }
         // Delegated institutional readers get the task context without the
         // reviewers' asks of the applicant.
-        let asks = if delegated.is_some() {
+        let mut asks = if delegated.is_some() {
             Vec::new()
         } else {
             self.store.review_context_asks(record.request_id).await?
         };
+        let unknown_answers = source_answers::join(&mut asks, live_answers, delegated.is_some())?;
+        if unknown_answers != 0 {
+            tracing::warn!(
+                unknown_answers,
+                "Casework dropped source answers for unknown asks"
+            );
+        }
         Ok(ReviewTaskContext {
             task_id,
             request_id: record.request_id,

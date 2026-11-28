@@ -414,6 +414,7 @@ mod tests {
                 .unwrap()
                 .push(request.credential.expose().to_owned());
             Ok(HumanDisplayObservation {
+                answers: Default::default(),
                 identity: request.identity.clone(),
                 reviewable: true,
                 display_reference: None,

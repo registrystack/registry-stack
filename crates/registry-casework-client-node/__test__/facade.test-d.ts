@@ -122,3 +122,6 @@ void client.previewReviewTaskTemplates(token, profile, { taskId: id, sourceCrede
 void client.reviewTasks(token, profile, undefined, undefined, { token: 'source' })
 // @ts-expect-error credentials are opaque strings, not decoded claim objects
 void client.reviewTasks(token, profile, undefined, undefined, { sourceProfile: 'source-reader', token: { sub: 'person' } })
+
+const liveAnswer: import("../client").ReviewContextAnswer = { text: "Why", documents: [], answeredAt: "2026-11-27T00:00:00Z" }
+void liveAnswer

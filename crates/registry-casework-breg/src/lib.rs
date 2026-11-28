@@ -433,6 +433,7 @@ impl BregContextProvider {
         }
         let display_reference = Some(document.context.reference);
         Ok(HumanDisplayObservation {
+            answers: Default::default(),
             identity: identity.clone(),
             reviewable: document.reviewable,
             display_reference,

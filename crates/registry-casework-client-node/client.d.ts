@@ -347,6 +347,25 @@ export interface ReviewAsk {
   closedAt?: string
 }
 export interface ReviewTaskAsked { task: ReviewTask; ask: ReviewAsk }
+export interface ReviewAnswerDownload {
+  method: 'GET'
+  operation: string
+  accessProfile: string
+  path: string
+}
+export interface ReviewAnswerDocument {
+  id: string
+  sha256: string
+  contentType: string
+  byteSize: number
+  verificationStatus?: string
+  download?: ReviewAnswerDownload
+}
+export interface ReviewContextAnswer {
+  text?: string
+  documents: ReadonlyArray<ReviewAnswerDocument>
+  answeredAt: string
+}
 export interface ReviewContextAsk {
   askId: Uuid
   taskId: Uuid
@@ -356,6 +375,7 @@ export interface ReviewContextAsk {
   dueAt?: string
   state: ReviewAskState
   answeredAt?: string
+  answer?: ReviewContextAnswer
 }
 export interface ReviewTaskContext {
   taskId: Uuid

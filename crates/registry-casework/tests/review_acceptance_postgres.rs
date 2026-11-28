@@ -120,6 +120,7 @@ impl ReviewContextProvider for SubstituteProvider {
             identity.subject.version = "successor".into();
         }
         Ok(HumanDisplayObservation {
+            answers: Default::default(),
             identity,
             reviewable: true,
             display_reference: Some(

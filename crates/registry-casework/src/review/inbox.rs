@@ -202,6 +202,12 @@ impl InboxObservations {
                 if let Some(status) = status {
                     self.status.insert(id, status);
                 }
+                // Inbox hydration retains only invocation-local display facts,
+                // never the applicant answers used by a task-context read.
+                let observation = observation.map(|mut view| {
+                    view.answers.clear();
+                    view
+                });
                 self.human.insert(id, observation);
             }
         }

@@ -355,6 +355,12 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
     "request.not-found",
     "request.unprocessable",
     "request.unsupported-media-type",
+    "review.ask-already-open",
+    "review.ask-answer-time-invalid",
+    "review.ask-not-offered",
+    "review.ask-not-open",
+    "review.ask-producer-unsupported",
+    "review.ask-task-inactive",
     "review.distinct-approver-required", "review.initiator-excluded",
     "review.initiator-required",
     "review.query-too-broad",
@@ -652,9 +658,28 @@ class ReviewAsk(_ReviewAskOptional):
 class ReviewTaskAsked(TypedDict):
     task: ReviewTask
     ask: ReviewAsk
+class ReviewAnswerDownload(TypedDict):
+    method: Literal["GET"]
+    operation: str
+    accessProfile: str
+    path: str
+class _ReviewAnswerDocumentOptional(TypedDict, total=False):
+    verificationStatus: str
+    download: ReviewAnswerDownload
+class ReviewAnswerDocument(_ReviewAnswerDocumentOptional):
+    id: str
+    sha256: str
+    contentType: str
+    byteSize: int
+class _ReviewContextAnswerOptional(TypedDict, total=False):
+    text: str
+class ReviewContextAnswer(_ReviewContextAnswerOptional):
+    documents: list[ReviewAnswerDocument]
+    answeredAt: str
 class _ReviewContextAskOptional(TypedDict, total=False):
     dueAt: str
     answeredAt: str
+    answer: ReviewContextAnswer
 class ReviewContextAsk(_ReviewContextAskOptional):
     askId: Uuid
     taskId: Uuid

@@ -190,6 +190,7 @@ test('review task context uses the exact route and forwards the optional source 
           source: 'professional-licences', type: 'change-request', id: 'correction-42', version: '1',
           digest: `sha256:${'a'.repeat(64)}`,
         },
+        asks: [{"askId": "00000000-0000-4000-8000-000000000007", "taskId": "00000000-0000-0000-0000-000000000000", "text": "Why?", "wants": [{"kind": "answer"}], "askedAt": "2026-11-27T00:00:00Z", "state": "open", "answer": {"text": "source answer from BReg", "documents": [], "answeredAt": "2026-11-27T01:00:00Z"}}],
         requesterReference: 'correction-42',
         policy: { id: 'registry-correction', version: '1', digest: POLICY_DIGEST },
         policyClosure: {
@@ -229,6 +230,7 @@ test('review task context uses the exact route and forwards the optional source 
     'reviewer',
   );
 
+  assert.deepEqual(result.value.asks[0].answer, {"text": "source answer from BReg", "documents": [], "answeredAt": "2026-11-27T01:00:00Z"});
   assert.equal(result.value.context.projection.displayReference, 'Correction 42');
   assert.equal(observed.path, '/v1/review-tasks/00000000-0000-0000-0000-000000000000/context');
   assert.equal(observed.headers.authorization, 'Bearer one-call-secret');

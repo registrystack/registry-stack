@@ -15,6 +15,7 @@ mod lifecycle;
 mod model;
 mod policy;
 mod review;
+mod review_answer;
 mod routing;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -45,6 +46,7 @@ pub use registry_platform_calendar::{
 pub use registry_review_protocol as review_protocol;
 pub use registry_review_protocol::*;
 pub use review::*;
+pub use review_answer::*;
 pub use routing::*;
 pub use staffing::*;
 pub use task_grant::*;

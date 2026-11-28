@@ -1408,6 +1408,9 @@ pub struct ReviewContextAsk {
     pub state: registry_review_protocol::ReviewAskState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_at: Option<DateTime<Utc>>,
+    /// Live source content. Casework retains only its own answer notification time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<crate::ReviewContextAnswer>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -774,6 +774,18 @@ BReg must trust that issuer and audience, authorise the selected profile and sub
 It applies that profile's disclosure and checks the exact Proposal binding.
 Casework never substitutes its service credential for a human display read.
 
+Casework joins live source answers onto the request's asks by ask ID.
+Your task context shows each matching answer beside its question.
+Casework reads those answers again for every context request and never stores their text or file descriptors.
+The source controls their retention and file downloads.
+Casework drops answers for unknown ask IDs and counts them in a value-free operational warning.
+Delegated institutional readers receive neither asks nor answers.
+
+{/* Evidence: crates/registry-casework/tests/support/source_ask_answers.rs,
+    source_answers_join_known_asks_live_without_entering_the_display_schema_or_store;
+    crates/registry-casework/tests/review_http.rs,
+    delegated_institutional_reads_carry_neither_asks_nor_markers. */}
+
 Casework selects the action and purpose from current caller-visible metadata, then checks the observed Proposal binding and exact context contract at visibility and decision boundaries.
 Context meaning, field semantics and schema bytes stay pinned while profile and row disclosure remain current.
 A concealed, changed or non-reviewable Proposal is refused or omitted from the visible task list.

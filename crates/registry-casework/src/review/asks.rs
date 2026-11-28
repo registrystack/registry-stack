@@ -628,6 +628,7 @@ impl PostgresStore {
             .iter()
             .map(|row| {
                 Ok(ReviewContextAsk {
+                    answer: None,
                     ask_id: row.get(0),
                     task_id: row.get(1),
                     text: row.get(2),

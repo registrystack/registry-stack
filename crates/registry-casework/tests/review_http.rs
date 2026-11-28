@@ -42,6 +42,7 @@ use uuid::Uuid;
 
 #[derive(Default)]
 struct DelegatedSourceBarrier {
+    answers: Mutex<BTreeMap<Uuid, ReviewContextAnswer>>,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
@@ -123,6 +124,11 @@ impl ReviewContextProvider for ReviewSource {
             identity.subject.version = "2".into();
         }
         Ok(HumanDisplayObservation {
+            answers: self
+                .delegated_barrier
+                .as_ref()
+                .map(|barrier| barrier.answers.lock().unwrap().clone())
+                .unwrap_or_default(),
             identity,
             reviewable: matches!(
                 *self.source_state.lock().unwrap(),
@@ -5903,6 +5909,7 @@ impl ReviewContextProvider for SeparateHumanSource {
             return Err(ReviewContextError::Concealed);
         }
         Ok(HumanDisplayObservation {
+            answers: Default::default(),
             identity: request.identity.clone(),
             reviewable: true,
             display_reference: None,
@@ -7358,23 +7365,31 @@ async fn the_ask_command_and_the_producer_ask_routes_follow_the_contract_over_ht
 #[tokio::test]
 async fn delegated_institutional_reads_carry_neither_asks_nor_markers() {
     let idp = MockIdp::start().await;
-    let (app, _, _, _, _, _, database) =
-        app_with_project_options(&idp, asks_http_project(&idp), None, true, None, None).await;
-    let (client, server) = native_review_client(app.clone()).await;
-    let mut created_request =
-        review_request_for_subject("ask-delegated", "ask-delegated-ref", &idp.issuer());
-    created_request.context = ReviewContext::Submitted {
-        snapshot: json!({"summary": "Ask delegated"}),
+    let barrier = Arc::new(DelegatedSourceBarrier::default());
+    let mut project = asks_http_project(&idp);
+    project.review_policies[0].context = ReviewContextPolicy::CurrentSource {
+        provider: "registry".into(),
+        contract: context_contract(),
     };
+    let (app, _, _, _, _, _, database) =
+        app_with_project_options(&idp, project, Some(barrier.clone()), true, None, None).await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let created_request =
+        review_request_for_subject("ask-delegated", "ask-delegated-ref", &idp.issuer());
     let (_, task_id) = create_task(&app, &database, &idp, &created_request).await;
     let reviewer = human_token(&idp, "reviewer", "staff");
     client
-        .claim_review_task(CaseworkAuth::new(&reviewer, "staff"), task_id, 1, "claim")
+        .claim_review_task(
+            CaseworkAuth::new(&reviewer, "staff").with_source_profile("reviewer-source"),
+            task_id,
+            1,
+            "claim",
+        )
         .await
         .expect("claim");
     let asked = client
         .ask_applicant(
-            CaseworkAuth::new(&reviewer, "staff"),
+            CaseworkAuth::new(&reviewer, "staff").with_source_profile("reviewer-source"),
             task_id,
             2,
             "ask",
@@ -7390,27 +7405,46 @@ async fn delegated_institutional_reads_carry_neither_asks_nor_markers() {
         asked.task.marker,
         Some(registry_casework_client::ReviewTaskMarker::Waiting)
     );
-    // The reviewer sees the ask and the marker.
+    barrier.answers.lock().unwrap().insert(
+        asked.ask.ask_id,
+        ReviewContextAnswer {
+            text: Some("source answer excluded from institutional delegation".into()),
+            documents: vec![],
+            answered_at: asked.ask.asked_at,
+        },
+    );
+    // The reviewer sees the ask, its live answer and the marker.
     let own = client
-        .review_task_context(CaseworkAuth::new(&reviewer, "staff"), task_id)
+        .review_task_context(
+            CaseworkAuth::new(&reviewer, "staff").with_source_profile("reviewer-source"),
+            task_id,
+        )
         .await
         .expect("reviewer context")
         .value;
     assert_eq!(own.asks.len(), 1);
+    assert!(own.asks[0].answer.is_some());
+    barrier.release.notify_one();
 
     let delegated = delegated_staff_read_token(&idp, "reviewer");
     let context = client
         .delegated_review_task_context(
-            DelegatedStaffReadAuth::new(&delegated, "assistant-reader"),
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader")
+                .with_source_profile("reviewer-source"),
             task_id,
         )
         .await
         .expect("delegated context")
         .value;
     assert!(context.asks.is_empty());
+    assert!(!serde_json::to_string(&context)
+        .unwrap()
+        .contains("source answer excluded"));
+    barrier.release.notify_one();
     let list = client
         .delegated_review_tasks(
-            DelegatedStaffReadAuth::new(&delegated, "assistant-reader"),
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader")
+                .with_source_profile("reviewer-source"),
             None,
             25,
         )

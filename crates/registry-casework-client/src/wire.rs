@@ -712,6 +712,8 @@ struct ReviewContextAskWire {
     state: registry_casework_core::ReviewAskState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     answered_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answer: Option<registry_casework_core::ReviewContextAnswer>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1026,5 +1028,16 @@ mod fix_round_tests {
         let value = serde_json::json!({"askId":uuid::Uuid::new_v4(), "taskId":uuid::Uuid::new_v4(), "text":"Why?", "wants":[{"kind":"answer"}], "askedAt":"2026-11-27T00:00:00Z", "dueAt":"2026-11-27T01:00:00Z", "state":"open"});
         let wire: ReviewContextAskWire = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(wire).unwrap()["dueAt"], value["dueAt"]);
+    }
+
+    #[test]
+    fn reviewer_ask_answer_survives_client_decoding() {
+        let value = serde_json::json!({"askId":uuid::Uuid::new_v4(), "taskId":uuid::Uuid::new_v4(), "text":"Why?", "wants":[{"kind":"answer"}], "askedAt":"2026-11-27T00:00:00Z", "state":"answered",
+            "answeredAt":"2026-11-27T01:00:00Z", "answer":{"text":"Synthetic answer","documents":[],"answeredAt":"2026-11-27T01:00:00Z"}});
+        let wire: ReviewContextAskWire = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(wire).unwrap()["answer"],
+            value["answer"]
+        );
     }
 }
