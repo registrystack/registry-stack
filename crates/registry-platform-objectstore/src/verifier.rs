@@ -21,7 +21,9 @@ use registry_platform_config::{
 };
 use registry_platform_httputil::client::transport_protects_the_credential;
 use registry_platform_httputil::{
-    read_bounded, validate_response_headers, OutboundClientBuilder, PeerPolicy, ResponseHeaderError,
+    read_bounded,
+    select::{select_credential_destination, SelectedDestination},
+    validate_response_headers, OutboundClientBuilder, PeerPolicy, ResponseHeaderError,
 };
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -101,6 +103,7 @@ impl VerifierNamespace {
 pub struct HttpVerifierSettings {
     peer_policy: PeerPolicy,
     url: Url,
+    destination: SelectedDestination,
     authorization_ref: SecretReference,
     policy_id: String,
     timeout: Duration,
@@ -113,9 +116,10 @@ impl HttpVerifierSettings {
     }
 
     /// Refuse what the shared block's decode does not: a non-loopback `http`
-    /// URL, a URL with a fragment or surrounding whitespace, and a
-    /// `policyId` that is empty, longer than 128 bytes, or not printable
-    /// ASCII.
+    /// URL, a URL the credential destination selector refuses (the verifier
+    /// sends a bearer credential), a URL with a fragment or surrounding
+    /// whitespace, and a `policyId` that is empty, longer than 128 bytes, or
+    /// not printable ASCII.
     pub fn from_config(config: &AttachmentVerifierConfig, peer_policy: PeerPolicy) -> Result<Self> {
         let text = config.url.as_str();
         let url = Url::parse(text).map_err(|_| VerifierError::InvalidConfiguration)?;
@@ -134,9 +138,12 @@ impl HttpVerifierSettings {
         {
             return Err(VerifierError::InvalidConfiguration);
         }
+        let destination = select_credential_destination(&url, None, &[])
+            .map_err(|_| VerifierError::InvalidConfiguration)?;
         Ok(Self {
             peer_policy,
             url,
+            destination,
             authorization_ref: config.authorization_ref.clone(),
             policy_id: policy_id.to_owned(),
             timeout: Duration::from_millis(config.attempt_timeout_milliseconds.get()),
@@ -168,6 +175,7 @@ impl HttpVerifierSettings {
             client: OutboundClientBuilder::new()
                 .timeout(self.timeout)
                 .connect_timeout(connect_timeout(self.timeout))
+                .destination(&self.destination)
                 .try_build()
                 .map_err(|_| VerifierError::InvalidConfiguration)?,
             binding_digest: binding_digest(namespace, &self.url, &self.policy_id)?,

@@ -18,8 +18,9 @@ use registry_platform_yaml::{BoundedU32, ExternalId, Invalid, LocalId, Url};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    DevelopmentClass, DevelopmentOnlyRefused, DevelopmentSetting, DevelopmentWitness, Gated,
-    SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+    DestinationTransport, DevelopmentClass, DevelopmentOnlyRefused, DevelopmentSetting,
+    DevelopmentWitness, Gated, PrivateRanges, SecretError, SecretProvider, SecretReference,
+    SecretResolver, Stated, MAX_SECRET_BYTES,
 };
 
 /// The schema pattern of a field that must name an enabled secret provider.
@@ -1798,17 +1799,30 @@ pub const MAX_HOOK_ATTEMPTS: u8 = 20;
 pub const DEFAULT_HOOK_MAXIMUM_ATTEMPTS: u8 = 8;
 
 /// One URL hook destination a runtime signs and sends hook deliveries to:
-/// the URL, the HMAC-SHA256 key references, and the delivery budget. The
-/// outbound policy is fixed: `registry-platform-hooks` activates it with no
-/// private address range and no client certificate. A runtime whose
-/// destinations need either configures its own full outbound policy instead.
+/// the URL, how it is reached, the HMAC-SHA256 key references, and the
+/// delivery budget. `registry-platform-hooks` activates it under the
+/// transport and private ranges it declares, with no client certificate. A
+/// runtime whose destinations need a client certificate configures its own
+/// full outbound policy instead.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UrlHookDestinationConfig {
     /// An https URL, or http on 127.0.0.1, localhost, or [::1], without a
-    /// query or fragment.
+    /// query or fragment. Plain http to any other host needs
+    /// `transport: private-network-plaintext`.
     pub url: Url,
+    /// How the destination is reached. Absent, https reads `verified-tls`
+    /// and http to a loopback host reads `loopback-plaintext`.
+    /// `private-network-plaintext` needs `allowedPrivateCidrs`, and is
+    /// reported as an explicit production setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Stated<DestinationTransport>"))]
+    pub transport: Option<Stated<DestinationTransport>>,
+    /// The private ranges the destination's host may resolve to. Empty
+    /// admits none.
+    #[serde(default, skip_serializing_if = "PrivateRanges::is_empty")]
+    pub allowed_private_cidrs: PrivateRanges,
     pub hmac_sha256_key_ref: SecretReference,
     /// Optional previous signing key for rotation, excluded from the
     /// destination binding digest.

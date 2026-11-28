@@ -55,12 +55,11 @@ pub fn is_loopback_host(host: &url::Host<&str>) -> bool {
 /// or http to a host on the loopback transport class ([`is_loopback_host`]). The
 /// client built by [`build_client`] is pinned to the loopback addresses for
 /// `localhost`, so that name is never resolved off-host.
+///
+/// This is the credential selector with no declared transport and no private
+/// range, so the rule has one definition.
 pub fn transport_protects_the_credential(url: &Url) -> bool {
-    match url.scheme() {
-        "https" => true,
-        "http" => url.host().is_some_and(|host| is_loopback_host(&host)),
-        _ => false,
-    }
+    crate::select::select_credential_destination(url, None, &[]).is_ok()
 }
 
 /// The service URL with userinfo, query, and fragment removed for diagnostics.

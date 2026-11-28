@@ -11,6 +11,7 @@
 pub mod blocks;
 mod caller_issuers;
 mod check_acceptances;
+mod destination;
 mod loader;
 mod metrics_bind;
 mod offline;
@@ -51,6 +52,10 @@ pub use caller_issuers::{
     ScopeClaimName,
 };
 pub use check_acceptances::{apply_check_acceptances, read_project_check_acceptances};
+pub use destination::{
+    DestinationTransport, PrivateRange, PrivateRangeError, PrivateRangeRefusal, PrivateRanges,
+    MAX_PRIVATE_RANGES,
+};
 pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,
     require_trusted_runtime_path, substituted_variable_names, AuthoredExpressions,

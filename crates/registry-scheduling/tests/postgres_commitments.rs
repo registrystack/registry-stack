@@ -496,6 +496,8 @@ async fn fixture_publishing_with_hook_and_status(
             destination_id.clone(),
             UrlHookDestinationConfig {
                 url: Url::new(hook_url).expect("the test hook URL"),
+                transport: None,
+                allowed_private_cidrs: registry_platform_config::PrivateRanges::default(),
                 hmac_sha256_key_ref: SecretReference::parse(format!(
                     "secret:env/{hook_secret_name}"
                 ))
@@ -2624,6 +2626,8 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         UrlHookDestinationConfig {
             url: Url::new("http://127.0.0.1:9/changed-scheduling-hooks")
                 .expect("the changed hook URL"),
+            transport: None,
+            allowed_private_cidrs: registry_platform_config::PrivateRanges::default(),
             hmac_sha256_key_ref: SecretReference::parse(fx.hook_secret_ref.clone())
                 .expect("the test hook key reference"),
             previous_hmac_sha256_key_ref: None,

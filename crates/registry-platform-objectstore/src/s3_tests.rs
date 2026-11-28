@@ -296,6 +296,61 @@ async fn ipv6_signed_request_preserves_bracketed_host_on_wire() {
     assert!(received.load(Ordering::SeqCst));
 }
 
+/// D4 (c): an https store never reaches the cloud metadata address or an
+/// always-denied address. A literal is refused when the client is built,
+/// before the versioning probe sends anything.
+#[tokio::test]
+async fn a_metadata_or_always_denied_literal_over_https_is_refused_at_activation() {
+    let files = SecretFiles::new();
+    for url in [
+        "https://169.254.169.254",
+        "https://[fd00:ec2::254]",
+        "https://0.0.0.0",
+    ] {
+        let settings = settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+        assert_eq!(
+            settings
+                .activate(NAMESPACE, "registry", &files.resolver())
+                .await
+                .unwrap_err(),
+            ObjectStoreError::InvalidConfiguration,
+            "{url}"
+        );
+    }
+}
+
+/// D1: an explicit loopback literal over https is admitted when the client
+/// is built, so activation reaches the versioning probe. The listener closes
+/// every connection, so the probe fails as unavailable, not as a refused
+/// configuration.
+#[tokio::test]
+async fn a_loopback_literal_over_https_reaches_the_versioning_probe() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let files = SecretFiles::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    let server = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
+            drop(socket);
+        }
+    });
+    let settings = settings(raw(&format!("https://{address}"))).unwrap();
+    let error = settings
+        .activate(NAMESPACE, "registry", &files.resolver())
+        .await
+        .unwrap_err();
+    server.abort();
+    assert_eq!(error, ObjectStoreError::Unavailable);
+    assert!(
+        accepted.load(Ordering::SeqCst) >= 1,
+        "the probe dialled the loopback literal"
+    );
+}
+
 #[test]
 fn strict_storage_configuration_and_debug_are_value_free() {
     for url in [
@@ -340,19 +395,31 @@ fn strict_storage_configuration_and_debug_are_value_free() {
         settings(input).unwrap_err(),
         ObjectStoreError::InvalidConfiguration
     );
+    // Loopback plain text is the selector's rule: a loopback literal, or the
+    // name localhost, which the client pins to loopback.
     for url in [
         "http://localhost:1234",
         "http://127.0.0.2:1234",
         "http://[::1]:1234",
         "http://[::ffff:127.0.0.1]:1234",
+        "http://localhost:1234",
     ] {
         settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
     }
+    // A virtual-hosted bucket under localhost is a name below localhost,
+    // which is not loopback.
+    let mut input = raw("http://localhost:1234");
+    input["pathStyle"] = json!(false);
+    assert_eq!(
+        settings(input).unwrap_err(),
+        ObjectStoreError::InvalidConfiguration
+    );
     for url in [
         "http://storage.localhost:1234",
         "http://10.0.0.1:1234",
         "http://0.0.0.0:1234",
         "http://[::ffff:10.0.0.1]:1234",
+        "http://10.0.0.1:1234",
     ] {
         assert_eq!(
             settings(raw(url)).unwrap_err(),

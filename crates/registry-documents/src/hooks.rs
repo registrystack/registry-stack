@@ -739,7 +739,8 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
         UrlHookActivationError::DeliveryBudgetWidening => {
             HookActivationError::DeliveryBudgetWidening
         }
-        UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
+        UrlHookActivationError::InvalidDestination
+        | UrlHookActivationError::DestinationRefused(_) => HookActivationError::InvalidDestination,
         UrlHookActivationError::SigningKeyUnavailable { .. }
         | UrlHookActivationError::InvalidSigningKey { .. }
         | UrlHookActivationError::RepeatedSigningKey { .. } => {
@@ -782,9 +783,9 @@ fn signing_material_refusal(error: &UrlHookActivationError) -> String {
         UrlHookActivationError::RepeatedSigningKey { first, second } => {
             shared_signing_key_refusal(first, second)
         }
-        UrlHookActivationError::DeliveryBudgetWidening | UrlHookActivationError::InvalidDestination => {
-            error.to_string()
-        }
+        UrlHookActivationError::DeliveryBudgetWidening
+        | UrlHookActivationError::InvalidDestination
+        | UrlHookActivationError::DestinationRefused(_) => error.to_string(),
     }
 }
 

@@ -12,7 +12,9 @@ use registry_platform_config::{
 };
 use registry_platform_httputil::client::transport_protects_the_credential;
 use registry_platform_httputil::{
-    read_bounded, validate_response_headers, BoundedReadError, OutboundClientBuilder, PeerPolicy,
+    read_bounded,
+    select::{select_credential_destination, SelectedDestination},
+    validate_response_headers, BoundedReadError, OutboundClientBuilder, PeerPolicy,
     ResponseHeaderError,
 };
 use reqwest::{
@@ -91,6 +93,7 @@ impl ObjectNamespace {
 pub struct S3Settings {
     peer_policy: PeerPolicy,
     bucket_url: Url,
+    destination: SelectedDestination,
     region: String,
     access_key_id_ref: SecretReference,
     secret_access_key_ref: SecretReference,
@@ -106,8 +109,10 @@ impl S3Settings {
     }
 
     /// Refuse what the shared block's decode does not: a non-loopback
-    /// `http` URL, a URL with a path, query or fragment, a malformed bucket
-    /// or region name, and virtual-hosted buckets over HTTP or on IP hosts.
+    /// `http` URL, a bucket URL the credential destination selector refuses
+    /// (the store signs every request), a URL with a path, query or
+    /// fragment, a malformed bucket or region name, and virtual-hosted
+    /// buckets over HTTP or on IP hosts.
     pub fn from_config(config: &ObjectStorageConfig, peer_policy: PeerPolicy) -> Result<Self> {
         let text = config.url.as_str();
         let mut url = Url::parse(text).map_err(|_| ObjectStoreError::InvalidConfiguration)?;
@@ -153,9 +158,14 @@ impl S3Settings {
             )))
             .map_err(|_| ObjectStoreError::InvalidConfiguration)?;
         }
+        // The bucket URL is what the client dials, so a virtual-hosted
+        // bucket is selected under its own host name.
+        let destination = select_credential_destination(&url, None, &[])
+            .map_err(|_| ObjectStoreError::InvalidConfiguration)?;
         Ok(Self {
             peer_policy,
             bucket_url: url,
+            destination,
             region: region.to_owned(),
             access_key_id_ref: config.access_key_id_ref.clone(),
             secret_access_key_ref: config.secret_access_key_ref.clone(),
@@ -205,7 +215,8 @@ impl S3Settings {
         }
         let mut builder = OutboundClientBuilder::new()
             .timeout(self.timeout)
-            .connect_timeout(connect_timeout(self.timeout));
+            .connect_timeout(connect_timeout(self.timeout))
+            .destination(&self.destination);
         if let Some(reference) = &self.ca_bundle_ref {
             builder =
                 builder.trusted_root_certificates(resolve(reference)?.expose_secret().to_vec());
