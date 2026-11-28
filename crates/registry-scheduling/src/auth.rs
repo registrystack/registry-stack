@@ -35,7 +35,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use registry_platform_authcommon::{validate_compact_access_token, FailedCheck, RefusalRecorder};
+use registry_platform_authcommon::{
+    validate_compact_access_token, DeclaredScope, FailedCheck, RefusalRecorder,
+};
 use registry_platform_oidc::{
     actor_kind, grant_claims, ClaimError, ClaimNames, JwksFetcher, OidcError, TokenVerifier,
     TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
@@ -57,6 +59,7 @@ pub struct SchedulingAuthenticator {
     verifier: TokenVerifier,
     claim_names: ClaimNames,
     audience: String,
+    scope_claim: String,
     reads_scope: String,
     explain_scope: String,
     appointment_read_profiles: BTreeMap<String, OperationalReadProfileConfig>,
@@ -87,6 +90,7 @@ impl SchedulingAuthenticator {
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             audience: oidc.provider.audience.clone(),
+            scope_claim: oidc.scope_claim.clone(),
             reads_scope: oidc.reads_scope.clone(),
             explain_scope: oidc.explain_scope.clone(),
             appointment_read_profiles: oidc.appointment_read_profiles.clone(),
@@ -95,6 +99,32 @@ impl SchedulingAuthenticator {
             refusals: Arc::new(
                 RefusalRecorder::new("scheduling").expect("the refusal counter is declared once"),
             ),
+        }
+    }
+
+    /// The configured values a reads-scope refusal's log line names.
+    #[must_use]
+    pub fn declared_reads_scope(&self) -> DeclaredScope {
+        DeclaredScope::new(&self.scope_claim).with_required_scope(&self.reads_scope)
+    }
+
+    /// The configured values an explain-scope refusal's log line names.
+    #[must_use]
+    pub fn declared_explain_scope(&self) -> DeclaredScope {
+        DeclaredScope::new(&self.scope_claim).with_required_scope(&self.explain_scope)
+    }
+
+    /// The configured values a source-busy scope refusal's log line names:
+    /// the profile's scope, and the profile id when the deployment declares
+    /// that profile.
+    #[must_use]
+    pub fn declared_busy_scope(&self, profile_selector: &str) -> DeclaredScope {
+        let declared = DeclaredScope::new(&self.scope_claim);
+        match self.busy_import_profiles.get(profile_selector) {
+            Some(profile) => declared
+                .with_required_scope(&profile.scope)
+                .with_access_profile(profile_selector),
+            None => declared,
         }
     }
 

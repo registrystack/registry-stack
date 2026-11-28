@@ -188,6 +188,7 @@ fn authorize_action_checked<'a>(
         .iter()
         .all(|scope| claims.has_scope(scope))
     {
+        claims.declare_scope_refusal(&grant.required_scopes, Some(&grant.profile_id));
         return Err(FailedCheck::Scope);
     }
     if !grant.required_purposes.is_empty()

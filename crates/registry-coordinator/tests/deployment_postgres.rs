@@ -412,13 +412,11 @@ async fn assert_bounded_readiness(
     database: &str,
     namespace: &str,
 ) {
+    let ready = http.get(format!("{origin}/ready")).send().await.unwrap();
+    assert_eq!(ready.status(), 200);
     assert_eq!(
-        http.get(format!("{origin}/ready"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        200
+        ready.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"ready": true, "status": "ready"})
     );
     let (mut locker, connection) = tokio_postgres::connect(database, tokio_postgres::NoTls)
         .await

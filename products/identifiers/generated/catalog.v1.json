@@ -4896,7 +4896,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "e488b0c50b714031f9505241b6a5c9cb15b9f50e823ef68e6a18fb343353380c",
+        "sha256": "de83cc5d1e6fd93c2a3f624ba02a44e7f8eaf08d2a48ec8ca8ad25aa1baae5f6",
         "mediaType": "application/schema+json"
       }
     },
@@ -5112,7 +5112,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "f760f95858307c972c65cda16b659021c608afefff75854c25bafdb975d9505b",
+        "sha256": "4a9161e749da012552829c6c6e1f58a365d457fd30db7bca4a4f6342e4af9318",
         "mediaType": "application/schema+json"
       }
     },
@@ -5256,7 +5256,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "1c547522ee09c598590eaa302615aaabb5e5628516f85f2f5558989af25210b1",
+        "sha256": "4b912d75812d2ae988192dd50ca4ce54e9c72da2ba9e62b614aeff188b1cae92",
         "mediaType": "application/schema+json"
       }
     },
@@ -5292,7 +5292,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "4a02526d00324efad59aca20e47c48401af4e281930d651e10c22ae570d63b96",
+        "sha256": "2e1a00a54542705141801fef4112443d715fdbde6842e2684fa801a3f5388392",
         "mediaType": "application/schema+json"
       }
     },
@@ -5400,7 +5400,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "ac880ee5cadd7b3bf63acb087fba76bd2bf83136a468e05036470e6e08ed529f",
+        "sha256": "035b9d0040bf61f7bfff4f8827547e711b05bdafe2b5da4561f73db46dbf85c1",
         "mediaType": "application/schema+json"
       }
     },
@@ -5414,7 +5414,7 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "1bb41563fd58ad1544df962d17d94172fe76c027128020095da08b5ba63ae733"
+        "sha256": "9b527f0a859daded79ed7fc6f23e764f8c644b277550fb3a2fa030be127d416b"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
@@ -5432,11 +5432,11 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "5a9e84b169d847669e97d8d53073ddbb98928c92470ee167f9020df98120fd6b"
+        "sha256": "c6718ea853224e33df0d64a1ad65a8a4b4acd317e53c59089f0c89d95130e844"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "6597f692f6eec4c68b186613eaae85ca5d99d8d87985a2653dafa7613f8596c6",
+        "sha256": "a6da5b7691382e9e412b9e67233228d6c18bf76a44cad0fd75c3b1dbbdae7429",
         "mediaType": "application/schema+json"
       }
     },
@@ -5450,7 +5450,7 @@
       "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/scenarios.rs",
-        "sha256": "d15a452b05c77a398cf957e0f955fb0d7faa2b478df6ee1780f10606d21366b3"
+        "sha256": "74658bd513eea12df551c2eb2f0edb1255695b5830022a6c414a095340358d9b"
       },
       "artifact": {
         "path": "products/coordinator/generated/scenarios/scenarios.schema.json",
@@ -5616,7 +5616,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "c132d0dea03c4d33a9387b5e0ddfb5b9dc7b6384287c7133e3c06d51114716ce",
+        "sha256": "1207d9ae54688fbc9b2cf69a75baed8008b0eedb0bfd8c7722629726e43016bc",
         "mediaType": "application/schema+json"
       }
     },
@@ -5778,7 +5778,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "4412d9e39955ffbb3d89e1c5fba790b5519ffb57861a1292ef14e95500808e04",
+        "sha256": "17c5085d53455e203add38e01b2eed330ec53b03bd0e242126b15ad2a58ffd79",
         "mediaType": "application/schema+json"
       }
     },
@@ -5796,7 +5796,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json",
-        "sha256": "933ad51331aaf9586f238fbc8bb5f0171ea09fa0f61052e71c36e685e5b521a9",
+        "sha256": "6efae3b628362ddeb7c9e470cb7ee9c0dcd9b61431580836cf873d45c21b75dd",
         "mediaType": "application/schema+json"
       }
     },
@@ -6012,7 +6012,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "daa1af1db5b235398feaa98417f8cf682a60703557065df61552d0579d97819a",
+        "sha256": "6d75d4e0abeeae4b5b6dfbec8d6fdc6576199654ff5f8b4720dea634230ee241",
         "mediaType": "application/schema+json"
       }
     },
@@ -6098,11 +6098,11 @@
       "description": "Report of the shared `provision` command that creates a product's PostgreSQL roles, database, schemas and extensions.",
       "source": {
         "path": "crates/registry-platform-provision/src/cli.rs",
-        "sha256": "bce58d08771dc21d7d4ceeda472f4709105066979298ab3bfd188d484c53c503"
+        "sha256": "43ad277b6695e1ceff8bdf6b917f19e19531a2fa954d4a8283367615bf3f17b7"
       },
       "artifact": {
         "path": "crates/registry-platform-provision/schema/provision-report.schema.json",
-        "sha256": "e0e39e826b35c83161ea544805d6b33a18bd1365033fd497022cefe05f30b0bb",
+        "sha256": "9be2b180528a351d3e18b336f062da0e48c57aba3311ed048703ca56822e83de",
         "mediaType": "application/schema+json"
       }
     },
@@ -6156,7 +6156,7 @@
       },
       "artifact": {
         "path": "products/platform/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "663f3c356b9df64ae410244797eac2abb488fa3ca87454f21c9618aab4fc0817",
+        "sha256": "2a4c006f8666d8ec3f9d1a9a511041525753ffa97526f4275ce22a64ca0c4531",
         "mediaType": "application/schema+json"
       }
     },
@@ -6264,7 +6264,7 @@
       },
       "artifact": {
         "path": "products/render/schemas/runtime.schema.json",
-        "sha256": "8db0c75502d68d1a6ecfffdf1ffce77136df2f87a832d5829b2bf14afa65ead3",
+        "sha256": "dbf6eb70c49c15e54ad435adc77446eebbe2a1dbd16f2eb707465c6bc89effd6",
         "mediaType": "application/schema+json"
       }
     },
@@ -6372,7 +6372,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "9f7a0846f8fb02c785b0663f3d96cc473b32a2c47d2fbc6dd21f6354faa9d58a",
+        "sha256": "319d14d8c66ea2eee3d77577d0b8924478b4b5e86893dce390533298cd9910d1",
         "mediaType": "application/schema+json"
       }
     },

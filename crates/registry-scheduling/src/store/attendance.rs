@@ -50,7 +50,7 @@ impl PostgresStore {
                 claim.kind == LedgerKind::Booking
                     && matches!(claim.state, ClaimState::Active | ClaimState::Cancelled)
             })
-            .ok_or(CommitError::Unauthorized)?;
+            .ok_or(CommitError::NotAttendable)?;
         let appointment_revision = i64::try_from(request.observed_appointment_revision)
             .map_err(|_| CommitError::RevisionMismatch)?;
         if claim.revision != appointment_revision {

@@ -316,6 +316,22 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual(set(), set(GENERATOR.UNPRODUCED_PROBLEMS) & produced)
         self.assertIn("resource.unavailable", produced)
 
+    def test_a_missing_refusal_classification_marker_stops_the_generator(self) -> None:
+        real = GENERATOR.production_source
+
+        def without_marker(root: Path, relative: str) -> str:
+            source = real(root, relative)
+            if relative == GENERATOR.REFUSAL_SOURCE:
+                return source.replace("pub const fn of", "pub const fn sorted")
+            return source
+
+        GENERATOR.production_source = without_marker
+        try:
+            with self.assertRaisesRegex(ValueError, "RefusalCode::of"):
+                GENERATOR.produced_problem_codes(ROOT, self.variants)
+        finally:
+            GENERATOR.production_source = real
+
     def test_every_route_is_described_by_exactly_one_operation(self) -> None:
         documented = {
             (method.upper(), path)

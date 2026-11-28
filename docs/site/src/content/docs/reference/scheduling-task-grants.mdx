@@ -130,7 +130,7 @@ No authority is asked, no revocation is observed, and Registry Scheduling accept
 An unexpired grant with more than 900 seconds remaining answers `grant.lifetime-too-long` when it creates a hold or an appointment, so the caller knows to present a grant that expires sooner. An expired grant answers `operation.not-authorized`.
 The lifetime answer follows the bounds match: a caller with no grant, or whose grant does not cover the offering, still answers `operation.not-authorized`. A listed authority never answers `grant.lifetime-too-long`.
 A route that names an existing hold or appointment, which is releasing a hold, confirming a hold, rescheduling, recording attendance, and cancelling, answers `operation.not-authorized` for that grant, the same answer an unknown identifier gives, so the answer never says whether the identifier exists.
-The appointment detail read, and every operation on a source-managed or assisted hold or appointment, needs a listed authority and so never answers `grant.lifetime-too-long`.
+The appointment detail read needs a listed authority, and so does creating, releasing, confirming, rescheduling or cancelling a source-managed or assisted hold or appointment. None of them answers `grant.lifetime-too-long`. Recording attendance needs no listed authority: it takes the offline path for every appointment.
 A list of authorities disables that path for every source, including an unlisted one, which is refused even with less than 15 minutes left.
 The token does not name its authorisation mode, so the final 15 minutes of an originally deferred grant can use the offline path on a deployment that writes the keyword.
 List the task authorities for every deployment that accepts deferred grants.

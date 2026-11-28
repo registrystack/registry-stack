@@ -173,6 +173,17 @@ class HookVerificationTests(unittest.TestCase):
     def test_default_window_refuses_the_old_fixed_vector(self) -> None:
         self.assert_refused("stale-delivery", caller_enforced_freshness=False)
 
+    def test_an_explicit_none_freshness_option_keeps_the_default_window(self) -> None:
+        self.assert_refused("stale-delivery", caller_enforced_freshness=None)
+        self.assertEqual(
+            verify(
+                headers=signed_headers(datetime.now(timezone.utc)),
+                max_skew_seconds=None,
+                caller_enforced_freshness=None,
+            )["attempt"],
+            "1",
+        )
+
     def test_max_skew_seconds_replaces_the_default_window(self) -> None:
         stamp = datetime.now(timezone.utc) - timedelta(seconds=600)
         self.assertEqual(verify_default(stamp, max_skew_seconds=900)["attempt"], "1")

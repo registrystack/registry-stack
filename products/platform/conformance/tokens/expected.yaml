@@ -10,8 +10,8 @@
 #              when a characterisation test observes a different result, and then the
 #              cell's `basis` becomes `observed`
 #   target     the result the caller-contract work is meant to give
-#   changedBy  the milestone that changes the result, or `none`
-#   landed     false until that milestone makes `target` true. A test asserts `target`
+#   changedBy  the change that alters the result, or `none`
+#   landed     false until that change makes `target` true. A test asserts `target`
 #              where `landed` is true and `main` otherwise
 #   basis      inferred or observed
 #   reason     why `main` is `unknown` or `n-a`
@@ -52,14 +52,14 @@ rows:
     configuration: default
     products:
       breg: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
-      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: M7, landed: false }
+      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
       messaging: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
       scheduling: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
       documents: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
-      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: M7, landed: false }
+      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/claims, basis: observed, target: admitted/human, changedBy: M7, landed: false }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      evidence: { main: refused/claims, basis: observed, target: admitted/human, changedBy: caller-contract, landed: false }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
       mcp-edge: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
   - fixture: thunderid-user-access
@@ -73,8 +73,8 @@ rows:
       documents: { main: admitted/human, basis: observed, target: admitted/human, changedBy: none }
       coordinator: { main: admitted, basis: observed, target: admitted, changedBy: none }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/claims, basis: observed, target: admitted/human, changedBy: M7, landed: false }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      evidence: { main: refused/claims, basis: observed, target: admitted/human, changedBy: caller-contract, landed: false }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
       mcp-edge: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
   - fixture: thunderid-client-credentials
@@ -82,14 +82,14 @@ rows:
     configuration: default
     products:
       breg: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
-      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: M7, landed: false }
+      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
       messaging: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
       scheduling: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
       documents: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
-      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: M7, landed: false }
+      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/claims, basis: observed, target: admitted/service, changedBy: M7, landed: false }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      evidence: { main: refused/claims, basis: observed, target: admitted/service, changedBy: caller-contract, landed: false }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
       mcp-edge: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
   - fixture: thunderid-client-credentials
@@ -103,8 +103,8 @@ rows:
       documents: { main: admitted/service, basis: observed, target: admitted/service, changedBy: none }
       coordinator: { main: admitted, basis: observed, target: admitted, changedBy: none }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/claims, basis: observed, target: admitted/service, changedBy: M7, landed: false }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      evidence: { main: refused/claims, basis: observed, target: admitted/service, changedBy: caller-contract, landed: false }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
       mcp-edge: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
   - fixture: thunderid-client-credentials
@@ -118,7 +118,7 @@ rows:
       documents: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none }
       coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence: { main: refused/claims, basis: observed, target: refused/profile, changedBy: M7, landed: false }
+      evidence: { main: refused/claims, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false }
       render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
@@ -141,17 +141,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      coordinator: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      adapter: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      render: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      coordinator: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      render: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
   - fixture: keycloak-client-credentials
     against: plain-read
     configuration: default
@@ -171,17 +171,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      coordinator: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      adapter: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      render: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      coordinator: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      render: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
   - fixture: keycloak-client-credentials-stock
     against: plain-read
     configuration: default
@@ -216,17 +216,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
       messaging: { main: none, basis: inferred, target: none, changedBy: none }
-      scheduling: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
       documents: { main: none, basis: inferred, target: none, changedBy: none }
-      coordinator: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      adapter: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      adapter: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      render: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
       mcp-edge: { main: none, basis: inferred, target: refused/client, changedBy: none }
-      evidence-oid4vci: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
   - fixture: supabase-oauth-server-user-access
     against: plain-read
     configuration: default
@@ -246,17 +246,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      messaging: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      scheduling: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      documents: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      coordinator: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      adapter: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      mcp-edge: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence-oid4vci: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      messaging: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      documents: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      adapter: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      render: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      mcp-edge: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
   - fixture: entra-v2-user-access
     against: plain-read
     configuration: default
@@ -276,17 +276,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      coordinator: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      adapter: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      render: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      coordinator: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      render: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
   - fixture: entra-v2-app-access
     against: plain-read
     configuration: default
@@ -306,17 +306,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      coordinator: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      adapter: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: M7, landed: false }
-      render: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: M7, landed: false }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      coordinator: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      render: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
   - fixture: identity-only
     against: plain-read
     configuration: default
@@ -336,44 +336,44 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
       messaging: { main: none, basis: inferred, target: none, changedBy: none }
-      scheduling: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
       documents: { main: none, basis: inferred, target: none, changedBy: none }
-      coordinator: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      adapter: { main: none, basis: inferred, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      adapter: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
       mcp-edge: { main: refused/client, basis: observed, target: refused/client, changedBy: none }
-      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
   - fixture: rstack-dev-run-user
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: M7, landed: false }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
       messaging: { main: admitted/unspecified, basis: observed, target: admitted/unspecified, changedBy: none }
-      scheduling: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      documents: { main: refused/profile, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided in M7" }
-      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: M7, landed: false }
+      scheduling: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      documents: { main: refused/profile, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided by the caller-contract change" }
+      coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      evidence: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
       mcp-edge: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
   - fixture: keycloak-client-credentials
     against: human-only-profile
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: refused/profile, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: refused/profile, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: refused/profile, changedBy: M7, landed: false }
+      breg: { main: refused/claims, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
       scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
-      documents: { main: none, basis: inferred, target: refused/profile, changedBy: M7, landed: false }
+      documents: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
       coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence: { main: none, basis: inferred, target: refused/profile, changedBy: M7, landed: false }
+      evidence: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
       render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
@@ -381,14 +381,14 @@ rows:
     against: human-only-profile
     configuration: recipe
     products:
-      breg: { main: none, basis: observed, target: refused/profile, changedBy: M7, landed: false, reason: "BReg does not start: a profile that names requester clients cannot be combined with allowedClients unrestricted" }
-      casework: { main: none, basis: inferred, target: refused/profile, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: refused/profile, changedBy: M7, landed: false }
+      breg: { main: none, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false, reason: "BReg does not start: a profile that names requester clients cannot be combined with allowedClients unrestricted" }
+      casework: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
       scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
-      documents: { main: none, basis: inferred, target: refused/profile, changedBy: M7, landed: false }
+      documents: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
       coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence: { main: refused/scope, basis: observed, target: refused/profile, changedBy: M7, landed: false }
+      evidence: { main: refused/scope, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false }
       render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
@@ -412,16 +412,16 @@ rows:
     configuration: jwt-accepted
     products:
       breg: { main: refused/audience, basis: observed, target: refused/audience, changedBy: none }
-      casework: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      scheduling: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      documents: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      coordinator: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      adapter: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      evidence: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      render: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
+      casework: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      scheduling: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      coordinator: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      adapter: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      render: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      mcp-edge: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
   - fixture: keycloak-id-token
     against: plain-read
     configuration: default
@@ -442,16 +442,16 @@ rows:
     configuration: jwt-accepted
     products:
       breg: { main: refused/audience, basis: observed, target: refused/audience, changedBy: none }
-      casework: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      scheduling: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      documents: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      coordinator: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      adapter: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      evidence: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      render: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
+      casework: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      scheduling: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      coordinator: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      adapter: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      render: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      mcp-edge: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
   - fixture: supabase-id-token
     against: plain-read
     configuration: default
@@ -472,16 +472,16 @@ rows:
     configuration: jwt-accepted
     products:
       breg: { main: refused/audience, basis: observed, target: refused/audience, changedBy: none }
-      casework: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      scheduling: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      documents: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      coordinator: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      adapter: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      evidence: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      render: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: refused/audience, changedBy: M7, landed: false }
+      casework: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      scheduling: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      coordinator: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      adapter: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      render: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      mcp-edge: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/audience, changedBy: caller-contract, landed: false }
   - fixture: entra-id-token
     against: plain-read
     configuration: default
@@ -501,17 +501,17 @@ rows:
     against: plain-read
     configuration: jwt-accepted
     products:
-      breg: { main: refused/client, basis: observed, target: refused/token-type, changedBy: M7, landed: false }
-      casework: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      messaging: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      scheduling: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      documents: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      coordinator: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      adapter: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      evidence: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      render: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: refused/token-type, changedBy: M7, landed: false }
+      breg: { main: refused/client, basis: observed, target: refused/token-type, changedBy: caller-contract, landed: false }
+      casework: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      messaging: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      scheduling: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      coordinator: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      adapter: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      render: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      mcp-edge: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
   - fixture: keycloak-refresh-token
     against: plain-read
     configuration: default
@@ -606,62 +606,62 @@ rows:
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "a token with no actor kind passes authentication as unspecified. The audience, scope claim and client rule are issuer-block lines. The holder profile limits rows by holder_ref, and no national claim is passed through" }
-      casework: { main: refused/audience, basis: observed, target: admitted, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
+      breg: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "a token with no actor kind passes authentication as unspecified. The audience, scope claim and client rule are issuer-block lines. The holder profile limits rows by holder_ref, and no national claim is passed through" }
+      casework: { main: refused/audience, basis: observed, target: admitted, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
       messaging: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
-      scheduling: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
-      documents: { main: refused/audience, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided in M7" }
-      coordinator: { main: refused/audience, basis: observed, target: admitted, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
+      scheduling: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
+      documents: { main: refused/audience, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided by the caller-contract change" }
+      coordinator: { main: refused/audience, basis: observed, target: admitted, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
       adapter: { main: refused/audience, basis: observed, target: admitted, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
-      evidence: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
-      render: { main: refused/audience, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      evidence: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
+      render: { main: refused/audience, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
       mcp-edge: { main: refused/audience, basis: observed, target: admitted, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
       evidence-oid4vci: { main: refused/audience, basis: observed, target: admitted, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
   - fixture: thunderid-exchanged-holder
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "a token with no actor kind passes authentication as unspecified. The audience, scope claim and client rule are issuer-block lines. The holder profile limits rows by holder_ref, and no national claim is passed through" }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "a token with no actor kind passes authentication as unspecified. The audience, scope claim and client rule are issuer-block lines. The holder profile limits rows by holder_ref, and no national claim is passed through" }
       casework: { main: admitted, basis: observed, target: admitted, changedBy: none }
       messaging: { main: admitted/unspecified, basis: observed, target: admitted/unspecified, changedBy: none }
-      scheduling: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      documents: { main: refused/profile, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided in M7" }
+      scheduling: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      documents: { main: refused/profile, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided by the caller-contract change" }
       coordinator: { main: admitted, basis: observed, target: admitted, changedBy: none }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
+      evidence: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries records:get", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
       mcp-edge: { main: none, basis: observed, target: admitted, changedBy: none, reason: "observed: the edge serves one MCP path, so the token's literal audience, which is not an /mcp URL, cannot be configured"}
       evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none }
   - fixture: thunderid-exchanged-holder-no-scope
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
-      mcp-edge: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence-oid4vci: { main: admitted, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no result is defined yet for a token that carries no scope claim" }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
+      mcp-edge: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no result is defined yet for a token that carries no scope claim" }
   - fixture: thunderid-exchanged-holder-no-scope
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "whether the caller contract gives Render a configurable scope is decided in M7" }
-      mcp-edge: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
+      mcp-edge: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
   - fixture: esignet-standin-id-token
     against: plain-read
     configuration: default
@@ -787,29 +787,29 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: M7, landed: false }
-      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
       messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
+      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
       documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
-      adapter: { main: admitted, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
-      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
+      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+      adapter: { main: admitted, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
+      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
       mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
   - fixture: thunderid-user-access-identity-only
     against: human-only-profile
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: M7, landed: false, targetReason: "decided with the actor kind an operator declares for the client (M7)" }
-      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client (M7)" }
-      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client (M7)" }
+      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
+      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
+      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
       scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
-      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client (M7)" }
+      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
       coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: M7, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client (M7)" }
+      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
       render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }

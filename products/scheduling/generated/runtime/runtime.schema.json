@@ -24,6 +24,13 @@
           "default": "file",
           "description": "Where audit entries go: a rotated `file` (the default) or `stdout`."
         },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the audit hash key."
@@ -85,6 +92,21 @@
         {
           "const": "stdout",
           "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
           "type": "string"
         }
       ]
@@ -185,6 +207,13 @@
           "default": false,
           "description": "Allow a plaintext connection. Refused outside test builds.",
           "type": "boolean"
+        },
+        "transport": {
+          "$ref": "#/$defs/DatabaseTransport",
+          "description": "How the connection is protected. Absent means `verified-tls`. A\nplaintext transport must match the database hosts, and cannot be\nwritten beside `testOnlyPlaintext`.",
+          "x-registry-development-only": [
+            "platform.posture.database-private-plaintext"
+          ]
         }
       },
       "required": [
@@ -192,6 +221,26 @@
         "migrationUrlRef"
       ],
       "type": "object"
+    },
+    "DatabaseTransport": {
+      "description": "How a PostgreSQL connection is protected.",
+      "oneOf": [
+        {
+          "const": "verified-tls",
+          "description": "TLS with verification. `caBundleRef` is optional.",
+          "type": "string"
+        },
+        {
+          "const": "loopback-plaintext",
+          "description": "No TLS. Every host must be a Unix socket, a numeric loopback address\nor `localhost`.",
+          "type": "string"
+        },
+        {
+          "const": "private-network-plaintext",
+          "description": "No TLS, in development only. Every host must also be loopback, a\nsocket, a private IPv4 address (RFC 1918), an IPv6 unique local\naddress (`fc00::/7`), or a name that resolves only to such addresses.",
+          "type": "string"
+        }
+      ]
     },
     "DestinationsConfig": {
       "additionalProperties": false,
@@ -344,8 +393,11 @@
       "properties": {
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "allowedClients": {
           "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, a repeated client, and `unrestricted`\nare refused.",

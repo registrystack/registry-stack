@@ -1173,13 +1173,13 @@ journeyCodeSuffixes:
   needs: [certificate, hand-written-sql]
   promote: [no-input]
 authenticationStages: [issuer, audience]
-milestones: [M1, M2]
+changes: [posture, shared-trust-rules]
 expectedFailures:
   - journey: sample
     product: beta
     step: call
     code: http.401.issuer
-    removedBy: M1
+    removedBy: posture
     basis: predicted
     reason: The issuer is refused.
 YAML
@@ -1189,7 +1189,7 @@ YAML
     product: delta
     step: start
     code: product.config.unknown-field
-    removedBy: M2
+    removedBy: shared-trust-rules
     basis: predicted
     reason: The runtime file names a field the product does not know.
 YAML
@@ -1200,7 +1200,7 @@ YAML
     product: alpha
     step: call
     code: http.401.audience
-    removedBy: M2
+    removedBy: shared-trust-rules
     basis: predicted
     reason: Listed twice on purpose.
 YAML

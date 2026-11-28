@@ -886,7 +886,7 @@ impl RuntimeConfig {
     /// removed keys, and retired apiVersions.
     #[must_use]
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(CASEWORK_RUNTIME_ENVELOPE)
+        RuntimeConfigLoader::new_without_posture(CASEWORK_RUNTIME_ENVELOPE)
             .removed_keys(CASEWORK_REMOVED_KEYS)
             .retired_api_versions(CASEWORK_RETIRED_RUNTIME_API_VERSIONS)
             .require_trusted_ownership()
@@ -1253,7 +1253,7 @@ impl RuntimeConfig {
 
     fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
         let oidc = &self.authentication.oidc;
-        if let Err(error) = oidc.provider.check(
+        if let Err(error) = oidc.provider.check_without_posture(
             "authentication.oidc",
             self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
         ) {

@@ -35,6 +35,33 @@
   diagnostic: one that names a posture code is refused with
   `config.check-acceptance-not-acceptable`. No runtime uses the gate yet.
 
+- BREAKING (Rust API): `RuntimeConfigLoader::new` takes the
+  `DeclaredPosture`. In production it refuses every development-only setting
+  the file holds, listed beside any other problem in the file, and in
+  development it admits them, and `LoadedRuntimeConfig` carries the
+  `PostureReport` and, in development only, the `DevelopmentWitness`.
+  `check_offline` reports each such setting as an error in production and a
+  warning in development, under the same code, and still decodes the file.
+  Migration: call `RuntimeConfigLoader::new_without_posture(envelope)`, which
+  behaves as `new` did, until the runtime adopts the posture; add
+  `transport: None` to a `DatabaseConfig` literal; and call
+  `OidcIssuerConfig::check_without_posture(field, allow_loopback_http)` where
+  `check` was called.
+
+- The shared database block adds `database.transport`: `verified-tls`, the
+  default, `loopback-plaintext`, for a Unix socket, a numeric loopback
+  address or `localhost`, and `private-network-plaintext`, development only,
+  for loopback or private addresses. `DatabaseConfig::plaintext_permitted`
+  checks the hosts against the value, and `DatabaseConfig::check` refuses
+  `transport` beside `testOnlyPlaintext`, and `testOnlyPlaintext` outside a
+  test build. The shared audit block adds `audit.hashKeyCustody`:
+  `operator-provisioned`, the default, or `development-generated`,
+  development only. `authentication.oidc.allowInsecureHttp: true` is
+  recorded as a development-only setting. The shared and product runtime
+  schemas mark these members `x-registry-development-only`. No runtime reads
+  the new members yet, and a runtime that has not adopted the posture
+  behaves as before.
+
 - `registry-cli-report` adds `Report::with_posture`, which writes
   `posture.value` and `posture.source` (`flag`, `environment` or `default`)
   into a CLI report body after the command members. A report built without it
@@ -53,14 +80,23 @@
   product's schema layout and the optional `btree_gist` and PostGIS
   extensions. It can run as an administrator over verified TLS, converging by
   object, or print a `psql` script that holds no password and stops at the
-  first error. It refuses an existing role with other attributes, role-level
-  settings or a membership it did not grant, a template database, a PostGIS
-  installed outside its schema or without the bbox membership, a role name
-  that is `public`, `none` or starts with `pg_`, a name with a control
-  character or backslash, and the `postgres`, `template0` and `template1`
-  databases. It grants the runtime role `USAGE` on `public` directly, so
+  first error. It refuses an existing role with other attributes or a
+  membership it did not grant, a `role`, `search_path` or
+  `session_authorization` default for a product role, in every database or
+  the product's (`platform.provision.role-settings-differ`), a template
+  database, a PostGIS installed outside its schema or without the bbox
+  membership, a role name that is `public`, `none` or starts with `pg_`, a
+  name with a control character, a backslash or a bidirectional formatting
+  character, a database name that starts with `postgresql://` or
+  `postgres://`, and the `postgres`, `template0` and `template1` databases.
+  Other role settings, such as `statement_timeout` or `jit`, are accepted on
+  a rerun. It grants the runtime role `USAGE` on `public` directly, so
   running `provision` again restores it. A run that stops part-way reports
-  the statements that ran. `registry-platform-activation` exports
+  the statements that ran, in text output as well, and the report's
+  `executed` is true whenever a statement ran. A session that cannot open in
+  the new database is `platform.provision.database-connect-failed`, and a
+  connection limit reached by a product login is an operational failure
+  (exit 3). `registry-platform-activation` exports
   `MINIMUM_SERVER_VERSION_NUM`, the PostgreSQL 17 floor the plan and the
   activation ledger share. `rstack dev` provisions its databases from the
   same plan.
@@ -97,10 +133,12 @@
   spellings than before, for example `127.0.0.2` and `[::ffff:127.0.0.1]`.
 
 - `registry-thunderid-tooling` reads development identity files and task
-  connections with the same loopback rule. A development issuer, exchange
-  issuer or local app origin may be any `127.0.0.0/8` address, `[::1]`, the
-  IPv4-mapped form or `localhost`. The identity facts issuer and the local app
-  origin accepted only `127.0.0.1` before.
+  connections with the same loopback rule. A development issuer or local app
+  origin may be any `127.0.0.0/8` address, `[::1]` or the IPv4-mapped form,
+  and never the name `localhost`. An exchange issuer may also use `localhost`
+  or `host.docker.internal`, as before, and one that names the development
+  issuer's own listener in any of those spellings is refused. The identity
+  facts issuer and the local app origin accepted only `127.0.0.1` before.
 
 - Every client built by `OutboundClientBuilder` resolves the name
   `localhost` to `127.0.0.1` and `::1` itself, so no resolver is asked for
@@ -130,6 +168,18 @@
   `registry_platform_httpsec::TraceId` implements it under httpsec's `server`
   feature, and authcommon does not depend on httpsec. Alert on the counter,
   not on the log line.
+
+- A scope refusal's `request refused` line can name what the operator
+  declared: `record_refusal!(.., declared = Some(&scope))` takes a
+  `registry_platform_authcommon::DeclaredScope` and writes `scope_claim`, and
+  `required_scope` and `access_profile` when they were declared. The values
+  come from the runtime configuration or the reviewed package, never from the
+  caller's token, and the line carries them only when the failed check is
+  `scope`. Each value is cut to 128 bytes. Products attach it to the refusal
+  answer's extensions, which are never written to the response.
+
+- The MCP edge's scope refusal line names the configured scope claim and the
+  required scopes, never the token's own scopes. No answer changes.
 
 - A token whose header `alg` does not fit the key its `kid` names, or whose
   `kid` names an encryption key such as an RSA-OAEP `use: enc` key, now fails

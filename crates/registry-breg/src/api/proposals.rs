@@ -183,6 +183,7 @@ fn request_matches(
         return Err(FailedCheck::TokenClaims);
     }
     if !required_scopes.iter().all(|scope| claims.has_scope(scope)) {
+        claims.declare_scope_refusal(required_scopes, None);
         return Err(FailedCheck::Scope);
     }
     if !required_purposes.is_empty()
@@ -1300,6 +1301,7 @@ pub(super) async fn review_context_batch(
     // Bound the aggregate independently of each Proposal's configured context.
     let mut remaining = 8 * 1024 * 1024 - 64 * 1024;
     let mut items = Vec::with_capacity(ids.len());
+    let mut concealed_items = Vec::new();
     for id in ids {
         let response = review_read(
             service.clone(),
@@ -1322,13 +1324,17 @@ pub(super) async fn review_context_batch(
                 items.push(json!({"id":id,"status":"visible","context":context}));
             }
             StatusCode::NOT_FOUND => {
-                // The batch answers 200, so each concealed item records its
-                // own refusal here.
-                crate::correlation::record_noted_refusal(&response, &correlation);
+                concealed_items.push(response);
                 items.push(json!({"id":id,"status":"concealed"}));
             }
             _ => return response,
         }
+    }
+    // The batch answers 200, so each concealed item records its own refusal.
+    // They are recorded only once the batch answers, so a batch that ends with
+    // another answer counts nothing the caller did not see.
+    for response in &concealed_items {
+        crate::correlation::record_noted_refusal(response, &correlation);
     }
     json_response(json!({"items":items}), None)
 }

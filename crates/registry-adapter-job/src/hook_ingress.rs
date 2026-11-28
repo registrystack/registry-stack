@@ -481,12 +481,9 @@ async fn answer_hook(
         );
     }
     if let Err(check) = authenticated(request.headers(), &source.credential) {
-        return noted(
-            response(
-                StatusCode::UNAUTHORIZED,
-                "adapter.job.hook-unauthenticated",
-                None,
-            ),
+        return refusal(
+            StatusCode::UNAUTHORIZED,
+            "adapter.job.hook-unauthenticated",
             check,
         );
     }
@@ -588,7 +585,28 @@ async fn discard_body(body: Body) -> Result<usize, HookRefusal> {
     Ok(total)
 }
 
+/// A refused caller's answer, carrying the check that refused it. Every 401
+/// or 403 is built here.
+fn refusal(status: StatusCode, code: &'static str, check: FailedCheck) -> Response<Body> {
+    noted(answer(status, code, None), check)
+}
+
+/// An answer that is not a refusal of the caller. A refusal status that
+/// arrives here has no check to count, which a debug build refuses outright
+/// and a release build logs.
 fn response(status: StatusCode, code: &'static str, retry_after: Option<u64>) -> Response<Body> {
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        debug_assert!(false, "a refusal was built without its failed check");
+        tracing::error!(
+            status = status.as_u16(),
+            code,
+            "a refusal was answered without its failed check"
+        );
+    }
+    answer(status, code, retry_after)
+}
+
+fn answer(status: StatusCode, code: &'static str, retry_after: Option<u64>) -> Response<Body> {
     let body = match code {
         "started" => r#"{"status":"started"}"#,
         "joined" => r#"{"status":"joined"}"#,
@@ -627,6 +645,29 @@ mod tests {
     use registry_platform_config::{SecretProvider, SecretResolver};
     use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal was built without its failed check")]
+    fn an_unauthorized_answer_without_its_check_is_not_built() {
+        let _ = response(
+            StatusCode::UNAUTHORIZED,
+            "adapter.job.hook-unauthenticated",
+            None,
+        );
+    }
+
+    #[test]
+    fn an_unauthorized_answer_carries_its_check_and_challenge() {
+        let answer = refusal(
+            StatusCode::UNAUTHORIZED,
+            "adapter.job.hook-unauthenticated",
+            FailedCheck::SharedSecret,
+        );
+        assert_eq!(answer.status(), StatusCode::UNAUTHORIZED);
+        assert!(answer.headers().contains_key(WWW_AUTHENTICATE));
+        assert!(answer.extensions().get::<RefusalNote>().is_some());
+    }
 
     async fn test_server(
         path: &str,

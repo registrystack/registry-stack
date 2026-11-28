@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - consumer or verifier
@@ -109,8 +109,7 @@ Existing bounded multi-audience tokens remain accepted where the owning profile 
 A token without the target audience grants no access to that resource.
 Casework task-client profiles keep their narrower audience rules.
 
-{/* Evidence: crates/registry-platform-oidc/src/diagnostics.rs failed_check;
-    crates/registry-messaging/src/auth.rs access_token_profile, AUDIENCE. */}
+{/* Evidence: crates/registry-messaging/src/auth.rs access_token_profile, AUDIENCE. */}
 {/* TODO[evidence]: the multi-audience acceptance rule and the Casework task-client audience rule have no single code anchor. */}
 
 ## Token profile each service accepts
@@ -190,13 +189,13 @@ A hostname that resolves to loopback is not a literal-loopback exception.
 
 Public invalid-credential responses remain a generic 401 `authentication.refused`.
 Authenticated profile and route failures keep their documented 403 or concealment, and a verifier outage keeps its product's 503.
-Internal verification stages are fixed labels: header, algorithm, token-type, key, signature, issuer, audience, time, client, scope, profile, and unavailable.
-Each verifier emits at most one diagnostic per stage per minute.
+Each refusal writes one `request refused` log line with a fixed `failed_check` label, and the product counts it by that label where it serves metrics.
+A verifier writes at most five lines per check per minute, and the next line reports how many refusals of that check the window counted but did not log.
 These logs contain no credential, claim, issuer, audience, scope, key, or subject values.
 Use the selected configuration and safe local validation to identify the mismatched field, and never add token contents to runtime logs.
 Local fixture validation names the field or rule and the expected profile category without printing input values.
 
-{/* Evidence: crates/registry-platform-oidc/src/diagnostics.rs failed_check;
+{/* Evidence: crates/registry-platform-authcommon/src/refusal.rs failed_check;
     crates/registry-adapter-core/src/problem.rs AUTHENTICATION_REFUSED_PROBLEM. */}
 
 ## Troubleshooting

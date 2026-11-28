@@ -504,23 +504,15 @@ fn openapi_method(method: HttpMethod) -> String {
 }
 
 /// The concrete path of one bound operation: the record type substituted
-/// into the record-type parameter's whole segment, every other segment
-/// kept as declared.
+/// into the record-type parameter's placeholder by the rule the listener and
+/// the checks share, every other part kept as declared.
 fn concrete_path(path: &str, parameter: Option<&str>, record_type: &str) -> String {
-    let Some(parameter) = parameter else {
-        return path.to_owned();
-    };
-    let template = format!("{{{parameter}}}");
-    path.split('/')
-        .map(|segment| {
-            if segment == template {
-                record_type.to_owned()
-            } else {
-                segment.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
+    match parameter {
+        Some(parameter) => {
+            registry_adapter_core::concrete_facade_path(path, parameter, record_type)
+        }
+        None => path.to_owned(),
+    }
 }
 
 /// The operation's OpenAPI parameters: the remaining declared path
@@ -1319,6 +1311,21 @@ mod tests {
                 ["operationId"],
             "adapter-effective-contract"
         );
+    }
+
+    /// The compiled path is the one the listener serves, whether the
+    /// record-type placeholder fills a segment or sits inside one.
+    #[test]
+    fn the_concrete_path_follows_the_shared_substitution_rule() {
+        assert_eq!(
+            concrete_path("/v1/{type}/{id}", Some("type"), "case"),
+            "/v1/case/{id}"
+        );
+        assert_eq!(
+            concrete_path("/v1/{type}.json", Some("type"), "case"),
+            "/v1/case.json"
+        );
+        assert_eq!(concrete_path("/v1/{type}", None, "case"), "/v1/{type}");
     }
 
     /// Two bindings whose concrete paths collide refuse the assembly with

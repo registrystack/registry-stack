@@ -25,7 +25,7 @@ use registry_payment_protocol::{
     RegistryReceipt, RequestCollection,
 };
 use registry_payment_simulator_connector::{ConnectorError, Observation, SimulatorClient};
-use registry_platform_authcommon::FailedCheck;
+use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::client::BearerToken;
 use registry_platform_httputil::{read_bounded, validate_response_headers, ServiceBaseUrl};
@@ -641,9 +641,9 @@ impl PaymentService {
             ));
         }
         if !caller.scopes.contains(&connection.required_scope) {
-            return Err(PaymentFailure::refused(
-                Error::Forbidden,
-                FailedCheck::Scope,
+            return Err(PaymentFailure::scope_refused(
+                &connection.id,
+                &connection.required_scope,
             ));
         }
         Ok(connection)
@@ -1150,10 +1150,13 @@ fn validate_key(key: &str) -> Result<(), Error> {
 }
 
 /// A payment error and, when the caller was refused, the check it failed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaymentFailure {
     pub code: Error,
     pub check: Option<FailedCheck>,
+    /// For a scope refusal, the values the operator declared. Never read from
+    /// the caller's token.
+    pub declared: Option<DeclaredScope>,
 }
 
 impl PaymentFailure {
@@ -1161,6 +1164,20 @@ impl PaymentFailure {
         Self {
             code,
             check: Some(check),
+            declared: None,
+        }
+    }
+
+    /// A caller that lacks the scope the connection requires. The recording
+    /// layer names the connection and its declared scope on the log line.
+    pub(crate) fn scope_refused(connection_id: &str, required_scope: &str) -> Self {
+        Self {
+            declared: Some(
+                DeclaredScope::new(crate::facade::SCOPE_CLAIM)
+                    .with_required_scope(required_scope)
+                    .with_access_profile(connection_id),
+            ),
+            ..Self::refused(Error::Forbidden, FailedCheck::Scope)
         }
     }
 
@@ -1177,7 +1194,11 @@ impl PaymentFailure {
 
 impl From<Error> for PaymentFailure {
     fn from(code: Error) -> Self {
-        Self { code, check: None }
+        Self {
+            code,
+            check: None,
+            declared: None,
+        }
     }
 }
 

@@ -136,7 +136,8 @@ pub struct ReportStatement {
     pub scope: ReportScope,
     pub needs: ReportNeeds,
     /// `not-run` for a statement the run did not reach, the one that failed
-    /// included.
+    /// included. After `platform.provision.effect-unconfirmed` the statement
+    /// the diagnostic names was sent and may have taken effect.
     pub outcome: ReportOutcome,
     pub sql: String,
 }
@@ -158,6 +159,7 @@ pub struct PlatformCliDatabaseProvisionReport {
     pub product: Option<String>,
     /// Whether a statement could have been sent to the server: false for a
     /// print-mode run and for a run that stopped before the first statement.
+    /// True whenever a statement is listed as run.
     pub executed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role_mode: Option<RoleMode>,
@@ -267,14 +269,15 @@ fn target_invalid(message: &str) -> Refusal {
 /// A name the plan refuses. The action names the URL member to correct and
 /// never quotes its value.
 fn plan_refusal(error: &PlanError) -> Refusal {
-    let rule = "A role name must not hold a control character or a backslash, and must not be \
-                public, none or start with pg_.";
+    let rule = "A role name must not hold a control character, a backslash or a bidirectional \
+                formatting character, and must not be public, none or start with pg_.";
     let action = match error {
         PlanError::InvalidName {
             what: "database name",
         } => "Change the database name, the path of database.migrationUrlRef and \
-              database.runtimeUrlRef. It must not hold a control character, a backslash or =, \
-              and must not be postgres, template0 or template1."
+              database.runtimeUrlRef. It must not hold a control character, a backslash, a \
+              bidirectional formatting character or =, must not start with postgresql:// or \
+              postgres://, and must not be postgres, template0 or template1."
             .to_owned(),
         PlanError::InvalidName {
             what: "migration role name",
@@ -324,7 +327,15 @@ fn read_admin_url(args: &ProvisionArgs) -> Result<Zeroizing<String>, Refusal> {
     };
     let raw = match (&args.admin_url_file, &args.admin_url_env) {
         (Some(path), None) => {
-            let read = std::fs::File::open(path).and_then(|file| {
+            // The check before the open keeps a named pipe from blocking it.
+            let read = std::fs::metadata(path).and_then(|metadata| {
+                if metadata.is_file() {
+                    std::fs::File::open(path)
+                } else {
+                    Err(std::io::Error::other("not a regular file"))
+                }
+            });
+            let read = read.and_then(|file| {
                 if !file.metadata()?.is_file() {
                     return Err(std::io::Error::other("not a regular file"));
                 }
@@ -414,6 +425,14 @@ fn execution_refusal(tool: &str, error: &ProvisionError) -> Refusal {
              then run provision again."
                 .to_owned(),
         ),
+        E::DatabaseConnectFailed { .. } => (
+            ReportStatus::OperationalFailure,
+            "The administrator opened a session on the server, and the statements listed as run \
+             took effect. Check that the administrator role's CONNECTION LIMIT leaves room for a \
+             second session and that pg_hba.conf admits it to the new database, then run \
+             provision again."
+                .to_owned(),
+        ),
         E::UnsupportedPostgres => (
             ReportStatus::DomainRefusal,
             "Provision a PostgreSQL 17 or newer server, then run provision again.".to_owned(),
@@ -430,6 +449,12 @@ fn execution_refusal(tool: &str, error: &ProvisionError) -> Refusal {
             ReportStatus::DomainRefusal,
             "Use another role name in the product URLs, or correct the role as an administrator, \
              then run provision again."
+                .to_owned(),
+        ),
+        E::RoleSettingsDiffer { .. } => (
+            ReportStatus::DomainRefusal,
+            "Use another role name in the product URLs, or reset the role's role, search_path \
+             and session_authorization defaults as an administrator, then run provision again."
                 .to_owned(),
         ),
         E::RoleMembershipDiffers { .. } => (
@@ -478,6 +503,12 @@ fn execution_refusal(tool: &str, error: &ProvisionError) -> Refusal {
                 "The server refused the role. Check that the role can log in and that \
                  pg_hba.conf lets it connect over TLS from this host, then run provision \
                  again."
+                    .to_owned(),
+            ),
+            Some("53300") => (
+                ReportStatus::OperationalFailure,
+                "The role or the server has reached its connection limit. Raise the role's \
+                 CONNECTION LIMIT or free a connection, then run provision again."
                     .to_owned(),
             ),
             Some(_) => (
@@ -612,10 +643,26 @@ impl Output<'_> {
     fn refusal(&mut self, report: &PlatformCliDatabaseProvisionReport) -> u8 {
         let written = match self.format {
             OutputFormat::Json => self.json(report),
-            OutputFormat::Human => report
-                .diagnostics
-                .iter()
-                .all(|diagnostic| write!(self.stderr, "{}", diagnostic.render_human()).is_ok()),
+            OutputFormat::Human => {
+                // A run that stopped part-way shows what it had already done.
+                let ran = report
+                    .statements
+                    .iter()
+                    .filter(|statement| statement.outcome != ReportOutcome::NotRun)
+                    .all(|statement| {
+                        writeln!(
+                            self.stderr,
+                            "{}  {}",
+                            outcome_word(statement.outcome),
+                            statement.step
+                        )
+                        .is_ok()
+                    });
+                ran && report
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| write!(self.stderr, "{}", diagnostic.render_human()).is_ok())
+            }
         };
         let exit = exit_code(report.status);
         match self.write_failed(written) {
@@ -799,7 +846,8 @@ fn run_with(
             output.write_failed(written)
         }
         Err(failure) => {
-            report.executed = failure.error.may_have_run_statements();
+            report.executed =
+                !failure.reached.is_empty() || failure.error.may_have_run_statements();
             report.statements = report_statements(&plan, &failure.reached);
             refused(&mut report, execution_refusal(tool, &failure.error));
             output.refusal(&report)
@@ -1526,6 +1574,36 @@ mod tests {
                 Some("extension.postgis"),
             ),
             (
+                E::RoleSettingsDiffer {
+                    step: "role.runtime",
+                    role: "app_runtime".to_owned(),
+                },
+                "platform.provision.role-settings-differ",
+                "domain-refusal",
+                1,
+                Some("role.runtime"),
+            ),
+            (
+                E::DatabaseConnectFailed {
+                    database: "app".to_owned(),
+                    sqlstate: Some("53300".to_owned()),
+                },
+                "platform.provision.database-connect-failed",
+                "operational-failure",
+                3,
+                None,
+            ),
+            (
+                E::RoleLoginFailed {
+                    role: "app_runtime".to_owned(),
+                    sqlstate: Some("53300".to_owned()),
+                },
+                "platform.provision.role-login-failed",
+                "operational-failure",
+                3,
+                None,
+            ),
+            (
                 E::EffectUnconfirmed {
                     step: "database.create",
                 },
@@ -1668,6 +1746,124 @@ mod tests {
     }
 
     #[test]
+    fn a_connect_failure_in_the_new_database_reports_what_ran_and_names_the_database() {
+        let admin = admin_url("db.example", 5432);
+        let backend = |_: &AdminConfig, plan: &Plan, _: &ProvisionTarget| {
+            let reached = plan
+                .statements()
+                .iter()
+                .take(3)
+                .map(|statement| (statement.step, StatementOutcome::Created))
+                .collect();
+            Err(Failure {
+                error: ProvisionError::DatabaseConnectFailed {
+                    database: "app".to_owned(),
+                    sqlstate: Some("53300".to_owned()),
+                },
+                reached,
+            })
+        };
+        let run = execute_run(
+            &["--format", "json"],
+            Some(&admin),
+            Ok(split_input()),
+            &backend,
+        );
+        assert_eq!(run.exit, 3, "{}", run.all_output());
+        let report = run.json();
+        assert_eq!(report["executed"], true);
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(
+            diagnostic["code"],
+            "platform.provision.database-connect-failed"
+        );
+        let action = diagnostic["suggestedAction"].as_str().unwrap();
+        assert!(
+            action.contains("CONNECTION LIMIT") && action.contains("pg_hba.conf"),
+            "{action}"
+        );
+        assert!(
+            !action.contains("administrator URL"),
+            "the URL was proved right: {action}"
+        );
+        assert_eq!(report["statements"][0]["outcome"], "created");
+    }
+
+    #[test]
+    fn statements_that_ran_mean_executed_whatever_the_error() {
+        let admin = admin_url("db.example", 5432);
+        let backend = |_: &AdminConfig, plan: &Plan, _: &ProvisionTarget| {
+            Err(Failure {
+                error: ProvisionError::AdminConnectFailed { sqlstate: None },
+                reached: vec![(plan.statements()[0].step, StatementOutcome::Created)],
+            })
+        };
+        let run = execute_run(
+            &["--format", "json"],
+            Some(&admin),
+            Ok(split_input()),
+            &backend,
+        );
+        assert_eq!(run.json()["executed"], true);
+    }
+
+    #[test]
+    fn a_text_refusal_lists_the_statements_that_ran_before_it() {
+        let admin = admin_url("db.example", 5432);
+        let backend = |_: &AdminConfig, plan: &Plan, _: &ProvisionTarget| {
+            Err(Failure {
+                error: ProvisionError::StatementFailed {
+                    step: "database.create",
+                    sqlstate: "42501".to_owned(),
+                },
+                reached: plan
+                    .statements()
+                    .iter()
+                    .take(2)
+                    .map(|statement| (statement.step, StatementOutcome::Created))
+                    .collect(),
+            })
+        };
+        let run = execute_run(&[], Some(&admin), Ok(split_input()), &backend);
+        assert_eq!(run.exit, 3);
+        assert_eq!(run.stdout, "");
+        let ran = run
+            .stderr
+            .find("created  role.migration\ncreated  role.runtime\n")
+            .unwrap_or_else(|| panic!("{}", run.stderr));
+        let refusal = run
+            .stderr
+            .find("error[platform.provision.statement-failed]")
+            .unwrap_or_else(|| panic!("{}", run.stderr));
+        assert!(ran < refusal, "{}", run.stderr);
+        assert!(!run.stderr.contains("not-run"), "{}", run.stderr);
+    }
+
+    #[test]
+    fn a_refusal_before_any_statement_lists_no_statements() {
+        let admin = admin_url("db.example", 5432);
+        let backend = |_: &AdminConfig, _: &Plan, _: &ProvisionTarget| {
+            Err(ProvisionError::UnsupportedPostgres.into())
+        };
+        let run = execute_run(&[], Some(&admin), Ok(split_input()), &backend);
+        assert!(!run.stderr.contains("created"), "{}", run.stderr);
+        assert!(run.stderr.starts_with("error["), "{}", run.stderr);
+    }
+
+    #[test]
+    fn a_login_refusal_for_a_connection_limit_is_operational() {
+        let (exit, report) = refusal_json(ProvisionError::RoleLoginFailed {
+            role: "app_runtime".to_owned(),
+            sqlstate: Some("53300".to_owned()),
+        });
+        assert_eq!(exit, 3);
+        let action = report["diagnostics"][0]["suggestedAction"]
+            .as_str()
+            .unwrap();
+        assert!(action.contains("CONNECTION LIMIT"), "{action}");
+    }
+
+    #[test]
     fn a_missing_administrator_database_gets_its_own_action() {
         let (exit, report) = refusal_json(ProvisionError::AdminConnectFailed {
             sqlstate: Some("3D000".to_owned()),
@@ -1785,6 +1981,37 @@ mod tests {
             "platform.provision.admin-url-invalid"
         );
         assert!(!String::from_utf8(stdout).unwrap().contains("nonexistent"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_administrator_file_that_is_a_named_pipe_is_refused_without_opening_it() {
+        let directory = tempfile::tempdir().expect("scratch directory");
+        let pipe = directory.path().join("admin.url");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success());
+        let pipe = pipe.display().to_string();
+        let args = parse(&["--runtime-config", "r", "--admin-url-file", &pipe]).unwrap();
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let exit = run_with(
+            "casectl",
+            "1",
+            &args,
+            OutputFormat::Json,
+            |_| Ok(split_input()),
+            &must_not_run,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, 2);
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "platform.provision.admin-url-invalid"
+        );
     }
 
     #[test]

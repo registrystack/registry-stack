@@ -183,7 +183,18 @@ async fn verified_subject_owns_runs_and_exact_policy_restricts_flow_action() {
             scope,
             Utc::now().timestamp() + 300,
         );
-        assert!(auth.authenticate(&token).await.is_err());
+        let refusal = auth.authenticate(&token).await.err().unwrap();
+        // Only a scope refusal declares values, and they come from the
+        // configuration, never from the token.
+        match refusal.declared {
+            Some(declared) => {
+                assert_eq!(scope, "wrong-scope");
+                assert_eq!(declared.scope_claim(), "scope");
+                assert_eq!(declared.required_scope(), Some("coordinator:start"));
+                assert_eq!(declared.access_profile(), None);
+            }
+            None => assert_ne!(scope, "wrong-scope"),
+        }
     }
     issuer.stop().await;
 }

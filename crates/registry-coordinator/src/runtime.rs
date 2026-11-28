@@ -544,7 +544,7 @@ fn minimum_observation_interval() -> registry_platform_yaml::BoundedU32<30, 86_4
 /// The shared reader checks the envelope before directly decoding RuntimeConfig.
 impl RuntimeConfig {
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(RuntimeEnvelope {
+        RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
             api_version: API_VERSION,
             kind: KIND,
         })

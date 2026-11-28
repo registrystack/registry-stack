@@ -254,7 +254,7 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
             };
         }
     };
-    let check = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let check = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: API_VERSION,
         kind: KIND,
     })

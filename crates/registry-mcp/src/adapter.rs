@@ -351,7 +351,7 @@ fn input_schema(operation: &Operation) -> Value {
 
 impl AdapterContract {
     fn loaded_bytes_checked(path: &std::path::Path) -> Result<Vec<u8>, AdapterContractLoadError> {
-        let loaded = registry_platform_config::RuntimeConfigLoader::new(
+        let loaded = registry_platform_config::RuntimeConfigLoader::new_without_posture(
             registry_platform_config::RuntimeEnvelope {
                 api_version: "id.registrystack.org/formats/adapter/effective-contract/v1alpha1",
                 kind: "AdapterEffectiveContract",

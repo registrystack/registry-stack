@@ -545,7 +545,7 @@ fn refused(findings: &[Finding]) -> String {
 impl RuntimeConfig {
     #[must_use]
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(DOCUMENTS_RUNTIME_ENVELOPE)
+        RuntimeConfigLoader::new_without_posture(DOCUMENTS_RUNTIME_ENVELOPE)
             .removed_keys(DOCUMENTS_REMOVED_KEYS)
             .require_trusted_ownership()
     }
@@ -782,7 +782,10 @@ impl RuntimeConfig {
     fn check_oidc(&self, findings: &mut Vec<Finding>) {
         let oidc = &self.authentication.oidc;
         let development = self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
-        if let Err(error) = oidc.provider.check("authentication.oidc", development) {
+        if let Err(error) = oidc
+            .provider
+            .check_without_posture("authentication.oidc", development)
+        {
             findings.push(Finding::block("/authentication/oidc", &error));
         }
         if let Err(error) = oidc.clients.check("authentication.oidc") {

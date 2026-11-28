@@ -15,6 +15,8 @@ mod metrics_bind;
 mod offline;
 pub mod package;
 mod posture;
+#[cfg(test)]
+mod posture_load_tests;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod secrets;
@@ -25,9 +27,10 @@ use sha2::{Digest, Sha256};
 pub use blocks::url_hook_destinations_schema;
 pub use blocks::{
     describe_secret_failure, is_sha256_label, url_hook_destinations, AdmittedClients,
-    AttachmentVerifierConfig, AttemptTimeoutMilliseconds, AuditKeyConfig, ConfigBlockError,
-    ConfigBlockErrorKind, DatabaseConfig, EnvironmentSecretProviderConfig,
-    FileSecretProviderConfig, JwksSource, ListenerBind, ListenerConfig, ListenerNetworkExposure,
+    AttachmentVerifierConfig, AttemptTimeoutMilliseconds, AuditKeyConfig, AuditKeyCustody,
+    ConfigBlockError, ConfigBlockErrorKind, DatabaseConfig, DatabaseHost, DatabaseTransport,
+    DatabaseTransportError, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
+    InsecureHttp, JwksSource, ListenerBind, ListenerConfig, ListenerNetworkExposure,
     MetricsListenerConfig, ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig,
     OidcPackageClientsConfig, PackageClients, PackageClientsError, PackageConfig,
     PackageDigestMismatch, PrivateListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig,

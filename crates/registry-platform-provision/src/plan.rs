@@ -218,11 +218,20 @@ const MAX_NAME_BYTES: usize = 63;
 const RESERVED_DATABASES: [&str; 3] = ["postgres", "template0", "template1"];
 
 /// A name reaches the printed `psql` script, where a line break would end a
-/// meta-command and a backslash would start one, so no byte below 0x20, DEL
-/// or backslash is allowed in any name.
+/// meta-command and a backslash would start one, and a bidirectional override
+/// would make a reviewed line read differently from what runs. So no control
+/// character (C0, DEL or C1), backslash or bidirectional formatting character
+/// is allowed in any name.
 fn check_name(what: &'static str, name: &str) -> Result<(), PlanError> {
-    let unsafe_byte = |byte: u8| byte < 0x20 || byte == 0x7f || byte == b'\\';
-    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.bytes().any(unsafe_byte) {
+    let unsafe_char = |c: char| {
+        c.is_control()
+            || c == '\\'
+            || matches!(
+                c,
+                '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            )
+    };
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.chars().any(unsafe_char) {
         return Err(PlanError::InvalidName { what });
     }
     Ok(())
@@ -239,10 +248,16 @@ fn check_role_name(what: &'static str, name: &str) -> Result<(), PlanError> {
     Ok(())
 }
 
-/// `\connect` reads a database name holding `=` as a connection string.
+/// `\connect` reads a database name holding `=`, or starting with a URI
+/// scheme, as a connection string and so can reach another server.
 fn check_database_name(what: &'static str, name: &str) -> Result<(), PlanError> {
     check_name(what, name)?;
-    if name.contains('=') || RESERVED_DATABASES.contains(&name) {
+    let lower = name.to_ascii_lowercase();
+    if name.contains('=')
+        || lower.starts_with("postgresql://")
+        || lower.starts_with("postgres://")
+        || RESERVED_DATABASES.contains(&name)
+    {
         return Err(PlanError::InvalidName { what });
     }
     Ok(())
@@ -849,6 +864,60 @@ mod tests {
         let mut role = target();
         role.runtime = RoleCredential::new("app=runtime", PASSWORD_R);
         assert!(plan_for(&role).is_ok());
+    }
+
+    #[test]
+    fn a_database_name_that_starts_with_a_connection_uri_scheme_is_refused() {
+        for bad in [
+            "postgresql://evil.example/x",
+            "postgres://evil.example/x",
+            "PostgreSQL://evil.example/x",
+            "POSTGRES://evil.example/x",
+        ] {
+            let mut database = target();
+            database.database = bad.to_owned();
+            assert_eq!(
+                plan_for(&database).unwrap_err(),
+                invalid("database name"),
+                "{bad}"
+            );
+        }
+        // Only a leading scheme is read as a URI, and a role name may hold one.
+        let mut inner = target();
+        inner.database = "app-postgres://x".to_owned();
+        assert!(plan_for(&inner).is_ok());
+        let mut role = target();
+        role.runtime = RoleCredential::new("postgres://runtime", PASSWORD_R);
+        assert!(plan_for(&role).is_ok());
+    }
+
+    #[test]
+    fn names_with_c1_controls_or_bidirectional_overrides_are_refused() {
+        for bad in [
+            "a\u{85}b",
+            "a\u{9f}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+            "a\u{200f}b",
+        ] {
+            let mut database = target();
+            database.database = bad.to_owned();
+            assert_eq!(
+                plan_for(&database).unwrap_err(),
+                invalid("database name"),
+                "{bad:?}"
+            );
+            let mut runtime = target();
+            runtime.runtime = RoleCredential::new(bad, PASSWORD_R);
+            assert_eq!(
+                plan_for(&runtime).unwrap_err(),
+                invalid("runtime role name"),
+                "{bad:?}"
+            );
+        }
+        let mut accented = target();
+        accented.database = "cafe\u{301}".to_owned();
+        assert!(plan_for(&accented).is_ok());
     }
 
     #[test]

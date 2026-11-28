@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::{SubsecRound as _, Utc};
 use registry_adapter_engine::route::EvidenceHttpDiagnostic;
 use registry_platform_audit::{AuditDestination, AuditError, AuditProfile};
-use registry_platform_authcommon::FailedCheck;
+use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_crypto::{
     LocalJwkSigner, PrivateJwk, SigningProvider, TransitInitializationError, TransitSigner,
     TransitSignerConfig,
@@ -524,6 +524,12 @@ pub(crate) trait RuntimeAuthenticator: Send + Sync {
     async fn announce_key_source(&self);
 
     async fn key_source_ready(&self) -> bool;
+
+    /// What a scope refusal may say about the deployment, when it has a scope
+    /// gate.
+    fn declared_scope(&self) -> Option<DeclaredScope> {
+        None
+    }
 }
 
 #[async_trait]
@@ -541,6 +547,10 @@ impl RuntimeAuthenticator for Authenticator {
 
     async fn announce_key_source(&self) {
         Authenticator::announce_key_source(self).await;
+    }
+
+    fn declared_scope(&self) -> Option<DeclaredScope> {
+        Authenticator::declared_scope(self)
     }
 
     async fn key_source_ready(&self) -> bool {
@@ -852,6 +862,11 @@ impl EvidenceRuntime {
 
     /// The per-source diagnostics whose counters back the
     /// `evidence_source_shape_drift_total` series on the metrics listener.
+    /// The configured values a scope refusal's log line may name.
+    pub(crate) fn declared_scope(&self) -> Option<DeclaredScope> {
+        self.authenticator.declared_scope()
+    }
+
     pub(crate) fn source_diagnostics(&self) -> Arc<SourceDiagnostics> {
         Arc::clone(&self.source_diagnostics)
     }

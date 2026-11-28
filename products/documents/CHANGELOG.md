@@ -15,16 +15,19 @@
 - The Document Store counts every refused request by the check that refused
   it, in `documents_request_refusals_total{check}` on the metrics listener,
   published at zero for every check. Each refusal writes one `request refused`
-  line with `failed_check`, at most five lines per check per minute. That line
-  replaces the scope refusal line, which named the claim, the scope and the
-  access profile; a scope refusal now carries a fixed remedy that names
-  `authentication.oidc.scopeClaim`. Refusal statuses, headers and bodies are
-  unchanged.
+  line with `failed_check`, at most five lines per check per minute. A scope
+  refusal's line also names the scope claim the deployment configured, the
+  scope the access profile requires and the profile's id, as `scope_claim`,
+  `required_scope` and `access_profile`, and carries a fixed remedy that names
+  `authentication.oidc.scopeClaim`. No value from the token is written.
+  Refusal statuses, headers and bodies are unchanged.
 - A static key set with a private key member or a repeated member name is
   refused at startup, and the error names the rule it broke, and the key's
   position for a rule about one key, never a key value.
-- A token verifier that cannot reach its key source still answers 503, and the
-  operator's record of it is the `request refused` line with `failed_check`
+- A token verifier that cannot fetch, read or use its key set still answers
+  503. A key endpoint the verifier refuses to contact answers the refusal a bad
+  credential gets, with its `WWW-Authenticate` header. The operator's record of
+  either is the `request refused` line with `failed_check`
   `key-source-unavailable` and the counter, not a warning per request, so
   `DOCUMENTS_LOG=warn` writes no line for it.
 - A caller that sees a document and does not hold custody of it is counted

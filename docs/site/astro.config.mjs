@@ -1043,6 +1043,7 @@ export default defineConfig({
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
             { label: 'Where each rule lives', slug: 'explanation/where-each-rule-lives' },
+            { label: 'Where authority lives', slug: 'explanation/where-authority-lives' },
             { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
             { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
             { label: 'Retired products', slug: 'decisions/registry-relay-retirement-2026-10-03' },

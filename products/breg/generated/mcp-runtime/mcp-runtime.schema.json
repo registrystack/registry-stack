@@ -53,6 +53,13 @@
           "default": "file",
           "description": "Where audit lines go: `file` or `stdout`."
         },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the audit hash key."
@@ -114,6 +121,21 @@
         {
           "const": "stdout",
           "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
           "type": "string"
         }
       ]

@@ -94,6 +94,7 @@ impl Fixture {
             migration_url_ref: reference,
             ca_bundle_ref: None,
             test_only_plaintext: true,
+            transport: None,
         };
         Self::open(database, &url, url.clone(), schema).await
     }
@@ -119,6 +120,7 @@ impl Fixture {
             migration_url_ref: secret_ref(&url),
             ca_bundle_ref: None,
             test_only_plaintext: true,
+            transport: None,
         };
         Self::open(database, &url, runtime_url, schema).await
     }

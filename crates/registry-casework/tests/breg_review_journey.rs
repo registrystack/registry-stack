@@ -416,6 +416,7 @@ async fn casework_store() -> (PostgresStore, tokio_postgres::Client, String) {
         migration_url_ref: format!("secret:env/{name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     let store = PostgresStore::connect_migration(&config, &secrets)
         .unwrap()

@@ -238,7 +238,7 @@ def verify_hook_delivery(
     body: bytes,
     key: bytes,
     max_skew_seconds: int | None = None,
-    caller_enforced_freshness: bool = False,
+    caller_enforced_freshness: bool | None = None,
 ) -> VerifiedHookDelivery:
     """Authenticate one exact Base Registry Engine Version 1 hook delivery.
     The delivery time must be within 300 seconds of the receiver clock unless

@@ -49,6 +49,7 @@ async fn store_for_schema(schema: &str, application_name: &str) -> PostgresStore
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     let store = PostgresStore::connect_runtime(&config, &secrets)
         .expect("connect lock-order store")

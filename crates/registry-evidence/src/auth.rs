@@ -7,7 +7,7 @@ use std::{
 
 #[cfg(test)]
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
+use registry_platform_authcommon::{validate_compact_access_token, DeclaredScope, FailedCheck};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     actor_kind, grant_claims, ActorKind, Audience, ClaimError, ClaimNames, GrantClaims,
@@ -76,6 +76,8 @@ pub struct Authenticator {
     /// Resource identifiers accepted by the verifier. A task grant must name
     /// the one member that actually matched the token audience.
     resources: Vec<String>,
+    /// The claim the verifier reads scopes from, as the configuration names it.
+    scope_claim: String,
     key_source: Arc<Mutex<KeySourceState>>,
 }
 
@@ -273,6 +275,9 @@ impl AuthenticationError {
 /// possession, such as DPoP or mutual TLS.
 const CONFIRMATION_CLAIM: &str = "cnf";
 
+/// The claim the platform verifier reads scopes from unless configured.
+const DEFAULT_SCOPE_CLAIM: &str = "scope";
+
 impl Authenticator {
     /// Build the one strict resource-server profile from the loaded bundle.
     ///
@@ -326,6 +331,7 @@ impl Authenticator {
             jwks_fetch_policy(config),
             issuer_roots,
         ));
+        let scope_claim = verifier_config.scope_claim.clone();
         let verifier = Arc::new(TokenVerifier::new(verifier_config, fetcher));
         let claims = AuthenticationClaimsConfig {
             principal_claim: config.principal_claim.clone(),
@@ -335,6 +341,7 @@ impl Authenticator {
             actor_claim: config.actor_claim.clone(),
         };
         Self::new(verifier, claims)
+            .with_scope_claim(scope_claim)
             .with_required_scopes(config.required_scopes.admitted())
             .with_resources(vec![config.audience().to_owned()])
     }
@@ -345,6 +352,7 @@ impl Authenticator {
             claims,
             required_scopes: Vec::new(),
             resources: Vec::new(),
+            scope_claim: DEFAULT_SCOPE_CLAIM.to_owned(),
             key_source: Arc::new(Mutex::new(KeySourceState::default())),
         }
     }
@@ -356,6 +364,24 @@ impl Authenticator {
     pub fn with_required_scopes(mut self, required_scopes: Vec<String>) -> Self {
         self.required_scopes = required_scopes;
         self
+    }
+
+    /// Name the claim the verifier reads scopes from. The platform verifier
+    /// reads `scope` unless told otherwise.
+    #[must_use]
+    pub fn with_scope_claim(mut self, scope_claim: String) -> Self {
+        self.scope_claim = scope_claim;
+        self
+    }
+
+    /// What a scope refusal may say about the deployment: the claim name and
+    /// the scopes the configuration requires. Both are configured values, so
+    /// the line they appear in carries nothing the caller's token held.
+    pub fn declared_scope(&self) -> Option<DeclaredScope> {
+        (!self.required_scopes.is_empty()).then(|| {
+            DeclaredScope::new(&self.scope_claim)
+                .with_required_scope(self.required_scopes.join(" "))
+        })
     }
 
     #[must_use]
@@ -485,7 +511,7 @@ impl Authenticator {
                 .jwks_uri()
                 .unwrap_or(STATIC_KEY_SOURCE),
             cause = describe_causes(error),
-            "the access-token issuer key set could not be retrieved; every request is rejected until it can be"
+            "the access-token issuer key set could not be retrieved or used"
         );
     }
 

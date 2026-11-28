@@ -22,10 +22,21 @@
   `access-profile` unless it presented a task grant. The key-source `WARN`
   line now follows the same classification as the `key-source-unavailable`
   count.
+- The `request refused` line of Evidence, Evidence OID4VCI and Evidence OID4VP
+  names the configured scope claim and the scope or scopes the configuration
+  requires when the failed check is `scope`, as `scope_claim` and
+  `required_scope`. Nothing the caller's token carried is written. No response
+  status, header or body changes.
 - Evidence OID4VP states the rule a refused static key set broke in its
   startup message, still under `evidence.oid4vp.issuer-unavailable`. A request
   whose `Authorization` header is present but unreadable as text counts under
   `credential-malformed`. The answer is unchanged.
+- Evidence counts an `Authorization` header that names another scheme, such as
+  `Basic`, under `credential-missing`, and a header that is only the start of
+  `Bearer` under `credential-malformed`. Evidence OID4VCI counts an unreadable
+  header, or `Bearer` with no token, under `credential-malformed`. The
+  key-source `WARN` text says the key set could not be retrieved or used, and
+  no longer says every request is rejected. No answer changes.
 - `evidencectl suggest` accepts an IPv4-mapped IPv6 loopback address, for
   example `[::ffff:127.0.0.1]`, for a plain-HTTP base URL or OpenAPI URL, as
   the shared loopback rule does. The name `localhost` is still refused there.

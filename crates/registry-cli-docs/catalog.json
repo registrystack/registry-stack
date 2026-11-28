@@ -12516,18 +12516,9 @@
           "invocation": "coordinatorctl provision",
           "about": "Create the database, the migration and runtime roles, and the grants `apply` expects, as a PostgreSQL administrator",
           "long_about": null,
-          "usage": "coordinatorctl provision [OPTIONS] --runtime-config <FILE>",
+          "usage": "coordinatorctl provision [OPTIONS]",
           "arguments": [],
           "options": [
-            {
-              "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration file, the one `apply` reads",
-              "always_required": true,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
             {
               "display": "--admin-url-file <ADMIN_URL_FILE>",
               "description": "File holding the administrator PostgreSQL URL",
@@ -12549,6 +12540,15 @@
             {
               "display": "--print-sql",
               "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one `apply` reads",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

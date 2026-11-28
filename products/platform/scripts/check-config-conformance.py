@@ -56,7 +56,7 @@ GENERATOR_ARGUMENTS: tuple[str, ...] = (
 )
 GENERATOR_COMMAND = " ".join((*GENERATOR_ARGUMENTS, GENERATOR_OUTPUT))
 LEGACY_EXPANSION = re.compile(r"\bexpand_config_env_vars\w*\b")
-LOADER_USE = re.compile(r"\bRuntimeConfigLoader\s*::\s*new\s*\(")
+LOADER_USE = re.compile(r"\bRuntimeConfigLoader\s*::\s*new(?:_without_posture)?\s*\(")
 PLATFORM_CRATE = "registry_platform_config"
 # Keywords a hand-written copy of a shared block may add: each one only
 # describes or narrows what the canonical block accepts.

@@ -341,8 +341,9 @@ fn path_conflict(served: &[ServedOperation], candidate: &ServedOperation) -> Opt
 /// The facade path a served operation answers, with its record type in
 /// place of the record-type parameter.
 fn concrete_path(operation: &ServedOperation) -> String {
-    operation.method_path.replace(
-        &format!("{{{}}}", operation.record_type_parameter),
+    registry_adapter_core::concrete_facade_path(
+        &operation.method_path,
+        &operation.record_type_parameter,
         &operation.record_type,
     )
 }
@@ -681,7 +682,7 @@ fn load_inner(
     let absolute = std::fs::canonicalize(runtime_path).map_err(|_| LoadError::Unreadable {
         path: runtime_path.display().to_string(),
     })?;
-    let runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let runtime = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: ADAPTER_RUNTIME_API_VERSION,
         kind: ADAPTER_RUNTIME_KIND,
     })
@@ -1226,8 +1227,9 @@ fn compile_binding<S: ArtifactSource + ?Sized>(
                 "the binding names no profile operation",
             )
         })?;
-    let concrete_method_path = operation.path.replace(
-        &format!("{{{}}}", operation.record_type_parameter.as_str()),
+    let concrete_method_path = registry_adapter_core::concrete_facade_path(
+        &operation.path,
+        operation.record_type_parameter.as_str(),
         binding.record_type.as_str(),
     );
     if [

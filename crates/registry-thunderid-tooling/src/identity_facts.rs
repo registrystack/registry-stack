@@ -479,15 +479,15 @@ pub(crate) fn https_url(value: &str) -> bool {
         })
 }
 
-/// An `https` URL, or `http` to 127.0.0.1, without user information, query
-/// or fragment. A facts document may describe a development issuer.
+/// An `https` URL, or `http` to a loopback address literal, without user
+/// information, query or fragment. A facts document may describe a development issuer.
 fn issuer_url(value: &str) -> bool {
     https_url(value)
         || (Url::new(value).is_ok()
             && url::Url::parse(value).is_ok_and(|url| {
                 url.scheme() == "http"
                     && url.host_str().is_some_and(|host| {
-                        registry_platform_loopback::loopback_host(host).is_some()
+                        registry_platform_loopback::loopback_literal(host).is_some()
                     })
                     && url.username().is_empty()
                     && url.password().is_none()

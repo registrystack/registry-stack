@@ -29,8 +29,11 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "audience": {
           "description": "The audience every accepted access token must carry in `aud`.",
@@ -92,6 +95,13 @@
           "$ref": "#/$defs/AuditDestinationKind",
           "default": "file"
         },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the audit hash key."
@@ -117,6 +127,21 @@
         "hashKeyRef"
       ],
       "type": "object"
+    },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
+          "type": "string"
+        }
+      ]
     },
     "ClaimQueryDocument": {
       "additionalProperties": false,
@@ -330,8 +355,11 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "allowedClient": {
           "$ref": "#/$defs/ExternalId",

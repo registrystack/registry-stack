@@ -18,7 +18,7 @@ use std::sync::Arc;
 use registry_messaging_core::{
     AccessProfiles, AccessRefusal, ActorKind, ActorKindClaim, Caller, VerifiedTokenFacts,
 };
-use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
+use registry_platform_authcommon::{validate_compact_access_token, DeclaredScope, FailedCheck};
 use registry_platform_oidc::{
     actor_kind, ClaimError, ClaimNames, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
     ASSERTION_ISSUER_CLAIM,
@@ -29,6 +29,8 @@ pub struct MessagingAuthenticator {
     verifier: TokenVerifier,
     claim_names: ClaimNames,
     profiles: AccessProfiles,
+    /// The claim the deployment reads scopes from, as configured.
+    scope_claim: String,
     /// Whether the deployment declared any assertion authority at all.
     binds_assertion_issuers: bool,
 }
@@ -46,6 +48,7 @@ impl MessagingAuthenticator {
             .validate()
             .expect("the default contextual claim names are valid");
         Self {
+            scope_claim: verifier.scope_claim.clone(),
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             profiles,
@@ -55,6 +58,16 @@ impl MessagingAuthenticator {
 
     /// Verify one credential and resolve it to exactly one access profile.
     pub async fn authenticate(&self, token: &str) -> Result<Caller, AuthenticationError> {
+        self.authenticate_declaring(token)
+            .await
+            .map_err(|refusal| refusal.error)
+    }
+
+    /// As [`Self::authenticate`], and a scope refusal also carries what the
+    /// deployment declared about it: the scope claim name, the scope the
+    /// profile requires, and the profile's id. None of it comes from the
+    /// token.
+    pub async fn authenticate_declaring(&self, token: &str) -> Result<Caller, DeclaredRefusal> {
         validate_compact_access_token(token)
             .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
         let verified = self
@@ -70,9 +83,7 @@ impl MessagingAuthenticator {
         if !self.binds_assertion_issuers
             && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM)
         {
-            return Err(AuthenticationError::Profile(
-                FailedCheck::TokenAssertionIssuer,
-            ));
+            return Err(AuthenticationError::Profile(FailedCheck::TokenAssertionIssuer).into());
         }
         let client_id = verified
             .matched_client_id()
@@ -91,17 +102,26 @@ impl MessagingAuthenticator {
     }
 
     /// The error a refused profile resolution answers with, and the check it
-    /// names.
+    /// names. A scope refusal also carries the values configuration declared
+    /// for it.
     fn access_refusal(
         &self,
         refusal: AccessRefusal,
         facts: &VerifiedTokenFacts<'_>,
-    ) -> AuthenticationError {
+    ) -> DeclaredRefusal {
         match refusal {
             AccessRefusal::Profile => {
-                let check = if self.profiles.missing_scope(facts).is_some() {
-                    FailedCheck::Scope
-                } else if self.profiles.iter().any(|profile| {
+                if let Some(missing) = self.profiles.missing_scope(facts) {
+                    return DeclaredRefusal {
+                        error: AuthenticationError::Profile(FailedCheck::Scope),
+                        declared: Some(
+                            DeclaredScope::new(&self.scope_claim)
+                                .with_required_scope(missing.scope)
+                                .with_access_profile(missing.profile),
+                        ),
+                    };
+                }
+                let check = if self.profiles.iter().any(|profile| {
                     facts.client_id.is_some_and(|client| {
                         profile
                             .requester_clients
@@ -113,7 +133,7 @@ impl MessagingAuthenticator {
                 } else {
                     FailedCheck::AccessProfile
                 };
-                AuthenticationError::Profile(check)
+                AuthenticationError::Profile(check).into()
             }
             AccessRefusal::Claims => AuthenticationError::Claims(
                 if matches!(facts.actor_kind, ActorKindClaim::Malformed) {
@@ -121,7 +141,8 @@ impl MessagingAuthenticator {
                 } else {
                     FailedCheck::TokenClaims
                 },
-            ),
+            )
+            .into(),
         }
     }
 }
@@ -133,6 +154,23 @@ impl std::fmt::Debug for MessagingAuthenticator {
             .field("verifier", &"<redacted>")
             .field("binds_assertion_issuers", &self.binds_assertion_issuers)
             .finish_non_exhaustive()
+    }
+}
+
+/// A refusal of authentication with the values the deployment declared about
+/// it, when it is a scope refusal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeclaredRefusal {
+    pub error: AuthenticationError,
+    pub declared: Option<DeclaredScope>,
+}
+
+impl From<AuthenticationError> for DeclaredRefusal {
+    fn from(error: AuthenticationError) -> Self {
+        Self {
+            error,
+            declared: None,
+        }
     }
 }
 

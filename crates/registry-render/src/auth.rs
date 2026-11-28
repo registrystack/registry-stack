@@ -116,6 +116,9 @@ fn verifier_failure(error: OidcError) -> AuthenticationError {
     }
 }
 
+/// The claim the verifier reads a token's scopes from.
+pub(crate) const SCOPE_CLAIM: &str = "scope";
+
 /// The scope the render and document routes require.
 pub(crate) const RENDER_SCOPE: &str = "render:render";
 /// The scope the seal route requires. Neither scope implies the other: a

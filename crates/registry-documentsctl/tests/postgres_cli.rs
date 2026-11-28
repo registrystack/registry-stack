@@ -405,6 +405,14 @@ impl ProvisionedDatabase {
     const PASSWORD: &'static str = "documents-test";
 
     async fn new(admin: &tokio_postgres::Client) -> Self {
+        Self::with_runtime_usage(admin, true).await
+    }
+
+    /// The database as an operator who provisioned by hand to a layout that
+    /// gives the runtime role no `USAGE` on `public` leaves it, when
+    /// `runtime_usage` is false: no role but the migration role can resolve
+    /// the `public` schema.
+    async fn with_runtime_usage(admin: &tokio_postgres::Client, runtime_usage: bool) -> Self {
         let suite = base_config()
             .get_dbname()
             .expect("DOCUMENTS_TEST_DATABASE_URL names a database")
@@ -452,6 +460,14 @@ impl ProvisionedDatabase {
             ))
             .await
             .unwrap();
+        if !runtime_usage {
+            database
+                .batch_execute(&format!(
+                    "REVOKE USAGE ON SCHEMA public FROM PUBLIC, {runtime_role}"
+                ))
+                .await
+                .unwrap();
+        }
         drop(database);
         connection.await.unwrap().unwrap();
         provisioned
@@ -591,6 +607,42 @@ async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_op
         plan["diagnostics"][0]["code"],
         "documentsctl.activation.ledger-unreadable"
     );
+
+    provisioned.drop(&deployment.admin).await;
+}
+
+/// A database provisioned by hand so that the runtime role has `USAGE` on no
+/// schema resolves no schema before the first apply. `plan` over that
+/// credential still reports the initial activation: the refusal by name is
+/// for a database a package was already applied to.
+#[tokio::test]
+async fn plan_reports_the_initial_activation_when_the_runtime_role_resolves_no_schema() {
+    let deployment = Deployment::new().await;
+    let digest = deployment.deploy();
+    let runtime = deployment.runtime();
+    let provisioned = ProvisionedDatabase::with_runtime_usage(&deployment.admin, false).await;
+    deployment.secret(
+        "runtime-database-url",
+        &provisioned.url(
+            &provisioned.runtime_role,
+            Some(ProvisionedDatabase::PASSWORD),
+        ),
+    );
+    deployment.secret(
+        "migration-database-url",
+        &provisioned.url(
+            &provisioned.migration_role,
+            Some(ProvisionedDatabase::PASSWORD),
+        ),
+    );
+
+    let (code, plan) = ctl(&["plan", "--runtime-config", &runtime]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(plan["packageDigest"], digest);
+    assert_eq!(plan["change"], "activate");
+    assert_eq!(plan["planKind"], "initial");
+    assert_eq!(plan["activeDigest"], Value::Null);
+    assert_eq!(plan["refusals"], serde_json::json!([]));
 
     provisioned.drop(&deployment.admin).await;
 }

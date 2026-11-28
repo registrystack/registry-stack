@@ -850,7 +850,7 @@ pub(crate) fn read_runtime(
         path: shown.clone(),
         source,
     })?;
-    let loader = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let loader = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: ADAPTER_RUNTIME_API_VERSION,
         kind: ADAPTER_RUNTIME_KIND,
     })

@@ -94,14 +94,14 @@ A cell holds:
 
 - `main`: the result today.
 - `target`: the result the caller contract work aims for.
-- `changedBy`: the milestone that changes the result, such as `M7`, or `none`.
-- `landed`: present when `changedBy` is a milestone. It is `false` until that milestone makes `target` true.
+- `changedBy`: the change that alters the result, a name such as `caller-contract`, or `none`.
+- `landed`: present when `changedBy` is a change name. It is `false` until that change makes `target` true.
 - `basis`: `inferred` while `main` is a reading of the code, `observed` once a test has run the fixture through the product.
 - `reason` and `targetReason`: why a `main` or a `target` is `unknown`, `n-a` or `none`, or why a product cannot follow one of the driver's choices listed at the head of `expected.yaml`.
 
 A result is `admitted`, `admitted/<actor kind>`, `admitted/unspecified`, `refused/<stage>`, `none`, `n-a` or `unknown`. A stage is one of the verifier's labels (`header`, `algorithm`, `token-type`, `key`, `signature`, `issuer`, `audience`, `time`, `client`, `scope`, `profile`, `unavailable`) or `claims`, which a product uses for its own claim checks.
 
-The test asserts `target` where `landed` is `true` and `main` everywhere else. Work on a milestone goes row by row. Set `landed: true`, watch the test fail, make the change, watch it pass.
+The test asserts `target` where `landed` is `true` and `main` everywhere else. Work on a change goes row by row. Set `landed: true`, watch the test fail, make the change, watch it pass.
 
 The head of `expected.yaml` lists the choices the driver makes for every row, such as which client list and which read scope a product is given.
 

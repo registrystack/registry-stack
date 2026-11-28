@@ -166,6 +166,9 @@ def rosters(
     if release_roster.coordinator_in_release(parsed):
         for binary in ("coordinator", "coordinatorctl"):
             image_bins.append((binary, f"{binary}-{tag}-linux-amd64"))
+    if release_roster.adapter_image_in_release(parsed):
+        for binary in ("adapter", "adapterctl"):
+            image_bins.append((binary, f"{binary}-{tag}-linux-amd64"))
     return {
         "core": core,
         "breg": breg,

@@ -9,7 +9,9 @@
 
 use std::{sync::Arc, time::Duration};
 
-use registry_platform_authcommon::{parse_bearer_token, BearerParseError, FailedCheck};
+use registry_platform_authcommon::{
+    parse_bearer_token, BearerParseError, DeclaredScope, FailedCheck,
+};
 use registry_platform_config::{JwksSource, SecretResolver};
 use registry_platform_oidc::{
     parse_static_jwks, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
@@ -63,6 +65,8 @@ pub struct TokenAuthenticator {
     verifier: TokenVerifier,
     issuer: String,
     required_scope: String,
+    /// The claim the verifier reads scopes from.
+    scope_claim: String,
 }
 
 impl std::fmt::Debug for TokenAuthenticator {
@@ -137,11 +141,20 @@ impl TokenAuthenticator {
         if let Some(client) = &config.allowed_client {
             profile = profile.with_allowed_clients(vec![client.clone()]);
         }
+        let scope_claim = profile.scope_claim.clone();
         Ok(Self {
             verifier: TokenVerifier::new(profile, Arc::new(fetcher)),
             issuer,
             required_scope: config.required_scope.clone(),
+            scope_claim,
         })
+    }
+
+    /// What a scope refusal may say about this gate: the configured claim and
+    /// the configured scope, never a value the token carried.
+    #[must_use]
+    pub fn declared_scope(&self) -> DeclaredScope {
+        DeclaredScope::new(&self.scope_claim).with_required_scope(&self.required_scope)
     }
 
     /// Authenticate the value of an `Authorization` header.

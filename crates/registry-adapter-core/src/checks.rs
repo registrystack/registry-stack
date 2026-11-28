@@ -4751,8 +4751,9 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
         // itself, so a binding whose concrete path is one of them would be
         // advertised and never served.
         if let Some(operation) = operation {
-            let concrete = operation.path.replace(
-                &format!("{{{}}}", operation.record_type_parameter.as_str()),
+            let concrete = crate::concrete_facade_path(
+                &operation.path,
+                operation.record_type_parameter.as_str(),
                 binding.record_type.as_str(),
             );
             if [
@@ -5934,8 +5935,9 @@ fn async_status_path_collision_checks(workspace: &Workspace<'_>) -> Vec<Diagnost
         if operation.method != HttpMethod::Get {
             continue;
         }
-        let concrete = operation.path.replace(
-            &format!("{{{}}}", operation.record_type_parameter.as_str()),
+        let concrete = crate::concrete_facade_path(
+            &operation.path,
+            operation.record_type_parameter.as_str(),
             binding.record_type.as_str(),
         );
         let ordinary_shape = facade_path_shape(&concrete);
@@ -6922,7 +6924,7 @@ pub fn check_endpoint_bindings(
 #[must_use]
 pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
     let mut findings = check_endpoint_bindings(workspace, &runtime.endpoint_bindings());
-    if let Err(error) = runtime.oidc.check("oidc", true) {
+    if let Err(error) = runtime.oidc.check_without_posture("oidc", true) {
         findings.push(finding(
             CheckCode::RuntimeInvalidOrigin,
             "/oidc",

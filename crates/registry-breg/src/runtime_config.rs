@@ -1015,7 +1015,7 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
 /// position reach the operator. The file is held to the shared 1 MiB bound
 /// (CFG-YAML-6).
 const fn runtime_config_loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new(RuntimeEnvelope {
+    RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: RUNTIME_CONFIG_API_VERSION,
         kind: RUNTIME_CONFIG_KIND,
     })
@@ -2205,7 +2205,7 @@ impl OidcVerifierConfig {
         // development and test deployments that run their issuer beside the
         // registry; every other issuer and key URI is `https`.
         raw.provider
-            .check("authentication.oidc", true)
+            .check_without_posture("authentication.oidc", true)
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
         validate_oidc_value(&raw.access_token_type)?;
         validate_claim_name(&raw.scope_claim)?;

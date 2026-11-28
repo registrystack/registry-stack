@@ -44,7 +44,6 @@ decisions:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: release_hold_refuses_indistinguishably_for_missing_and_unauthorized_holds}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: confirm_appointment_refuses_indistinguishably_for_missing_and_unauthorized_holds}
       - {path: crates/registry-scheduling/tests/postgres_commitments/review_regressions.rs, name: an_id_addressed_route_answers_an_existing_and_an_unknown_id_alike_under_a_long_grant}
-      - {path: crates/registry-scheduling/tests/postgres_commitments/review_regressions.rs, name: an_id_addressed_route_answers_an_existing_and_an_unknown_id_alike_under_a_long_grant}
   - id: SCHEDULING-DEC-02
     subject: Cancellation never answers policy.changed
     decision: >-

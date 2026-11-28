@@ -1,0 +1,87 @@
+---
+title: Where authority lives
+description: Which of the token, the configuration and the records decides who a caller is, what a profile may do, and which rows and teams a caller reaches, and what holds today.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-27"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Every Registry Stack product asks the same three questions about a request. Each question has one
+home. Knowing the home tells you where to change an answer, and which answer takes effect first.
+
+## One rule
+
+- The token says who the caller is. Your issuer signs it, and the product verifies it.
+- Configuration says what a profile may do. The access profile lists operations, fields and purposes.
+- Records say which rows and which teams. Today this holds only in part, as the next sections show.
+
+A caller cannot widen its own reach. A request field is never an authorisation decision, and a
+product inherits no authority from another product.
+
+{/* Evidence: crates/registry-breg/src/access.rs; crates/registry-platform-oidc/src/lib.rs. */}
+
+## Row authority today comes from token claims
+
+A [row boundary](../../reference/glossary/#row-boundary) compares a Record field with a claim in
+the verified token. Base Registry Engine (BReg) declares it with `rowBoundaries` on a record
+permission. The rows a caller reaches therefore depend on what your issuer put in the token.
+
+This has two consequences.
+
+- Your issuer must be one you trust to assert the claim.
+- A change to a caller's reach takes effect when the caller next receives a token, not when you
+  change a record.
+
+The compiled form shows the limit of this design. An empty list of boundaries permits every row, and
+the authored `rowBoundaries: unrestricted` compiles to that empty list.
+
+See [BReg access profiles](../../configure/breg-access/) for the fields and examples.
+
+{/* Evidence: crates/registry-breg/src/contract.rs row_boundaries; crates/registry-breg/src/access.rs;
+    crates/registry-breg/src/authority.rs. */}
+
+## Membership boundaries read records, for reads only
+
+A membership boundary moves the decision into records. A row is readable only while a current,
+active membership Record names the caller. Deactivate the membership and the next request no longer
+sees the row. No token expiry is involved.
+
+Membership boundaries support `get`, `lookup`, `list`, `revisions` and `snapshot` only. Today BReg
+refuses a profile that combines a membership boundary with any other operation, or with
+`writableFields`. The compiler reports `breg.access.membership-read-only` and tells you to use a
+separate, directly authorised profile for writes and proposal application.
+
+So a registry that must restrict writes by team still uses `rowBoundaries` and token claims for the
+write profile. Membership records cannot yet carry write authority.
+
+Two more limits apply today:
+
+- A profile with a membership boundary cannot enable spatial bounding-box queries.
+- A profile declares at most eight membership boundaries.
+
+{/* Evidence: crates/registry-breg/src/membership.rs validate();
+    crates/registry-breg/tests/membership_access.rs membership_boundaries_refuse_unenforced_authority_paths. */}
+
+## Casework keeps BReg disclosure under the reviewer's identity
+
+Registry Casework decides who may review a task. It does not decide what a reviewer may see in
+BReg. When Casework shows a reviewer the current record, BReg answers under the reviewer's own
+identity and its own access profile. Casework adds no disclosure authority.
+
+Today, by default, Casework forwards the reviewer's bearer token to BReg for that read. A provider
+that declares `humanSourceAuthentication` can use a separate source credential for the same
+reviewer instead. On either path BReg applies its own profile to the identity it receives.
+
+{/* Evidence: crates/registry-casework/src/review.rs; crates/registry-casework-breg/src/lib.rs human_display();
+    crates/registry-casework/src/http/source_credentials.rs. */}
+
+## Continue
+
+- [BReg access profiles](../../configure/breg-access/)
+- [Where each rule lives](../where-each-rule-lives/)
+- [Security model](../../security/)

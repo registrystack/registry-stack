@@ -50,12 +50,15 @@ and the restore drill is in
   published at zero, and no caller value becomes a label.
   The counter covers a missing or refused credential, a token that resolves to no access profile, a
   refused custody placement, a caller that sees a document but may not act on it, a document or
-  upload the caller may not see, and a verifier that cannot reach its key source
-  (`key-source-unavailable`).
-  Each refusal also writes one `request refused` log line with `failed_check` and the request's
-  trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
-  a window held back.
-  A scope refusal carries a fixed remedy that names `authentication.oidc.scopeClaim`.
+  upload the caller may not see, and a verifier that cannot reach or use its key source
+  (`key-source-unavailable`). A key set the verifier cannot fetch, read or use answers 503. A key
+  endpoint the verifier refuses to contact answers the refusal a bad credential gets, and is counted
+  the same way.
+  Each refusal also writes one `request refused` log line with `failed_check`, at most five lines per
+  check per minute, with `suppressed` counting what a window held back.
+  A scope refusal's line also carries `scope_claim`, `required_scope` and `access_profile`, the
+  values the deployment configured, never the token's own scope, and a fixed remedy that names
+  `authentication.oidc.scopeClaim`.
   Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
   recording a refusal changes nothing the caller receives.
 - The custodian alone removes a document and issues, lists and revokes its grants.

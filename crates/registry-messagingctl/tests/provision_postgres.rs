@@ -37,7 +37,7 @@ impl Deployment {
         std::fs::create_dir(&secrets).unwrap();
         std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
         let deployment = Self { directory, admin };
-        deployment.secret("audit-key", "0123456789abcdef0123456789abcdef");
+        deployment.secret("audit-key", &"5a".repeat(16));
         // The runtime verifies tokens against a static key set, so it starts
         // without reaching the issuer.
         deployment.secret(

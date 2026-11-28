@@ -280,7 +280,8 @@ and Python client namespace also joins in `v0.44.0`, under
 `COORDINATOR_CLIENT_FIRST_RELEASE`. Its image remains held while
 `COORDINATOR_FIRST_RELEASE` is unset.
 Registry Adapter binaries join in `v0.46.0`, as set by
-`ADAPTER_FIRST_RELEASE`; the Adapter has no image.
+`ADAPTER_FIRST_RELEASE`. Its image is authored and remains held while
+`ADAPTER_IMAGE_FIRST_RELEASE` is unset.
 The Registry Document Store is held out of every release while
 `DOCUMENTS_FIRST_RELEASE` is `None`, and no release roster names it.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,

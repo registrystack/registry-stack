@@ -31,7 +31,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use registry_adapter_core::ErrorClass;
-use registry_platform_authcommon::{RefusalNote, RefusalRecorder};
+use registry_platform_authcommon::{DeclaredScope, RefusalNote, RefusalRecorder};
 use registry_platform_metrics::{
     CounterVec, Exposition, LabelSpace, CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
@@ -254,7 +254,8 @@ pub async fn record_refusals(
 ) -> Response {
     let response = next.run(request).await;
     if let Some(note) = response.extensions().get::<RefusalNote>() {
-        registry_platform_authcommon::record_refusal!(recorder, *note);
+        let declared = response.extensions().get::<DeclaredScope>();
+        registry_platform_authcommon::record_refusal!(recorder, *note, declared = declared);
     }
     response
 }
@@ -398,6 +399,78 @@ mod tests {
             .filter(|line| line.starts_with("adapter_request_refusals_total{check=\""))
             .count();
         assert_eq!(declared, registry_platform_authcommon::FailedCheck::COUNT);
+    }
+
+    /// The refusal line a scope refusal writes, driven through the recording
+    /// layer with the scope values the answer carries.
+    async fn refusal_line(check: registry_platform_authcommon::FailedCheck) -> String {
+        use registry_platform_testing::CapturedDiagnosticLogs;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let recorder = Arc::new(RefusalRecorder::new("adapter_test").expect("recorder"));
+        let app = Router::new()
+            .route(
+                "/",
+                get(move || async move {
+                    let mut response = StatusCode::FORBIDDEN.into_response();
+                    response.extensions_mut().insert(RefusalNote::new(check));
+                    response.extensions_mut().insert(
+                        DeclaredScope::new("scope")
+                            .with_required_scope("records.read")
+                            .with_access_profile("records-reader"),
+                    );
+                    response
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                recorder,
+                record_refusals,
+            ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback test listener");
+        let address = listener.local_addr().expect("the bound address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let logs = CapturedDiagnosticLogs::default();
+        let _guard = tracing::dispatcher::set_default(&logs.subscriber());
+        let mut stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect");
+        stream
+            .write_all(
+                b"GET / HTTP/1.1\r\nhost: test\r\nauthorization: Bearer canary-token-scope\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .expect("send");
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.expect("read");
+        assert!(answer.starts_with(b"HTTP/1.1 403"));
+        logs.text()
+    }
+
+    #[tokio::test]
+    async fn a_scope_refusal_line_names_the_declared_values_and_no_token_value() {
+        let text = refusal_line(registry_platform_authcommon::FailedCheck::Scope).await;
+        assert!(text.contains("\"scope_claim\":\"scope\""), "{text}");
+        assert!(
+            text.contains("\"required_scope\":\"records.read\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"access_profile\":\"records-reader\""),
+            "{text}"
+        );
+        assert!(!text.contains("canary-token-scope"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_other_than_scope_names_no_declared_values() {
+        let text = refusal_line(registry_platform_authcommon::FailedCheck::Operation).await;
+        assert!(text.contains("request refused"), "{text}");
+        assert!(!text.contains("scope_claim"), "{text}");
+        assert!(!text.contains("required_scope"), "{text}");
     }
 
     fn text_has(metrics: &Metrics, line: &str) -> bool {

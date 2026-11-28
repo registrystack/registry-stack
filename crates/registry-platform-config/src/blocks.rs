@@ -17,7 +17,10 @@ use std::str::FromStr;
 use registry_platform_yaml::{BoundedU32, ExternalId, Invalid, LocalId, Url};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES};
+use crate::{
+    DevelopmentClass, DevelopmentOnlyRefused, DevelopmentSetting, DevelopmentWitness, Gated,
+    SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+};
 
 /// The schema pattern of a field that must name an enabled secret provider.
 pub const SECRET_PROVIDER_PATTERN: &str = "^secret:(?:env|file)/";
@@ -261,6 +264,12 @@ pub struct DatabaseConfig {
     /// Allow a plaintext connection. Refused outside test builds.
     #[serde(default)]
     pub test_only_plaintext: bool,
+    /// How the connection is protected. Absent means `verified-tls`. A
+    /// plaintext transport must match the database hosts, and cannot be
+    /// written beside `testOnlyPlaintext`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Gated<DatabaseTransport>"))]
+    pub transport: Option<Gated<DatabaseTransport>>,
 }
 
 impl fmt::Debug for DatabaseConfig {
@@ -274,6 +283,7 @@ impl fmt::Debug for DatabaseConfig {
                 &self.ca_bundle_ref.as_ref().map(|_| "<redacted>"),
             )
             .field("test_only_plaintext", &self.test_only_plaintext)
+            .field("transport", &self.transport)
             .finish()
     }
 }
@@ -290,6 +300,207 @@ impl DatabaseConfig {
             references.push(("database.caBundleRef", reference.as_str()));
         }
         references
+    }
+}
+
+/// How a PostgreSQL connection is protected.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DatabaseTransport {
+    /// TLS with verification. `caBundleRef` is optional.
+    #[default]
+    VerifiedTls,
+    /// No TLS. Every host must be a Unix socket, a numeric loopback address
+    /// or `localhost`.
+    LoopbackPlaintext,
+    /// No TLS, in development only. Every host must also be loopback, a
+    /// socket, a private IPv4 address (RFC 1918), an IPv6 unique local
+    /// address (`fc00::/7`), or a name that resolves only to such addresses.
+    PrivateNetworkPlaintext,
+}
+
+static DATABASE_PRIVATE_PLAINTEXT: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.database-private-plaintext",
+    key: "transport",
+    summary: "The database connection is not encrypted and reaches a private network",
+    production: "Write database.transport: verified-tls, and give the database a certificate the runtime trusts.",
+};
+
+impl DevelopmentClass for DatabaseTransport {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&DATABASE_PRIVATE_PLAINTEXT];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::VerifiedTls | Self::LoopbackPlaintext => None,
+            Self::PrivateNetworkPlaintext => Some(&DATABASE_PRIVATE_PLAINTEXT),
+        }
+    }
+}
+
+/// A host a PostgreSQL URL names, once the secret is resolved and the URL
+/// parsed by the product's driver.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DatabaseHost {
+    /// A host name or address, with no brackets required around an IPv6
+    /// literal.
+    Tcp(String),
+    /// A Unix socket directory.
+    Unix,
+}
+
+/// Why a database transport was refused. No variant repeats a configured
+/// value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatabaseTransportError {
+    /// A host is not one the plaintext transport permits.
+    HostMismatch(DatabaseTransport),
+    /// The transport is development-only and the caller holds no witness.
+    DevelopmentOnly(DevelopmentOnlyRefused),
+    /// `transport` and `testOnlyPlaintext` are both written.
+    Conflict,
+    /// `testOnlyPlaintext` in a build that is not a test build.
+    TestOnlyPlaintext,
+}
+
+impl DatabaseTransportError {
+    /// The stable code of the refusal (CFG-DIAG-3).
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::HostMismatch(_) => "platform.database.transport-host-mismatch",
+            Self::DevelopmentOnly(refused) => refused.setting.code,
+            Self::Conflict => "platform.database.transport-conflict",
+            Self::TestOnlyPlaintext => "platform.database.test-only-plaintext",
+        }
+    }
+
+    /// What to write instead.
+    #[must_use]
+    pub const fn suggested_action(&self) -> &'static str {
+        match self {
+            Self::HostMismatch(DatabaseTransport::PrivateNetworkPlaintext) => {
+                "Name a Unix socket, a loopback address, a private-network address or a name that resolves only to such addresses, or write database.transport: verified-tls."
+            }
+            Self::HostMismatch(_) => {
+                "Name a Unix socket, a loopback address or localhost, or write database.transport: verified-tls."
+            }
+            Self::DevelopmentOnly(refused) => refused.setting.production,
+            Self::Conflict => "Remove database.testOnlyPlaintext, and keep database.transport.",
+            Self::TestOnlyPlaintext => {
+                "Remove it, and set database.transport for a plaintext connection on the same host."
+            }
+        }
+    }
+}
+
+impl fmt::Display for DatabaseTransportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::HostMismatch(_) => {
+                "a database host is not one the configured plaintext transport permits"
+            }
+            Self::DevelopmentOnly(_) => {
+                "the database transport is accepted only when the process declares development"
+            }
+            Self::Conflict => "database.transport and database.testOnlyPlaintext are both set",
+            Self::TestOnlyPlaintext => "database.testOnlyPlaintext is accepted only by test builds",
+        })
+    }
+}
+
+impl std::error::Error for DatabaseTransportError {}
+
+impl DatabaseConfig {
+    /// The checks every posture applies to the transport: `transport` is not
+    /// written beside `testOnlyPlaintext`, and `testOnlyPlaintext` is
+    /// written only in a test build, which the product states with
+    /// `test_build`.
+    pub fn check(&self, test_build: bool) -> Result<(), DatabaseTransportError> {
+        if self.test_only_plaintext && self.transport.is_some() {
+            return Err(DatabaseTransportError::Conflict);
+        }
+        if self.test_only_plaintext && !test_build {
+            return Err(DatabaseTransportError::TestOnlyPlaintext);
+        }
+        Ok(())
+    }
+
+    /// The transport the connection uses, once `hosts` are known: a plaintext
+    /// transport is returned only when every host is one it permits. A
+    /// development-only transport is readable with `witness` alone. A name is
+    /// resolved here, once, so a later re-resolution by the driver is outside
+    /// the check; a name that does not resolve is refused.
+    pub fn plaintext_permitted(
+        &self,
+        hosts: &[DatabaseHost],
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<DatabaseTransport, DatabaseTransportError> {
+        plaintext_permitted_with(self, hosts, witness, &resolve_host)
+    }
+}
+
+fn resolve_host(name: &str) -> std::io::Result<Vec<IpAddr>> {
+    use std::net::ToSocketAddrs;
+    (name, 0)
+        .to_socket_addrs()
+        .map(|addresses| addresses.map(|address| address.ip()).collect())
+}
+
+pub(crate) fn plaintext_permitted_with(
+    config: &DatabaseConfig,
+    hosts: &[DatabaseHost],
+    witness: Option<&DevelopmentWitness>,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<DatabaseTransport, DatabaseTransportError> {
+    let transport = match &config.transport {
+        None => DatabaseTransport::VerifiedTls,
+        Some(gated) => *gated
+            .get(witness)
+            .map_err(DatabaseTransportError::DevelopmentOnly)?,
+    };
+    let permitted = |host: &DatabaseHost| match (transport, host) {
+        (DatabaseTransport::VerifiedTls, _) | (_, DatabaseHost::Unix) => true,
+        (DatabaseTransport::LoopbackPlaintext, DatabaseHost::Tcp(name)) => {
+            registry_platform_loopback::loopback_host(name).is_some()
+        }
+        (DatabaseTransport::PrivateNetworkPlaintext, DatabaseHost::Tcp(name)) => {
+            private_network_host(name, resolve)
+        }
+    };
+    if hosts.iter().all(permitted) {
+        Ok(transport)
+    } else {
+        Err(DatabaseTransportError::HostMismatch(transport))
+    }
+}
+
+/// Whether `name` is loopback, a private IPv4 address, an IPv6 unique local
+/// address, or a name that resolves, and resolves only, to such addresses.
+fn private_network_host(
+    name: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> bool {
+    if registry_platform_loopback::loopback_host(name).is_some() {
+        return true;
+    }
+    let literal = name
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(name);
+    if let Ok(address) = literal.parse::<IpAddr>() {
+        return private_address(address);
+    }
+    match resolve(name) {
+        Ok(addresses) => !addresses.is_empty() && addresses.into_iter().all(private_address),
+        Err(_) => false,
+    }
+}
+
+fn private_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+        IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
     }
 }
 
@@ -449,6 +660,51 @@ fn valid_jwks_uri(value: &Url, allow_loopback_http: bool, allow_insecure_http: b
 pub struct AuditKeyConfig {
     /// Secret reference to the audit hash key.
     pub hash_key_ref: SecretReference,
+    /// Who provisioned the key. Absent means `operator-provisioned`.
+    /// `development-generated` marks a key a development tool made.
+    #[serde(
+        default = "operator_provisioned",
+        skip_serializing_if = "is_operator_provisioned"
+    )]
+    pub hash_key_custody: Gated<AuditKeyCustody>,
+}
+
+/// Who provisioned the audit hash key.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditKeyCustody {
+    /// The operator provisioned the key.
+    #[default]
+    OperatorProvisioned,
+    /// A development tool generated the key.
+    DevelopmentGenerated,
+}
+
+static GENERATED_AUDIT_KEY: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.generated-audit-key",
+    key: "hashKeyCustody",
+    summary: "The audit hash key was generated by a development tool",
+    production: "Provision an audit hash key, reference it in audit.hashKeyRef, and write audit.hashKeyCustody: operator-provisioned.",
+};
+
+impl DevelopmentClass for AuditKeyCustody {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&GENERATED_AUDIT_KEY];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::OperatorProvisioned => None,
+            Self::DevelopmentGenerated => Some(&GENERATED_AUDIT_KEY),
+        }
+    }
+}
+
+fn operator_provisioned() -> Gated<AuditKeyCustody> {
+    Gated::wrap(AuditKeyCustody::OperatorProvisioned)
+}
+
+fn is_operator_provisioned(custody: &Gated<AuditKeyCustody>) -> bool {
+    custody.development_setting().is_none()
 }
 
 impl AuditKeyConfig {
@@ -485,22 +741,67 @@ pub struct OidcIssuerConfig {
     #[serde(default)]
     pub jwks_source: JwksSource,
     /// Permit plain HTTP beyond loopback to the configured issuer and to a
-    /// JWKS URI declared in configuration. TLS remains required unless the
-    /// operator explicitly accepts this transport risk.
-    #[serde(default)]
+    /// JWKS URI declared in configuration. Loopback needs no setting. The
+    /// value `true` is a development-only setting: the loader records it, and
+    /// production refuses it.
+    #[serde(default, deserialize_with = "deserialize_insecure_http")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-development-only" = ["platform.posture.insecure-issuer-http"]))
+    )]
     pub allow_insecure_http: bool,
+}
+
+/// The value of `allowInsecureHttp`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct InsecureHttp(pub bool);
+
+static INSECURE_ISSUER_HTTP: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.insecure-issuer-http",
+    key: "allowInsecureHttp",
+    summary: "Plain http is permitted to an issuer beyond loopback",
+    production: "Delete allowInsecureHttp and use an https issuer.",
+};
+
+impl DevelopmentClass for InsecureHttp {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&INSECURE_ISSUER_HTTP];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        self.0.then_some(&INSECURE_ISSUER_HTTP)
+    }
+}
+
+/// Read `allowInsecureHttp` through [`Gated`], so a loader that collects
+/// development-only settings records `true` with its pointer.
+fn deserialize_insecure_http<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Gated::<InsecureHttp>::deserialize(deserializer)
+        .map(|value| value.development_setting().is_some())
 }
 
 impl OidcIssuerConfig {
     /// The issuer is an absolute `https` URL without credentials, query, or
-    /// fragment, or a plain `http` one when `allow_insecure_http` is set, the
-    /// audience is non-empty bounded text without control characters, and
-    /// the key source passes [`JwksSource::check`]. Without
-    /// `allow_insecure_http`, a loopback `http` issuer or key URI is accepted
-    /// only when `allow_loopback_http` is set, for supervised local
-    /// development. `field` is the dotted path of the block,
-    /// such as `authentication.oidc`.
-    pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
+    /// fragment, a loopback `http` one, or a plain `http` one when
+    /// `allow_insecure_http` is set, the audience is non-empty bounded text
+    /// without control characters, and the key source passes
+    /// [`JwksSource::check`]. Loopback needs no setting in any posture. A
+    /// plain `http` issuer beyond loopback is accepted here when
+    /// `allow_insecure_http` is set, and the posture decision refuses it in
+    /// production. `field` is the dotted path of the block, such as
+    /// `authentication.oidc`.
+    pub fn check(&self, field: &str) -> Result<(), ConfigBlockError> {
+        self.check_without_posture(field, true)
+    }
+
+    /// [`OidcIssuerConfig::check`] for a runtime that has not adopted the
+    /// posture: a loopback `http` issuer or key URI is accepted only when
+    /// `allow_loopback_http` is set.
+    pub fn check_without_posture(
+        &self,
+        field: &str,
+        allow_loopback_http: bool,
+    ) -> Result<(), ConfigBlockError> {
         let issuer = self.issuer.to_url();
         let issuer_ok = valid_jwks_uri(&self.issuer, allow_loopback_http, self.allow_insecure_http)
             && issuer.query().is_none()

@@ -139,7 +139,12 @@ struct World {
 }
 
 async fn world() -> World {
-    let mut deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    world_with_project(support::STARTER_PROJECT).await
+}
+
+async fn world_with_project(project: &str) -> World {
+    let mut deployment =
+        Deployment::with_project(DATABASE_STORAGE, DISABLED_VERIFIER, project).await;
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -639,5 +644,86 @@ async fn a_request_that_is_not_refused_is_not_counted() {
         .await;
     assert!(unsupported.status >= 400);
     assert_eq!(counted_in_total(&world.prepared).await, before);
+    drop(world.deployment);
+}
+
+/// A custodian whose profile has no grant authority is refused under
+/// `operation`, not `ownership`, with the answer the reserving system gets.
+/// Under `citizen-delivery` with represented-principal grants refused, the
+/// citizen holds the document and may not issue a grant on it.
+#[tokio::test]
+async fn a_custodian_without_grant_authority_is_counted_under_operation() {
+    let project = support::STARTER_PROJECT.replacen(
+        "representedPrincipalGrants: permitted",
+        "representedPrincipalGrants: refused",
+        1,
+    );
+    assert_ne!(
+        project,
+        support::STARTER_PROJECT,
+        "the starter changed shape"
+    );
+    let world = world_with_project(&project).await;
+    let fixture = Fixture::as_principal(
+        "grant-issued-by-a-custodian-without-grant-authority",
+        FailedCheck::Operation,
+        Method::POST,
+        &format!("/v1/documents/{}/grants", world.document),
+        CITIZEN,
+    )
+    .with_body(
+        json!({"versionId": world.version, "grantee": {"subject": "reader-1", "kind": "human"}}),
+    );
+    let operation_before = counted(&world.prepared, FailedCheck::Operation).await;
+    let ownership_before = counted(&world.prepared, FailedCheck::Ownership).await;
+    let (_, answer) = observe(&world.api, &fixture).await;
+    assert_eq!(
+        counted(&world.prepared, FailedCheck::Operation).await,
+        operation_before + 1
+    );
+    assert_eq!(
+        counted(&world.prepared, FailedCheck::Ownership).await,
+        ownership_before
+    );
+    let golden: Value = serde_json::from_slice(&std::fs::read(golden_path()).unwrap()).unwrap();
+    assert_eq!(answer, golden["grant-issued-by-the-reserving-system"]);
+    drop(world.deployment);
+}
+
+/// A scope refusal's line names what the deployment declared, the scope
+/// claim, the scope the profile requires and the profile, and nothing the
+/// token carried in its own scope.
+#[tokio::test]
+async fn a_scope_refusal_line_names_the_declared_values_and_none_of_the_tokens() {
+    let world = world().await;
+    let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+    let canary = "canary-scope-from-the-token";
+    let fixture = Fixture::get(
+        "listing-with-another-scope",
+        FailedCheck::Scope,
+        "/v1/documents",
+        Credential::Token(token_with(CITIZEN, claims("scope", json!(canary)))),
+    );
+    let (answer, _) = observe(&world.api, &fixture)
+        .with_subscriber(logs.subscriber())
+        .await;
+    assert_eq!(answer.status, 403);
+    let text = logs.text();
+    assert!(
+        !text.contains(canary),
+        "the token's scope reached the log\n{text}"
+    );
+    let line: Value = text
+        .lines()
+        .filter(|line| line.contains("request refused"))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .next()
+        .unwrap_or_else(|| panic!("no refusal line\n{text}"));
+    let fields = &line["fields"];
+    assert_eq!(fields["failed_check"], "scope");
+    assert_eq!(fields["scope_claim"], "scope");
+    assert_eq!(fields["required_scope"], "documents:own");
+    assert_eq!(fields["access_profile"], "citizen");
+    assert!(fields["remedy"].as_str().unwrap().contains("scopeClaim"));
     drop(world.deployment);
 }

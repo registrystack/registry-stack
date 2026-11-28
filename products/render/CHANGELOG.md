@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A scope refusal writes the scope claim name and the scope the route
+  requires on its `request refused` log line. The values are fixed by Render
+  and never come from the caller's token. Responses are unchanged.
 - Render counts every refusal of a caller in `render_request_refusals_total{check}`
   (served when `metricsListener` is set) and writes one `request refused` log line with
   `failed_check` and the trace id, at most five per check per minute. The

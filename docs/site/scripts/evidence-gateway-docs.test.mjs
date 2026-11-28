@@ -116,6 +116,11 @@ test('names exactly the metrics the OID4VCI delivery front end renders', () => {
   );
   const rendered = new Set([...observability.matchAll(/"(evidence_oid4vci_\w+)"/g)].map((match) => match[1]));
   assert.ok(rendered.size > 0, 'expected observability.rs to name metric families');
+  // The shared refusal recorder renders `<prefix>_request_refusals_total` for
+  // the prefix the service gives it.
+  for (const match of observability.matchAll(/RefusalRecorder::new\("(evidence_oid4vci)"\)/g)) {
+    rendered.add(`${match[1]}_request_refusals_total`);
+  }
 
   const page = readFileSync(resolve(docsRoot, 'configure/evidence-oid4vci.mdx'), 'utf8');
   const metricsSection = page.split(/^## Metrics$/m)[1]?.split(/^## /m)[0] ?? '';

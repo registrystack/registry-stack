@@ -33,7 +33,8 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use registry_platform_authcommon::{
-    parse_bearer_token, record_refusal, BearerParseError, FailedCheck, RefusalNote, RefusalRecorder,
+    parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
+    RefusalRecorder,
 };
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
@@ -180,7 +181,10 @@ async fn authenticate_busy_source(
         .authenticator
         .authenticate_busy_source(token, profile)
         .await
-        .map_err(authentication_problem)
+        .map_err(|error| {
+            authentication_problem(error)
+                .with_declared_scope(state.authenticator.declared_busy_scope(profile))
+        })
 }
 
 fn busy_request_problem(error: BusyRequestError) -> HttpError {
@@ -884,7 +888,11 @@ async fn authenticate_read(state: &HttpState, headers: &HeaderMap) -> Result<Cal
         .authenticator
         .authenticate_read(token)
         .await
-        .map_err(|error| authentication_problem(error).with_scope_remedy())
+        .map_err(|error| {
+            authentication_problem(error)
+                .with_scope_remedy()
+                .with_declared_scope(state.authenticator.declared_reads_scope())
+        })
 }
 
 async fn authenticate_appointment_detail(
@@ -896,7 +904,10 @@ async fn authenticate_appointment_detail(
         .authenticator
         .authenticate_appointment_detail(token)
         .await
-        .map_err(authentication_problem)
+        .map_err(|error| {
+            authentication_problem(error)
+                .with_declared_scope(state.authenticator.declared_reads_scope())
+        })
 }
 
 async fn authenticate_explain(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
@@ -905,7 +916,11 @@ async fn authenticate_explain(state: &HttpState, headers: &HeaderMap) -> Result<
         .authenticator
         .authenticate_explain(token)
         .await
-        .map_err(|error| authentication_problem(error).with_scope_remedy())
+        .map_err(|error| {
+            authentication_problem(error)
+                .with_scope_remedy()
+                .with_declared_scope(state.authenticator.declared_explain_scope())
+        })
 }
 
 async fn authenticate_mutate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
@@ -1074,6 +1089,8 @@ fn idempotency_key(headers: &HeaderMap) -> Result<&str, HttpError> {
 pub struct HttpError {
     problem: ProblemCode,
     note: Option<RefusalNote>,
+    /// The operator-declared scope values a scope refusal's log line names.
+    declared: Option<DeclaredScope>,
 }
 
 impl HttpError {
@@ -1090,6 +1107,7 @@ impl HttpError {
         Self {
             problem,
             note: None,
+            declared: None,
         }
     }
 
@@ -1098,6 +1116,7 @@ impl HttpError {
         Self {
             problem: code.problem(),
             note: Some(RefusalNote::new(check)),
+            declared: None,
         }
     }
 
@@ -1106,7 +1125,16 @@ impl HttpError {
         Self {
             problem: ProblemCode::ServiceUnavailable,
             note: Some(RefusalNote::new(check)),
+            declared: None,
         }
+    }
+
+    /// Attach the values the operator declared for the scope this route
+    /// demands. They ride in the response extensions and are written to the
+    /// log line only for a scope refusal.
+    fn with_declared_scope(mut self, declared: DeclaredScope) -> Self {
+        self.declared = Some(declared);
+        self
     }
 
     /// Name the setting the operator checks when this is a scope refusal of
@@ -1141,6 +1169,9 @@ impl IntoResponse for HttpError {
         if let Some(note) = self.note {
             response.extensions_mut().insert(note);
         }
+        if let Some(declared) = self.declared {
+            response.extensions_mut().insert(declared);
+        }
         response
     }
 }
@@ -1165,7 +1196,13 @@ async fn record_refusals(
     let response = next.run(request).await;
     if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
         let trace = current_trace();
-        record_refusal!(recorder, note, trace_id = &trace.trace_id);
+        let declared = response.extensions().get::<DeclaredScope>();
+        record_refusal!(
+            recorder,
+            note,
+            trace_id = &trace.trace_id,
+            declared = declared
+        );
     }
     response
 }

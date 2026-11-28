@@ -316,8 +316,9 @@ fn effective_operation(
         .operations
         .get(&served.operation)
         .ok_or_else(|| ContractError::MissingOperation(served.operation.clone()))?;
-    let concrete_path = served.method_path.replace(
-        &format!("{{{}}}", served.record_type_parameter),
+    let concrete_path = registry_adapter_core::concrete_facade_path(
+        &served.method_path,
+        &served.record_type_parameter,
         &served.record_type,
     );
     let target = served.target_contract.as_ref();

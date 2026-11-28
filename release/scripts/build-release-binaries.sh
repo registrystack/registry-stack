@@ -165,12 +165,16 @@ include_coordinator_image=0
 if [[ "$(python3 "${script_dir}/release_roster.py" coordinator-in-release "${version}")" == true ]]; then
   include_coordinator_image=1
 fi
-# The Adapter ships as binaries only; the facade has no image yet.
+# Adapter binaries have an independent boundary from image publication.
 include_adapter=0
 adapter_in_release="$(python3 "${script_dir}/release_roster.py" \
   adapter-in-release "${version}")"
 if [[ "${adapter_in_release}" == true ]]; then
   include_adapter=1
+fi
+include_adapter_image=0
+if [[ "$(python3 "${script_dir}/release_roster.py" adapter-image-in-release "${version}")" == true ]]; then
+  include_adapter_image=1
 fi
 
 if [[ "${group}" == discovery ]]; then
@@ -362,6 +366,10 @@ build_payload() {
       cargo build --release --locked \
         -p registry-adapterctl --bin adapterctl
       cp target/release/adapterctl "dist/bin/adapterctl-${RELEASE_TAG}-linux-amd64"
+      if [[ "${include_adapter_image}" -eq 1 ]]; then
+        cp target/release/adapter dist/image-bin/adapter
+        cp target/release/adapterctl dist/image-bin/adapterctl
+      fi
     fi
 
   fi
@@ -598,6 +606,7 @@ docker run --rm \
   --env RELEASE_INCLUDE_COORDINATOR="${include_coordinator}" \
   --env RELEASE_INCLUDE_COORDINATOR_IMAGE="${include_coordinator_image}" \
   --env RELEASE_INCLUDE_ADAPTER="${include_adapter}" \
+  --env RELEASE_INCLUDE_ADAPTER_IMAGE="${include_adapter_image}" \
   --env RELEASE_INCLUDE_LANGUAGE_SERVER="${include_language_server}" \
   --env RELEASE_INCLUDE_EVIDENCE_OID4VCI_IMAGE="${include_evidence_oid4vci_image}" \
   --env RELEASE_TAG="${tag}" \
@@ -725,6 +734,9 @@ if [[ "${group}" == all || "${group}" == core ]]; then
       "adapter-${tag}-linux-amd64"
       "adapterctl-${tag}-linux-amd64"
     )
+    if [[ "${include_adapter_image}" -eq 1 ]]; then
+      image_bin_binaries+=(adapter adapterctl)
+    fi
   fi
 fi
 

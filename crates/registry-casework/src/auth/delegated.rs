@@ -271,6 +271,13 @@ impl CaseworkAuthenticator {
         if !expected_scopes.is_subset(&actual_scopes)
             || actual_scopes.len() != verified.scopes.len()
         {
+            self.declare_scope_refusal(
+                expected_scopes
+                    .difference(&actual_scopes)
+                    .next()
+                    .map(String::as_str),
+                Some(&profile.id),
+            );
             return Err(AuthenticationError::Profile(FailedCheck::Scope));
         }
         if verified
