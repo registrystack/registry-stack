@@ -29,6 +29,7 @@ async fn start_as(server: &MockServer, root: &Path, format: &[&str]) -> std::pro
         .collect::<Vec<_>>();
     tokio::task::spawn_blocking(move || {
         Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(format)
             .args([
                 "start",
@@ -50,17 +51,17 @@ async fn start_as(server: &MockServer, root: &Path, format: &[&str]) -> std::pro
     .unwrap()
 }
 
-async fn healthy_peer(server: &MockServer) {
+async fn production_probe(server: &MockServer) {
     Mock::given(method("GET"))
-        .and(path("/health"))
-        .respond_with(ResponseTemplate::new(200))
+        .and(path("/v1/doctor"))
+        .respond_with(ResponseTemplate::new(401))
         .expect(1)
         .mount(server)
         .await;
 }
 
 async fn receiver(server: &MockServer, response: ResponseTemplate) {
-    healthy_peer(server).await;
+    production_probe(server).await;
     Mock::given(method("POST"))
         .and(path("/v1/runs"))
         .and(header("authorization", format!("Bearer {TOKEN}")))
@@ -764,7 +765,7 @@ async fn check_now_posts_the_step_to_the_run_and_reports_the_answer() {
         "observations": 3,
         "observationLimit": 121
     });
-    healthy_peer(&server).await;
+    production_probe(&server).await;
     Mock::given(method("POST"))
         .and(path(format!("/v1/runs/{RUN}/check")))
         .and(header("authorization", format!("Bearer {TOKEN}")))
@@ -799,7 +800,7 @@ async fn check_now_names_the_fix_for_a_step_that_is_not_waiting_and_a_run_not_vi
         (409, "check.not-waiting", "coordinatorctl inspect"),
         (404, "run.not-visible", "--run"),
     ] {
-        healthy_peer(&server).await;
+        production_probe(&server).await;
         Mock::given(method("POST"))
             .and(path(format!("/v1/runs/{RUN}/check")))
             .respond_with(ResponseTemplate::new(status).set_body_json(json!({
@@ -878,7 +879,7 @@ async fn typed_commands_refuse_a_development_peer_only_in_production() {
         fs::write(&token, TOKEN).unwrap();
         if verb == "POST" {
             Mock::given(method("GET"))
-                .and(path("/health"))
+                .and(path("/v1/doctor"))
                 .respond_with(
                     ResponseTemplate::new(200).insert_header("Registry-Posture", "development"),
                 )
@@ -915,7 +916,7 @@ async fn typed_commands_refuse_a_development_peer_only_in_production() {
             if verb == "POST" && !success {
                 let requests = server.received_requests().await.unwrap();
                 assert_eq!(requests.len(), 1, "production must only probe");
-                assert_eq!(requests[0].url.path(), "/health");
+                assert_eq!(requests[0].url.path(), "/v1/doctor");
                 assert!(!requests[0].headers.contains_key("authorization"));
             }
             let report: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -944,4 +945,102 @@ async fn typed_commands_refuse_a_development_peer_only_in_production() {
         }
         server.verify().await;
     }
+}
+
+#[tokio::test]
+async fn production_mutation_requires_a_valid_probe_on_the_api_routes() {
+    for (mark, gateway_health, transport_failure, mutations, diagnostic) in [
+        (Some("development"), false, false, 0, "development-peer"),
+        (Some("invalid"), false, false, 0, "service-unavailable"),
+        (None, false, true, 0, "service-unavailable"),
+        (Some("development"), true, false, 0, "development-peer"),
+        (None, false, false, 1, ""),
+    ] {
+        let server = MockServer::start().await;
+        let root = tempfile::tempdir().unwrap();
+        let token = root.path().join("token");
+        fs::write(&token, TOKEN).unwrap();
+        let origin = server.uri();
+        if gateway_health {
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&server)
+                .await;
+        }
+        let mut probe = ResponseTemplate::new(404);
+        if let Some(mark) = mark {
+            probe = probe.insert_header("Registry-Posture", mark);
+        }
+        if transport_failure {
+            probe = probe.set_delay(std::time::Duration::from_secs(31));
+        }
+        Mock::given(method("GET"))
+            .and(path("/v1/doctor"))
+            .respond_with(probe)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/runs/{RUN}/cancel")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"state":{}})))
+            .expect(mutations)
+            .mount(&server)
+            .await;
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+                .env_remove("REGISTRY_STACK_POSTURE")
+                .args([
+                    "--format",
+                    "json",
+                    "cancel",
+                    "--run",
+                    RUN,
+                    "--reason",
+                    "incident-1",
+                ])
+                .args(["--url", &origin, "--token-file"])
+                .arg(token)
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.success(), mutations == 1, "{report}");
+        if mutations == 0 {
+            assert_eq!(
+                report["diagnostics"][0]["code"],
+                format!("coordinator.command.{diagnostic}")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_development_mutation_answer_warns_the_request_may_already_be_applied() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    receiver(
+        &server,
+        ResponseTemplate::new(200)
+            .insert_header("Registry-Posture", "development")
+            .set_body_json(json!({})),
+    )
+    .await;
+    let output = start(&server, root.path()).await;
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!output.status.success(), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "coordinator.command.development-peer");
+    assert!(diagnostic["message"]
+        .as_str()
+        .unwrap()
+        .contains("may already have applied"));
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .unwrap()
+        .contains("Inspect the run before repeating"));
+    server.verify().await;
 }

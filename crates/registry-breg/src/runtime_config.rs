@@ -741,6 +741,7 @@ pub fn load_runtime_config_with_env(
 pub(crate) fn load_verified_startup_config(
     path: &Path,
     declared: DeclaredPosture,
+    selected_package: Option<&Path>,
 ) -> std::result::Result<(RuntimeConfig, VerifiedPackage), crate::startup::StartupError> {
     use crate::startup::StartupError;
 
@@ -755,6 +756,7 @@ pub(crate) fn load_verified_startup_config(
         )))
     })?;
     let package = loaded.config.package.shared.clone();
+    let package_root = selected_package.unwrap_or(&package.root);
     let mut report = loaded.posture.clone();
     let pending_refusal = report.posture() == Posture::Production && !report.settings().is_empty();
     // Preserve ordinary configuration validation before reading the package.
@@ -774,15 +776,19 @@ pub(crate) fn load_verified_startup_config(
             RuntimeConfigError::PackageRootUnavailable,
         )
         .map_err(StartupError::RuntimeConfig)?;
-        let shared = package
-            .verify_package(&crate::package::shared_package_limits(), "bregctl package")
-            .map_err(|error| {
-                StartupError::PackageEnvelopeRefused(
-                    error.naming_root_as("package.root").to_string(),
-                )
-            })?;
+        let shared = if let Some(root) = selected_package {
+            crate::package::verify_shared_package(root).map_err(StartupError::PackageRefused)?
+        } else {
+            package
+                .verify_package(&crate::package::shared_package_limits(), "bregctl package")
+                .map_err(|error| {
+                    StartupError::PackageEnvelopeRefused(
+                        error.naming_root_as("package.root").to_string(),
+                    )
+                })?
+        };
         crate::package::load_verified_package_for_startup(
-            &package.root,
+            package_root,
             &PackageLoadContext {
                 posture: declared.posture,
             },
@@ -798,20 +804,26 @@ pub(crate) fn load_verified_startup_config(
                 StartupError::RuntimeConfig(cause) => {
                     diagnostics.extend(cause.diagnostics(Some(path)))
                 }
-                StartupError::PackageEnvelopeRefused(message) => {
-                    diagnostics.push(Diagnostic::error(
+                error @ (StartupError::PackageEnvelopeRefused(_)
+                | StartupError::PackageRefused(_)) => {
+                    let message = match error {
+                        StartupError::PackageEnvelopeRefused(message) => message,
+                        StartupError::PackageRefused(cause) => cause.to_string(),
+                        _ => unreachable!(),
+                    };
+                    let mut diagnostic = Diagnostic::error(
                         "startup.package.refused",
                         "/package/root",
                         message,
-                        "Verify package.root and deploy the complete reviewed package.",
-                    ))
+                        "Verify the selected package directory and deploy the complete reviewed package.",
+                    );
+                    diagnostic.source = Some(Source {
+                        file: package_root.display().to_string(),
+                        line: None,
+                        column: None,
+                    });
+                    diagnostics.push(diagnostic);
                 }
-                StartupError::PackageRefused(cause) => diagnostics.push(Diagnostic::error(
-                    "startup.package.refused",
-                    "/package/root",
-                    cause.to_string(),
-                    "Verify package.root and deploy the complete reviewed package.",
-                )),
                 _ => unreachable!(
                     "verifying the package returns only package configuration or closure errors"
                 ),
@@ -822,7 +834,7 @@ pub(crate) fn load_verified_startup_config(
         }
         Err(error) => return Err(error),
     };
-    decide_startup_posture(&mut report, &verified, path, &package.root)
+    decide_startup_posture(&mut report, &verified, path, package_root)
         .map_err(StartupError::RuntimeConfig)?;
     let mut config = config.map_err(StartupError::RuntimeConfig)?;
     config.posture = report;
@@ -1455,6 +1467,7 @@ impl RuntimeConfig {
             compiled,
             &self.evidence_providers,
             &self.secret_resolver()?,
+            self.peer_policy(),
         )
     }
 
@@ -1501,6 +1514,18 @@ impl RuntimeConfig {
                     .map_err(|_| RuntimeConfigError::InvalidBinding)?,
             )
         })
+    }
+
+    fn review_client(
+        &self,
+        endpoint: reqwest::Url,
+    ) -> Result<registry_review_client::ReviewClient> {
+        registry_review_client::ReviewClient::new(
+            registry_review_client::ReviewClientConfig::new(endpoint, self.peer_policy())
+                .with_attempt_timeout(self.operational_timeouts.http_request)
+                .with_connect_timeout(self.operational_timeouts.http_request),
+        )
+        .map_err(|_| RuntimeConfigError::InvalidBinding)
     }
 
     pub fn activate_review_authorities(
@@ -1571,14 +1596,7 @@ impl RuntimeConfig {
             } else {
                 (None, None)
             };
-            let client = registry_review_client::ReviewClient::new(
-                registry_review_client::ReviewClientConfig::new_without_peer_policy(
-                    config.endpoint.clone(),
-                )
-                .with_attempt_timeout(self.operational_timeouts.http_request)
-                .with_connect_timeout(self.operational_timeouts.http_request),
-            )
-            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+            let client = self.review_client(config.endpoint.clone())?;
             let authority_client = crate::review_store::ReviewAuthorityClient::new(
                 authority.clone(),
                 client,
@@ -2204,7 +2222,10 @@ pub struct PublicOrigin {
 
 impl PublicOrigin {
     pub fn parse(value: &str) -> Result<Self> {
-        if value.len() > MAX_PUBLIC_ORIGIN_BYTES || value.contains(['?', '#', '@']) {
+        if value.len() > MAX_PUBLIC_ORIGIN_BYTES
+            || Url::new(value).is_err()
+            || value.contains(['?', '#', '@'])
+        {
             return Err(RuntimeConfigError::InvalidListener);
         }
         let uri: axum::http::Uri = value
@@ -2218,7 +2239,7 @@ impl PublicOrigin {
         let loopback = registry_platform_httputil::loopback::loopback_host(host).is_some();
         let scheme_allowed = match uri.scheme_str() {
             Some("https") => true,
-            Some("http") => loopback,
+            Some("http") => loopback && uri.path() == "/",
             _ => false,
         };
         let path = uri.path();
@@ -3608,7 +3629,8 @@ struct RawRegistryListener {
     /// Canonical public origin for QGIS discovery and pagination links, with
     /// an optional deployment path prefix such as
     /// `https://registry.example.org/breg`. Production requires `https`.
-    /// Development also accepts `http` for a loopback host. Required when the
+    /// Development also accepts `http` for a loopback host with no deployment
+    /// path prefix. Required when the
     /// registry exposes GIS collections; omitted, the registry builds no
     /// absolute discovery or paging links.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3618,7 +3640,7 @@ struct RawRegistryListener {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(transparent)]
-struct RawPublicOrigin(Url);
+struct RawPublicOrigin(#[cfg_attr(feature = "schema", schemars(with = "Url"))] String);
 
 static BREG_HTTP_PUBLIC_ORIGIN: registry_platform_config::DevelopmentSetting =
     registry_platform_config::DevelopmentSetting {
@@ -3633,15 +3655,11 @@ impl registry_platform_config::DevelopmentClass for RawPublicOrigin {
         &[&BREG_HTTP_PUBLIC_ORIGIN];
 
     fn development_setting(&self) -> Option<&'static registry_platform_config::DevelopmentSetting> {
-        let uri: axum::http::Uri = self.0.parse().ok()?;
-        let host = uri
-            .authority()?
-            .host()
-            .trim_start_matches('[')
-            .trim_end_matches(']');
-        (uri.scheme() == Some(&axum::http::uri::Scheme::HTTP)
-            && registry_platform_httputil::loopback::loopback_host(host).is_some())
-        .then_some(&BREG_HTTP_PUBLIC_ORIGIN)
+        let origin = PublicOrigin::parse(&self.0).ok()?;
+        origin
+            .value
+            .starts_with("http://")
+            .then_some(&BREG_HTTP_PUBLIC_ORIGIN)
     }
 }
 
@@ -4838,6 +4856,55 @@ mod tests {
             .unwrap();
             assert_eq!(config.peer_policy(), expected, "{posture:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn review_client_respects_the_runtime_posture() {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        use registry_review_client::{BearerToken, ReviewAuth, ReviewClientError};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new().fallback(|| async {
+                (
+                    axum::http::StatusCode::NOT_FOUND,
+                    [("registry-posture", "development")],
+                )
+            });
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let runtime = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml");
+        let token = BearerToken::new("synthetic-review-token").unwrap();
+        for posture in [Posture::Production, Posture::Development] {
+            let config = super::parse_runtime_config(
+                runtime,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let client = config.review_client(endpoint.parse().unwrap()).unwrap();
+            let result = client
+                .request(
+                    ReviewAuth::new(&token, "review-producer"),
+                    uuid::Uuid::new_v4(),
+                )
+                .await;
+            match posture {
+                Posture::Production => assert!(
+                    matches!(result, Err(ReviewClientError::DevelopmentPeer)),
+                    "{result:?}"
+                ),
+                Posture::Development => assert!(
+                    matches!(result, Err(ReviewClientError::Protocol { status, .. }) if status == 404),
+                    "{result:?}"
+                ),
+            }
+        }
+        server.abort();
     }
 
     fn review_authority_fragment() -> serde_json::Value {

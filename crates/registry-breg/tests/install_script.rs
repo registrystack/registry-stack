@@ -388,6 +388,7 @@ exec /bin/mv "$@"
         fs::write(source_dir.join("THIRD_PARTY_NOTICES"), "fixture notices\n").unwrap();
 
         let output = Command::new("tar")
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(["-czf"])
             .arg(archive)
             .arg("-C")
@@ -488,6 +489,7 @@ exit 1
             std::env::var("PATH").unwrap_or_default()
         );
         let mut command = Command::new("bash");
+        command.env_remove("REGISTRY_STACK_POSTURE");
         command
             .arg(installer_path())
             .env("PATH", path)
@@ -555,6 +557,7 @@ exec "$REAL_MV" "$@"
     fn assert_release_toolset_active(&self) {
         for binary in BINARIES {
             let output = Command::new(self.install_dir.join(binary))
+                .env_remove("REGISTRY_STACK_POSTURE")
                 .output()
                 .unwrap();
             assert!(
@@ -577,6 +580,7 @@ exec "$REAL_MV" "$@"
         );
         for binary in BINARIES {
             let output = Command::new(self.install_dir.join(binary))
+                .env_remove("REGISTRY_STACK_POSTURE")
                 .output()
                 .unwrap();
             assert!(
@@ -675,7 +679,12 @@ fn platform_suffix_for(system: &str, machine: &str) -> &'static str {
 
 fn sha256(path: &Path) -> String {
     for (program, args) in [("shasum", &["-a", "256"][..]), ("sha256sum", &[][..])] {
-        if let Ok(output) = Command::new(program).args(args).arg(path).output() {
+        if let Ok(output) = Command::new(program)
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .args(args)
+            .arg(path)
+            .output()
+        {
             if output.status.success() {
                 return String::from_utf8(output.stdout)
                     .unwrap()

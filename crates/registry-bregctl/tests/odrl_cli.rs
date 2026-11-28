@@ -15,6 +15,7 @@ fn fixture() -> PathBuf {
 
 fn run(project: &Path, output: &Path, extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["--format", "json", "generate", "odrl"])
         .arg(project)
         .arg("--output")

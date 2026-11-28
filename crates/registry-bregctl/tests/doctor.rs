@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::OsStr;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
@@ -40,28 +40,16 @@ impl Drop for TestDirectory {
 }
 
 fn run(runtime_config: &Path) -> (u8, String, String) {
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let status = registry_bregctl::run_from(
-        [
-            OsStr::new("bregctl"),
-            OsStr::new("--format"),
-            OsStr::new("json"),
-            OsStr::new("doctor"),
-            OsStr::new("--runtime-config"),
-            runtime_config.as_os_str(),
-        ],
-        &mut stdout,
-        &mut stderr,
-    );
+    let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args(["--format", "json", "doctor", "--runtime-config"])
+        .arg(runtime_config)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .expect("bregctl starts");
     (
-        if status == std::process::ExitCode::SUCCESS {
-            0
-        } else {
-            1
-        },
-        String::from_utf8(stdout).expect("stdout is UTF-8"),
-        String::from_utf8(stderr).expect("stderr is UTF-8"),
+        output.status.code().expect("bregctl exits normally") as u8,
+        String::from_utf8(output.stdout).expect("stdout is UTF-8"),
+        String::from_utf8(output.stderr).expect("stderr is UTF-8"),
     )
 }
 

@@ -711,6 +711,7 @@ impl NativeTimerHarness {
                             .join(format!("{launch_id}.mutation-before-commit.release")),
                     });
             let mut command = Command::new(&executable);
+            command.env_remove("REGISTRY_STACK_POSTURE");
             command
                 .args(&arguments)
                 .env("BREG_LOG", "info")
@@ -1076,6 +1077,7 @@ impl NativeTimerHarness {
         let stdout = private_log(&stdout_path)?;
         let stderr = private_log(&stderr_path)?;
         let mut child = Command::new(&executable)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
@@ -3896,6 +3898,7 @@ impl NativeTimerHarness {
             return Err("native timer replica is not live for a process signal".to_owned());
         }
         let status = Command::new("/bin/kill")
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg(signal)
             .arg(replica.command.pid.to_string())
             .stdin(Stdio::null())

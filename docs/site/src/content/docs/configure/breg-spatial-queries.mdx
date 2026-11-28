@@ -153,8 +153,9 @@ listener:
 
 Declare development with `REGISTRY_STACK_POSTURE=development` or
 `--posture development` to use this example. Production requires an HTTPS
-public origin on every host, including loopback.
-{/* Evidence: crates/registry-breg/tests/runtime_config.rs, http_public_origin_requires_development_posture. */}
+public origin on every host, including loopback. A development loopback HTTP
+public origin uses the root path.
+{/* Evidence: crates/registry-breg/tests/runtime_config.rs, http_public_origin_requires_development_posture, malformed_loopback_public_origins_get_listener_diagnostics_in_both_postures. */}
 The value can include a deployment path prefix, such as `https://registry.example.org/registry-a`, but not credentials, a query string, or a fragment.
 Discovery, paging, and schema links preserve that prefix and never use the request Host or forwarded headers.
 QGIS requires absolute links to retain authentication and follow every page.

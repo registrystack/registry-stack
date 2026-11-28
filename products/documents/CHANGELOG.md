@@ -9,6 +9,8 @@
   A service must still name the custodian and is refused `request.unprocessable`
   without one. The OpenAPI `ReserveDocumentRequest` no longer requires
   `custodian`.
+- Development Document Store hook captures include `"posture":"development"` in the signed canonical body. Production capture and replay of stored deliveries keep their original wire form.
+
 - BREAKING: Document Store hook deliveries use Standard Webhooks. Each POST
   carries `accept`, `content-type`, `webhook-id`, `webhook-timestamp` and
   `webhook-signature`. The signature covers `webhook-id`, the attempt

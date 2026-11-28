@@ -1786,6 +1786,9 @@
       ],
       "type": "object"
     },
+    "RawPublicOrigin": {
+      "$ref": "#/$defs/Url"
+    },
     "RawRegistryDatabase": {
       "additionalProperties": false,
       "description": "The registry's database: the shared database block and the connection\npool and SQL roles the registry adds.",
@@ -1837,8 +1840,8 @@
           "$ref": "#/$defs/ListenerBind"
         },
         "publicOrigin": {
-          "$ref": "#/$defs/Url",
-          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. Production requires `https`.\nDevelopment also accepts `http` for a loopback host. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links.",
+          "$ref": "#/$defs/RawPublicOrigin",
+          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. Production requires `https`.\nDevelopment also accepts `http` for a loopback host with no deployment\npath prefix. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links.",
           "x-registry-development-only": [
             "breg.posture.http-public-origin"
           ]

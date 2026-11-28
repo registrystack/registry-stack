@@ -640,19 +640,28 @@ pub(crate) fn absolute_runtime_path(path: &Path) -> Result<PathBuf> {
     }
     Ok(normal)
 }
-fn validate_coordinator_peer(response: &reqwest::Response, peer_policy: PeerPolicy) -> Result<()> {
+fn validate_coordinator_peer(
+    response: &reqwest::Response,
+    peer_policy: PeerPolicy,
+    mutation_sent: bool,
+) -> Result<()> {
     validate_response_headers(response.headers(), peer_policy).map_err(|error| match error {
-            ResponseHeaderError::DevelopmentPeer => CoordinatorError::new(
-                "development-peer",
-                "The Coordinator declared development and this command runs as production.",
-            )
-            .suggest("Use a production Coordinator, or declare development with --posture development or REGISTRY_STACK_POSTURE=development."),
-            _ => CoordinatorError::new(
-                "service-unavailable",
-                "the service response headers exceeded their bounds",
-            )
-            .suggest("Check that --url names the Coordinator service origin."),
-        })
+        ResponseHeaderError::DevelopmentPeer if mutation_sent => CoordinatorError::new(
+            "development-peer",
+            "The development Coordinator may already have applied the request.",
+        )
+        .suggest("Inspect the run before repeating the command."),
+        ResponseHeaderError::DevelopmentPeer => CoordinatorError::new(
+            "development-peer",
+            "The Coordinator declared development and this command runs as production.",
+        )
+        .suggest("Use a production Coordinator, or declare development with --posture development or REGISTRY_STACK_POSTURE=development."),
+        _ => CoordinatorError::new(
+            "service-unavailable",
+            "the service response headers exceeded their bounds",
+        )
+        .suggest("Check that --url names the Coordinator service origin."),
+    })
 }
 
 async fn remote(
@@ -715,23 +724,28 @@ async fn remote(
         .map_err(|_| {
             CoordinatorError::new("service-unavailable", "cannot initialize the HTTP client")
         })?;
-    if method != reqwest::Method::GET {
-        let mut health = url.clone();
-        health.set_path(registry_platform_httputil::probe::HEALTH_PATH);
-        let response = client.get(health).send().await.map_err(|_| {
+    let is_mutation = method != reqwest::Method::GET;
+    if is_mutation {
+        let mut probe = url.clone();
+        probe.set_path("/v1/doctor");
+        let response = client.get(probe).send().await.map_err(|_| {
             CoordinatorError::new(
                 "service-unavailable",
-                "the Coordinator health probe could not answer",
+                "the Coordinator API posture probe could not answer",
             )
-            .suggest("Check that --url reaches the running Coordinator service.")
+            .suggest("Check that --url reaches the running Coordinator API.")
         })?;
-        validate_coordinator_peer(&response, peer_policy)?;
-        if !response.status().is_success() {
-            return Err(CoordinatorError::new(
-                "service-unavailable",
-                "the Coordinator health probe did not succeed",
-            )
-            .suggest("Check that --url reaches the running Coordinator service."));
+        validate_coordinator_peer(&response, peer_policy, false)?;
+        if peer_policy == PeerPolicy::RefuseDevelopmentPeer {
+            let marks = response.headers().get_all("registry-posture");
+            let mut marks = marks.iter();
+            if marks.next().is_some_and(|mark| mark != "production") || marks.next().is_some() {
+                return Err(CoordinatorError::new(
+                    "service-unavailable",
+                    "the Coordinator API posture probe returned a malformed Registry-Posture header",
+                )
+                .suggest("Check the Coordinator and proxy response headers on /v1/doctor."));
+            }
         }
     }
     url.set_path(path.split('?').next().unwrap_or(path));
@@ -750,7 +764,7 @@ async fn remote(
         )
         .suggest("Check that --url reaches the running Coordinator service, then inspect the original run before repeating the command.")
     })?;
-    validate_coordinator_peer(&response, peer_policy)?;
+    validate_coordinator_peer(&response, peer_policy, is_mutation)?;
     let status = response.status();
     let bytes = registry_platform_httputil::read_bounded(response, 1_048_576)
         .await
@@ -1300,6 +1314,11 @@ pub async fn run() -> std::process::ExitCode {
                     argument.strip_prefix("--posture=")
                 }
             });
+        for posture in postures.clone() {
+            if let Err(error) = registry_platform_config::declared_from(Some(posture), None) {
+                return posture_error(error.code(), error.message(), error.suggested_action());
+            }
+        }
         if let Some(first) = postures.clone().next() {
             if postures.skip(1).any(|other| other != first) {
                 return posture_error(

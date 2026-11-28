@@ -4,7 +4,8 @@
 //! unchanged for every product and every destination kind.
 //!
 //! The fields are `id`, `type`, `source`, `time`, `subject`, `dataschema`,
-//! `data`, and `causation`. A remote handler deduplicates on the event ID,
+//! `data`, and `causation`, with `posture: "development"` on development-marked
+//! envelopes. A remote handler deduplicates on the event ID,
 //! which is also sent as `webhook-id`. The attempt timestamp and signature
 //! are HTTP headers. The worker tracks attempts and replay generations in
 //! delivery state.
@@ -300,8 +301,29 @@ impl HookEnvelope {
         &self,
         limits: &EnvelopeLimits,
     ) -> Result<Vec<u8>, HookEnvelopeError> {
+        self.encode_canonical_bytes(limits, false)
+    }
+
+    /// Serialize with a development mark inside the signed bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [Self::to_canonical_bytes], with the mark
+    /// included in the byte ceiling.
+    pub fn to_development_canonical_bytes(
+        &self,
+        limits: &EnvelopeLimits,
+    ) -> Result<Vec<u8>, HookEnvelopeError> {
+        self.encode_canonical_bytes(limits, true)
+    }
+
+    fn encode_canonical_bytes(
+        &self,
+        limits: &EnvelopeLimits,
+        development: bool,
+    ) -> Result<Vec<u8>, HookEnvelopeError> {
         validate_envelope(self)?;
-        let bytes = self.typed_canonical_bytes()?;
+        let bytes = self.typed_canonical_bytes(development)?;
         if bytes.len() > limits.max_envelope_bytes {
             return Err(HookEnvelopeError::PayloadTooLarge {
                 size: bytes.len(),
@@ -314,9 +336,12 @@ impl HookEnvelope {
     /// The canonical bytes of this envelope's typed value: the one
     /// serialization the encoder emits and the decoder's round-trip check
     /// holds the accepted bytes to.
-    fn typed_canonical_bytes(&self) -> Result<Vec<u8>, HookEnvelopeError> {
-        let value = serde_json::to_value(self)
+    fn typed_canonical_bytes(&self, development: bool) -> Result<Vec<u8>, HookEnvelopeError> {
+        let mut value = serde_json::to_value(self)
             .map_err(|error| HookEnvelopeError::Shape(redacted_message(&error.to_string())))?;
+        if development {
+            value["posture"] = Value::String("development".to_owned());
+        }
         canonicalize_json(&value).map_err(HookEnvelopeError::Canonical)
     }
 
@@ -339,22 +364,56 @@ impl HookEnvelope {
     /// Returns [`HookEnvelopeError`] when the bytes exceed the ceiling, are not
     /// strict or canonical JSON, violate the envelope shape, carry a refused
     /// identity, revision, time spelling, or causation chain, or do not
-    /// re-encode from their decoded value.
+    /// re-encode from their decoded value. Development-marked envelopes are
+    /// refused by this receiver-side decoder.
     pub fn from_canonical_bytes(
         bytes: &[u8],
         limits: &EnvelopeLimits,
     ) -> Result<Self, HookEnvelopeError> {
+        let (envelope, development) = Self::decode_canonical_bytes(bytes, limits)?;
+        if development {
+            return Err(HookEnvelopeError::DevelopmentPeer);
+        }
+        Ok(envelope)
+    }
+
+    /// Validate the shape of bytes already captured for delivery. The worker
+    /// signs and sends those stored bytes, including any original mark.
+    #[cfg(feature = "postgres")]
+    pub(crate) fn from_stored_canonical_bytes(
+        bytes: &[u8],
+        limits: &EnvelopeLimits,
+    ) -> Result<Self, HookEnvelopeError> {
+        Self::decode_canonical_bytes(bytes, limits).map(|(envelope, _)| envelope)
+    }
+
+    fn decode_canonical_bytes(
+        bytes: &[u8],
+        limits: &EnvelopeLimits,
+    ) -> Result<(Self, bool), HookEnvelopeError> {
         if bytes.len() > limits.max_envelope_bytes {
             return Err(HookEnvelopeError::PayloadTooLarge {
                 size: bytes.len(),
                 max: limits.max_envelope_bytes,
             });
         }
-        let value = parse_json_strict(bytes)?;
+        let mut value = parse_json_strict(bytes)?;
         let canonical = canonicalize_json(&value).map_err(HookEnvelopeError::Canonical)?;
         if canonical.as_slice() != bytes {
             return Err(HookEnvelopeError::NotCanonical);
         }
+        let development = match value
+            .as_object_mut()
+            .and_then(|object| object.remove("posture"))
+        {
+            None => false,
+            Some(Value::String(mark)) if mark == "development" => true,
+            Some(_) => {
+                return Err(HookEnvelopeError::Shape(
+                    "invalid envelope posture".to_owned(),
+                ))
+            }
+        };
         // The envelope shape requires a string `time`, so a document that gets
         // past the deserializer carried one.
         let spelled_time = value
@@ -372,10 +431,10 @@ impl HookEnvelope {
         // to the `None` the encoder omits) is refused with the canonicality
         // error instead of being accepted as bytes whose digest no producer
         // can reproduce.
-        if envelope.typed_canonical_bytes()?.as_slice() != bytes {
+        if envelope.typed_canonical_bytes(development)?.as_slice() != bytes {
             return Err(HookEnvelopeError::NotCanonical);
         }
-        Ok(envelope)
+        Ok((envelope, development))
     }
 }
 
@@ -540,6 +599,9 @@ pub enum HookEnvelopeError {
     /// redacted and bounded, never the untrusted bytes as they arrived.
     #[error("envelope violates the hook envelope shape: {0}")]
     Shape(String),
+    /// A production receiver refuses a development-marked envelope.
+    #[error("the hook envelope declares development")]
+    DevelopmentPeer,
     /// A number in the envelope cannot be canonicalized.
     #[error("envelope is not canonicalizable: {0}")]
     Canonical(#[from] JcsError),
@@ -567,6 +629,7 @@ impl HookEnvelopeError {
             Self::Json(_) => "hook.envelope.not_strict_json",
             Self::NotCanonical => "hook.envelope.not_canonical",
             Self::Shape(_) => "hook.envelope.bad_shape",
+            Self::DevelopmentPeer => "hook.envelope.development_peer",
             Self::Canonical(_) => "hook.envelope.not_canonicalizable",
             Self::InvalidRevision { .. } => "hook.envelope.invalid_revision",
             Self::TimeNotNormalized { .. } => "hook.envelope.time_not_normalized",
@@ -582,6 +645,7 @@ impl HookEnvelopeError {
             Self::Json(_)
             | Self::NotCanonical
             | Self::Shape(_)
+            | Self::DevelopmentPeer
             | Self::Canonical(_)
             | Self::InvalidRevision { .. }
             | Self::TimeNotNormalized { .. } => crate::error::ErrorCategory::Source,
@@ -663,6 +727,37 @@ mod tests {
         assert_eq!(decoded, source);
         let again = decoded.to_canonical_bytes(&limits).expect("re-encodes");
         assert_eq!(again, bytes);
+    }
+
+    #[test]
+    fn development_encoding_preserves_the_closed_envelope() {
+        let limits = EnvelopeLimits::default();
+        let source = envelope();
+        let bytes = source.to_development_canonical_bytes(&limits).unwrap();
+        let (decoded, development) = HookEnvelope::decode_canonical_bytes(&bytes, &limits).unwrap();
+        assert_eq!(decoded, source);
+        assert!(development);
+        assert!(matches!(
+            HookEnvelope::from_canonical_bytes(&bytes, &limits),
+            Err(HookEnvelopeError::DevelopmentPeer)
+        ));
+
+        let mut value = parse_json_strict(&bytes).unwrap();
+        value["unexpected"] = Value::Bool(true);
+        let unknown = canonicalize_json(&value).unwrap();
+        assert!(matches!(
+            HookEnvelope::decode_canonical_bytes(&unknown, &limits),
+            Err(HookEnvelopeError::Shape(_))
+        ));
+        value.as_object_mut().unwrap().remove("unexpected");
+        for mark in [Value::Null, json!("production"), json!("other")] {
+            value["posture"] = mark;
+            let malformed = canonicalize_json(&value).unwrap();
+            assert!(matches!(
+                HookEnvelope::decode_canonical_bytes(&malformed, &limits),
+                Err(HookEnvelopeError::Shape(_))
+            ));
+        }
     }
 
     #[test]
@@ -1384,6 +1479,7 @@ mod tests {
             ),
             HookEnvelopeError::NotCanonical,
             HookEnvelopeError::Shape(String::new()),
+            HookEnvelopeError::DevelopmentPeer,
             HookEnvelopeError::Canonical(
                 canonicalize_json(&json!({"count": 9007199254740993_u64}))
                     .expect_err("a lossy integer is not canonicalizable"),

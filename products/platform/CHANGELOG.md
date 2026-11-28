@@ -60,6 +60,14 @@
   `requiredFilters` makes one of its equality-filter alternatives required. The
   client checks the same rules before sending and refuses with a `TypeError`
   that names the property and profile, never a filter value.
+- Platform Hooks refuses development-marked signed envelopes at its verifier with `development-peer`. Development producers can include the mark in the signed bytes, and delivery retries or replay keep the exact stored payload.
+
+- Registry MCP and MCP Edge refuse HTTP issuers in production.
+  Migration: Configure an HTTPS issuer, or declare development for a test deployment that needs HTTP.
+- MCP Edge's Rust resource and issuer accessors return a result and take an optional development witness.
+  Migration: Pass the witness returned by the runtime loader and handle the refusal. For production callers, pass `None`.
+- Registry MCP's Casework and BReg bindings refuse development-marked peers in production and accept them in development.
+  Migration: Use production peers with a production gateway, or declare development for the gateway in a test deployment.
 
 - Every URL hook delivery is signed with Standard Webhooks. The signature is
   `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body

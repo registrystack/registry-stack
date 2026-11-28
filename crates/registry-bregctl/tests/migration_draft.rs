@@ -135,6 +135,7 @@ fn module_bytes(classification: &str) -> Vec<u8> {
 
 fn run(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(arguments)
         .output()
         .expect("bregctl starts")

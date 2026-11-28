@@ -455,6 +455,7 @@ pub struct ActivatedHooks {
     identity: HookRuntimeIdentity,
     schema: String,
     delivery_source: String,
+    development: bool,
     payload_retention: Duration,
     retry_delays_ms: Arc<[i64]>,
 }
@@ -499,6 +500,7 @@ impl ActivatedHooks {
             identity,
             schema: database_schema,
             delivery_source,
+            development: false,
             payload_retention,
             retry_delays_ms: retry_delays_ms().into(),
         })
@@ -512,6 +514,15 @@ impl ActivatedHooks {
     #[must_use]
     pub fn destination_binding_digest(&self) -> &str {
         &self.destinations.binding_digest
+    }
+
+    #[must_use]
+    pub(crate) fn with_development_witness(
+        mut self,
+        witness: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Self {
+        self.development = witness.is_some();
+        self
     }
 
     /// Capture one canonical envelope and one delivery row for every hook on
@@ -561,9 +572,13 @@ impl ActivatedHooks {
                 data: projected(event, &hook.projection)?,
                 causation: Causation::root(&id),
             };
-            let payload = envelope
-                .to_canonical_bytes(&EnvelopeLimits::tightened_to(MAXIMUM_PAYLOAD_BYTES))
-                .map_err(|_| HookCaptureError::InvalidCapture)?;
+            let limits = EnvelopeLimits::tightened_to(MAXIMUM_PAYLOAD_BYTES);
+            let payload = if self.development {
+                envelope.to_development_canonical_bytes(&limits)
+            } else {
+                envelope.to_canonical_bytes(&limits)
+            }
+            .map_err(|_| HookCaptureError::InvalidCapture)?;
             self.insert_outbox(
                 transaction,
                 event_id,

@@ -106,6 +106,8 @@ pub enum HookDeliveryError {
     Signature(#[from] DeliverySignatureError),
     #[error("the hook delivery body is not a canonical hook envelope")]
     InvalidEnvelope,
+    #[error("the hook delivery declares development")]
+    DevelopmentPeer,
     #[error("webhook-id does not match the hook envelope id")]
     IdMismatch,
 }
@@ -119,6 +121,7 @@ impl HookDeliveryError {
             Self::InvalidContentType => "invalid-content-type",
             Self::Signature(error) => error.code(),
             Self::InvalidEnvelope => "invalid-envelope",
+            Self::DevelopmentPeer => "development-peer",
             Self::IdMismatch => "id-mismatch",
         }
     }
@@ -168,7 +171,12 @@ where
         }
     }?;
     let envelope = HookEnvelope::from_canonical_bytes(delivery.body, &EnvelopeLimits::default())
-        .map_err(|_| HookDeliveryError::InvalidEnvelope)?;
+        .map_err(|error| match error {
+            crate::envelope::HookEnvelopeError::DevelopmentPeer => {
+                HookDeliveryError::DevelopmentPeer
+            }
+            _ => HookDeliveryError::InvalidEnvelope,
+        })?;
     if envelope.id != id {
         return Err(HookDeliveryError::IdMismatch);
     }
@@ -435,6 +443,29 @@ mod tests {
             assert_eq!(delivery.timestamp, 1000);
             assert_eq!(delivery.body, HOOK_BODY);
         });
+    }
+
+    #[test]
+    fn verify_hook_delivery_refuses_a_signed_development_envelope() {
+        let original = std::str::from_utf8(HOOK_BODY).unwrap();
+        let marked = original.replace(",\"source\":", ",\"posture\":\"development\",\"source\":");
+        let keys = hook_keys();
+        let signature = delivery_signature::sign(&keys, HOOK_ID, 1000, marked.as_bytes()).unwrap();
+        let error = verify_hook_delivery(
+            HookDelivery {
+                headers: [
+                    ("content-type", b"application/json".as_slice()),
+                    ("webhook-id", HOOK_ID.as_bytes()),
+                    ("webhook-timestamp", b"1000"),
+                    ("webhook-signature", signature.as_bytes()),
+                ],
+                body: marked.as_bytes(),
+                keys: &keys,
+            },
+            DeliveryFreshness::CallerEnforced,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "development-peer");
     }
 
     #[test]

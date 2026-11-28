@@ -4908,7 +4908,7 @@ async fn read_activation_status_in(
             "SELECT package_id, database_id, active_package_digest,
                     active_activation_id::text, schema_fingerprint,
                     maintenance_status, maintenance_target_package_digest,
-                        coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
+                    coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],

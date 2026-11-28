@@ -48,24 +48,48 @@
 - `bregctl doctor` no longer reports `authentication.insecure-http`.
   Development settings appear in its advisories and startup lists them.
   A posture mismatch appears in the normal doctor report, including
-  `checked`, `roleMode`, and `advisories`, and doctor exits 0 if its other
-  checks pass. `status` and `doctor` locate the finding at `/database`.
+  `checked`, `roleMode`, `diagnostics`, and `advisories`. Doctor exits 0 when
+  its other checks pass. If a later check fails, doctor keeps the posture
+  finding beside the refusal. `status` and `doctor` locate it at `/database`.
 - `bregctl migration reconcile` and the timer operator report
   `breg.activation.posture-mismatch` when the recorded posture differs.
 - `bregctl verify`, `migration explain`, runtime-bound `diff`, and runtime-backed
   generation include accepted development settings in their success diagnostics.
-  Hook listing, Proposal retention, and idempotency retention preserve
-  runtime posture refusal codes, pointers, and remedies.
+- Hook listing and Proposal retention include accepted development settings
+  in human output and the JSON `diagnostics` member.
+- Hook listing, drain, replay, discard, Proposal retention, and idempotency
+  retention preserve runtime posture refusal codes, pointers, and remedies.
+- Hook operations, external projection maintenance, import authority commands,
+  instance claim commands, and operator identity checks report
+  `breg.activation.posture-mismatch` at `/database` when they detect a mismatch.
 - `bregctl generate odrl` refuses an incompatible `--runtime-config` selector
-  with `identity-facts.arguments` before writing output.
+  with `generate.arguments` before writing output.
 - `bregctl dev` declares development for its child processes and marks the
   audit hash key it creates as `development-generated`. It refuses an
   explicit production declaration.
 - `bregctl data import`, `data runs list`, `data runs cancel`,
   `statistics publish`, and `statistics withdraw` now accept `--posture`.
   These commands and `data export` accept development peers in development.
-  In production, export reports `data.export.development-peer` for a
-  development peer.
+  In production, a development peer produces `data.export.development-peer`,
+  `data.import.development-peer`, `data.runs.list.development-peer`,
+  `data.runs.cancel.development-peer`, or `statistics.development-peer`.
+- BReg accepts development Evidence and Review peers when its own posture is
+  development. Production BReg refuses those peers.
+- `bregctl mcp check`, `mcp serve`, `review check`, and `review serve` accept
+  `--posture` and pass the resolved declaration to the supporting service.
+- Production `package`, `test`, and `migration draft` refuse a
+  `--baseline-package` with group- or world-writable files and report
+  `package.baseline.permissions-refused`.
+- Runtime configuration refusals that contain a posture diagnostic place
+  recovery instructions in each JSON `suggestedAction` and omit the recovery
+  suffix from each diagnostic message.
+- Production startup reports a refused package as `startup.package.refused`
+  at `/package/root` alongside any runtime posture refusals. The startup
+  headline states that the deployment posture was refused.
+- `doctor`, `plan`, and `apply` collect runtime and selected package posture
+  refusals in one report.
+- Malformed loopback HTTP public origins and loopback HTTP origins carrying a
+  path prefix report `breg.runtime.invalid-listener` in either posture.
 
 - **Breaking.** Production is the default posture. It refuses
   `authentication.oidc.allowInsecureHttp: true` in place of the former startup

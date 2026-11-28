@@ -5,8 +5,7 @@ use std::path::Path;
 
 use registry_breg::package::PackageError;
 use registry_breg::postgres::DatabaseConnectionCause;
-use registry_breg::runtime_config::load_runtime_config;
-use registry_breg::startup::{check_loaded_observing_posture, CheckedStartup, StartupError};
+use registry_breg::startup::{CheckedStartup, StartupError, StartupInputs};
 use registry_breg::{Diagnostic, DiagnosticSeverity, RelatedDiagnostic};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
@@ -59,10 +58,12 @@ pub(crate) fn run(
         });
     }
 
-    let config = load_runtime_config(runtime_config, posture).map_err(|cause| DoctorRefusal {
-        diagnostics: crate::runtime_config_diagnostics(&cause),
-        runtime_configuration: true,
-    })?;
+    let inputs = StartupInputs::load(runtime_config, posture).map_err(startup_refusal)?;
+    let config = inputs.config();
+    let registry = inputs.package().registry();
+    let mut diagnostics = config.posture_report().diagnostics(runtime_config);
+    let plan_diagnostics = config.external_refresh_diagnostics(registry);
+    let external_refresh_timings = config.external_refresh_timings(registry);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -74,32 +75,31 @@ pub(crate) fn run(
             )],
             runtime_configuration: false,
         })?;
-    let checked = runtime
-        .block_on(check_loaded_observing_posture(config.clone()))
-        .map_err(startup_refusal)?;
-    let mut diagnostics = config.posture_report().diagnostics(runtime_config);
-    if checked.recorded_posture != posture.posture {
-        diagnostics.push(crate::activation_posture_finding(checked.recorded_posture));
+    let mut recorded_posture = None;
+    let checked = runtime.block_on(inputs.check_observing_posture(&mut recorded_posture));
+    if let Some(recorded) = recorded_posture.filter(|recorded| *recorded != posture.posture) {
+        diagnostics.push(crate::activation_posture_finding(recorded));
     }
-    let package = config.load_active_package().map_err(|_| DoctorRefusal {
-        diagnostics: vec![diagnostic(
-            "startup.package.refused",
-            "package",
-            "the active runtime package could not be verified",
-        )],
-        runtime_configuration: false,
-    })?;
-    let plan_diagnostics = config.external_refresh_diagnostics(package.registry());
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(error) => {
+            let mut refusal = startup_refusal(error);
+            refusal
+                .diagnostics
+                .extend(diagnostics.into_iter().map(runtime_diagnostic));
+            return Err(refusal);
+        }
+    };
     if !plan_diagnostics.is_empty() {
         return Err(DoctorRefusal {
             diagnostics: plan_diagnostics
                 .into_iter()
+                .chain(diagnostics)
                 .map(runtime_diagnostic)
                 .collect(),
             runtime_configuration: true,
         });
     }
-    let external_refresh_timings = config.external_refresh_timings(package.registry());
     Ok(DoctorSuccess {
         checked,
         diagnostics,
@@ -469,6 +469,7 @@ mod tests {
         ));
         assert_eq!(refusal.code, "breg.posture.placeholder-identity");
         assert!(refusal.message.contains("canonicalBaseIri"));
+        assert!(refusal.message.contains("rstack dev"));
         assert!(refusal.message.contains("--posture development"));
         assert!(refusal
             .message

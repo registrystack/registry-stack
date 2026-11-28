@@ -319,6 +319,36 @@ fn provider_failure(error: ToolError) -> ProviderFailure {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provider_options_use_the_loaded_runtime_posture() {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        use registry_platform_httputil::PeerPolicy;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runtime.yaml");
+        std::fs::write(&path, crate::config::tests::document()).unwrap();
+        for (posture, policy) in [
+            (Posture::Production, PeerPolicy::RefuseDevelopmentPeer),
+            (Posture::Development, PeerPolicy::AcceptDevelopmentPeer),
+        ] {
+            let loaded = crate::config::RuntimeConfig::load_with_posture(
+                &path,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let options = super::BRegProviderOptions::from_product_config(
+                &loaded.config.registry,
+                &loaded.config.service,
+                loaded.development.as_ref(),
+            )
+            .unwrap();
+            assert_eq!(options.peer_policy, policy);
+        }
+    }
+
     use std::{io::Write, sync::Mutex};
 
     use registry_mcp_edge::{EffectCertainty, Provider as _};

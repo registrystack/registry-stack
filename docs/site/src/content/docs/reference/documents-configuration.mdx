@@ -241,7 +241,7 @@ A token the verifier refuses answers `authentication.refused` with a `Bearer` ch
 
 `documentsctl plan`, `apply`, `status`, `verification list` and `replay`, and `erasure status`, `list`, and `replay` read this same document.
 They write their audit records to a companion journal under the `documentsctl` process name, beside the runtime's file journal, so they never contend for the running service's journal.
-The `verification` and `erasure` commands, like `serve`, need an activated database: a runtime role that cannot use the schema or read the activation ledger is refused as `documentsctl.activation.ledger-unreadable` at `database.runtimeUrlRef`.
+The `verification` and `erasure` commands, like `serve`, need an activated database: a runtime role that cannot use the schema or read the activation ledger is refused as `documentsctl.activation.ledger-unreadable` at `/database/runtimeUrlRef`.
 Run `documentsctl apply` with the migration credential, which grants the runtime role what it lacks, then retry.
 `verification replay` also activates the project's hooks, so it refuses a hook whose destination `destinations.hooks` does not bind with the diagnostic that `serve` gives, on its line of the file.
 

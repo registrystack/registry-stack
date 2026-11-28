@@ -2966,6 +2966,7 @@ fn generated_postgres_leaf_verifies_against_its_distinct_ca() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let output = match Command::new("openssl")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("verify")
         .arg("-CAfile")
         .arg(state.root().join("tls/ca.pem"))
@@ -3120,8 +3121,24 @@ fn doctor_refusal(code: &str, message: &str) -> Vec<u8> {
 
 #[test]
 fn activation_preflight_refuses_a_successful_doctor_posture_finding() {
-    let report = br#"{"ok":true,"diagnostics":[{"code":"breg.activation.posture-mismatch","path":"database","message":"the database was activated in production"}]}"#;
-    let refusal = activation(true, report).unwrap_err();
+    let finding = crate::activation_posture_finding(registry_platform_config::Posture::Production);
+    let report = serde_json::json!({
+        "ok": true,
+        "command": "doctor",
+        "status": "complete",
+        "checked": crate::doctor::CHECKED_DEPENDENCIES,
+        "roleMode": "single",
+        "posture": {"value": "development", "source": "flag"},
+        "advisories": [{
+            "severity": "warning",
+            "code": finding.code,
+            "message": format!("{}: {} Next: {}", finding.path, finding.message, finding.suggested_action),
+            "observed": {},
+        }],
+        "diagnostics": [finding],
+    });
+    let report = serde_json::to_vec(&report).unwrap();
+    let refusal = activation(true, &report).unwrap_err();
     assert!(refusal
         .to_string()
         .contains("breg.activation.posture-mismatch"));
@@ -3217,8 +3234,13 @@ fn a_refused_schema_test_reports_the_check_that_failed_beside_the_report_log() {
         &refusing,
         &format!("cat <<'REPORT'\n{report}\nREPORT\nexit 1"),
     );
-    let error = command(&mut Command::new(&refusing), &root, "schema-test", None)
-        .expect_err("a refused schema test stops the start");
+    let error = command(
+        Command::new(&refusing).env_remove("REGISTRY_STACK_POSTURE"),
+        &root,
+        "schema-test",
+        None,
+    )
+    .expect_err("a refused schema test stops the start");
     let error = format!("{error:#}");
     assert!(error.contains(message), "{error}");
     assert!(error.contains("test.step.failed"), "{error}");
@@ -3412,7 +3434,7 @@ fn role_password_bytes_cannot_reach_diagnostics_or_errors() {
     // A refused psql echoes the statement it could not run, both whole and as
     // the truncated window a client reports around an error position.
     let mut echo = Command::new("/bin/sh");
-    echo.arg("-c").arg(
+    echo.env_remove("REGISTRY_STACK_POSTURE").arg("-c").arg(
         "statement=$(cat)\n\
          printf 'ERROR:  syntax error at or near \"END\"\\nLINE 1: %s\\n' \"$statement\" >&2\n\
          printf 'CONTEXT: ...%s...\\n' \"$(printf '%s' \"$statement\" | cut -c 45-75)\" >&2\n\

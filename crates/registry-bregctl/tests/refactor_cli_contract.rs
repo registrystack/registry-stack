@@ -17,6 +17,7 @@ fn fixture() -> PathBuf {
 }
 fn run(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(args)
         .current_dir(root())
         .output()

@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use registry_documents::activation::ActivationError;
 use registry_documents::runtime::{prepare_with_posture, RuntimeError};
-use registry_documents_client::{DocumentsClient, DocumentsClientConfig, ProblemCode};
+use registry_documents_client::{
+    DocumentsClient, DocumentsClientConfig, DocumentsClientError, PeerPolicy, ProblemCode,
+};
 use support::{
     database_url, pdf, reservation_body, sha256, token, Deployment, APP, CITIZEN, DATABASE_STORAGE,
     DISABLED_VERIFIER, PARTNER_SERVICE, READER, STAFF,
@@ -75,18 +77,20 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
 
     let base = Url::parse(&format!("http://{address}/")).unwrap();
     let client = DocumentsClient::new(
-        DocumentsClientConfig::new_without_peer_policy(base.clone())
+        DocumentsClientConfig::new(base.clone(), PeerPolicy::RefuseDevelopmentPeer)
             .with_attempt_timeout(Duration::from_secs(5)),
     )
     .unwrap();
     assert!(matches!(
         client.health().await,
-        Err(registry_documents_client::DocumentsClientError::Protocol {
-            status: 200,
-            failure: registry_documents_client::DocumentsProtocolFailure::HeaderBounds,
-            ..
-        })
+        Err(DocumentsClientError::DevelopmentPeer)
     ));
+    let development_client = DocumentsClient::new(DocumentsClientConfig::new(
+        base.clone(),
+        PeerPolicy::AcceptDevelopmentPeer,
+    ))
+    .unwrap();
+    assert!(development_client.health().await.is_ok());
     let ready = reqwest::get(base.join("ready").unwrap()).await.unwrap();
     assert_eq!(ready.status(), reqwest::StatusCode::OK);
     assert_eq!(ready.headers()["registry-posture"], "development");

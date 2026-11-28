@@ -70,6 +70,7 @@ pub fn activate(
     registry: &CompiledRegistry,
     bindings: &BTreeMap<String, EvidenceProviderConfig>,
     secrets: &SecretResolver,
+    peer_policy: registry_platform_httputil::PeerPolicy,
 ) -> Result<Option<Arc<ActionEvidenceEvaluator>>, crate::runtime_config::RuntimeConfigError> {
     use crate::runtime_config::RuntimeConfigError as Error;
     let required = required_provider_ids(registry);
@@ -106,7 +107,7 @@ pub fn activate(
         let jwks = registry_platform_crypto::parse_json_strict(keys.expose_secret())
             .map_err(|_| Error::InvalidBinding)?;
         let jwks = serde_json::from_value(jwks).map_err(|_| Error::InvalidBinding)?;
-        let mut config = registry_evidence_client::EvidenceClientConfig::new_without_peer_policy(
+        let mut config = registry_evidence_client::EvidenceClientConfig::new(
             binding
                 .base_url
                 .as_str()
@@ -115,6 +116,7 @@ pub fn activate(
             token_provider,
             jwks,
             binding.revoked_key_ids.clone(),
+            peer_policy,
         );
         if let Some(ca_bundle) = ca_bundle {
             config = config.with_trusted_root_certificates(ca_bundle);
@@ -230,9 +232,14 @@ mod tests {
             "/private/tmp",
         )
         .unwrap();
-        assert!(activate(&compiled, &BTreeMap::new(), &secrets)
-            .unwrap()
-            .is_none());
+        assert!(activate(
+            &compiled,
+            &BTreeMap::new(),
+            &secrets,
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+        )
+        .unwrap()
+        .is_none());
         let binding = EvidenceProviderConfig {
             base_url: Url::new("https://invalid.example").unwrap(),
             trust_binding_id: "unused".into(),
@@ -246,7 +253,8 @@ mod tests {
             activate(
                 &compiled,
                 &BTreeMap::from([("unused".into(), binding)]),
-                &secrets
+                &secrets,
+                registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
             ),
             Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
         ));
@@ -358,9 +366,14 @@ mod tests {
         )
         .unwrap();
         assert!(
-            activate(&compiled, &BTreeMap::new(), &secrets)
-                .unwrap()
-                .is_none(),
+            activate(
+                &compiled,
+                &BTreeMap::new(),
+                &secrets,
+                registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+            )
+            .unwrap()
+            .is_none(),
             "missing optional integrations defer dependent Actions without preventing startup"
         );
         let binding = EvidenceProviderConfig {
@@ -376,7 +389,8 @@ mod tests {
             activate(
                 &compiled,
                 &BTreeMap::from([("farmer-registry".into(), binding.clone())]),
-                &secrets
+                &secrets,
+                registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
             ),
             Err(crate::runtime_config::RuntimeConfigError::Secret)
         ));
@@ -409,7 +423,8 @@ mod tests {
         assert!(activate(
             &compiled,
             &BTreeMap::from([("farmer-registry".into(), binding)]),
-            &secrets
+            &secrets,
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
         )
         .unwrap()
         .is_some());

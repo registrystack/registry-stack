@@ -567,8 +567,10 @@ mismatch as a finding. Databases activated before
 posture was recorded read as production. Use a fresh database and apply the
 package in the other posture if you need to switch.
 If doctor exits 0 with `breg.activation.posture-mismatch`, startup still
-refuses that database in the declared posture. Doctor reports this finding
-alongside its other dependency checks.
+refuses that database in the declared posture. Doctor keeps the finding when
+a later dependency check refuses. Doctor, plan and apply report development
+settings from both the runtime file and the selected package.
+{/* Evidence: crates/registry-bregctl/tests/cli.rs, startup_operators_report_runtime_and_selected_package_posture_together. */}
 {/* Evidence: crates/registry-bregctl/tests/cli/posture.rs, opposite_activation_posture_refuses_planning_and_apply_and_reports_findings. */}
 
 Then activate. `--initial` is for the first package in a database that has never had one:
@@ -690,7 +692,10 @@ print.
 bregctl serve --runtime-config /etc/breg/runtime.yaml --posture production
 ```
 
-`bregctl serve` passes the resolved posture to `breg`.
+`bregctl serve` passes the resolved posture to `breg`. The `bregctl mcp`
+and `bregctl review` wrappers pass the declaration from `--posture` or
+`REGISTRY_STACK_POSTURE` to their `check` and `serve` commands.
+{/* Evidence: crates/registry-bregctl/tests/supporting_services.rs, service_wrappers_forward_the_resolved_posture. */}
 
 {/* Evidence: crates/registry-bregctl/tests/serve.rs unmanaged_serve_preserves_runtime_arguments_streams_process_and_exit. */}
 
@@ -704,15 +709,16 @@ role mode it serves in. If production refuses development settings, the
 startup report lists findings from the runtime file and the verified package.
 {/* Evidence: crates/registry-breg/tests/postgres_field_encryption.rs, local_file_data_key_is_bound_during_apply_and_prepares_ready. */}
 
-Use one posture across a stack. In production, BReg refuses a development
-task-grant peer. The `bregctl` data import, export, run recovery, and statistics
-commands refuse development peers in production. If Render or Evidence signs
+Use one posture across a stack. In production, BReg refuses development
+task-grant, Evidence and Review peers. The `bregctl` data import, export,
+run recovery and statistics commands report development-peer refusals in production. If Render or Evidence signs
 using a local key file, run
 the stack in development. Use Transit for production signing.
 
 {/* Evidence: crates/registry-platform-httputil/src/lib.rs PeerPolicy;
-    crates/registry-breg/src/runtime_config.rs declared_posture_selects_task_grant_peer_policy;
-    crates/registry-bregctl/src/data_lifecycle.rs export_http_refuses_a_development_peer_in_production. */}
+    crates/registry-breg/src/runtime_config.rs declared_posture_selects_task_grant_peer_policy, review_client_respects_the_runtime_posture;
+    crates/registry-breg/tests/postgres_action_evidence.rs real_evidence_service_resolves_exact_selector_and_commits_verified_postgres_result;
+    crates/registry-bregctl/src/data_lifecycle.rs export_http_refuses_a_development_peer_in_production, ingestion_and_statistics_commands_apply_the_declared_peer_policy. */}
 
 Check readiness before admitting traffic:
 

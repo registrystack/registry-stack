@@ -447,6 +447,11 @@ async fn activation_posture_is_fixed_and_status_reports_the_mismatch() {
         };
         let plan = cli_report("plan");
         assert_eq!(plan["refusals"][0]["path"], "/database", "{plan}");
+        assert_eq!(
+            plan["diagnostics"][0]["code"], "platform.activation.posture-mismatch",
+            "{plan}"
+        );
+        assert_eq!(plan["diagnostics"][0]["path"], "/database", "{plan}");
         let apply = cli_report("apply");
         assert_eq!(
             apply["diagnostics"][0]["code"], "platform.activation.posture-mismatch",

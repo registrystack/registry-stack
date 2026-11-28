@@ -21,6 +21,7 @@ fn export_with_flags(output: &Path, fields: &str, flags: &[&str]) -> Output {
         .canonicalize()
         .unwrap();
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["--format", "json", "generate", "evidence-source"])
         .arg(project)
         .args([
@@ -55,6 +56,7 @@ fn explicit_pack_authentication_is_emitted() {
         .canonicalize()
         .unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["--format", "json", "generate", "evidence-source"])
         .arg(project)
         .args([
@@ -171,6 +173,7 @@ fn an_explicit_lookup_project_exports_an_evidence_source_without_edits() {
 
     let destination = root.join("export");
     let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["--format", "json", "generate", "evidence-source"])
         .arg(&project)
         .args([
@@ -243,6 +246,7 @@ fn export_with(output: &Path, extra: &[&str]) -> Output {
         .canonicalize()
         .unwrap();
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["--format", "json", "generate", "evidence-source"])
         .arg(project)
         .args([
@@ -362,6 +366,7 @@ fn evidence_source_flags_apply_only_to_evidence_source() {
         ] {
             let output = root.join("output");
             let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+            command.env_remove("REGISTRY_STACK_POSTURE");
             command
                 .args(["--format", "json", "generate", artifact])
                 .arg(&project)

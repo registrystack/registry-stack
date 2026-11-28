@@ -2538,6 +2538,7 @@ fn test_candidate_command_with_refused_database_secrets(
     output: &Path,
 ) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove(VERIFY_RUNTIME_DATABASE_SECRET_CANARY)
         .env_remove(VERIFY_MIGRATION_DATABASE_SECRET_CANARY)
         .args([
@@ -3591,6 +3592,10 @@ fn generate_odrl_refuses_a_runtime_selector_before_writing() {
         path(&runtime),
     ]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(
+        json_stdout(&output)["diagnostics"][0]["code"],
+        "generate.arguments"
+    );
     assert!(!output_path.exists());
 }
 
@@ -4225,6 +4230,7 @@ fn check_substitutes_the_environment_only_when_asked_and_never_repeats_a_value()
     let example = minimal_example();
     let check = |environment: bool, bind: Option<&str>| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+        command.env_remove("REGISTRY_STACK_POSTURE");
         command.args([
             "--format",
             "json",
@@ -4959,6 +4965,78 @@ fn package_development_accepts_and_warns_about_reserved_canonical_iri() {
 }
 
 #[test]
+fn startup_operators_report_runtime_and_selected_package_posture_together() {
+    let project = packaging_project();
+    let registry = project.path().join("registry.yaml");
+    let original = fs::read_to_string(&registry).unwrap();
+    let placeholder = original.replace(
+        "https://package.example.test",
+        "https://package.example.invalid",
+    );
+    assert_ne!(original, placeholder);
+    fs::write(registry, placeholder).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let package = scratch.path().join("selected");
+    prepare_packaging_candidate(&project, &format!("sha256:{}", "2".repeat(64)))
+        .publish_to_directory(&package)
+        .unwrap();
+    for operation in ["doctor", "plan", "apply"] {
+        let config_root = tempfile::tempdir().unwrap();
+        let runtime_package = if operation == "doctor" {
+            package.clone()
+        } else {
+            let root = config_root.path().join("different-runtime-package");
+            fs::create_dir(&root).unwrap();
+            root
+        };
+        let runtime = write_runtime_config(
+            config_root.path(),
+            &runtime_package,
+            "127.0.0.1:1".parse().unwrap(),
+        );
+        let content = fs::read_to_string(&runtime).unwrap().replace(
+            "audit:\n",
+            "audit:\n  hashKeyCustody: development-generated\n",
+        );
+        fs::write(&runtime, content).unwrap();
+        let mut args = vec![
+            "--format",
+            "json",
+            operation,
+            "--runtime-config",
+            path(&runtime),
+        ];
+        if operation != "doctor" {
+            args.extend(["--package", path(&package)]);
+        }
+        if operation == "apply" {
+            args.push("--initial");
+        }
+        let result = bregctl(&args);
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        let report = json_stdout(&result);
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        for (code, pointer) in [
+            (
+                "platform.posture.generated-audit-key",
+                "/audit/hashKeyCustody",
+            ),
+            (
+                "breg.posture.placeholder-identity",
+                "/project/canonicalBaseIri",
+            ),
+        ] {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|item| item["code"] == code && item["path"] == pointer),
+                "{report}"
+            );
+        }
+    }
+}
+
+#[test]
 fn package_refuses_the_removed_local_flag() {
     let output = bregctl(&["package", ".", "--local"]);
     assert_eq!(output.status.code(), Some(2));
@@ -5543,6 +5621,7 @@ fn heading_slug(heading: &str) -> String {
 fn init_writes_a_bare_relative_destination_into_the_working_directory() {
     let project = TestProject::asset_fixture();
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["--format", "json", "init", "initialized"])
         .current_dir(project.path())
         .output()
@@ -9349,6 +9428,7 @@ fn plan_and_status_refuse_before_database_authority_and_name_the_next_command() 
 /// contact reports the connection as unavailable.
 fn bregctl_with_unreachable_database(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env(
             VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
             "postgresql://registry_migration@127.0.0.1:1/breg",
@@ -9363,6 +9443,7 @@ fn bregctl_with_unreachable_database(arguments: &[&str]) -> Output {
 /// refusal, rather than secret resolution, is exercised.
 fn bregctl_schema_test_with_unreachable_database(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env(
             VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
             "postgresql://registry_runtime@127.0.0.1:1/breg",
@@ -10635,6 +10716,7 @@ fn external_projection_operations_report_database_prerequisites_with_the_shared_
         let refused = bregctl(&arguments);
         // The secrets name an address nothing listens on.
         let unreachable = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .env(
                 VERIFY_RUNTIME_DATABASE_SECRET_CANARY,
                 "postgresql://registry_runtime@127.0.0.1:1/breg",
@@ -11576,31 +11658,38 @@ fn runtime_bound_inspections_render_development_findings() {
         assert!(String::from_utf8_lossy(&human.stdout).contains("/audit/hashKeyCustody"));
     }
 
-    for format in ["json", "human"] {
-        let artifact = scratch
-            .path()
-            .join(format!("external-source-facts-{format}.json"));
-        let output = bregctl(&[
-            "--format",
-            format,
-            "generate",
-            "external-source-facts",
-            path(project.path()),
-            "--output",
-            path(&artifact),
-            "--runtime-config",
-            path(&runtime),
-            "--posture",
-            "development",
-        ]);
-        assert!(output.status.success(), "{output:?}");
-        assert!(artifact.is_file());
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        assert!(
-            stdout.contains("platform.posture.generated-audit-key"),
-            "{stdout}"
-        );
-        assert!(stdout.contains("/audit/hashKeyCustody"), "{stdout}");
+    let identity_project = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/fixtures/generic-operator-workflows");
+    for (artifact_kind, source) in [
+        ("external-source-facts", project.path()),
+        ("identity-facts", identity_project.as_path()),
+    ] {
+        for format in ["json", "human"] {
+            let artifact = scratch
+                .path()
+                .join(format!("{artifact_kind}-{format}.json"));
+            let output = bregctl(&[
+                "--format",
+                format,
+                "generate",
+                artifact_kind,
+                path(source),
+                "--output",
+                path(&artifact),
+                "--runtime-config",
+                path(&runtime),
+                "--posture",
+                "development",
+            ]);
+            assert!(output.status.success(), "{output:?}");
+            assert!(artifact.is_file());
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(
+                stdout.contains("platform.posture.generated-audit-key"),
+                "{stdout}"
+            );
+            assert!(stdout.contains("/audit/hashKeyCustody"), "{stdout}");
+        }
     }
 }
 
@@ -11615,6 +11704,27 @@ fn runtime_operators_preserve_all_production_posture_refusals() {
     );
     fs::write(&runtime, format!("{content}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/dek\n")).unwrap();
     for command in [
+        &["hook", "drain"][..],
+        &[
+            "hook",
+            "replay",
+            "--event-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--delivery-id",
+            "delivery",
+            "--expected-generation",
+            "1",
+        ][..],
+        &[
+            "hook",
+            "discard",
+            "--event-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--delivery-id",
+            "delivery",
+            "--expected-generation",
+            "1",
+        ][..],
         &["hook", "list"][..],
         &["proposal-retention", "list"][..],
         &[
@@ -11690,6 +11800,45 @@ fn direct_predecessor_reads_follow_the_declared_posture() {
         assert_eq!(result.status.code(), Some(1), "{result:?}");
         let report = json_stdout(&result);
         assert_eq!(report["diagnostics"][0]["code"], code, "{report}");
+        assert!(!output.exists());
+    }
+
+    for (command, arguments) in [
+        (
+            &["test"][..],
+            vec!["--credentials", path(&receipt), "--output", path(&output)],
+        ),
+        (
+            &["migration", "draft"][..],
+            vec![
+                "--module",
+                "core",
+                "--id",
+                "posture",
+                "--output",
+                path(&output),
+            ],
+        ),
+    ] {
+        let mut args = vec!["--format", "json"];
+        args.extend_from_slice(command);
+        args.extend([
+            path(project.path()),
+            "--baseline-package",
+            path(&baseline.package),
+            "--runtime-config",
+            path(&baseline.runtime_config),
+            "--posture",
+            "production",
+        ]);
+        args.extend(arguments);
+        let refused = bregctl(&args);
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let report = json_stdout(&refused);
+        assert_eq!(
+            report["diagnostics"][0]["code"], "package.baseline.permissions-refused",
+            "{report}"
+        );
         assert!(!output.exists());
     }
 }

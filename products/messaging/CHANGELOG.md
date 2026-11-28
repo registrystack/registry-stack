@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- When both the flag and the environment declare production, `messagingctl dev` names both settings to remove.
+
 - BREAKING: An undeclared posture is production. Runtime files with development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
 - BREAKING: `check` reports development settings as errors when no posture is declared. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
 - BREAKING: Use `loopback-plaintext` to bind a plaintext listener to loopback in either posture. Migration: Write tlsTermination: loopback-plaintext; settings it used to relax now follow the posture.

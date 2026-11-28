@@ -202,3 +202,39 @@ pub(crate) async fn append_maintenance_entries(
     }
     Ok(())
 }
+
+#[cfg(all(test, feature = "postgres-test"))]
+mod posture_tests {
+    use super::*;
+    use crate::postgres::posture_test_support::*;
+
+    #[tokio::test]
+    async fn postgres_posture_locked_history_maintenance_requires_a_match() {
+        let database = TestDatabase::create(2).await;
+        let expected = install_ready_identity(&database).await;
+        let (mut migration, task) = database.connect_migration().await;
+        for (recorded, declared) in MISMATCHES {
+            record_posture(&database, recorded).await;
+            let transaction = migration.transaction().await.unwrap();
+            assert!(
+                matches!(
+                    verify_ready_identity(&transaction, &expected, declared).await,
+                    Err(HistoryMaintenanceError::Unavailable)
+                ),
+                "{recorded:?} / {declared:?}"
+            );
+            transaction.rollback().await.unwrap();
+        }
+        let transaction = migration.transaction().await.unwrap();
+        verify_ready_identity(
+            &transaction,
+            &expected,
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        .unwrap();
+        transaction.rollback().await.unwrap();
+        task.abort();
+        database.cleanup().await;
+    }
+}

@@ -554,8 +554,9 @@ The residuals refer to these obligations by number.
    require the development posture. Production uses Transit for field encryption.
    Development HTTP responses carry `Registry-Posture: development`, and journal
    entries carry `posture`. Production BReg refuses development task-grant
-   status responses and signed development task assertions. A development
-   runtime accepts development task-grant peers. BReg omits HSTS on loopback
+   status responses and signed development task assertions. Production also
+   refuses development Evidence and Review peers. A development BReg accepts
+   development peers for all three clients. BReg omits HSTS on loopback
    listeners in development. Production sends HSTS on every API listener.
    Run your stack under one posture. A deployment that uses key-file signing in Render or
    Evidence runs in development. Use Transit for production signing.
@@ -564,7 +565,9 @@ The residuals refer to these obligations by number.
         crates/registry-breg/src/api/mod.rs, authenticated_router_with_listener;
         crates/registry-breg/src/startup.rs, open_registry_audit;
         crates/registry-breg/src/auth.rs, grant_context_check;
-        crates/registry-platform-oidc/src/task_grant.rs, TaskGrantStatusClient. */}
+        crates/registry-platform-oidc/src/task_grant.rs, TaskGrantStatusClient;
+        crates/registry-breg/src/runtime_config.rs, review_client_respects_the_runtime_posture;
+        crates/registry-breg/tests/postgres_action_evidence.rs, real_evidence_service_resolves_exact_selector_and_commits_verified_postgres_result. */}
 7. Use TLS to PostgreSQL and an HTTPS issuer.
    `database.testOnlyPlaintext` is refused unless BReg was built with its test-only PostgreSQL
    feature.
@@ -572,8 +575,8 @@ The residuals refer to these obligations by number.
    HTTP requires development and `authentication.oidc.allowInsecureHttp: true`
    (`BREG-RES-17`).
    Set `listener.publicOrigin` to HTTPS in production. A loopback HTTP public
-   origin requires development.
-   {/* Evidence: crates/registry-breg/tests/runtime_config.rs, http_public_origin_requires_development_posture. */}
+   origin requires development and a root path.
+   {/* Evidence: crates/registry-breg/tests/runtime_config.rs, http_public_origin_requires_development_posture, malformed_loopback_public_origins_get_listener_diagnostics_in_both_postures. */}
    For an issuer and for `listener.publicOrigin`, loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case. BReg connects to an issuer named `localhost` only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
    A pinned key set (`authentication.oidc.jwksSource.type: static`) holds public keys only.
    BReg refuses a key that carries a private or symmetric member (`d`, `p`, `q`, `dp`, `dq`, `qi`,

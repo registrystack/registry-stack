@@ -1091,7 +1091,7 @@ mod tests {
         )
         .unwrap();
 
-        let production = registry_platform_config::declared(Some("production")).unwrap();
+        let production = registry_platform_config::declared_from(Some("production"), None).unwrap();
         let result = registry_discovery::check_runtime_with_package(&runtime, false, production);
         assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
 
@@ -1149,15 +1149,52 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
+    #[test]
+    fn runtime_config_check_reports_a_package_root_lookup_error_as_unavailable() {
+        use std::os::unix::fs::symlink;
+        let root = fixture_copy(copy_runtime);
+        let runtime = root.path().join("runtime.yaml");
+        let package = root.path().join("package");
+        symlink(&package, &package).unwrap();
+        assert!(package.try_exists().is_err());
+        let text = fs::read_to_string(&runtime)
+            .unwrap()
+            .replace("/srv/registry-discovery/package", package.to_str().unwrap());
+        fs::write(&runtime, text).unwrap();
+
+        let (exit, stdout, stderr) = run_cli(&[
+            "check",
+            "--runtime-config",
+            runtime.to_str().unwrap(),
+            "--format",
+            "json",
+        ]);
+        assert_eq!(
+            exit,
+            ExitCode::from(report::OPERATIONAL_FAILURE_EXIT),
+            "{stdout}{stderr}"
+        );
+        let report = json(&stdout);
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "discovery.runtime.package-refused"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "/package/root");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn runtime_config_check_reports_an_unreadable_package_as_unavailable() {
         let root = fixture_copy(copy_runtime);
         let runtime = root.path().join("runtime.yaml");
         let mut package = root.path().join("package");
-        // Linux accepts this directory path but returns ENAMETOOLONG when
-        // the verifier appends SHA256SUMS, even for a privileged process.
-        const ROOT_LENGTH: usize = 4090;
+        // Keep the root just below PATH_MAX so appending SHA256SUMS
+        // fails even for a privileged process.
+        #[cfg(target_os = "linux")]
+        const ROOT_LENGTH: usize = 4096 - 6;
+        #[cfg(target_os = "macos")]
+        const ROOT_LENGTH: usize = 1024 - 6;
         while package.as_os_str().len() < ROOT_LENGTH {
             let remaining = ROOT_LENGTH - package.as_os_str().len() - 1;
             package.push("x".repeat(remaining.min(200)));

@@ -1314,6 +1314,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         .join(FILESYSTEM_PATH_CANARY);
     fs::write(&config_path, canary_runtime_document()).expect("canary runtime config writes");
     let output = Command::new(env!("CARGO_BIN_EXE_breg"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--runtime-config",
             config_path.to_str().expect("config path is UTF-8"),
@@ -1374,6 +1375,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     }
 
     let unknown_flag = Command::new(env!("CARGO_BIN_EXE_breg"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--config",
             config_path.to_str().expect("config path is UTF-8"),
@@ -1393,6 +1395,7 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     );
 
     let invalid_level = Command::new(env!("CARGO_BIN_EXE_breg"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--runtime-config",
             config_path.to_str().expect("config path is UTF-8"),
@@ -1823,10 +1826,16 @@ operationalTimeouts:
 fn an_unreadable_package_keeps_the_runtime_posture_refusal() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
+    let package = root.join("package");
+    fs::create_dir(&package).unwrap();
     let runtime = root.join("runtime.yaml");
     let config = runtime_without_telemetry(&root).replace(
         "  bind: 127.0.0.1:8080",
         "  bind: 127.0.0.1:8080\n  publicOrigin: http://127.0.0.1:8080",
+    );
+    let config = config.replace(
+        &format!("  root: {}\nauthentication:", root.display()),
+        &format!("  root: {}\nauthentication:", package.display()),
     );
     fs::write(&runtime, config).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_breg"))
@@ -1847,6 +1856,7 @@ fn an_unreadable_package_keeps_the_runtime_posture_refusal() {
         diagnostics.contains("startup.package.refused"),
         "{diagnostics}"
     );
+    assert!(diagnostics.contains("2 files"), "{diagnostics}");
 }
 
 #[cfg(feature = "postgres-test")]

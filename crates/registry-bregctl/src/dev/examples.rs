@@ -2579,6 +2579,7 @@ mod tests {
         parent: Option<uuid::Uuid>,
     ) -> Option<Value> {
         let mut command = Command::new(std::env::current_exe().unwrap());
+        command.env_remove("REGISTRY_STACK_POSTURE");
         command
             .env_remove("SSL_CERT_FILE")
             .args([
@@ -2633,6 +2634,7 @@ mod tests {
     impl OwnedDev {
         fn dev(&self, args: &[&str]) -> std::process::Output {
             Command::new(&self.ctl)
+                .env_remove("REGISTRY_STACK_POSTURE")
                 .env_remove("SSL_CERT_FILE")
                 .env(
                     "PATH",

@@ -1152,6 +1152,7 @@ fn database_test_only_plaintext_is_refused_outside_test_builds_with_its_fix() {
     );
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_breg"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(&config_path)
         .env_remove("RUST_LOG")
@@ -6504,6 +6505,31 @@ fn http_public_origin_requires_development_posture() {
         assert!(error.diagnostics(None)[0]
             .suggested_action
             .contains("HTTPS"));
+    }
+}
+
+#[test]
+fn malformed_loopback_public_origins_get_listener_diagnostics_in_both_postures() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for origin in [
+        "http://user@127.0.0.1:8080",
+        "http://127.0.0.1:8080?query",
+        "http://127.0.0.1:8080#fragment",
+        "http://127.0.0.1:8080/path",
+    ] {
+        let configured = base.replace(
+            "  bind: 127.0.0.1:8080",
+            &format!("  bind: 127.0.0.1:8080\n  publicOrigin: '{origin}'"),
+        );
+        for posture in [PRODUCTION_POSTURE, DEVELOPMENT_POSTURE] {
+            let error = parse_runtime_config(&configured, posture).unwrap_err();
+            assert_eq!(
+                error,
+                RuntimeConfigError::InvalidListener,
+                "{origin} {posture:?}"
+            );
+        }
     }
 }
 

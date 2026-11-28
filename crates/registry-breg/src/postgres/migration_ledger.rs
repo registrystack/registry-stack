@@ -1007,6 +1007,67 @@ pub(crate) fn statement_checksum(sql: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "postgres-test")]
+    #[tokio::test]
+    async fn postgres_posture_failed_and_reverted_outcomes_require_a_match() {
+        use super::super::posture_test_support::*;
+
+        let database = TestDatabase::create(2).await;
+        let (migration, task) = database.connect_migration().await;
+        migration
+            .batch_execute(
+                "CREATE TABLE registry_internal.registry_migrations (
+                activation_id uuid PRIMARY KEY,
+                package_digest text,
+                predecessor_package_digest text,
+                outcome text,
+                completed_at timestamptz,
+                posture text
+            )",
+            )
+            .await
+            .unwrap();
+        for outcome in ["failed", "reverted"] {
+            for (recorded, declared) in MISMATCHES {
+                let mut entry = entry(MigrationKind::MetadataOnly);
+                migration
+                    .execute(
+                        "INSERT INTO registry_internal.registry_migrations VALUES
+                        ($1, $2, $3, 'applying', NULL, $4)",
+                        &[
+                            &entry.activation_id,
+                            &entry.package_digest,
+                            &entry.predecessor_package_digest,
+                            &recorded,
+                        ],
+                    )
+                    .await
+                    .unwrap();
+                entry.posture = declared;
+                let refused = match outcome {
+                    "failed" => record_failed(&migration, &entry).await,
+                    _ => record_reverted(&migration, &entry).await,
+                };
+                assert!(
+                    matches!(refused, Err(PostgresKernelError::RegistryUnavailable)),
+                    "{outcome} / {recorded:?} / {declared:?}"
+                );
+                let row = migration.query_one(
+                    "SELECT outcome, completed_at IS NULL FROM registry_internal.registry_migrations",
+                    &[],
+                ).await.unwrap();
+                assert_eq!(row.get::<_, String>(0), "applying");
+                assert!(row.get::<_, bool>(1));
+                migration
+                    .execute("DELETE FROM registry_internal.registry_migrations", &[])
+                    .await
+                    .unwrap();
+            }
+        }
+        task.abort();
+        database.cleanup().await;
+    }
+
     #[test]
     fn stored_migration_kind_words_use_kebab_case() {
         assert_eq!(

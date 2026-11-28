@@ -1357,9 +1357,6 @@ mod tests {
         assert_eq!(report["status"], "domain-refusal");
     }
 
-    /// A plan that names a refusal keeps its own `refusals` member and
-    /// points at it, so a caller reading only the envelope finds the next
-    /// step; a plan that refuses nothing is complete.
     #[test]
     fn a_plan_posture_mismatch_has_the_shared_top_diagnostic() {
         let report = completed_report(
@@ -1383,6 +1380,9 @@ mod tests {
         );
     }
 
+    /// A plan that names a refusal keeps its own `refusals` member and
+    /// points at it, so a caller reading only the envelope finds the next
+    /// step; a plan that refuses nothing is complete.
     #[test]
     fn a_refused_plan_points_at_its_refusals() {
         let plan = json!({

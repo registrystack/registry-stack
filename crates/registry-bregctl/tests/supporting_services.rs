@@ -44,6 +44,7 @@ fn runtime(path: &Path, name: &str, exit: u8) -> PathBuf {
 
 fn run(service: Service, binary: &Path, capture: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(arguments)
         .env(service.unmanaged_env, binary)
         .env("RUNTIME_CAPTURE", capture)
@@ -60,6 +61,7 @@ fn unmanaged_service_serve_preserves_arguments_streams_process_status_and_lease(
         let capture = temp.path().join("capture");
         let lease = temp.path().join("lease");
         let mut launcher = Command::new("/bin/bash");
+        launcher.env_remove("REGISTRY_STACK_POSTURE");
         launcher
             .args([
                 "-c",
@@ -115,6 +117,7 @@ fn unmanaged_service_serve_falls_back_to_path() {
         ))
         .unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args([
                 service.command,
                 "serve",
@@ -157,6 +160,7 @@ fn managed_service_serve_uses_the_selected_generation_instead_of_path() {
         ))
         .unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args([
                 service.command,
                 "serve",
@@ -199,6 +203,7 @@ fn managed_service_does_not_fall_back_when_the_optional_binary_is_absent() {
         ))
         .unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args([
                 service.command,
                 "serve",
@@ -234,6 +239,7 @@ fn managed_service_refuses_a_same_version_unmanaged_override() {
         fs::write(&outside, fs::read(&selected).unwrap()).unwrap();
         let capture = temp.path().join("capture");
         let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args([
                 service.command,
                 "serve",
@@ -351,5 +357,49 @@ fn service_serve_rejects_explicit_human_report_format_before_launch() {
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("--format does not apply"));
         assert!(!capture.exists(), "the service must not start");
+    }
+}
+
+#[test]
+fn service_wrappers_forward_the_resolved_posture() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("posture-probe");
+    fs::write(
+        &binary,
+        "#!/bin/sh\nprintf '%s\\n' \"${REGISTRY_STACK_POSTURE-unset}\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+
+    for service in [MCP, REVIEW] {
+        for action in ["check", "serve"] {
+            for (flag, environment, expected) in [
+                (Some("production"), None, "production"),
+                (Some("development"), None, "development"),
+                (None, Some("development"), "development"),
+                (None, None, "production"),
+            ] {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+                command
+                    .args([
+                        service.command,
+                        action,
+                        "--runtime-config",
+                        "/tmp/runtime.yaml",
+                    ])
+                    .env(service.unmanaged_env, &binary)
+                    .env_remove("RSTACK_GENERATION_DIR")
+                    .env_remove("REGISTRY_STACK_POSTURE");
+                if let Some(value) = flag {
+                    command.args(["--posture", value]);
+                }
+                if let Some(value) = environment {
+                    command.env("REGISTRY_STACK_POSTURE", value);
+                }
+                let output = command.output().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+            }
+        }
     }
 }

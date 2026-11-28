@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Start a local development run from the starter with `rstack dev start`.
+- Typed remote mutations probe the Coordinator API through an unauthenticated `GET /v1/doctor`. Production commands refuse a development or malformed posture mark before sending the mutation.
 
 - BREAKING: An undeclared posture is production.
   Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.

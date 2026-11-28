@@ -30,9 +30,10 @@ It needs no checkout, Python launcher, shell script, or OpenSSL installation.
 hash key for the session. An explicit production declaration refuses the
 command before it writes anything.
 With no declaration, `bregctl dev` runs in development and its report shows
-`default` as the posture source. If doctor reports a posture mismatch, run
-`bregctl dev stop --remove` to discard the retained development database,
-then run `bregctl dev start` to recreate it.
+`default` as the posture source. A doctor report can include a posture
+mismatch beside another refusal. To discard the mismatched local database,
+run `bregctl dev stop --remove`. Run `bregctl dev start` to recreate it.
+{/* Evidence: crates/registry-bregctl/tests/cli/posture.rs, opposite_activation_posture_refuses_planning_and_apply_and_reports_findings. */}
 {/* Evidence: crates/registry-bregctl/src/lib.rs, DEV_POSTURE;
     crates/registry-bregctl/src/dev/tests.rs, activation_preflight_refuses_a_successful_doctor_posture_finding. */}
 

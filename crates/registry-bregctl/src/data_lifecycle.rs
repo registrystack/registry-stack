@@ -993,9 +993,10 @@ fn map_ingestion_client_error(error: BaseRegistryClientError) -> DataLifecycleEr
         BaseRegistryClientError::InvalidRequest { .. } => {
             DataLifecycleError::Data(DataError::InvalidBinding)
         }
-        BaseRegistryClientError::Protocol { .. } | BaseRegistryClientError::DevelopmentPeer => {
+        BaseRegistryClientError::Protocol { .. } => {
             DataLifecycleError::Data(DataError::InvalidResponse)
         }
+        BaseRegistryClientError::DevelopmentPeer => DataLifecycleError::DevelopmentPeer,
         BaseRegistryClientError::Problem {
             code: BRegProblemCode::IngestionRunBlocked,
             ..
@@ -1769,10 +1770,10 @@ mod tests {
     use registry_breg::data::execute_export_page;
 
     #[test]
-    fn a_development_peer_ingestion_answer_maps_to_an_invalid_response() {
+    fn a_development_peer_ingestion_answer_keeps_its_refusal_kind() {
         assert!(matches!(
             map_ingestion_client_error(BaseRegistryClientError::DevelopmentPeer),
-            DataLifecycleError::Data(DataError::InvalidResponse)
+            DataLifecycleError::DevelopmentPeer
         ));
     }
 
@@ -2053,23 +2054,11 @@ mod tests {
         .expect("large-manifest package source serializes")
     }
 
-    #[test]
-    fn data_validate_accepts_a_verified_manifest_above_the_checkpoint_bound() {
+    fn publish_data_package_fixture(path: &Path, source: Vec<u8>) {
         use registry_breg::package::{
             prepare_package, PackageBuildRequest, PackageMigrationPlanInput, PackageSourceFile,
         };
 
-        let directory = tempfile::tempdir().expect("large package test directory is created");
-        let package = directory.path().join("package");
-        let input = directory.path().join("input.jsonl");
-        let source = large_manifest_package_source();
-        let project = parse_project_json(&source).expect("large package project parses");
-        let compiled = compile_project(&project, &[], CompileProfile::Production)
-            .expect("large package project compiles in production");
-        assert!(
-            compiled.ddl().statements.len() <= registry_breg::package::MAX_MIGRATION_STATEMENTS,
-            "the regression package remains inside the supported migration capacity"
-        );
         let prepared = prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: "data-package-regression".to_owned(),
@@ -2084,11 +2073,171 @@ mod tests {
                 bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n".to_vec(),
             },
             migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
-        })
-        .expect("a package with a manifest above the checkpoint bound prepares");
+        }).expect("the data fixture package prepares");
         prepared
-            .publish_to_directory(&package)
-            .expect("the large manifest package publishes");
+            .publish_to_directory(path)
+            .expect("the data fixture package publishes");
+    }
+
+    #[test]
+    fn ingestion_and_statistics_commands_apply_the_declared_peer_policy() {
+        let scratch = tempfile::tempdir().unwrap();
+        let package = scratch.path().join("package");
+        let input = scratch.path().join("input.jsonl");
+        let token = scratch.path().join("token");
+        let checkpoint = scratch.path().join("checkpoint.json");
+        publish_data_package_fixture(&package, large_manifest_package_source());
+        fs::write(
+            &input,
+            b"{\"operation\":\"create\",\"data\":{\"label\":\"AA\"}}\n",
+        )
+        .unwrap();
+        fs::write(&token, b"synthetic-token").unwrap();
+        let import = [
+            "data",
+            "import",
+            "--package",
+            package.to_str().unwrap(),
+            "--record-type",
+            "case-0",
+            "--profile",
+            "reviewer-0",
+            "--operation",
+            "create",
+            "--input",
+            input.to_str().unwrap(),
+            "--checkpoint",
+            checkpoint.to_str().unwrap(),
+        ];
+        let list = [
+            "data",
+            "runs",
+            "list",
+            "--record-route",
+            "cases-0",
+            "--profile",
+            "reviewer-0",
+        ];
+        let cancel = [
+            "data",
+            "runs",
+            "cancel",
+            "--record-route",
+            "cases-0",
+            "--profile",
+            "reviewer-0",
+            "--run-id",
+            RUN_ID,
+        ];
+        let publish = [
+            "statistics",
+            "publish",
+            "--dataset",
+            "dataset",
+            "--period",
+            "2026",
+            "--status",
+            "final",
+            "--profile",
+            "operator",
+            "--idempotency-key",
+            "publish-fixture",
+        ];
+        let withdraw = [
+            "statistics",
+            "withdraw",
+            "--dataset",
+            "dataset",
+            "--period",
+            "2026",
+            "--version",
+            "1",
+            "--reason",
+            "computation-error",
+            "--profile",
+            "operator",
+            "--idempotency-key",
+            "withdraw-fixture",
+        ];
+        for (command, prefix, response_failure) in [
+            (
+                import.as_slice(),
+                "data.import",
+                "data.import.response.refused",
+            ),
+            (
+                list.as_slice(),
+                "data.runs.list",
+                "data.runs.list.response.refused",
+            ),
+            (
+                cancel.as_slice(),
+                "data.runs.cancel",
+                "data.runs.cancel.response.refused",
+            ),
+            (
+                publish.as_slice(),
+                "statistics",
+                "statistics.response.invalid",
+            ),
+            (
+                withdraw.as_slice(),
+                "statistics",
+                "statistics.response.invalid",
+            ),
+        ] {
+            for posture in ["production", "development"] {
+                // A malformed body distinguishes passing the peer gate from
+                // refusing the mark, independently of successful DTO decoding.
+                let marked_response = String::from_utf8(ingestion_http_response(200, "OK", b"{}"))
+                    .unwrap()
+                    .replacen("\r\n", "\r\nRegistry-Posture: development\r\n", 1);
+                let (address, server) = spawn_one_response_server(marked_response.into_bytes());
+                let url = format!("http://{address}");
+                let mut arguments = vec!["bregctl", "--format", "json"];
+                arguments.extend_from_slice(command);
+                arguments.extend([
+                    "--posture",
+                    posture,
+                    "--breg-url",
+                    &url,
+                    "--access-token-file",
+                    token.to_str().unwrap(),
+                ]);
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                let status = crate::run_from(arguments, &mut stdout, &mut stderr);
+                assert_eq!(
+                    status,
+                    std::process::ExitCode::from(1),
+                    "{prefix} {posture}"
+                );
+                let report: Value = serde_json::from_slice(&stdout).unwrap();
+                let expected = if posture == "production" {
+                    format!("{prefix}.development-peer")
+                } else {
+                    response_failure.to_owned()
+                };
+                assert_eq!(report["diagnostics"][0]["code"], expected, "{report}");
+                assert!(!server.join().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn data_validate_accepts_a_verified_manifest_above_the_checkpoint_bound() {
+        let directory = tempfile::tempdir().expect("large package test directory is created");
+        let package = directory.path().join("package");
+        let input = directory.path().join("input.jsonl");
+        let source = large_manifest_package_source();
+        let project = parse_project_json(&source).expect("large package project parses");
+        let compiled = compile_project(&project, &[], CompileProfile::Production)
+            .expect("large package project compiles in production");
+        assert!(
+            compiled.ddl().statements.len() <= registry_breg::package::MAX_MIGRATION_STATEMENTS,
+            "the regression package remains inside the supported migration capacity"
+        );
+        publish_data_package_fixture(&package, source);
         assert!(
             fs::metadata(package.join("package.json")).unwrap().len() > MAX_CHECKPOINT_BYTES,
             "the regression package must cross the stale data-workflow read bound"
@@ -4447,6 +4596,7 @@ mod tests {
             return;
         }
         let status = Command::new(std::env::current_exe().unwrap())
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("--exact")
             .arg("data_lifecycle::tests::data_http_client_ignores_ambient_proxy_variables_child")
             .arg("--nocapture")

@@ -110,9 +110,11 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                     .write_all(br#"{"keys":[{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"synthetic-doctor-jwks"}]}"#)
                     .unwrap();
                 let run = |args: &[&str]| {
-                    Command::new(env!("CARGO_BIN_EXE_bregctl"))
-                        .args(["--format", "json"])
-                        .args(args)
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+                    if !args.contains(&"--format") {
+                        command.args(["--format", "json"]);
+                    }
+                    command.args(args)
                         .env_remove("REGISTRY_STACK_POSTURE")
                         .env(
                             VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
@@ -184,6 +186,24 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                     );
                 }
                 assert!(!unopened_audit.exists(), "a posture refusal must precede opening audit");
+                let reconcile_target = config_root.path().join("reconcile-target");
+                prepare_packaging_candidate(&project, &format!("sha256:{}", "4".repeat(64)))
+                    .publish_to_directory(&reconcile_target)
+                    .unwrap();
+                for flags in [&[][..], &["--execute"][..]] {
+                    let mut arguments = vec![
+                        "migration", "reconcile", "--runtime-config", path(&config),
+                        "--package", path(&reconcile_target), "--posture", declared,
+                        "--operator-reference", "synthetic-reconcile-posture",
+                    ];
+                    arguments.extend(flags);
+                    let refused = run(&arguments);
+                    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+                    let report = json_stdout(&refused);
+                    assert_eq!(report["diagnostics"][0]["code"], "breg.activation.posture-mismatch", "{report}");
+                    assert_eq!(report["diagnostics"][0]["path"], "/database", "{report}");
+                }
+
                 let checked = status(declared);
                 assert!(checked.status.success(), "{checked:?}");
                 let checked = json_stdout(&checked);
@@ -219,6 +239,45 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                 if declared == "development" {
                     assert!(has_code("advisories", "breg.posture.http-public-origin"), "{doctor_report}");
                 }
+                if recorded == "development" {
+                    let development_config = config_root.path().join("development.yaml");
+                    let development = fs::read_to_string(&config).unwrap().replace(
+                        "audit:\n",
+                        "audit:\n  hashKeyCustody: development-generated\n",
+                    );
+                    fs::write(&development_config, development).unwrap();
+                    for command in ["hook", "proposal-retention"] {
+                        for format in ["json", "human"] {
+                            let output = run(&[
+                                "--format", format, command, "list", "--runtime-config",
+                                path(&development_config), "--posture", "development",
+                            ]);
+                            assert!(output.status.success(), "{output:?}");
+                            if format == "json" {
+                                let report = json_stdout(&output);
+                                assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| {
+                                    item["code"] == "platform.posture.generated-audit-key"
+                                        && item["path"] == "/audit/hashKeyCustody"
+                                }), "{report}");
+                            } else {
+                                let report = String::from_utf8(output.stdout).unwrap();
+                                assert!(report.contains("platform.posture.generated-audit-key"), "{report}");
+                                assert!(report.contains("/audit/hashKeyCustody"), "{report}");
+                            }
+                        }
+                    }
+                }
+                let cursor_config = config_root.path().join("invalid-cursor.yaml");
+                let source = fs::read_to_string(&config).unwrap();
+                fs::write(&cursor_config, source.replace(
+                    &format!("  secretRef: secret:file/{PACKAGE_VALUE_CANARY}"),
+                    "  secretRef: secret:file/missing-cursor-key",
+                )).unwrap();
+                let refused = run(&["doctor", "--runtime-config", path(&cursor_config), "--posture", declared]);
+                assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+                let report = json_stdout(&refused);
+                assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| item["code"] == "startup.cursor.refused"), "{report}");
+                assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| item["code"] == "breg.activation.posture-mismatch"), "{report}");
                 let refresh_config = config_root.path().join("invalid-refresh.yaml");
                 let source = fs::read_to_string(&config).unwrap();
                 fs::write(&refresh_config, format!("{source}
@@ -240,6 +299,13 @@ externalRefresh:
                 assert_eq!(
                     refresh_report["diagnostics"][0]["code"],
                     "breg.external-refresh.view-missing",
+                    "{refresh_report}"
+                );
+                assert!(
+                    refresh_report["diagnostics"].as_array().unwrap().iter().any(
+                        |item| item["code"] == "breg.activation.posture-mismatch"
+                            && item["path"] == "/database"
+                    ),
                     "{refresh_report}"
                 );
             });

@@ -557,3 +557,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, feature = "postgres-test"))]
+pub(crate) mod posture_test_support;
