@@ -186,7 +186,7 @@ fn runtime_json(source: &Path, component: &str) -> String {
         "allowedPrivateCidrs": ["10.0.0.0/8"],
         "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "testOnlyPlaintext": true
+            "transport": "loopback-plaintext"
         },
         "destinations": {"coordinator-test": {
             "type": "signed-coordinator-event",
