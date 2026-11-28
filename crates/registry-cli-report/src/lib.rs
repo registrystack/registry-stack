@@ -3,6 +3,7 @@
 
 use std::io::{self, Write};
 
+use registry_platform_config::FoundExplicitSetting;
 #[doc(hidden)]
 pub use registry_platform_posture::declared_from;
 /// The declaration used by CLI report producers.
@@ -94,6 +95,23 @@ pub struct ExplicitSettingLine {
     pub line: Option<usize>,
     pub column: Option<usize>,
     pub summary: String,
+}
+
+impl ExplicitSettingLine {
+    /// The line a `check` report lists for `found`. `file` names the document
+    /// the pointer refers to: the runtime file, or the package for a setting
+    /// found there.
+    #[must_use]
+    pub fn from_found(found: &FoundExplicitSetting, file: Option<&str>) -> Self {
+        Self {
+            code: found.setting.code.to_owned(),
+            file: file.map(ToOwned::to_owned),
+            pointer: found.pointer.clone(),
+            line: found.position.map(|position| position.line),
+            column: found.position.map(|position| position.column),
+            summary: found.setting.summary.to_owned(),
+        }
+    }
 }
 
 impl Serialize for ExplicitSettingLine {

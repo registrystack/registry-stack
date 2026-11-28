@@ -195,14 +195,7 @@ fn generate(args: &IdentityFactsArgs) -> Result<Generated, Refused> {
         .posture
         .explicit_settings()
         .iter()
-        .map(|setting| ExplicitSettingLine {
-            code: setting.setting.code.to_owned(),
-            file: Some(runtime_path.to_string()),
-            pointer: setting.pointer.clone(),
-            line: setting.position.map(|position| position.line),
-            column: setting.position.map(|position| position.column),
-            summary: setting.setting.summary.to_owned(),
-        })
+        .map(|setting| ExplicitSettingLine::from_found(setting, Some(&runtime_path)))
         .collect();
     let runtime = runtime.config;
     let mut issuers = runtime.oidc.set.iter();

@@ -948,14 +948,10 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
             match explicit
                 .iter()
                 .map(|found| {
-                    serde_json::to_value(registry_cli_report::ExplicitSettingLine {
-                        code: found.setting.code.to_owned(),
-                        file: Some(file.clone()),
-                        pointer: found.pointer.clone(),
-                        line: found.position.map(|position| position.line),
-                        column: found.position.map(|position| position.column),
-                        summary: found.setting.summary.to_owned(),
-                    })
+                    serde_json::to_value(registry_cli_report::ExplicitSettingLine::from_found(
+                        found,
+                        Some(&file),
+                    ))
                 })
                 .collect::<Result<Vec<_>, _>>()
             {

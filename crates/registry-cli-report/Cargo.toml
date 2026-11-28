@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+registry-platform-config.workspace = true
 registry-platform-posture.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -532,6 +532,8 @@
   `explicitProductionSettings` after `posture`, each with `code`, an optional
   `file`, `pointer`, `line` and `column`, and a value-free `summary`. The list
   is not a diagnostic, so `--deny-warnings` does not change.
+  `ExplicitSettingLine::from_found` in `registry-cli-report` builds the line
+  for a named file.
 
 - `registry-platform-oidc` can refuse task authority that comes from a
   development peer. `TaskGrantStatusClient::new` and

@@ -1260,14 +1260,7 @@ fn check_runtime_file(
         .explicit_settings
         .get_or_insert_with(Vec::new)
         .extend(check.explicit_settings.iter().map(|found| {
-            registry_cli_report::ExplicitSettingLine {
-                code: found.setting.code.to_owned(),
-                file: Some(given.clone()),
-                pointer: found.pointer.clone(),
-                line: found.position.map(|position| position.line),
-                column: found.position.map(|position| position.column),
-                summary: found.setting.summary.to_owned(),
-            }
+            registry_cli_report::ExplicitSettingLine::from_found(found, Some(&given))
         }));
     for mut diagnostic in check.diagnostics {
         if let Some(source) = &mut diagnostic.source {
