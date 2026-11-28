@@ -529,9 +529,9 @@ fn compile_preview_seal_renders_the_sealed_variant_without_a_signature() {
 
 #[test]
 fn package_excludes_development_companions() {
-    let root = tempfile::tempdir().unwrap();
-    let bundle = root.path().join("bundle");
-    let package = root.path().join("package");
+    let root = tempdir();
+    let bundle = root.join("bundle");
+    let package = root.join("package");
     assert!(run(&["init", bundle.to_str().unwrap()]).status.success());
     std::fs::copy(bundle.join("dev.yaml"), bundle.join("copy-of-dev.yml")).unwrap();
     std::fs::write(
