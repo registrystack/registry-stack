@@ -378,8 +378,8 @@ claim_names() {
 		journey_harness_failure "cannot read the claims of the token of $CELL"
 }
 
-# logged_stage FILE...: the last authentication stage the product logged,
-# from its `stage` field or the `failed_check` label of its refusal line.
+# logged_stage FILE...: the stage word for the `failed_check` label of the last
+# refusal line the product logged, or nothing when that label has no stage word.
 logged_stage() {
 	perl -e '
 		my $stage = "";
@@ -403,16 +403,12 @@ logged_stage() {
 			my $text = <$fh>;
 			next unless defined $text;
 			$text =~ s/\e\[[0-9;]*m//g;
-			# A product logs `stage`, or the refusal recorder `failed_check`
-			# label, which the map turns into the stage word the table lists.
-			# A label with no stage word is skipped, so the problem code names
-			# the refusal instead.
-			while ($text =~ /"stage"\s*:\s*"([a-z]+(?:-[a-z]+)*)"|\bstage=("?)([a-z]+(?:-[a-z]+)*)\2|\bfailed_check"?[:=]\s*"([a-z]+(?:-[a-z]+)*)"/g) {
-				if (defined $4) {
-					$stage = $check_stage{$4} if exists $check_stage{$4};
-				} else {
-					$stage = defined $1 ? $1 : $3;
-				}
+			# The refusal recorder writes a `failed_check` label, which the map
+			# turns into the stage word the table lists. The last refusal
+			# decides, and a label with no stage word leaves the stage empty,
+			# so the problem code names the refusal instead.
+			while ($text =~ /\bfailed_check"?[:=]\s*"([a-z]+(?:-[a-z]+)*)"/g) {
+				$stage = exists $check_stage{$1} ? $check_stage{$1} : "";
 			}
 		}
 		print $stage;' "$@"

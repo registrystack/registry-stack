@@ -9827,9 +9827,13 @@ fn acceptance_case_time(
 }
 
 async fn acceptance_runtime() -> AcceptanceRuntime {
+    acceptance_runtime_with(authenticator()).await
+}
+
+async fn acceptance_runtime_with(authenticator: Authenticator) -> AcceptanceRuntime {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
     let runtime = Arc::new(
-        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator)
             .await
             .expect("one immutable acceptance runtime initializes"),
     );

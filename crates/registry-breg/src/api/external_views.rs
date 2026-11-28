@@ -398,6 +398,7 @@ async fn admit_source_change(
         } else if claims.requester_client() != Some(notifier.requester_client.as_str()) {
             Err(FailedCheck::RequesterClient)
         } else if !claims.has_scope(&notifier.required_scope) {
+            claims.declare_scope_refusal([&notifier.required_scope], None);
             Err(FailedCheck::Scope)
         } else {
             Ok(())

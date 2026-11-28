@@ -146,7 +146,11 @@ schedulingctl provision --runtime-config /etc/registry-scheduling/runtime.yaml -
 The `admin-url` file holds one PostgreSQL URL for that administrator, for example
 `postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
 `CREATEDB` and does not need to be a superuser. The URL must name the same host and port as the two
-product URLs, or `provision` refuses it as `platform.provision.target-mismatch`. To pass the URL in
+product URLs, or `provision` refuses it as `platform.provision.target-mismatch`. It must also name a
+database other than the product database, such as `postgres`, or `provision` refuses it as
+`platform.provision.target-invalid`. Where the administrator may connect only to the product
+database, `provision` cannot run: add `--print-sql` and give the script to the person who
+administers the server. To pass the URL in
 an environment variable instead, use `--admin-url-env NAME`. The connection requires TLS and
 verifies the server certificate. Set
 `database.caBundleRef` in the runtime file to trust a private CA. The command never prints the

@@ -36,6 +36,7 @@ impl RefusalCode {
     /// code, so a code added to the vocabulary does not compile until it is
     /// sorted here. The vocabulary test in `http.rs` pins the refusal set.
     #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
     pub const fn of(problem: ProblemCode) -> Option<Self> {
         match problem {
             ProblemCode::AuthenticationRefused => Some(Self::AuthenticationRefused),

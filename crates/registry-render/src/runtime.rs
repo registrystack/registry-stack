@@ -758,7 +758,7 @@ impl AuditRuntime {
 /// retired apiVersion.
 #[must_use]
 pub const fn runtime_loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new(RENDER_RUNTIME_ENVELOPE)
+    RuntimeConfigLoader::new_without_posture(RENDER_RUNTIME_ENVELOPE)
         .removed_keys(RENDER_REMOVED_KEYS)
         .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
         .require_trusted_ownership()
@@ -1136,7 +1136,7 @@ fn findings(
     }
     match (&runtime.authentication.oidc, &runtime.authentication.api_key_ref) {
         (Some(oidc), None) => {
-            findings.extend([oidc.provider.check("authentication.oidc", true), oidc.clients.check("authentication.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
+            findings.extend([oidc.provider.check_without_posture("authentication.oidc", true), oidc.clients.check("authentication.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
             if let registry_platform_config::JwksSource::Static { document_ref } = &oidc.provider.jwks_source {
                 if let Err(error) = runtime.secret_providers.check_reference("authentication.oidc.jwksSource.documentRef", document_ref) { findings.push(block_finding(&error)); }
             }

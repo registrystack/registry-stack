@@ -18,7 +18,7 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use registry_platform_authcommon::FailedCheck;
+use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     grant_claims, ClaimNames, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
@@ -29,6 +29,9 @@ use crate::config::{OfferAuthorizationConfig, ValidationMode};
 
 /// The access-token types this service accepts, which are the two spellings
 /// RFC 9068 permits for a JWT access token.
+/// The claim the platform verifier reads scopes from unless configured.
+const DEFAULT_SCOPE_CLAIM: &str = "scope";
+
 const ACCESS_TOKEN_TYPES: [&str; 2] = ["at+jwt", "application/at+jwt"];
 
 /// What a verified offer token established.
@@ -77,6 +80,12 @@ impl AuthorizationError {
 #[async_trait]
 pub trait OfferAuthorizer: Send + Sync {
     async fn authorize(&self, credential: &str) -> Result<AuthorizedOffer, AuthorizationError>;
+
+    /// What a scope refusal may say about the deployment, when the authorizer
+    /// has a scope gate. Both values are configured, never read from a token.
+    fn declared_scope(&self) -> Option<DeclaredScope> {
+        None
+    }
 }
 
 /// The configured issuer's access-token verifier.
@@ -88,6 +97,8 @@ pub struct MintResourceServer {
     /// token's scope set after verification, with the same closed refusal a
     /// refused client gets, before any offer is stored or Evidence contacted.
     required_scopes: Vec<String>,
+    /// The claim the verifier reads scopes from.
+    scope_claim: String,
 }
 
 impl MintResourceServer {
@@ -107,9 +118,12 @@ impl MintResourceServer {
             fetch_url_policy(config, mode),
         ));
         let required_scopes = config.required_scopes.items().to_vec();
+        let profile = verifier_profile(config);
+        let scope_claim = profile.scope_claim.clone();
         Self {
-            verifier: Arc::new(TokenVerifier::new(verifier_profile(config), fetcher)),
+            verifier: Arc::new(TokenVerifier::new(profile, fetcher)),
             required_scopes,
+            scope_claim,
             claims: config.claims.clone(),
         }
     }
@@ -122,6 +136,7 @@ impl MintResourceServer {
         Self {
             verifier,
             required_scopes: Vec::new(),
+            scope_claim: DEFAULT_SCOPE_CLAIM.to_owned(),
             claims: ClaimNames::default(),
         }
     }
@@ -192,6 +207,13 @@ fn fetch_url_policy(config: &OfferAuthorizationConfig, mode: ValidationMode) -> 
 
 #[async_trait]
 impl OfferAuthorizer for MintResourceServer {
+    fn declared_scope(&self) -> Option<DeclaredScope> {
+        (!self.required_scopes.is_empty()).then(|| {
+            DeclaredScope::new(&self.scope_claim)
+                .with_required_scope(self.required_scopes.join(" "))
+        })
+    }
+
     async fn authorize(&self, credential: &str) -> Result<AuthorizedOffer, AuthorizationError> {
         if credential.is_empty() {
             return Err(AuthorizationError::Missing);
@@ -313,6 +335,22 @@ mod tests {
         let config = valid_config();
         let server = MintResourceServer::from_config(&config.offers, config.validation_mode);
         assert_eq!(server.authorize("").await, Err(AuthorizationError::Missing));
+    }
+
+    #[test]
+    fn the_declared_scope_is_the_configured_claim_and_scopes() {
+        let mut config = valid_config();
+        config.offers.required_scopes =
+            crate::config::Restriction::Listed(vec!["offers:create".to_owned()]);
+        let server = MintResourceServer::from_config(&config.offers, config.validation_mode);
+        let declared = server.declared_scope().expect("a scope gate is declared");
+        assert_eq!(declared.scope_claim(), "scope");
+        assert_eq!(declared.required_scope(), Some("offers:create"));
+        assert_eq!(declared.access_profile(), None);
+
+        config.offers.required_scopes = crate::config::Restriction::Unrestricted;
+        let server = MintResourceServer::from_config(&config.offers, config.validation_mode);
+        assert_eq!(server.declared_scope(), None);
     }
 
     #[test]

@@ -398,7 +398,10 @@ impl DeliveryService {
     ) -> Self {
         let store = Arc::new(OfferStore::new(&config.store));
         let nonces = NonceMinter::new(config.store.nonce_lifetime_seconds);
-        let metrics = Arc::new(Metrics::new(config.store.maximum_offers));
+        let metrics = Arc::new(
+            Metrics::new(config.store.maximum_offers)
+                .with_declared_scope(authorizer.declared_scope()),
+        );
         let limits = Limits::new(&config.rate_limits);
         Self {
             config,
@@ -1139,11 +1142,9 @@ async fn credential(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some(access_token) = bearer_credential(&headers) else {
-        return unauthorized(
-            FailedCheck::CredentialMissing,
-            "a bearer access token is required",
-        );
+    let access_token = match bearer_credential(&headers) {
+        Ok(access_token) => access_token,
+        Err(check) => return unauthorized(check, "a bearer access token is required"),
     };
     let access_token = Zeroizing::new(access_token.to_owned());
     stage.mark_claiming_token();
@@ -1518,7 +1519,8 @@ async fn authorize_offer(
     service: &DeliveryService,
     headers: &HeaderMap,
 ) -> Result<crate::authorizer::AuthorizedOffer, Response> {
-    let credential = bearer_credential(headers).unwrap_or_default();
+    let credential = bearer_credential(headers)
+        .map_err(|check| unauthorized(check, "a bearer access token is required"))?;
     service
         .authorizer
         .authorize(credential)
@@ -1544,15 +1546,31 @@ async fn authorize_offer(
         })
 }
 
-/// The bearer credential a request presented, if it presented one.
-fn bearer_credential(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, credential) = value.split_once(' ')?;
+/// The bearer credential a request presented, or the check its header failed:
+/// no header, or one naming another scheme, is a missing credential. An
+/// unreadable header, or the Bearer scheme with no token after it, is a
+/// malformed credential.
+fn bearer_credential(headers: &HeaderMap) -> Result<&str, FailedCheck> {
+    let value = headers
+        .get(AUTHORIZATION)
+        .ok_or(FailedCheck::CredentialMissing)?
+        .to_str()
+        .map_err(|_| FailedCheck::CredentialMalformed)?;
+    let Some((scheme, credential)) = value.split_once(' ') else {
+        return Err(if value.eq_ignore_ascii_case("Bearer") {
+            FailedCheck::CredentialMalformed
+        } else {
+            FailedCheck::CredentialMissing
+        });
+    };
     if !scheme.eq_ignore_ascii_case("Bearer") {
-        return None;
+        return Err(FailedCheck::CredentialMissing);
     }
     let credential = credential.trim();
-    (!credential.is_empty()).then_some(credential)
+    if credential.is_empty() {
+        return Err(FailedCheck::CredentialMalformed);
+    }
+    Ok(credential)
 }
 
 /// The system clock, which is the reading a serving process takes.
@@ -1642,12 +1660,10 @@ fn warn_on_unusable_issuance(error: &IssuanceError) {
 fn issuance_response(service: &DeliveryService, error: &IssuanceError) -> Response {
     record_issuance_outcome(service, error);
     match error {
-        IssuanceError::Refused => refused(
-            problem(
-                StatusCode::FORBIDDEN,
-                "invalid_credential_request",
-                "the credential source refused this request",
-            ),
+        IssuanceError::Refused => refusal(
+            StatusCode::FORBIDDEN,
+            "invalid_credential_request",
+            "the credential source refused this request",
             FailedCheck::SourceAuthority,
         ),
         IssuanceError::NotAvailable => problem(
@@ -1724,16 +1740,53 @@ fn refused(mut response: Response, check: FailedCheck) -> Response {
 }
 
 fn unauthorized(check: FailedCheck, description: &'static str) -> Response {
-    let mut response = problem(StatusCode::UNAUTHORIZED, "invalid_token", description);
+    let mut response = problem_answer(StatusCode::UNAUTHORIZED, "invalid_token", description);
     response
         .headers_mut()
         .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
     refused(response, check)
 }
 
+/// Whether a status is an authentication or authorization refusal, which names
+/// the check that failed.
+fn is_refusal_status(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
+/// An authentication or authorization refusal with the check that failed.
+fn refusal(
+    status: StatusCode,
+    error: &'static str,
+    description: impl Into<Cow<'static, str>>,
+    check: FailedCheck,
+) -> Response {
+    refused(problem_answer(status, error, description), check)
+}
+
+/// One error shape for every answer that is not an authentication or
+/// authorization refusal. Those are built by [`refusal`] and [`unauthorized`],
+/// which take the failed check.
+fn problem(
+    status: StatusCode,
+    error: &'static str,
+    description: impl Into<Cow<'static, str>>,
+) -> Response {
+    if is_refusal_status(status) {
+        tracing::error!(
+            target: "registry_evidence_oid4vci::service",
+            "a refusal was built without naming its failed check"
+        );
+        debug_assert!(
+            false,
+            "a refusal is built with `refusal`, which names its check"
+        );
+    }
+    problem_answer(status, error, description)
+}
+
 /// One error shape for every refusal: the OAuth members a wallet already reads,
 /// carrying fixed text chosen here and never any part of the request.
-fn problem(
+fn problem_answer(
     status: StatusCode,
     error: &'static str,
     description: impl Into<Cow<'static, str>>,
@@ -1800,6 +1853,78 @@ async fn add_no_store(request: Request<Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bearer_header_is_classified_by_what_it_lacks() {
+        let classify = |value: Option<&[u8]>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(
+                    AUTHORIZATION,
+                    HeaderValue::from_bytes(value).expect("test header is valid"),
+                );
+            }
+            bearer_credential(&headers).map(str::to_owned)
+        };
+        assert_eq!(classify(Some(b"Bearer abc")), Ok("abc".to_owned()));
+        assert_eq!(classify(Some(b"bearer abc")), Ok("abc".to_owned()));
+        assert_eq!(classify(None), Err(FailedCheck::CredentialMissing));
+        assert_eq!(
+            classify(Some(b"Basic abc")),
+            Err(FailedCheck::CredentialMissing)
+        );
+        assert_eq!(
+            classify(Some(b"Basic")),
+            Err(FailedCheck::CredentialMissing)
+        );
+        assert_eq!(
+            classify(Some(b"Bearer ")),
+            Err(FailedCheck::CredentialMalformed)
+        );
+        assert_eq!(
+            classify(Some(b"Bearer")),
+            Err(FailedCheck::CredentialMalformed)
+        );
+        assert_eq!(
+            classify(Some(&[0xff, 0xfe])),
+            Err(FailedCheck::CredentialMalformed)
+        );
+    }
+
+    #[test]
+    fn refusal_answers_carry_their_failed_check() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let response = refusal(
+                status,
+                "invalid_token",
+                "refused",
+                FailedCheck::CredentialMissing,
+            );
+            assert_eq!(response.status(), status);
+            assert!(response.extensions().get::<RefusalNote>().is_some());
+        }
+        let response = unauthorized(FailedCheck::CredentialMissing, "refused");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.extensions().get::<RefusalNote>().is_some());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal is built with `refusal`")]
+    fn an_unauthorized_answer_built_without_a_failed_check_is_caught() {
+        let _ = problem(StatusCode::UNAUTHORIZED, "invalid_token", "refused");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal is built with `refusal`")]
+    fn a_forbidden_answer_built_without_a_failed_check_is_caught() {
+        let _ = problem(
+            StatusCode::FORBIDDEN,
+            "invalid_credential_request",
+            "refused",
+        );
+    }
 
     use std::{
         fs,
@@ -1932,6 +2057,24 @@ mod tests {
                 client: Some("adopter-front-end".to_owned()),
                 subject: Some(OFFER_SUBJECT.to_owned()),
             })
+        }
+    }
+
+    /// An authorizer that refuses every credential for its scope and declares
+    /// the scope gate it enforces.
+    struct ScopeGateAuthorizer;
+
+    #[async_trait]
+    impl OfferAuthorizer for ScopeGateAuthorizer {
+        async fn authorize(&self, _: &str) -> Result<AuthorizedOffer, AuthorizationError> {
+            Err(AuthorizationError::Refused(FailedCheck::Scope))
+        }
+
+        fn declared_scope(&self) -> Option<registry_platform_authcommon::DeclaredScope> {
+            Some(
+                registry_platform_authcommon::DeclaredScope::new("scope")
+                    .with_required_scope("offers:create"),
+            )
         }
     }
 
@@ -3821,6 +3964,49 @@ mod tests {
 
     /// The failed check reaches the operator log as well, with the same fixed
     /// wording and none of the proof's contents.
+    #[tokio::test]
+    async fn a_scope_refusal_logs_the_declared_values_and_none_of_the_tokens() {
+        let buffer = TestLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(buffer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let directory = canonical_tempdir();
+        let service = DeliveryService::with_halves(
+            load_deployment(directory.path()),
+            Arc::new(ScopeGateAuthorizer),
+            Arc::new(RecordingIssuer::new()),
+            test_audit(),
+        );
+        let server = TestServer::new(build_app(Arc::new(service)));
+        let refused = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", "Bearer scope-canary-held-by-the-token")
+            .json(&offer_body(false))
+            .await;
+        assert_eq!(refused.status_code(), StatusCode::UNAUTHORIZED);
+
+        let rendered = String::from_utf8(buffer.0.lock().expect("log buffer lock").clone())
+            .expect("logs are UTF-8");
+        assert!(rendered.contains("request refused"), "logs: {rendered}");
+        assert!(
+            rendered.contains("failed_check=\"scope\""),
+            "logs: {rendered}"
+        );
+        assert!(
+            rendered.contains("scope_claim=\"scope\""),
+            "logs: {rendered}"
+        );
+        assert!(
+            rendered.contains("required_scope=\"offers:create\""),
+            "logs: {rendered}"
+        );
+        assert!(!rendered.contains("scope-canary"), "logs: {rendered}");
+    }
+
     #[tokio::test]
     async fn a_refused_proof_logs_the_failed_check_without_the_proof_or_nonce() {
         let buffer = TestLogBuffer::default();

@@ -251,7 +251,7 @@ issue_token() {
 # code for. It is a harness failure so that a new kind of refusal is looked at
 # and named, never recorded under a code the product did not print.
 unexpected_answer() {
-	journey_harness_failure "step $1 of $CELL answered HTTP $JOURNEY_HTTP_STATUS (problem code '${JOURNEY_HTTP_PROBLEM_CODE:-none}'); name the authentication stage from the operator log and extend rstack-dev.sh"
+	journey_harness_failure "step $1 of $CELL answered HTTP $JOURNEY_HTTP_STATUS (problem code '${JOURNEY_HTTP_PROBLEM_CODE:-none}'); name the stage word for the operator log's failed_check and extend rstack-dev.sh"
 }
 
 # walk_product PRODUCT: walk one product through the steps.

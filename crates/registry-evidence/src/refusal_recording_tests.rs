@@ -539,3 +539,49 @@ async fn a_request_over_the_rate_budget_is_counted_under_rate_limit() {
     );
     assert_eq!(counted(&metrics.render(), FailedCheck::RateLimit), 1);
 }
+
+/// A scope refusal names the claim and the scopes the configuration declares.
+/// Nothing the token carried reaches the line, whatever scopes it held.
+#[test]
+fn a_scope_refusal_logs_the_declared_values_and_none_of_the_tokens() {
+    const SCOPE_CANARY: &str = "scope-canary-held-by-the-token";
+    let scenario = evidence(
+        "token-lacks-the-required-scope",
+        Credential::Token(access_token(Some(json!({"scope": SCOPE_CANARY})))),
+        adult_request(),
+        StatusCode::UNAUTHORIZED,
+        FailedCheck::Scope,
+    );
+    let answered: Arc<Mutex<Option<StatusCode>>> = Arc::new(Mutex::new(None));
+    let sink = Arc::clone(&answered);
+    let emitted = capture_evidence_logs(|| async {
+        let fixture = acceptance_runtime_with(
+            authenticator().with_required_scopes(vec!["evidence:invoke".to_owned()]),
+        )
+        .await;
+        let (app, _metrics) = build_app_with_metrics(Arc::clone(&fixture.runtime));
+        let response = app
+            .oneshot(build_request(&scenario))
+            .await
+            .expect("the router answers");
+        *sink.lock().expect("status slot") = Some(response.status());
+    });
+    assert_eq!(
+        answered.lock().expect("status slot").take(),
+        Some(StatusCode::UNAUTHORIZED)
+    );
+    let refused: Vec<&Value> = emitted
+        .iter()
+        .filter(|record| record["fields"]["decision"] == json!("refused"))
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    let fields = &refused[0]["fields"];
+    assert_eq!(fields["failed_check"], json!("scope"));
+    assert_eq!(fields["scope_claim"], json!("scope"));
+    assert_eq!(fields["required_scope"], json!("evidence:invoke"));
+    let raw = serde_json::to_string(&emitted).expect("captured records serialize");
+    assert!(
+        !raw.contains(SCOPE_CANARY),
+        "a log line carried the token's scope"
+    );
+}

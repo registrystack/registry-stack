@@ -330,12 +330,26 @@ fn development_host(host: &str) -> bool {
     registry_platform_loopback::loopback_host(host).is_some() || host == "host.docker.internal"
 }
 
+/// Whether an address names the development issuer's listener: a loopback
+/// host in any spelling (a literal, its IPv4-mapped form or the name
+/// `localhost`) on the listener's port, with no path or the root path.
+fn names_development_listener(address: &str, port: u16) -> bool {
+    url::Url::parse(address).is_ok_and(|url| {
+        url.scheme() == "http"
+            && url
+                .host_str()
+                .is_some_and(|host| registry_platform_loopback::loopback_host(host).is_some())
+            && url.port() == Some(port)
+            && matches!(url.path(), "" | "/")
+    })
+}
+
 fn local_url(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|url| {
         url.scheme() == "http"
             && url
                 .host_str()
-                .is_some_and(|host| registry_platform_loopback::loopback_host(host).is_some())
+                .is_some_and(|host| registry_platform_loopback::loopback_literal(host).is_some())
             && url.port().is_some_and(|port| port != 0)
             && url.username().is_empty()
             && url.password().is_none()
@@ -633,11 +647,11 @@ impl IssuerDescription {
                     return refuse("exchange issuer and JWKS URLs require HTTPS or an explicit development host");
                 }
             }
-            let own_issuer = match profile {
-                Profile::Development => format!("http://127.0.0.1:{}", self.port),
-                Profile::Deployment { issuer } => issuer.to_owned(),
+            let names_this_issuer = match profile {
+                Profile::Development => names_development_listener(&issuer.issuer, self.port),
+                Profile::Deployment { issuer: own } => issuer.issuer == own,
             };
-            if issuer.issuer == own_issuer {
+            if names_this_issuer {
                 return refuse("an external exchange issuer cannot name this issuer");
             }
         }
@@ -977,8 +991,8 @@ mod tests {
             ("127.0.0.2", true),
             ("[::1]", true),
             ("[::ffff:127.0.0.1]", true),
-            ("localhost", true),
-            ("LOCALHOST", true),
+            ("localhost", false),
+            ("LOCALHOST", false),
             ("a.localhost", false),
             ("localhost.", false),
             ("10.0.0.1", false),
@@ -991,6 +1005,43 @@ mod tests {
             );
         }
         assert!(!local_url("http://127.0.0.1"), "a port is required");
+    }
+
+    #[test]
+    fn an_exchange_issuer_cannot_name_the_listener_in_any_loopback_spelling() {
+        let port = crate::testing::synthetic_description().port;
+        for host in [
+            "127.0.0.1",
+            "127.0.0.2",
+            "[::1]",
+            "[::ffff:127.0.0.1]",
+            "localhost",
+            "LOCALHOST",
+        ] {
+            for path in ["", "/"] {
+                let mut description = exchange_description();
+                description.exchange_issuers[0].issuer = format!("http://{host}:{port}{path}");
+                description.exchange_issuers[0].jwks_endpoint =
+                    format!("http://{host}:{port}/jwks");
+                assert!(
+                    matches!(
+                        description.validate(),
+                        Err(ToolingError::InvalidDescription {
+                            reason: "an external exchange issuer cannot name this issuer"
+                        })
+                    ),
+                    "{host}{path}"
+                );
+            }
+        }
+        let mut description = exchange_description();
+        description.exchange_issuers[0].issuer = format!("http://127.0.0.1:{}", port + 1);
+        description.exchange_issuers[0].jwks_endpoint =
+            format!("http://127.0.0.1:{}/jwks", port + 1);
+        assert!(
+            description.validate().is_ok(),
+            "another loopback port is another issuer"
+        );
     }
 
     #[test]

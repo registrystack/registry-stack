@@ -366,7 +366,7 @@ async fn authentication_and_admission_precede_the_pin_which_precedes_body_and_so
 }
 
 #[tokio::test]
-async fn a_valid_concrete_collision_is_unserved_before_router_construction() {
+async fn a_concrete_collision_with_a_reserved_route_refuses_to_start() {
     let upstream = UpstreamDouble::start();
     let directory = tempfile::tempdir().expect("a copied Adapter project");
     copy_example_project(directory.path());
@@ -386,32 +386,25 @@ async fn a_valid_concrete_collision_is_unserved_before_router_construction() {
         &project_path,
         project.replace("person", "effective-contract"),
     )
-    .expect("write the valid concrete-collision project");
+    .expect("write the concrete-collision project");
 
-    let served = Served::start_with_project(&upstream.url(""), directory.path()).await;
-    let token = served.token("");
-    let readback = served.get(WELL_KNOWN_PATH, Some(&token));
-    assert_eq!(readback.0, 200, "{}", readback.2);
-    let unserved = readback.2["contract"]["unserved"]
-        .as_array()
-        .expect("the contract carries unserved operations");
-    for binding in ["effective-contract-search", "effective-contract-create"] {
-        let colliding = unserved
-            .iter()
-            .find(|entry| entry["bindingId"] == binding)
-            .unwrap_or_else(|| panic!("the {binding} collision is explicitly unserved"));
-        assert_eq!(
-            colliding["reasonCode"],
-            "adapter.operation.reserved-facade-path"
-        );
-        assert_eq!(
-            colliding["reason"],
-            "the facade path is reserved for the Adapter effective-contract, health and ready routes"
-        );
-    }
+    // The workspace check refuses both colliding bindings before the facade
+    // builds a router, so the reserved route is never shadowed.
+    let stderr = Served::refusal_with_project(&upstream.url(""), directory.path()).await;
+    assert!(
+        stderr.contains("the workspace check refused the deployment"),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .matches("adapter.project.reserved-facade-path")
+            .count(),
+        2,
+        "{stderr}"
+    );
     assert_eq!(
         upstream.request_count(),
         0,
-        "the built-in protected route wins without source I/O"
+        "a refused deployment performs no source I/O"
     );
 }

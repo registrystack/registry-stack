@@ -147,17 +147,91 @@ pub mod __refusal_trace_id_seal {
 
 #[cfg(feature = "refusal-recorder")]
 pub use recorder::{
-    RefusalLine, RefusalNote, RefusalRecorder, REFUSAL_LOG_LINES_PER_WINDOW, REFUSAL_LOG_WINDOW,
+    DeclaredScope, RefusalLine, RefusalNote, RefusalRecorder, DECLARED_VALUE_MAX_BYTES,
+    REFUSAL_LOG_LINES_PER_WINDOW, REFUSAL_LOG_WINDOW,
 };
 
 #[cfg(feature = "refusal-recorder")]
 mod recorder {
-    use std::sync::{Mutex, PoisonError};
+    use std::sync::{Arc, Mutex, PoisonError};
     use std::time::{Duration, Instant};
 
     use registry_platform_metrics::{CounterVec, LabelSpace, MetricsError};
 
     use super::FailedCheck;
+
+    /// The most bytes one declared value contributes to a refusal line.
+    pub const DECLARED_VALUE_MAX_BYTES: usize = 128;
+
+    /// Values the operator declared that a scope refusal line may name: the
+    /// name of the claim that carries scopes, the scope the operation needs,
+    /// and the access profile that was applied.
+    ///
+    /// Each value comes from the runtime configuration or the reviewed
+    /// package, never from the caller's token. The recording layer passes it
+    /// to [`record_refusal!`](crate::record_refusal) beside the note, and the
+    /// line carries it only when the failed check is
+    /// [`FailedCheck::Scope`]. A product attaches it to the refusal answer's
+    /// extensions, which are never written to the response.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct DeclaredScope {
+        scope_claim: Arc<str>,
+        required_scope: Option<Arc<str>>,
+        access_profile: Option<Arc<str>>,
+    }
+
+    impl DeclaredScope {
+        /// `scope_claim` is the claim name the deployment configured, for
+        /// example `authentication.oidc.scopeClaim`.
+        pub fn new(scope_claim: impl AsRef<str>) -> Self {
+            Self {
+                scope_claim: bounded(scope_claim.as_ref()),
+                required_scope: None,
+                access_profile: None,
+            }
+        }
+
+        /// The scope the operation needs, as the configuration or package
+        /// declares it.
+        #[must_use]
+        pub fn with_required_scope(self, scope: impl AsRef<str>) -> Self {
+            Self {
+                required_scope: Some(bounded(scope.as_ref())),
+                ..self
+            }
+        }
+
+        /// The identifier of the access profile the configuration applied.
+        #[must_use]
+        pub fn with_access_profile(self, profile: impl AsRef<str>) -> Self {
+            Self {
+                access_profile: Some(bounded(profile.as_ref())),
+                ..self
+            }
+        }
+
+        pub fn scope_claim(&self) -> &str {
+            &self.scope_claim
+        }
+
+        pub fn required_scope(&self) -> Option<&str> {
+            self.required_scope.as_deref()
+        }
+
+        pub fn access_profile(&self) -> Option<&str> {
+            self.access_profile.as_deref()
+        }
+    }
+
+    /// Cut a value to [`DECLARED_VALUE_MAX_BYTES`] on a character boundary.
+    /// The log formatter escapes what remains, so a value stays on one line.
+    fn bounded(value: &str) -> Arc<str> {
+        let mut end = value.len().min(DECLARED_VALUE_MAX_BYTES);
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        Arc::from(&value[..end])
+    }
 
     /// The length of one log window for one check.
     pub const REFUSAL_LOG_WINDOW: Duration = Duration::from_secs(60);
@@ -322,19 +396,33 @@ mod recorder {
     /// every span that encloses the event. Do not call this macro inside a
     /// span that records request values (a URI, query, header, client id or
     /// subject), or those values reach the refusal line through the span.
+    ///
+    /// A scope refusal may also pass `declared = Some(&scope)`, a
+    /// [`DeclaredScope`](crate::DeclaredScope) built from configuration. The
+    /// line then carries `scope_claim`, and `required_scope` and
+    /// `access_profile` when they were declared. They are written only when
+    /// the note's check is [`FailedCheck::Scope`](crate::FailedCheck::Scope).
     #[macro_export]
     macro_rules! record_refusal {
-        (@write $recorder:expr, $note:expr, $trace_id:expr) => {{
+        (@write $recorder:expr, $note:expr, $trace_id:expr, $declared:expr) => {{
             let note: $crate::RefusalNote = $note;
             let trace_id: ::core::option::Option<&dyn $crate::RefusalTraceId> = $trace_id;
+            let declared: ::core::option::Option<&$crate::DeclaredScope> = $declared;
             if let Some(line) = $recorder.record(note.check) {
                 let trace_id = trace_id.map($crate::__tracing::field::display);
+                let declared = declared.filter(|_| note.check == $crate::FailedCheck::Scope);
+                let scope_claim = declared.map($crate::DeclaredScope::scope_claim);
+                let required_scope = declared.and_then($crate::DeclaredScope::required_scope);
+                let access_profile = declared.and_then($crate::DeclaredScope::access_profile);
                 match note.remedy {
                     Some(remedy) => $crate::__tracing::info!(
                         decision = "refused",
                         failed_check = line.failed_check,
                         suppressed = line.suppressed,
                         remedy,
+                        scope_claim,
+                        required_scope,
+                        access_profile,
                         trace_id,
                         "request refused"
                     ),
@@ -342,6 +430,9 @@ mod recorder {
                         decision = "refused",
                         failed_check = line.failed_check,
                         suppressed = line.suppressed,
+                        scope_claim,
+                        required_scope,
+                        access_profile,
                         trace_id,
                         "request refused"
                     ),
@@ -349,11 +440,24 @@ mod recorder {
             }
         }};
         ($recorder:expr, $note:expr) => {
-            $crate::record_refusal!(@write $recorder, $note, ::core::option::Option::None)
+            $crate::record_refusal!(
+                @write $recorder, $note, ::core::option::Option::None, ::core::option::Option::None
+            )
+        };
+        ($recorder:expr, $note:expr, declared = $declared:expr) => {
+            $crate::record_refusal!(@write $recorder, $note, ::core::option::Option::None, $declared)
         };
         ($recorder:expr, $note:expr, trace_id = $trace_id:expr) => {{
             let typed: &dyn $crate::RefusalTraceId = &$trace_id;
-            $crate::record_refusal!(@write $recorder, $note, ::core::option::Option::Some(typed))
+            $crate::record_refusal!(
+                @write $recorder, $note, ::core::option::Option::Some(typed), ::core::option::Option::None
+            )
+        }};
+        ($recorder:expr, $note:expr, trace_id = $trace_id:expr, declared = $declared:expr) => {{
+            let typed: &dyn $crate::RefusalTraceId = &$trace_id;
+            $crate::record_refusal!(
+                @write $recorder, $note, ::core::option::Option::Some(typed), $declared
+            )
         }};
     }
 }
@@ -670,6 +774,90 @@ mod recorder_tests {
         assert_eq!(output.lines().count(), 2, "{output}");
         assert!(!output.contains("remedy"), "{output}");
         assert!(output.contains("trace_id=0af7651916cd43dd8448eb211c80319c"));
+    }
+
+    #[test]
+    fn a_scope_refusal_names_the_declared_scope_and_no_token_value() {
+        let recorder = RefusalRecorder::new("breg").unwrap();
+        let token_scope = "canary-token-scope-9c1e";
+        let declared = DeclaredScope::new("scope")
+            .with_required_scope("registry.read")
+            .with_access_profile("caseworker");
+        let output = captured(|| {
+            let _ = token_scope;
+            record_refusal!(
+                recorder,
+                RefusalNote::new(FailedCheck::Scope),
+                trace_id = ServerTraceId("4bf92f3577b34da6a3ce929d0e0e4736"),
+                declared = Some(&declared)
+            );
+        });
+        assert_eq!(output.lines().count(), 1, "{output}");
+        assert!(output.contains("failed_check=\"scope\""), "{output}");
+        assert!(output.contains("scope_claim=\"scope\""), "{output}");
+        assert!(
+            output.contains("required_scope=\"registry.read\""),
+            "{output}"
+        );
+        assert!(output.contains("access_profile=\"caseworker\""), "{output}");
+        assert!(output.contains("trace_id=4bf92f3577b34da6a3ce929d0e0e4736"));
+        assert!(!output.contains("canary"), "{output}");
+
+        // Only the members that were declared are written.
+        let output = captured(|| {
+            record_refusal!(
+                recorder,
+                RefusalNote::new(FailedCheck::Scope).with_remedy("check scopeClaim"),
+                declared = Some(&DeclaredScope::new("scp"))
+            );
+        });
+        assert!(output.contains("scope_claim=\"scp\""), "{output}");
+        assert!(output.contains("remedy=\"check scopeClaim\""), "{output}");
+        assert!(!output.contains("required_scope"), "{output}");
+        assert!(!output.contains("access_profile"), "{output}");
+    }
+
+    #[test]
+    fn declared_scope_values_are_written_only_for_a_scope_refusal() {
+        let recorder = RefusalRecorder::new("breg").unwrap();
+        let declared = DeclaredScope::new("scope").with_required_scope("registry.read");
+        let output = captured(|| {
+            record_refusal!(
+                recorder,
+                RefusalNote::new(FailedCheck::TokenAudience),
+                declared = Some(&declared)
+            );
+            record_refusal!(
+                recorder,
+                RefusalNote::new(FailedCheck::Scope),
+                declared = None
+            );
+        });
+        assert_eq!(output.lines().count(), 2, "{output}");
+        assert!(!output.contains("scope_claim"), "{output}");
+        assert!(!output.contains("required_scope"), "{output}");
+    }
+
+    #[test]
+    fn a_declared_value_is_bounded_and_kept_on_one_line() {
+        let long = "s".repeat(DECLARED_VALUE_MAX_BYTES + 50);
+        let declared = DeclaredScope::new(long.as_str())
+            .with_required_scope("é".repeat(DECLARED_VALUE_MAX_BYTES))
+            .with_access_profile("line\nbreak");
+        assert_eq!(declared.scope_claim().len(), DECLARED_VALUE_MAX_BYTES);
+        let required = declared.required_scope().unwrap();
+        assert!(required.len() <= DECLARED_VALUE_MAX_BYTES);
+        assert!(required.chars().all(|c| c == 'é'));
+
+        let recorder = RefusalRecorder::new("breg").unwrap();
+        let output = captured(|| {
+            record_refusal!(
+                recorder,
+                RefusalNote::new(FailedCheck::Scope),
+                declared = Some(&declared)
+            );
+        });
+        assert_eq!(output.lines().count(), 1, "{output}");
     }
 
     #[test]

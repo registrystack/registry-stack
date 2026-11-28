@@ -214,10 +214,11 @@ invariants:
       template reference, correlation, outcome class, and a keyed recipient
       reference; log fields never carry payload values; metric labels are
       closed sets fixed in code. Authentication refusal diagnostics use only
-      fixed stage labels and static remedy keys, at most once per stage per
-      minute per verifier. This includes HTTP bearer and compact-token
-      admission failures; required time claims and maximum-lifetime failures
-      are time-stage refusals. These diagnostics never contain credentials,
+      a fixed failed-check label and static remedy keys, at most five lines
+      per check per minute, with every refusal counted by its check. This
+      includes HTTP bearer and compact-token admission failures; required
+      time claims and maximum-lifetime failures are token-time refusals.
+      These diagnostics never contain credentials,
       claim or scope values, issuer URLs, or underlying error text, and do not
       change public refusal/outage status or audit acceptance.
       The audit writer opens before serving and its

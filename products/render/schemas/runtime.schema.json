@@ -360,8 +360,11 @@
       "properties": {
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "allowedClients": {
           "$ref": "#/$defs/OidcAllowedClients",

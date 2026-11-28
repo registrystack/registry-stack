@@ -45,6 +45,10 @@ use registry_platform_yaml::{
 };
 use serde::de::DeserializeOwned;
 
+use crate::posture::{
+    collect_development_settings, DeclaredPosture, DevelopmentWitness, Posture, PostureReport,
+    PostureSource,
+};
 use crate::{resolve_config_env_expression, sha256_uri};
 
 /// The default size cap for a runtime configuration document.
@@ -168,6 +172,12 @@ impl RuntimeConfigError {
         Self::from_report(Report::new(diagnostics)).in_file(file)
     }
 
+    /// This refusal with `diagnostics` listed after its own.
+    pub(crate) fn with_diagnostics(mut self, diagnostics: Vec<Diagnostic>) -> Self {
+        self.detail.diagnostics.extend(diagnostics);
+        self
+    }
+
     fn from_report(report: Report) -> Self {
         let diagnostics = report.into_diagnostics();
         assert!(
@@ -281,6 +291,13 @@ pub struct LoadedRuntimeConfig<T> {
     /// spelling of an environment expression that resolved to the same value
     /// carry the same digest.
     pub effective_digest: String,
+    /// The declared posture and every development-only setting the document
+    /// holds. A loader made without a posture reports production and records
+    /// no setting.
+    pub posture: PostureReport,
+    /// Proof that the process declared development: `Some` only then, and
+    /// the only way to read a value that selects a development-only setting.
+    pub development: Option<DevelopmentWitness>,
 }
 
 impl<T> std::fmt::Debug for LoadedRuntimeConfig<T> {
@@ -313,16 +330,48 @@ pub struct RuntimeConfigLoader {
     removed_keys: &'static [RemovedKey],
     retired_api_versions: &'static [RetiredApiVersion<'static>],
     trusted_ownership: bool,
+    /// The posture the process declared. `None` for a loader made without a
+    /// posture, which refuses and records no development-only setting.
+    posture: Option<DeclaredPosture>,
+}
+
+/// What a parse does with the development-only settings it found.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Decision {
+    /// Refuse the document when the posture is production and it holds one.
+    Refuse,
+    /// Return the document and the settings, for a check that reports them.
+    Report,
 }
 
 impl RuntimeConfigLoader {
+    /// A loader for a process that declared `declared`. A document that
+    /// holds a development-only setting is refused in production, with every
+    /// such setting listed beside any other problem, and accepted in
+    /// development, which also yields the witness that reads those settings.
     #[must_use]
-    pub const fn new(envelope: RuntimeEnvelope) -> Self {
+    pub const fn new(envelope: RuntimeEnvelope, declared: DeclaredPosture) -> Self {
         Self {
             envelope,
             removed_keys: &[],
             retired_api_versions: &[],
             trusted_ownership: false,
+            posture: Some(declared),
+        }
+    }
+
+    /// A loader that declares no posture. It reports production, never
+    /// issues the witness, and neither refuses nor records a development-only
+    /// setting: a runtime that has not adopted the posture keeps the
+    /// behaviour it had.
+    #[must_use]
+    pub const fn new_without_posture(envelope: RuntimeEnvelope) -> Self {
+        Self {
+            envelope,
+            removed_keys: &[],
+            retired_api_versions: &[],
+            trusted_ownership: false,
+            posture: None,
         }
     }
 
@@ -377,7 +426,7 @@ impl RuntimeConfigLoader {
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
         let bytes = self.read_file(path)?;
-        self.parse_file(path, &bytes, &lookup)
+        self.parse_file(path, &bytes, &lookup, Decision::Refuse)
     }
 
     /// The bytes of the file at `path`, read under the file rules: the one
@@ -392,9 +441,15 @@ impl RuntimeConfigLoader {
         path: &Path,
         bytes: &[u8],
         lookup: &dyn Fn(&str) -> Option<String>,
+        decision: Decision,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        self.parse(&path.display().to_string(), bytes, Fill::Variables(lookup))
-            .map_err(|error| error.in_file(path))
+        self.parse(
+            &path.display().to_string(),
+            bytes,
+            Fill::Variables(lookup),
+            decision,
+        )
+        .map_err(|error| error.in_file(path))
     }
 
     /// Apply every rule after the file read to the `bytes` read from `path`,
@@ -405,9 +460,15 @@ impl RuntimeConfigLoader {
         path: &Path,
         bytes: &[u8],
         stand_in: &dyn Fn(&str) -> String,
+        decision: Decision,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        self.parse(&path.display().to_string(), bytes, Fill::StandIns(stand_in))
-            .map_err(|error| error.in_file(path))
+        self.parse(
+            &path.display().to_string(),
+            bytes,
+            Fill::StandIns(stand_in),
+            decision,
+        )
+        .map_err(|error| error.in_file(path))
     }
 
     /// Apply every rule after the file read to `text`. Used by authoring tools
@@ -418,15 +479,70 @@ impl RuntimeConfigLoader {
         text: &str,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        self.parse(BUFFER_NAME, text.as_bytes(), Fill::Variables(&lookup))
+        self.parse(
+            BUFFER_NAME,
+            text.as_bytes(),
+            Fill::Variables(&lookup),
+            Decision::Refuse,
+        )
     }
 
+    /// Decode the document, then settle the posture: collect the
+    /// development-only settings the decode finds, and under
+    /// [`Decision::Refuse`] refuse them in production.
     fn parse<T: DeserializeOwned>(
         &self,
         file: &str,
         bytes: &[u8],
         fill: Fill<'_>,
+        decision: Decision,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
+        let Some(declared) = self.posture else {
+            let (config, effective_digest) = self.decode::<T>(file, bytes, fill)?;
+            return Ok(LoadedRuntimeConfig {
+                config,
+                effective_digest,
+                posture: PostureReport::new(DeclaredPosture {
+                    posture: Posture::Production,
+                    source: PostureSource::Default,
+                }),
+                development: None,
+            });
+        };
+        let (decoded, found) = collect_development_settings(|| self.decode::<T>(file, bytes, fill));
+        let mut posture = PostureReport::new(declared);
+        for setting in found {
+            posture.record(setting);
+        }
+        let named = Path::new(file);
+        match decoded {
+            Ok((config, effective_digest)) => {
+                if decision == Decision::Refuse {
+                    posture.decide(named)?;
+                }
+                Ok(LoadedRuntimeConfig {
+                    config,
+                    effective_digest,
+                    posture,
+                    development: (declared.posture == Posture::Development)
+                        .then(DevelopmentWitness::issue),
+                })
+            }
+            // The settings found before the failure are still reported, so
+            // one run lists every problem (CFG-DIAG-5).
+            Err(error) => Err(match decision {
+                Decision::Refuse if declared.posture == Posture::Development => error,
+                _ => error.with_diagnostics(posture.diagnostics(named)),
+            }),
+        }
+    }
+
+    fn decode<T: DeserializeOwned>(
+        &self,
+        file: &str,
+        bytes: &[u8],
+        fill: Fill<'_>,
+    ) -> Result<(T, String), RuntimeConfigError> {
         let removed: Vec<(String, String)> = self
             .removed_keys
             .iter()
@@ -462,10 +578,7 @@ impl RuntimeConfigLoader {
                         "Write every number as a plain decimal within the range JSON can carry.",
                     )
                 })?;
-        Ok(LoadedRuntimeConfig {
-            config: decoded.value,
-            effective_digest: sha256_uri(&canonical),
-        })
+        Ok((decoded.value, sha256_uri(&canonical)))
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, RuntimeConfigError> {

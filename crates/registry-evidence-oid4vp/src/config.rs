@@ -62,7 +62,7 @@ const REMOVED_KEYS: &[RemovedKey] = &[
 /// The shared runtime reader for a runtime file.
 #[must_use]
 pub const fn loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new(RuntimeEnvelope {
+    RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: OID4VP_RUNTIME_API_VERSION,
         kind: OID4VP_RUNTIME_KIND,
     })
@@ -1321,7 +1321,7 @@ impl VerifierDocument {
                 &self.evidence_credentials.provider,
             ),
         ] {
-            let Err(error) = provider.check(field, false) else {
+            let Err(error) = provider.check_without_posture(field, false) else {
                 continue;
             };
             let member = error.field().rsplit('.').next().unwrap_or_default();

@@ -167,8 +167,10 @@ A request that BReg answers `404 resource.not_found` because the caller may not 
 The operator can tell the reasons apart: the counter holds the request under the rule that refused it, for example `scope`, `purpose`, `requester-client`, `row-boundary`, `task-grant-binding`, `disclosure` or `visibility`.
 A refused write the engine answers with `write.outside-boundary` counts under `row-boundary`, and a Proposal outside the caller's scope counts under `ownership`.
 A batch of Proposal review contexts answers `200`, and each concealed item counts once under its own check.
-A generic `412` precondition answer, which also covers a stale version, and a request for an unknown route are not counted.
-Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and recording a refusal changes nothing the caller receives.
+A `412` for a stale version and a request for an unknown route are not counted.
+A failed field guard counts under `action-guard`, also when it answers the generic `412`.
+A refusal on the `scope` check also names the claim that carries scopes, the scope the operation needs and the access profile, each as the configuration or package declares it.
+Neither the counter nor the line holds a token, claim, client, subject, scope or identifier from the request, and recording a refusal changes nothing the caller receives.
 A `visibility` count is a record that is absent or outside the boundary, and BReg does not say which, so it also counts a caller probing for identifiers.
 The audit journal's `refusalReason` stays the three values it lists below.
 
@@ -512,7 +514,7 @@ The residuals refer to these obligations by number.
    Loopback HTTP is accepted for an issuer; anything else needs
    `authentication.oidc.allowInsecureHttp: true`, which is logged at startup and reported by
    `bregctl doctor` (`BREG-RES-17`).
-   For an issuer and for `listener.publicOrigin`, loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which BReg connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
+   For an issuer and for `listener.publicOrigin`, loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case. BReg connects to an issuer named `localhost` only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
    A pinned key set (`authentication.oidc.jwksSource.type: static`) holds public keys only.
    BReg refuses a key that carries a private or symmetric member (`d`, `p`, `q`, `dp`, `dq`, `qi`,
    `oth`, `k`), a repeated member name, a missing or repeated `kid`, or a key that does not match

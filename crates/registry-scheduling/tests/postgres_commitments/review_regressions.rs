@@ -637,3 +637,30 @@ async fn a_reads_scope_caller_reading_another_owners_appointment_is_an_ownership
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["fields"]["failed_check"], "ownership");
 }
+
+/// A read refused for its scope names the values the operator declared: the
+/// claim that carries scopes and the scope the route needs. The scope the
+/// token carries never reaches the line, and the answer is the same 403.
+#[tokio::test]
+async fn a_scope_refusal_line_names_the_declared_scope_and_none_of_the_tokens() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
+    let fx = fixture().await;
+    let canary = "canary-token-scope-4d8e";
+    let holder = operational_token("principal-canary", canary);
+    let captured = CapturedDiagnosticLogs::default();
+    let (status, answer) = fx
+        .get("/v1/offerings", &holder)
+        .with_subscriber(captured.subscriber())
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    assert_eq!(answer["code"], "profile.not-authorized");
+    let rendered = captured.text();
+    assert!(!rendered.contains(canary), "{rendered}");
+    let lines = refusal_lines(&rendered);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["fields"]["failed_check"], "scope");
+    assert_eq!(lines[0]["fields"]["scope_claim"], "registry_scopes");
+    assert_eq!(lines[0]["fields"]["required_scope"], "scheduling-read");
+    assert!(lines[0]["fields"].get("access_profile").is_none());
+}

@@ -7,7 +7,10 @@
   writes one `request refused` line with `failed_check` and the request's
   trace id, at most five lines per check per minute. A policy denial after
   authentication and a refused signed event delivery are now counted and
-  logged too. Refusal statuses and bodies are unchanged, and
+  logged too. A scope refusal's line also names the scope claim the
+  deployment configured and the scope the caller's policy requires, as
+  `scope_claim` and `required_scope`, and nothing from the token. Refusal
+  statuses and bodies are unchanged, and
   `coordinator_authentication_refusals_total{reason}` stays.
 - Wherever Coordinator and `coordinatorctl` allow plaintext to a loopback
   host, an IPv4-mapped loopback literal such as `[::ffff:127.0.0.1]` counts as
@@ -17,15 +20,18 @@
   signing key is unreadable, missing or too short counts under
   `key-source-unavailable` in `coordinator_request_refusals_total`. The 401 and
   503 answers are unchanged.
-- A static key set that startup refuses now names the key position and member
-  in the `access.configuration` message instead of pointing at the issuer and
-  policy configuration.
+- A static key set that startup refuses now names the rule it broke, and the
+  key's position for a rule about one key, in the `access.configuration`
+  message instead of pointing at the issuer and policy configuration.
 - `coordinatorctl provision` creates the database, the migration and runtime
   roles and the grants `apply` expects, from the two database URLs in the
   runtime file, as a PostgreSQL administrator. `--print-sql` prints the plan
   and connects to nothing. When the runtime file has a `deployment` block, a
   runtime URL whose user is not `deployment.runtimeRole` is refused before any
-  connection with `coordinator.runtime-config.runtime-role-mismatch`.
+  connection with `coordinator.runtime-config.runtime-role-mismatch`, and a
+  runtime URL that names no user gets its own message under the same code.
+  `coordinatorctl --runtime-config FILE provision` is accepted, as for every
+  other `coordinatorctl` command.
 
 - `GET /health` and `GET /ready` carry the `status` member the other
   services answer: `{"live":true,"status":"ok"}` and

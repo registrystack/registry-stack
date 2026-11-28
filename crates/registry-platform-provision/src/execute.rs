@@ -18,7 +18,9 @@ pub enum Mode {
     /// Probe the catalog first, create only what is absent, and refuse what
     /// exists in a different shape. Every `*ctl provision` uses this.
     Converge,
-    /// The server is known to be empty: no floor check and no probes.
+    /// The server is known to be empty: no floor check and no probes. Only
+    /// the products' test helpers and the PostgreSQL suite use it.
+    #[cfg(any(feature = "test-support", feature = "postgres-test"))]
     Fresh,
 }
 
@@ -46,6 +48,13 @@ pub enum ProvisionError {
     AdminConnectFailed {
         sqlstate: Option<String>,
     },
+    /// The administrator opened a session on the server, then could not open
+    /// one in the database the plan provisions, so the server-scope
+    /// statements before it ran.
+    DatabaseConnectFailed {
+        database: String,
+        sqlstate: Option<String>,
+    },
     UnsupportedPostgres,
     StatementNeedsPrivilege {
         step: &'static str,
@@ -54,6 +63,13 @@ pub enum ProvisionError {
         database: String,
     },
     RoleAttributesDiffer {
+        step: &'static str,
+        role: String,
+    },
+    /// An existing product role carries a setting that redirects its sessions:
+    /// a `role`, `search_path` or `session_authorization` default, for every
+    /// database or for the provisioned one.
+    RoleSettingsDiffer {
         step: &'static str,
         role: String,
     },
@@ -102,9 +118,11 @@ impl ProvisionError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::AdminConnectFailed { .. } => "platform.provision.admin-connect-failed",
+            Self::DatabaseConnectFailed { .. } => "platform.provision.database-connect-failed",
             Self::UnsupportedPostgres => "platform.provision.unsupported-postgres",
             Self::StatementNeedsPrivilege { .. } => "platform.provision.statement-needs-privilege",
             Self::RoleAttributesDiffer { .. } => "platform.provision.role-attributes-differ",
+            Self::RoleSettingsDiffer { .. } => "platform.provision.role-settings-differ",
             Self::RoleMembershipDiffers { .. } => "platform.provision.role-membership-differs",
             Self::DatabaseOwnerDiffers { .. } => "platform.provision.database-owner-differs",
             Self::DatabaseIsTemplate { .. } => "platform.provision.database-is-template",
@@ -130,6 +148,7 @@ impl ProvisionError {
         match self {
             Self::StatementNeedsPrivilege { step, .. }
             | Self::RoleAttributesDiffer { step, .. }
+            | Self::RoleSettingsDiffer { step, .. }
             | Self::RoleMembershipDiffers { step, .. }
             | Self::SchemaOwnerDiffers { step, .. }
             | Self::ExtensionTooOld { step, .. }
@@ -140,6 +159,7 @@ impl ProvisionError {
                 Some("database.create")
             }
             Self::AdminConnectFailed { .. }
+            | Self::DatabaseConnectFailed { .. }
             | Self::UnsupportedPostgres
             | Self::RoleLoginFailed { .. } => None,
         }
@@ -183,6 +203,16 @@ impl fmt::Display for ProvisionError {
                 f,
                 "cannot open a session with the administrator URL (SQLSTATE {sqlstate})"
             ),
+            Self::DatabaseConnectFailed { database, sqlstate } => {
+                write!(
+                    f,
+                    "the administrator role cannot open a session in database \"{database}\""
+                )?;
+                match sqlstate {
+                    Some(sqlstate) => write!(f, " (SQLSTATE {sqlstate})"),
+                    None => Ok(()),
+                }
+            }
             Self::UnsupportedPostgres => fmt::Display::fmt(&crate::plan::UnsupportedPostgres, f),
             Self::StatementNeedsPrivilege {
                 step,
@@ -206,6 +236,12 @@ impl fmt::Display for ProvisionError {
                 "the role \"{role}\" already exists with attributes other than provisioning \
                  creates it with. It is not altered: use another name or correct the role as \
                  an administrator"
+            ),
+            Self::RoleSettingsDiffer { role, .. } => write!(
+                f,
+                "the role \"{role}\" already exists with a default for role, search_path or \
+                 session_authorization. It is not altered: use another name or reset the \
+                 setting as an administrator"
             ),
             Self::RoleMembershipDiffers { role, .. } => write!(
                 f,
@@ -358,12 +394,12 @@ async fn run_plan(
             Scope::Server => &server,
             Scope::Database => match &mut database {
                 Some(session) => session,
-                empty => empty.insert(
-                    admin
-                        .connect(Some(plan.database()))
-                        .await
-                        .map_err(connect_failed)?,
-                ),
+                empty => empty.insert(admin.connect(Some(plan.database())).await.map_err(
+                    |failure| ProvisionError::DatabaseConnectFailed {
+                        database: plan.database().to_owned(),
+                        sqlstate: failure.sqlstate,
+                    },
+                )?),
             },
         };
         let outcome = run_statement(session, plan, statement, mode).await?;
@@ -441,13 +477,23 @@ async fn probe_is_satisfied(
             login,
             member_of,
         } => {
-            // Columns 1 to 7 are attributes that must be false: the six
-            // flags and role-level settings. Column 8 is membership of any
-            // role other than `member_of` granted as the plan grants it.
+            // Columns 1 to 6 are attributes that must be false: the six
+            // flags. Column 7 is a default for `role`, `search_path` or
+            // `session_authorization` set for the role in every database or
+            // in the provisioned one. Column 8 is membership of any role
+            // other than `member_of` granted as the plan grants it.
             let row = bounded_call(session.client.query_opt(
                 "SELECT r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole, \
                         r.rolinherit, r.rolbypassrls, r.rolreplication, \
-                        r.rolconfig IS NOT NULL, \
+                        EXISTS (SELECT 1 FROM pg_catalog.pg_db_role_setting s, \
+                                       unnest(s.setconfig) AS c \
+                                 WHERE s.setrole = r.oid \
+                                   AND (s.setdatabase = 0 \
+                                        OR s.setdatabase = (SELECT d.oid \
+                                                              FROM pg_catalog.pg_database d \
+                                                             WHERE d.datname = $3)) \
+                                   AND lower(split_part(c, '=', 1)) \
+                                       IN ('role', 'search_path', 'session_authorization')), \
                         EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m \
                                   JOIN pg_catalog.pg_roles g ON g.oid = m.roleid \
                                  WHERE m.member = r.oid \
@@ -456,7 +502,7 @@ async fn probe_is_satisfied(
                                             AND m.set_option \
                                             AND NOT m.admin_option)) \
                    FROM pg_catalog.pg_roles r WHERE r.rolname = $1",
-                &[name, member_of],
+                &[name, member_of, &plan.database()],
             ))
             .await
             .map_err(|failure| call_error(step, failure))?;
@@ -465,12 +511,19 @@ async fn probe_is_satisfied(
             };
             let can_login: bool = row.try_get(0).map_err(|_| unreadable(step))?;
             let mut others = false;
-            for column in 1..8 {
+            for column in 1..7 {
                 let flag: bool = row.try_get(column).map_err(|_| unreadable(step))?;
                 others |= flag;
             }
             if can_login != *login || others {
                 return Err(ProvisionError::RoleAttributesDiffer {
+                    step,
+                    role: name.clone(),
+                });
+            }
+            let redirected: bool = row.try_get(7).map_err(|_| unreadable(step))?;
+            if redirected {
+                return Err(ProvisionError::RoleSettingsDiffer {
                     step,
                     role: name.clone(),
                 });
@@ -630,11 +683,9 @@ pub async fn verify_logins(
                     CallFailure::Unconfirmed => None,
                 })
             })?;
-        let current: String = row
-            .try_get(0)
-            .map_err(|_| failed(Some("XX000".to_owned())))?;
+        let current: String = row.try_get(0).map_err(|_| failed(None))?;
         if current != role.name {
-            return Err(failed(Some("XX000".to_owned())));
+            return Err(failed(None));
         }
     }
     Ok(())
@@ -668,6 +719,14 @@ mod tests {
             ProvisionError::RoleAttributesDiffer {
                 step: "role.migration",
                 role: "r".to_owned(),
+            },
+            ProvisionError::RoleSettingsDiffer {
+                step: "role.runtime",
+                role: "r".to_owned(),
+            },
+            ProvisionError::DatabaseConnectFailed {
+                database: "d".to_owned(),
+                sqlstate: Some("53300".to_owned()),
             },
             ProvisionError::RoleMembershipDiffers {
                 step: "role.runtime",

@@ -166,7 +166,7 @@ exact identity, bounds, signed subjects, and deadline. An inactive,
 mismatched, unlisted, or incompletely bound grant answers `operation.not-authorized`; an authority or service
 credential outage, including an unusable authority response, answers `service.unavailable`. On the offline path
 (`unchecked-final-fifteen-minutes`), an unexpired grant with more than 900 seconds left answers
-`grant.lifetime-too-long` once its bounds have matched when it creates a hold or an appointment, and
+`grant.lifetime-too-long` once its bounds have matched when it creates a hold, or an appointment without a hold, and
 `operation.not-authorized` on a request that names an existing hold or appointment, the same answer as an
 unknown one; an expired grant answers `operation.not-authorized`. Positive answers
 are not cached, and the complete attempt is limited to ten seconds. No capacity lock is held during the outbound call.

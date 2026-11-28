@@ -33,7 +33,7 @@ use registry_payment_protocol::{
     PaymentProblem, PaymentProblemCode as Error, ProviderConfirmation, RecordProviderConfirmation,
     RecordReceipt, RequestCollection, RequestDisbursement,
 };
-use registry_platform_authcommon::{FailedCheck, RefusalNote};
+use registry_platform_authcommon::{DeclaredScope, FailedCheck, RefusalNote};
 use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, SecretResolver,
 };
@@ -110,7 +110,7 @@ pub fn contract(config: &PaymentsConfig) -> serde_json::Value {
 pub fn load_config(path: &Path) -> Result<PaymentsConfig, ServeError> {
     let absolute = std::fs::canonicalize(path)
         .map_err(|_| refused("payment configuration could not be read"))?;
-    let config = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let config = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: API_VERSION,
         kind: KIND,
     })
@@ -464,7 +464,7 @@ pub async fn run_only(
 ) -> Result<(), ServeError> {
     let absolute = std::fs::canonicalize(runtime_path)
         .map_err(|_| refused("runtime configuration could not be read"))?;
-    let runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
+    let runtime = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
         kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
     })
@@ -689,9 +689,9 @@ async fn g2p_connection<'a>(
                     FailedCheck::RequesterClient,
                 ))
             } else if !caller.scopes.contains(&connection.required_scope) {
-                Err(PaymentFailure::refused(
-                    Error::Forbidden,
-                    FailedCheck::Scope,
+                Err(PaymentFailure::scope_refused(
+                    &connection.id,
+                    &connection.required_scope,
                 ))
             } else {
                 Ok(connection)
@@ -1010,15 +1010,21 @@ fn audited_attempt<T: AuditedAttempt, E>(result: &Result<T, E>) -> Option<Uuid> 
 struct HttpError {
     code: Error,
     check: Option<FailedCheck>,
+    declared: Option<DeclaredScope>,
 }
 impl HttpError {
     fn plain(code: Error) -> Self {
-        Self { code, check: None }
+        Self {
+            code,
+            check: None,
+            declared: None,
+        }
     }
     fn refused(code: Error, check: FailedCheck) -> Self {
         Self {
             code,
             check: Some(check),
+            declared: None,
         }
     }
 }
@@ -1027,6 +1033,7 @@ impl From<PaymentFailure> for HttpError {
         Self {
             code: failure.code,
             check: failure.check,
+            declared: failure.declared,
         }
     }
 }
@@ -1035,6 +1042,7 @@ impl IntoResponse for HttpError {
         let problem = PaymentProblem::from(self.code);
         let status =
             StatusCode::from_u16(problem.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        crate::facade::require_refusal_check(status, self.check);
         let mut response = (status, Json(problem)).into_response();
         response.headers_mut().insert(
             "content-type",
@@ -1042,6 +1050,9 @@ impl IntoResponse for HttpError {
         );
         if let Some(check) = self.check {
             response.extensions_mut().insert(RefusalNote::new(check));
+        }
+        if let Some(declared) = self.declared {
+            response.extensions_mut().insert(declared);
         }
         headers(response)
     }
@@ -1075,6 +1086,37 @@ mod refusal_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal was built without its failed check")]
+    fn a_forbidden_payment_answer_without_its_check_is_not_built() {
+        let _ = HttpError::plain(Error::Forbidden).into_response();
+    }
+
+    #[test]
+    fn a_payment_scope_refusal_carries_the_connection_and_its_declared_scope() {
+        let response = HttpError::from(PaymentFailure::scope_refused(
+            "mifos-main",
+            "payments.write",
+        ))
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let declared = response
+            .extensions()
+            .get::<DeclaredScope>()
+            .expect("the declared scope values");
+        assert_eq!(declared.scope_claim(), "scope");
+        assert_eq!(declared.required_scope(), Some("payments.write"));
+        assert_eq!(declared.access_profile(), Some("mifos-main"));
+    }
+
+    #[test]
+    fn a_forbidden_payment_answer_carries_its_check() {
+        let response = HttpError::refused(Error::Forbidden, FailedCheck::Scope).into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(response.extensions().get::<RefusalNote>().is_some());
+    }
 
     #[test]
     fn payment_body_requires_a_closed_json_object() {

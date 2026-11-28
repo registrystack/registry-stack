@@ -135,6 +135,7 @@ test('the gate executes the local journey and names the hosted fences it omits',
     [
       'Install the binaries',
       'Check the runtime file',
+      'Provision PostgreSQL',
       'Record and serve the package',
       'Operate messages',
       'Erase expired data on demand',

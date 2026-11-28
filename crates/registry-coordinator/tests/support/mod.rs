@@ -88,6 +88,7 @@ pub fn config(
             migration_url_ref: "secret:env/COORDINATOR_TEST_DATABASE_URL".into(),
             ca_bundle_ref: None,
             test_only_plaintext: false,
+            transport: None,
         },
         namespace: format!("coordinator_{}", uuid::Uuid::new_v4().simple()),
         connections: BTreeMap::from([

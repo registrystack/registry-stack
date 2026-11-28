@@ -1,6 +1,7 @@
 use registry_casework_core::DirectoryTeamUpdateRequest;
 use std::sync::Arc;
 
+use crate::auth::DECLARED_SCOPE;
 use axum::body::Bytes;
 use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::header::{
@@ -13,7 +14,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use registry_casework_core::*;
 use registry_platform_authcommon::{
-    parse_bearer_token, record_refusal, BearerParseError, FailedCheck, RefusalNote, RefusalRecorder,
+    parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
+    RefusalRecorder,
 };
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
@@ -288,9 +290,12 @@ async fn record_refusals(
 ) -> Response {
     let response = next.run(request).await;
     if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
+        let declared = response.extensions().get::<DeclaredScope>();
         match REQUEST_TRACE.try_with(|trace| trace.trace_id.clone()) {
-            Ok(trace_id) => record_refusal!(recorder, note, trace_id = &trace_id),
-            Err(_) => record_refusal!(recorder, note),
+            Ok(trace_id) => {
+                record_refusal!(recorder, note, trace_id = &trace_id, declared = declared)
+            }
+            Err(_) => record_refusal!(recorder, note, declared = declared),
         }
     }
     response
@@ -306,10 +311,14 @@ async fn http_boundary(
         .scope(trace.clone(), async move {
             REQUEST_CONTRACT
                 .scope(contract, async move {
-                    normalize_framework_rejection(
-                        next.run(request).await,
-                        framework_rejection_problem,
-                    )
+                    DECLARED_SCOPE
+                        .scope(std::cell::RefCell::new(None), async move {
+                            normalize_framework_rejection(
+                                next.run(request).await,
+                                framework_rejection_problem,
+                            )
+                        })
+                        .await
                 })
                 .await
         })
@@ -1958,17 +1967,59 @@ impl IntoResponse for HttpError {
                 None => note,
             }
         });
-        let mut response = problem_response(self.problem(), None, validation);
-        if let Some(note) = note {
-            response.extensions_mut().insert(note);
+        match note {
+            Some(note) => {
+                let mut response = refusal_response(self.problem(), note, validation);
+                let declared = DECLARED_SCOPE
+                    .try_with(|slot| slot.borrow().clone())
+                    .ok()
+                    .flatten();
+                if let Some(declared) = declared.filter(|_| note.check == FailedCheck::Scope) {
+                    response.extensions_mut().insert(declared);
+                }
+                response
+            }
+            None => problem_response(self.problem(), None, validation),
         }
-        response
     }
 }
 
+/// A refusal of authority, with the check it failed. The note reaches the
+/// operator's counter and log line through the response extensions and never
+/// the caller's body.
+fn refusal_response(
+    problem: ProblemCode,
+    note: RefusalNote,
+    validation: Option<&ReviewValidationError>,
+) -> Response {
+    let mut response = build_problem_response(problem, validation);
+    response.extensions_mut().insert(note);
+    response
+}
+
+/// An answer that is not a refusal of authority. A 401 or 403 is built with
+/// [`refusal_response`] so it names its check. One arriving here is a defect:
+/// it is answered unchanged and logged once, and a debug build stops.
 fn problem_response(
     problem: ProblemCode,
     _attempt_reference: Option<Uuid>,
+    validation: Option<&ReviewValidationError>,
+) -> Response {
+    if matches!(
+        problem.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ) {
+        debug_assert!(false, "a refusal was built without its failed check");
+        tracing::error!(
+            code = problem.code(),
+            "a refusal was answered without its failed check"
+        );
+    }
+    build_problem_response(problem, validation)
+}
+
+fn build_problem_response(
+    problem: ProblemCode,
     validation: Option<&ReviewValidationError>,
 ) -> Response {
     let trace = REQUEST_TRACE
@@ -3045,6 +3096,46 @@ mod tests {
                     "{answer:?} answers {status} and names no check"
                 );
             }
+        }
+    }
+
+    /// Every code answered as a 401 or 403 is built with its check. The list
+    /// comes from the code catalogue, so a code added later is covered.
+    #[test]
+    fn every_refusal_code_is_built_with_its_check() {
+        let refusals: Vec<ProblemCode> = ProblemCode::ALL
+            .iter()
+            .copied()
+            .filter(|code| {
+                matches!(
+                    code.status(),
+                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+                )
+            })
+            .collect();
+        assert!(refusals.len() >= 4, "the catalogue lists its refusals");
+        for code in refusals {
+            let response = refusal_response(code, RefusalNote::new(FailedCheck::Operation), None);
+            assert_eq!(response.status(), code.status());
+            assert!(response.extensions().get::<RefusalNote>().is_some());
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_refusal_built_without_its_check_stops_a_debug_build() {
+        for code in ProblemCode::ALL.iter().copied().filter(|code| {
+            matches!(
+                code.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            )
+        }) {
+            let outcome = std::panic::catch_unwind(|| problem_response(code, None, None));
+            assert!(
+                outcome.is_err(),
+                "{} was built without a check",
+                code.code()
+            );
         }
     }
 

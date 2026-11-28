@@ -865,3 +865,50 @@ async fn attendance_commit_captures_one_minimized_signed_after_event() {
         }
     }
 }
+
+/// A caller recording attendance on its own booking after the booking left an
+/// attendance state is refused with the same 403 as any other attendance
+/// refusal. The check the operator's log line names is `visibility`: the
+/// target is the caller's own, so it is not an `ownership` refusal.
+#[tokio::test]
+async fn attendance_on_the_callers_own_closed_booking_is_not_counted_as_ownership() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
+    let fx = fixture().await;
+    let (appointment_id, appointment_revision) =
+        booked(&fx, 300, 440, "attendance-closed-booking").await;
+    let appointment_uuid = Uuid::parse_str(&appointment_id).expect("an appointment UUID");
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET state='released' WHERE claim_id=$1",
+            &[&appointment_uuid],
+        )
+        .await
+        .expect("the booking leaves its attendance states");
+    commit_current_test_writer(&fx.admin).await;
+    let recorder = attendance_token("attendance-desk", &["attendance.record"], pinned_now());
+    let captured = CapturedDiagnosticLogs::default();
+    let (status, refusal) = put_attendance(
+        &fx,
+        &appointment_id,
+        &recorder,
+        "attendance-closed",
+        appointment_revision,
+        0,
+        "arrived",
+        pinned_now() - TimeDelta::minutes(5),
+    )
+    .with_subscriber(captured.subscriber())
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    assert_eq!(refusal["code"], "operation.not-authorized");
+    let lines: Vec<Value> = captured
+        .text()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
+        .filter(|event| event["fields"]["message"] == "request refused")
+        .collect();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["fields"]["failed_check"], "visibility");
+}

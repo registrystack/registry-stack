@@ -48,7 +48,7 @@ use axum::{
     routing::get,
     Router,
 };
-use registry_platform_authcommon::{record_refusal, RefusalNote, RefusalRecorder};
+use registry_platform_authcommon::{record_refusal, DeclaredScope, RefusalNote, RefusalRecorder};
 use registry_platform_httpsec::{TraceContext, TraceId};
 use registry_platform_metrics::{
     Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_CONTENT_TYPE,
@@ -263,7 +263,12 @@ pub(crate) async fn observe(
 fn record_response_refusal(metrics: &Metrics, response: &Response, operation: &OperationId) {
     match response.extensions().get::<RefusalNote>() {
         Some(note) => {
-            record_refusal!(metrics.refusals, *note, trace_id = operation.trace_id());
+            record_refusal!(
+                metrics.refusals,
+                *note,
+                trace_id = operation.trace_id(),
+                declared = metrics.declared_scope.as_ref()
+            );
         }
         None => {
             if response
@@ -352,6 +357,8 @@ pub(crate) struct Metrics {
     /// Counts refusals by the check that failed and bounds the log lines they
     /// write. Keyed by no request value.
     refusals: RefusalRecorder,
+    /// The configured values a scope refusal's log line names.
+    declared_scope: Option<DeclaredScope>,
 }
 
 impl Default for Metrics {
@@ -362,6 +369,7 @@ impl Default for Metrics {
             rate_limiter: None,
             source_diagnostics: None,
             refusals: RefusalRecorder::new("evidence").expect(DECLARATION),
+            declared_scope: None,
         }
     }
 }
@@ -404,6 +412,12 @@ impl Metrics {
             source_diagnostics: Some(source_diagnostics),
             ..Self::default()
         }
+    }
+
+    /// Name the configured values a scope refusal's log line carries.
+    pub(crate) fn with_declared_scope(mut self, declared_scope: Option<DeclaredScope>) -> Self {
+        self.declared_scope = declared_scope;
+        self
     }
 
     fn record(

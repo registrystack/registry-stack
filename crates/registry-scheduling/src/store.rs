@@ -900,6 +900,10 @@ pub enum CommitError {
     /// its source manager differs.
     #[error("the target is not managed by this caller")]
     Unauthorized,
+    /// The appointment is absent or not in a state that takes attendance.
+    /// The caller may own it, so this is no ownership decision.
+    #[error("the appointment does not take attendance")]
+    NotAttendable,
     /// The task grant, or the access token that carried it, lapsed before the
     /// commitment.
     #[error("the task grant lapsed before the commitment")]

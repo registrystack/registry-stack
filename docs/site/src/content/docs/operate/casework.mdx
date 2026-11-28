@@ -207,6 +207,12 @@ use `--admin-url-env NAME`. The connection requires TLS and verifies the server 
 `database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
 administrator URL or a password.
 
+The administrator URL must name the same host and port as the two product URLs, or `provision`
+refuses it as `platform.provision.target-mismatch`. It must also name a database other than the
+product database, such as `postgres`, or `provision` refuses it as `platform.provision.target-invalid`.
+Where the administrator may connect only to the product database, `provision` cannot run: add
+`--print-sql` and give the script to the person who administers the server.
+
 The command:
 
 - Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
@@ -224,6 +230,10 @@ flags. The command connects to nothing and prints the script. Each `CREATE ROLE`
 `\password` line that prompts for the password in `psql`, so the script holds no password:
 
 ```sql
+-- provision script, product casework. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
 SET createrole_self_grant = 'set,inherit';
 CREATE ROLE "casework_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
 \password "casework_migration"

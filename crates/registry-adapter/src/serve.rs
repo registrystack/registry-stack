@@ -820,8 +820,8 @@ async fn lacking(
 /// because they would inherit it: the privilege check that follows then
 /// decides, as it does for a hand-granted deployment. A member that holds
 /// ADMIN OPTION on the role and has no members of its own does not count. It
-/// already controls the role, as the role that created it does when
-/// `adapterctl provision` runs. PostgreSQL ignores or refuses a GRANT the
+/// already controls the role, as the role that created it does in the layout
+/// the shared provisioning plan builds. PostgreSQL ignores or refuses a GRANT the
 /// migration role has no right to make, so each privilege is checked again
 /// before the commit, and a shortfall rolls everything back.
 ///

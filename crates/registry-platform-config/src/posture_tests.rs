@@ -111,7 +111,7 @@ fn declared(posture: Posture) -> DeclaredPosture {
 fn load(body: &str) -> (Result<(), String>, Vec<FoundSetting>) {
     let text = format!("{HEAD}{body}");
     let (result, found) = collect_development_settings(|| {
-        RuntimeConfigLoader::new(ENVELOPE).parse_str::<Example>(&text, |_| None)
+        RuntimeConfigLoader::new_without_posture(ENVELOPE).parse_str::<Example>(&text, |_| None)
     });
     (result.map(|_| ()).map_err(|error| error.to_string()), found)
 }

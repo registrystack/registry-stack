@@ -80,8 +80,8 @@ REALM=registry-journey
 POSTGRES_IMAGE=postgres:18.7@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
 PROJECTS_DIR=$JOURNEY_LIB_DIR/projects
 SECRETS=$JOURNEY_OUT/secrets
-# The stages a token characterisation result value may name (`Stage` in
-# registry-platform-testing), the same list as authenticationStages in the table.
+# The stage words of the ratchet table (authenticationStages), a subset of the
+# `Stage` words a token characterisation result value may name.
 STAGES=' header algorithm token-type key signature issuer audience time client scope profile unavailable '
 # Every product a token reaches. The realm names a caller client for each, so
 # every one of their client secrets is generated even when fewer are selected.
@@ -961,8 +961,8 @@ missing_claims() {
 		journey_harness_failure "cannot read the claims of the token of $CELL"
 }
 
-# logged_stage FILE...: the last authentication stage the product logged,
-# from its `stage` field or the `failed_check` label of its refusal line.
+# logged_stage FILE...: the stage word for the `failed_check` label of the last
+# refusal line the product logged, or nothing when that label has no stage word.
 logged_stage() {
 	perl -e '
 		my $stage = "";
@@ -986,16 +986,12 @@ logged_stage() {
 			my $text = <$fh>;
 			next unless defined $text;
 			$text =~ s/\e\[[0-9;]*m//g;
-			# A product logs `stage`, or the refusal recorder `failed_check`
-			# label, which the map turns into the stage word the table lists.
-			# A label with no stage word is skipped, so the problem code names
-			# the refusal instead.
-			while ($text =~ /"stage"\s*:\s*"([a-z]+(?:-[a-z]+)*)"|\bstage=("?)([a-z]+(?:-[a-z]+)*)\2|\bfailed_check"?[:=]\s*"([a-z]+(?:-[a-z]+)*)"/g) {
-				if (defined $4) {
-					$stage = $check_stage{$4} if exists $check_stage{$4};
-				} else {
-					$stage = defined $1 ? $1 : $3;
-				}
+			# The refusal recorder writes a `failed_check` label, which the map
+			# turns into the stage word the table lists. The last refusal
+			# decides, and a label with no stage word leaves the stage empty,
+			# so the problem code names the refusal instead.
+			while ($text =~ /\bfailed_check"?[:=]\s*"([a-z]+(?:-[a-z]+)*)"/g) {
+				$stage = exists $check_stage{$1} ? $check_stage{$1} : "";
 			}
 		}
 		print $stage;' "$@"
@@ -1109,12 +1105,12 @@ step_call() {
 }
 
 # hook: the products whose runtime format has hook destinations need the
-# receiver container the hook milestone adds; the others deliver nothing, so
+# receiver container the private-network-destinations change adds; the others deliver nothing, so
 # the step has no command for them.
 step_hook() {
 	case "$CELL" in
 	breg | scheduling | documents)
-		journey_unreached hook "The product delivers hooks, and the journey has no receiver for them until the hook milestone (M8) adds one."
+		journey_unreached hook "The product delivers hooks, and the journey has no receiver for them until the private-network-destinations change adds one."
 		CELL_OVER=1
 		;;
 	*) journey_pass hook ;;

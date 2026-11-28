@@ -132,6 +132,7 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.scheduling"),
     Path("release/docker/Dockerfile.messaging"),
     Path("release/docker/Dockerfile.coordinator"),
+    Path("release/docker/Dockerfile.adapter"),
 )
 
 # Adopter and development images. They build from source like the per-product
@@ -225,6 +226,12 @@ HTTP_PROBE_DOCKERFILES = {
         "tool": "coordinatorctl",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/coordinator"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-coordinator/runtime.yaml"]',
+    },
+    Path("release/docker/Dockerfile.adapter"): {
+        "binary": "adapter",
+        "tool": "adapterctl",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/adapter"]',
+        "command": 'CMD ["serve", "--runtime-config", "/etc/registry-adapter/runtime.yaml", "--project", "/etc/registry-adapter/project"]',
     },
 }
 

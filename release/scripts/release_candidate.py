@@ -80,6 +80,7 @@ IMAGE_OPERATOR_TOOLS = {
     "scheduling": "schedulingctl",
     "messaging": "messagingctl",
     "coordinator": "coordinatorctl",
+    "adapter": "adapterctl",
 }
 # Registry Messaging joins the release set from the release that
 # release_roster.MESSAGING_FIRST_RELEASE names.
@@ -95,6 +96,9 @@ EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES = {"evidence-oid4vci"}
 # Registry Coordinator joins the release set from the release that
 # release_roster.COORDINATOR_FIRST_RELEASE names.
 COORDINATOR_RUNTIME_IMAGE_NAMES = {"coordinator"}
+# The Registry Adapter facade image joins the release set from the release that
+# release_roster.ADAPTER_IMAGE_FIRST_RELEASE names.
+ADAPTER_RUNTIME_IMAGE_NAMES = {"adapter"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -142,6 +146,7 @@ SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
         | RENDER_RUNTIME_IMAGE_NAMES
         | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
         | COORDINATOR_RUNTIME_IMAGE_NAMES
+        | ADAPTER_RUNTIME_IMAGE_NAMES
     )
     for directory, suffix in (
         ("image-sbom", "spdx"),
@@ -185,6 +190,8 @@ def _candidate_image_names(version: str) -> set[str]:
         image_names = image_names | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
     if release_roster.coordinator_in_release(parsed):
         image_names = image_names | COORDINATOR_RUNTIME_IMAGE_NAMES
+    if release_roster.adapter_image_in_release(parsed):
+        image_names = image_names | ADAPTER_RUNTIME_IMAGE_NAMES
     if not release_roster.relay_in_release(parsed):
         image_names = image_names - {"relay"}
     return image_names

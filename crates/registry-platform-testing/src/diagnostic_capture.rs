@@ -54,29 +54,6 @@ impl CapturedDiagnosticLogs {
                 .finish(),
         )
     }
-
-    /// Assert that the capture holds exactly one header-stage diagnostic and
-    /// that it renders none of the supplied credentials.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the capture is not one value-free header diagnostic.
-    pub fn assert_one_value_free_header_diagnostic(&self, tokens: &[String]) {
-        let rendered = self.text();
-        assert_eq!(
-            rendered.lines().count(),
-            1,
-            "one bounded diagnostic per header stage"
-        );
-        assert!(rendered.contains(r#""stage":"header""#));
-        assert!(!rendered.contains("canary"));
-        for token in tokens.iter().filter(|token| !token.is_empty()) {
-            assert!(
-                !rendered.contains(token),
-                "diagnostics must not contain credentials"
-            );
-        }
-    }
 }
 
 impl Write for CapturedDiagnosticLogs {

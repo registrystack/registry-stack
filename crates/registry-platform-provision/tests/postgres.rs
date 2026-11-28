@@ -1064,7 +1064,7 @@ async fn an_existing_role_with_members_or_the_plans_own_grants_is_accepted() {
 }
 
 #[tokio::test]
-async fn an_existing_role_with_role_level_settings_is_refused() {
+async fn an_existing_role_with_a_role_level_search_path_is_refused() {
     let _serial = lock().await;
     let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
     let role = fixture.runtime_name();
@@ -1072,7 +1072,8 @@ async fn an_existing_role_with_role_level_settings_is_refused() {
         .server
         .superuser
         .exec(&format!(
-            "CREATE ROLE {} LOGIN; ALTER ROLE {} SET search_path = pg_catalog",
+            "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; \
+             ALTER ROLE {} SET search_path = pg_catalog",
             quote(&role),
             quote(&role)
         ))
@@ -1081,8 +1082,78 @@ async fn an_existing_role_with_role_level_settings_is_refused() {
         .provision(&Fixture::public_product())
         .await
         .unwrap_err();
-    assert_eq!(error.code(), "platform.provision.role-attributes-differ");
+    assert_eq!(error.code(), "platform.provision.role-settings-differ");
     assert_eq!(error.step(), Some("role.runtime"));
+    assert!(error.to_string().contains(&role));
+    assert!(
+        !fixture.database_exists().await,
+        "nothing runs after a refusal"
+    );
+    fixture
+        .server
+        .superuser
+        .exec(&format!("DROP ROLE IF EXISTS {}", quote(&role)))
+        .await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_search_path_set_for_the_role_in_the_product_database_is_refused_on_a_rerun() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+    let product = Fixture::public_product();
+    fixture.provision(&product).await.unwrap();
+    let role = quote(&fixture.runtime_name());
+    // A setting for another database does not touch this one.
+    fixture
+        .server
+        .superuser
+        .exec(&format!(
+            "ALTER ROLE {role} IN DATABASE postgres SET search_path = pg_catalog"
+        ))
+        .await;
+    let again = fixture.provision(&product).await.unwrap();
+    assert_eq!(created(&again), Vec::<&str>::new());
+    fixture
+        .server
+        .superuser
+        .exec(&format!(
+            "ALTER ROLE {role} IN DATABASE {} SET search_path = pg_catalog",
+            quote(&fixture.database())
+        ))
+        .await;
+    let error = fixture.provision(&product).await.unwrap_err();
+    assert_eq!(error.code(), "platform.provision.role-settings-differ");
+    assert_eq!(error.step(), Some("role.runtime"));
+    fixture
+        .server
+        .superuser
+        .exec(&format!("ALTER ROLE {role} IN DATABASE postgres RESET ALL"))
+        .await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_rerun_converges_over_role_settings_that_do_not_redirect_the_session() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+    let product = Fixture::public_product();
+    fixture.provision(&product).await.unwrap();
+    let role = quote(&fixture.runtime_name());
+    // The settings an operator puts on the runtime role behind a pooler that
+    // drops startup options.
+    fixture
+        .server
+        .superuser
+        .exec(&format!(
+            "ALTER ROLE {role} SET idle_in_transaction_session_timeout = '120s'; \
+             ALTER ROLE {role} SET jit = off; \
+             ALTER ROLE {role} IN DATABASE {} SET statement_timeout = '30s'",
+            quote(&fixture.database())
+        ))
+        .await;
+    let again = fixture.provision(&product).await.unwrap();
+    assert_eq!(created(&again), Vec::<&str>::new());
     fixture.cleanup().await;
 }
 
@@ -1447,6 +1518,43 @@ async fn a_login_refused_for_another_reason_carries_that_sqlstate() {
             "{alter}: {error:?}"
         );
     }
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_database_session_that_cannot_open_reports_the_statements_that_already_ran() {
+    let _serial = lock().await;
+    // One connection is the server session the run keeps open, so the session
+    // in the new database cannot open.
+    let fixture = Fixture::new("CREATEROLE CREATEDB CONNECTION LIMIT 1").await;
+    let plan = plan(&Fixture::public_product(), &fixture.target()).unwrap();
+    let failure = execute_recording(&fixture.admin(), &plan, Mode::Converge)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error.code(),
+        "platform.provision.database-connect-failed"
+    );
+    assert!(failure.error.may_have_run_statements());
+    let message = failure.error.to_string();
+    assert!(message.contains(&fixture.database()), "{message}");
+    assert!(message.contains("53300"), "{message}");
+    let steps: Vec<&str> = failure.reached.iter().map(|(step, _)| *step).collect();
+    assert_eq!(
+        steps,
+        [
+            "role.migration",
+            "role.runtime",
+            "database.create",
+            "database.revoke-public",
+            "database.grant-connect",
+            "database.allow-connections"
+        ]
+    );
+    assert!(
+        fixture.database_exists().await,
+        "the statements listed as run took effect"
+    );
     fixture.cleanup().await;
 }
 

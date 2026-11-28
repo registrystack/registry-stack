@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_testing::{
-    Against, Binding, Comparison, Configuration, FixtureClass, Outcome, Stage, TokenCorpus,
-    TokenFixture, TokenSigner,
+    Against, Binding, Comparison, Configuration, ExpectedCell, FixtureClass, Outcome, Stage,
+    TokenCorpus, TokenFixture, TokenSigner,
 };
 use serde_json::{json, Value};
 
@@ -322,8 +322,40 @@ fn no_negative_fixture_is_expected_to_be_admitted() {
     }
 }
 
+fn cell_with_changed_by(changed_by: &str) -> Result<ExpectedCell, serde_json::Error> {
+    serde_json::from_value(json!({
+        "main": "refused/scope",
+        "target": "admitted",
+        "basis": "observed",
+        "changedBy": changed_by,
+        "landed": false,
+    }))
+}
+
 #[test]
-fn landed_appears_exactly_when_a_milestone_changes_the_cell() {
+fn changed_by_is_a_change_name_or_none() {
+    for accepted in ["caller-contract", "posture", "none"] {
+        cell_with_changed_by(accepted)
+            .unwrap_or_else(|error| panic!("`{accepted}` is refused: {error}"));
+    }
+    for refused in [
+        "M7",
+        "Caller-Contract",
+        "caller_contract",
+        "-caller",
+        "caller-",
+        "7th",
+        "",
+    ] {
+        let error = cell_with_changed_by(refused)
+            .expect_err(&format!("`{refused}` is accepted"))
+            .to_string();
+        assert!(error.contains("changedBy"), "unhelpful error: {error}");
+    }
+}
+
+#[test]
+fn landed_appears_exactly_when_a_change_alters_the_cell() {
     let corpus = corpus();
     for row in &corpus.expectations().rows {
         for (product, cell) in &row.products {

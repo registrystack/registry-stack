@@ -3021,12 +3021,15 @@ name = "registry-platform-config"
 version = "0.49.0"
 dependencies = [
  "registry-platform-canonical-json",
+ "registry-platform-loopback",
+ "registry-platform-posture",
  "registry-platform-yaml",
  "rustix 1.1.6",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "thiserror 2.0.21",
+ "tracing",
  "url",
  "zeroize",
 ]
@@ -3074,6 +3077,7 @@ name = "registry-platform-httpsec"
 version = "0.49.0"
 dependencies = [
  "http",
+ "registry-platform-loopback",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3094,6 +3098,7 @@ dependencies = [
  "registry-platform-authcommon",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
+ "registry-platform-loopback",
  "reqwest",
  "rustls-native-certs",
  "serde",
@@ -3106,6 +3111,14 @@ dependencies = [
  "uuid",
  "zeroize",
 ]
+
+[[package]]
+name = "registry-platform-loopback"
+version = "0.49.0"
+
+[[package]]
+name = "registry-platform-posture"
+version = "0.49.0"
 
 [[package]]
 name = "registry-platform-script"
@@ -4159,7 +4172,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
  "pin-project-lite",
+ "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

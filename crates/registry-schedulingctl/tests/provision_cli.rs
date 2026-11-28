@@ -32,7 +32,7 @@ fn write_runtime(directory: &Path) -> String {
                 "postgresql://scheduling_runtime:{RUNTIME_PASSWORD}@db.invalid:5432/scheduling"
             ),
         ),
-        ("audit-key", "0123456789abcdef0123456789abcdef".to_owned()),
+        ("audit-key", "5a".repeat(16)),
         (
             "jwks.json",
             r#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#.to_owned(),

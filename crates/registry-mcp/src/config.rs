@@ -149,7 +149,7 @@ pub struct DelegationConfig {
 
 impl RuntimeConfig {
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(RuntimeEnvelope {
+        RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
             api_version: API_VERSION,
             kind: KIND,
         }).removed_keys(&[RemovedKey {

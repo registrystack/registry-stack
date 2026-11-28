@@ -413,6 +413,9 @@ fn validate_base_url(url: &Url, allow_local_loopback: bool) -> Result<()> {
     }
 }
 
+/// Exactly `127.0.0.1`, the only loopback address a client profile accepts
+/// for local-loopback discovery, so a profile written here is one the client
+/// library reads back.
 fn is_loopback_host(host: url::Host<&str>) -> bool {
     match host {
         url::Host::Ipv4(address) => address == std::net::Ipv4Addr::LOCALHOST,

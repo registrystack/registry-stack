@@ -23,8 +23,13 @@
   under the same idempotency key is not counted again, because the decision
   was counted when it was made. A grant or access token that lapses while a
   commitment waits inside the capacity transaction counts under
-  `task-grant-expired`, and a hold or appointment that another caller or
-  source manager holds counts under `ownership`.
+  `task-grant-expired`, a hold or appointment that another caller or
+  source manager holds counts under `ownership`, and an appointment that takes
+  no attendance in its current state counts under `visibility`.
+- A `request refused` line for a scope refusal names the scope claim the
+  deployment configured, the scope the route needs, and the source-busy
+  profile id when one applies. It never names a scope the token carries.
+  Answers are unchanged.
 - A static key set that the shared key set rule refuses is refused at startup
   under `scheduling.runtime.unreadable-jwks-secret`, with the rule it broke,
   in place of `scheduling.runtime-dependency.unavailable`. The rule refuses a
@@ -55,7 +60,8 @@
   so the answer does not say whether the identifier exists. Clients that
   branch on the code gain the new member in `SchedulingProblemCode`. A client
   from before this release reports the code as a protocol error with an
-  unknown outcome, so upgrade the client before shortening grants.
+  unknown outcome, so upgrade clients before upgrading the server if their
+  grants can have more than 900 seconds left on the offline path.
 
 ## 0.47.0 - 2026-11-21
 

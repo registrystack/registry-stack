@@ -295,6 +295,8 @@ impl ProfileDocument {
         }
         match self.trust {
             Some(TrustMember::LocalLoopbackDiscovery {}) => {
+                // Exactly `127.0.0.1`, the address a supervised development
+                // service binds, so a profile names the origin it will reach.
                 let loopback = parsed.scheme() == "http"
                     && parsed.host_str() == Some("127.0.0.1")
                     && parsed.port().is_some_and(|port| port != 0);

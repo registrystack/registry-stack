@@ -217,6 +217,7 @@ impl Fixture {
             migration_url_ref: format!("secret:env/{variable}"),
             ca_bundle_ref: None,
             test_only_plaintext: true,
+            transport: None,
         };
         let (audit, capture) = CaseworkAudit::capture();
         let migration = PostgresStore::connect_migration(&config, &secrets)

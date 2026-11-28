@@ -26,7 +26,7 @@ use axum::{
     Json, Router,
 };
 use registry_platform_authcommon::{
-    record_refusal, BearerParseError, FailedCheck, RefusalNote, RefusalRecorder,
+    record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote, RefusalRecorder,
 };
 use registry_platform_httpsec::{
     normalize_framework_rejection, FrameworkRejection, ProblemBody, TraceContext,
@@ -126,7 +126,7 @@ pub fn router(state: HttpState) -> Router {
     let ready_state = state.clone();
     let ready_bindings = Arc::new(BindingReadiness::default());
     let routes = Router::new()
-        .route(HEALTH_PATH, get(|| async { Json(live_body()) }))
+        .route(HEALTH_PATH, get(live))
         .route(
             READY_PATH,
             get(move || ready(ready_state.clone(), ready_bindings.clone())),
@@ -204,7 +204,13 @@ async fn record_refusals(
     let response = next.run(request).await;
     if let Some(note) = response.extensions().get::<RefusalNote>() {
         let trace = current_trace();
-        record_refusal!(refusals, *note, trace_id = trace.trace_id);
+        let declared = response.extensions().get::<DeclaredScope>();
+        record_refusal!(
+            refusals,
+            *note,
+            trace_id = trace.trace_id,
+            declared = declared
+        );
     }
     response
 }
@@ -251,6 +257,9 @@ pub(crate) fn problem(error: CoordinatorError) -> Response {
     let mut response = problem_response(problem);
     if let Some(check) = check {
         response.extensions_mut().insert(RefusalNote::new(check));
+        if let Some(declared) = error.declared {
+            response.extensions_mut().insert(*declared);
+        }
     }
     response
 }
@@ -406,6 +415,9 @@ fn live_body() -> Value {
 fn ready_body() -> Value {
     probe_body(READY_BODY, "ready")
 }
+async fn live() -> Json<Value> {
+    Json(live_body())
+}
 async fn ready(s: HttpState, bindings: Arc<BindingReadiness>) -> Response {
     if !s.recovery_only
         && deployment::check(&s.store, &s.runtime, s.workflows.digest())
@@ -432,13 +444,24 @@ mod readiness_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
-    #[test]
-    fn the_probe_bodies_keep_the_shared_status_member_and_name_their_own() {
-        assert_eq!(live_body().to_string(), r#"{"live":true,"status":"ok"}"#);
-        assert_eq!(
-            ready_body().to_string(),
-            r#"{"ready":true,"status":"ready"}"#
-        );
+    #[tokio::test]
+    async fn the_health_route_answers_the_shared_status_member_and_its_own() {
+        use tower::ServiceExt as _;
+        let response = Router::new()
+            .route(HEALTH_PATH, get(live))
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(HEALTH_PATH)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], br#"{"live":true,"status":"ok"}"#);
     }
 
     #[tokio::test(start_paused = true)]
@@ -2104,6 +2127,30 @@ mod refusal_recording_tests {
             assert!(!log.contains(CANARY), "{check}: {log}");
             assert!(!body.to_string().contains(CANARY), "{check}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_scope_refusal_line_names_the_declared_values_and_nothing_else() {
+        let (answered, body, _, log) = refused(
+            CoordinatorError::new("access.denied", CANARY)
+                .failing(FailedCheck::Scope)
+                .declaring(DeclaredScope::new("scp").with_required_scope("coordinator:run")),
+        )
+        .await;
+        assert_eq!(answered.as_u16(), 403);
+        for field in ["scope_claim=\"scp\"", "required_scope=\"coordinator:run\""] {
+            assert!(log.contains(field), "{field} in {log}");
+        }
+        assert!(!log.contains("access_profile"), "{log}");
+        assert!(!body.to_string().contains("coordinator:run"), "{body}");
+        // A refusal that is not a scope refusal names no declared value.
+        let (_, _, _, other) = refused(
+            CoordinatorError::new("access.denied", CANARY)
+                .failing(FailedCheck::Operation)
+                .declaring(DeclaredScope::new("scp")),
+        )
+        .await;
+        assert!(!other.contains("scope_claim"), "{other}");
     }
 
     #[tokio::test]

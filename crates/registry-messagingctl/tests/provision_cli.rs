@@ -16,6 +16,12 @@ const RUNTIME_PASSWORD: &str = "runtime-password-for-print-mode";
 /// and a runtime login on one server that does not exist, so a connection
 /// attempt could only fail.
 fn write_runtime(directory: &Path) -> String {
+    write_runtime_for(directory, "messaging")
+}
+
+/// [`write_runtime`] with the database name both URLs end in, written as the
+/// URL path holds it (percent-encoded where a name needs it).
+fn write_runtime_for(directory: &Path, database: &str) -> String {
     let secrets = directory.join("secrets");
     std::fs::create_dir(&secrets).unwrap();
     std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -23,14 +29,14 @@ fn write_runtime(directory: &Path) -> String {
         (
             "migration-database-url",
             format!(
-                "postgresql://messaging_migration:{MIGRATION_PASSWORD}@db.invalid:5432/messaging"
+                "postgresql://messaging_migration:{MIGRATION_PASSWORD}@db.invalid:5432/{database}"
             ),
         ),
         (
             "runtime-database-url",
-            format!("postgresql://messaging_runtime:{RUNTIME_PASSWORD}@db.invalid:5432/messaging"),
+            format!("postgresql://messaging_runtime:{RUNTIME_PASSWORD}@db.invalid:5432/{database}"),
         ),
-        ("audit-key", "0123456789abcdef0123456789abcdef".to_owned()),
+        ("audit-key", "5a".repeat(16)),
         (
             "jwks.json",
             r#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#.to_owned(),
@@ -109,6 +115,24 @@ fn scratch() -> tempfile::TempDir {
 }
 
 #[test]
+fn a_database_name_that_is_a_connection_uri_is_refused_in_print_mode() {
+    let directory = scratch();
+    let runtime = write_runtime_for(directory.path(), "postgresql%3A%2F%2Fevil.example%2Fx");
+    let (code, report) = refusal(&runtime);
+    assert_eq!(code, Some(2), "{report:#}");
+    let diagnostic = first_diagnostic(&report);
+    assert_eq!(
+        diagnostic["code"], "platform.provision.target-invalid",
+        "{report:#}"
+    );
+    assert_eq!(report["executed"], false, "{report:#}");
+    assert!(
+        !report.to_string().contains("evil.example"),
+        "the refused name is not repeated: {report:#}"
+    );
+}
+
+#[test]
 fn print_sql_writes_the_script_and_no_password() {
     let directory = scratch();
     let runtime = write_runtime(directory.path());
@@ -172,34 +196,40 @@ fn print_sql_as_json_reports_nothing_executed() {
 fn both_administrator_flags_are_refused() {
     let directory = scratch();
     let runtime = write_runtime(directory.path());
-    for arguments in [
-        vec![
-            "provision",
-            "--runtime-config",
-            &runtime,
-            "--admin-url-file",
-            "/nonexistent/admin-url",
-            "--admin-url-env",
-            "MESSAGING_ADMIN_URL",
-        ],
-        vec![
-            "provision",
-            "--runtime-config",
-            &runtime,
-            "--print-sql",
-            "--admin-url-env",
-            "MESSAGING_ADMIN_URL",
-        ],
-        vec!["provision", "--runtime-config", &runtime],
+    for (arguments, message) in [
+        (
+            vec![
+                "provision",
+                "--runtime-config",
+                &runtime,
+                "--admin-url-file",
+                "/nonexistent/admin-url",
+                "--admin-url-env",
+                "MESSAGING_ADMIN_URL",
+            ],
+            "conflicting use of --admin-url-file",
+        ),
+        (
+            vec![
+                "provision",
+                "--runtime-config",
+                &runtime,
+                "--print-sql",
+                "--admin-url-env",
+                "MESSAGING_ADMIN_URL",
+            ],
+            "conflicting use of --print-sql",
+        ),
+        (
+            vec!["provision", "--runtime-config", &runtime],
+            "missing required argument --admin-url-file, --admin-url-env",
+        ),
     ] {
         let output = ctl(&arguments);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
-        // clap also answers 2 for an unknown verb, so the text names the flags.
-        assert!(
-            stderr.contains("--admin-url") || stderr.contains("--print-sql"),
-            "{arguments:?}: {stderr}"
-        );
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+        assert!(stderr.contains(message), "{arguments:?}: {stderr}");
     }
 }
 

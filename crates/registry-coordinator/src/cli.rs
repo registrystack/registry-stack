@@ -193,6 +193,7 @@ enum Command {
         remove_workflow: Vec<String>,
     },
     /// Create the database, the migration and runtime roles, and the grants `apply` expects, as a PostgreSQL administrator.
+    #[command(mut_arg("runtime_config", |argument| argument.required(false)))]
     Provision(registry_platform_provision::cli::ProvisionArgs),
     /// Apply every listed workflow's package and least-privileged runtime grants using migration credentials.
     Apply {
@@ -1078,6 +1079,13 @@ fn usage(error: &clap::Error, arguments: &[String]) -> CoordinatorError {
         (ErrorKind::MissingRequiredArgument, Some(_)) => (
             format!("missing required argument {all}"),
             format!("Add {all}; {help} describes it."),
+        ),
+        // A required argument the command's own definition relaxes, so that a
+        // global flag given before the command satisfies it, is checked when
+        // its value is read and names no argument.
+        (ErrorKind::MissingRequiredArgument, None) => (
+            "missing required argument".to_owned(),
+            format!("Add the missing argument; {help} describes it."),
         ),
         (ErrorKind::InvalidValue | ErrorKind::ValueValidation, Some(name)) => (
             format!("invalid value for {name}"),

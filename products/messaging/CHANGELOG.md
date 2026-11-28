@@ -12,6 +12,10 @@
   check its producer names, and a key endpoint outage under
   `key-source-unavailable`. `messaging_authentication_refusals_total{reason}`
   is unchanged. Refusal statuses, headers and bodies are unchanged.
+- A scope refusal line also names the scope claim the deployment reads, the
+  scope the access profile requires and the profile's id. The values come from
+  the configuration and the reviewed package, never from the token. No other
+  refusal line carries them, and the answer is unchanged.
 - A static key set with a private key member or a repeated member name is
   refused at startup under `messaging.runtime.unreadable-jwks-secret`, with
   the rule it broke, and `messagingctl` names the rule when it refuses a
@@ -20,8 +24,7 @@
   runtime roles and the database from the runtime file's two database URLs, as
   a non-superuser administrator over verified TLS, or prints the script with
   `--print-sql`. It also grants the runtime role USAGE on the `public` schema,
-  and running it again restores that grant. The operate page no longer gives
-  hand SQL.
+  and running it again restores that grant.
 - A plain `http` provider base URL and an SMTP relay in development use the
   same loopback rule: `127.0.0.0/8`, `::1`, or an IPv4-mapped form of
   `127.0.0.0/8`. The name `localhost` is accepted for a provider base URL as

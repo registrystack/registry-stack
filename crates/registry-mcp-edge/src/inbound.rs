@@ -16,7 +16,8 @@ use axum::{
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_authcommon::{
-    parse_bearer_token, record_refusal, BearerParseError, FailedCheck, RefusalNote, RefusalRecorder,
+    parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
+    RefusalRecorder,
 };
 use registry_platform_httputil::loopback::loopback_host;
 pub use registry_platform_oidc::AccessTokenAlgorithm;
@@ -260,8 +261,17 @@ pub struct ResourceServer {
     scope_challenge: String,
     metadata: Value,
     refusals: Arc<RefusalRecorder>,
-    /// When the gateway last logged that it could not admit a request.
-    admit_fault_logged: Mutex<Option<Instant>>,
+    /// When the gateway last logged that it could not admit a request, and
+    /// how many requests failed the same way since.
+    admit_fault_logged: Mutex<AdmitFaultLog>,
+    /// The configured claim and scopes a scope refusal line names.
+    declared_scope: DeclaredScope,
+}
+
+#[derive(Default)]
+struct AdmitFaultLog {
+    logged: Option<Instant>,
+    suppressed: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -319,7 +329,9 @@ impl ResourceServer {
             scope_challenge,
             metadata,
             refusals,
-            admit_fault_logged: Mutex::new(None),
+            admit_fault_logged: Mutex::new(AdmitFaultLog::default()),
+            declared_scope: DeclaredScope::new(&options.scope_claim)
+                .with_required_scope(options.required_scopes.join(" ")),
         })
     }
 
@@ -402,31 +414,39 @@ impl ResourceServer {
     /// Counts and logs the refusal, then builds its answer.
     pub(crate) fn refuse(&self, refusal: Refusal) -> Response {
         match refusal.failed_check() {
-            Some(check) => record_refusal!(self.refusals, RefusalNote::new(check)),
+            Some(check) => record_refusal!(
+                self.refusals,
+                RefusalNote::new(check),
+                declared = Some(&self.declared_scope)
+            ),
             // The gateway could not derive a pseudonym or run its limiter.
             // That is a fault of this service, not a check a caller failed.
             None => {
-                if self.admit_fault_due(Instant::now()) {
-                    tracing::error!("the gateway could not admit a request");
+                if let Some(suppressed) = self.admit_fault_due(Instant::now()) {
+                    tracing::error!(suppressed, "the gateway could not admit a request");
                 }
             }
         }
         self.refusal_response(refusal)
     }
 
-    /// True at most once per `ADMIT_FAULT_LOG_WINDOW`, so a limiter that has
-    /// reached its capacity cannot write a line for every request.
-    fn admit_fault_due(&self, now: Instant) -> bool {
-        let mut last = self
+    /// `Some` at most once per `ADMIT_FAULT_LOG_WINDOW`, so a limiter that has
+    /// reached its capacity cannot write a line for every request. The value
+    /// is how many requests failed the same way since the last line.
+    fn admit_fault_due(&self, now: Instant) -> Option<u64> {
+        let mut log = self
             .admit_fault_logged
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if last.is_some_and(|logged| now.saturating_duration_since(logged) < ADMIT_FAULT_LOG_WINDOW)
+        if log
+            .logged
+            .is_some_and(|logged| now.saturating_duration_since(logged) < ADMIT_FAULT_LOG_WINDOW)
         {
-            return false;
+            log.suppressed = log.suppressed.saturating_add(1);
+            return None;
         }
-        *last = Some(now);
-        true
+        log.logged = Some(now);
+        Some(std::mem::take(&mut log.suppressed))
     }
 
     fn refusal_response(&self, refusal: Refusal) -> Response {

@@ -107,6 +107,7 @@ async fn fixture() -> Fixture {
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     let migration = PostgresStore::connect_migration(&config, &secrets)
         .expect("migration store")

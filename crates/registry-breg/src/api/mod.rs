@@ -311,10 +311,7 @@ async fn review_completion(
     body: Body,
 ) -> Response {
     let Some(receiver) = service.review_completions.as_ref() else {
-        return crate::correlation::note_refusal(
-            fixed_problem(ProblemCode::ResourceNotFound),
-            FailedCheck::Visibility,
-        );
+        return concealed(FailedCheck::Visibility);
     };
     let token = match crate::auth::bearer_token(&headers) {
         Ok(token) => token,
@@ -402,7 +399,7 @@ fn recipient_binding(headers: &HeaderMap) -> Result<&str, FailedCheck> {
 }
 
 fn review_completion_refused(check: FailedCheck) -> Response {
-    crate::correlation::note_refusal(fixed_problem(ProblemCode::AuthenticationRefused), check)
+    refusal_problem(ProblemCode::AuthenticationRefused, check)
 }
 
 async fn health() -> Response {
@@ -3021,6 +3018,7 @@ pub(crate) fn authorize_profile_claims(
         .iter()
         .all(|scope| claims.has_scope(scope))
     {
+        claims.declare_scope_refusal(&profile.required_scopes, Some(&profile.id));
         return Err(ClaimRefusal::new(
             "required-scope-missing",
             FailedCheck::Scope,
@@ -5144,13 +5142,16 @@ fn method_name(method: crate::model::HttpMethod) -> &'static str {
 /// The 404 that hides whether the target exists or what the caller may see.
 /// The check names, for the operator only, which rule refused.
 fn concealed(check: FailedCheck) -> Response {
-    crate::correlation::note_refusal(fixed_problem(ProblemCode::ResourceNotFound), check)
+    refusal_problem(ProblemCode::ResourceNotFound, check)
 }
 
 /// The 404 of a path or method the service does not serve. No check refused
 /// the caller, so nothing is counted.
 fn unknown_route() -> Response {
-    fixed_problem(ProblemCode::ResourceNotFound)
+    build_problem(
+        ProblemCode::ResourceNotFound,
+        ProblemCode::ResourceNotFound.description(),
+    )
 }
 
 fn unavailable() -> Response {
@@ -5763,7 +5764,9 @@ fn mutation_problem_response(error: MutationError) -> Response {
         | MutationError::FieldGuardFailed { .. }
         | MutationError::ProposalGuardFailed(_)
         | MutationError::TimerGenerationUnsupported => precondition_failed(),
-        MutationError::WriteOutsideBoundary => fixed_problem(ProblemCode::WriteOutsideBoundary),
+        MutationError::WriteOutsideBoundary => {
+            refusal_problem(ProblemCode::WriteOutsideBoundary, FailedCheck::RowBoundary)
+        }
         MutationError::Conflict | MutationError::ProposalUniqueConflict => {
             fixed_problem(ProblemCode::MutationConflict)
         }
@@ -5834,11 +5837,39 @@ fn mutation_problem_for_fields(
     }
 }
 
+/// An answer that is not a refusal of authority. A code that refuses authority
+/// (401, 403, or the 404 that conceals) is built with [`refusal_problem`] so it
+/// names its check. A refusal code arriving here is a defect: it is answered
+/// unchanged and logged once, and a debug build stops.
 fn fixed_problem(code: ProblemCode) -> Response {
     problem_with_detail(code, code.description())
 }
 
 fn problem_with_detail(code: ProblemCode, detail: &'static str) -> Response {
+    if refuses_authority(code) {
+        debug_assert!(false, "a refusal was built without its failed check");
+        tracing::error!(
+            code = code.code(),
+            "a refusal was answered without its failed check"
+        );
+    }
+    build_problem(code, detail)
+}
+
+/// A refusal of authority, with the check it failed. The check reaches the
+/// operator's counter and log line through the response extensions and never
+/// the caller's body.
+fn refusal_problem(code: ProblemCode, check: FailedCheck) -> Response {
+    crate::correlation::note_refusal(build_problem(code, code.description()), check)
+}
+
+/// The codes answered as a refusal of authority: every 401 and 403, and the
+/// 404 that hides what the caller may see.
+fn refuses_authority(code: ProblemCode) -> bool {
+    matches!(code.status(), 401 | 403) || code == ProblemCode::ResourceNotFound
+}
+
+fn build_problem(code: ProblemCode, detail: &'static str) -> Response {
     let status = StatusCode::from_u16(code.status()).expect("problem catalogue status is valid");
     crate::correlation::problem_response(status, code.title(), detail, code.code())
 }
@@ -6410,6 +6441,55 @@ mod refusal_check_tests {
         let unknown = unknown_route();
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
         assert_eq!(noted(&unknown), None);
+    }
+
+    /// The codes answered as a refusal of authority, read from the catalogue
+    /// so a code added later is covered.
+    fn refusal_codes() -> Vec<ProblemCode> {
+        ProblemCode::ALL
+            .iter()
+            .copied()
+            .filter(|code| refuses_authority(*code))
+            .collect()
+    }
+
+    /// Every code answered as a 401, a 403 or the concealing 404 is built with
+    /// its check, and building one without the check is a defect.
+    #[test]
+    fn every_refusal_code_is_built_with_its_check() {
+        let refusals = refusal_codes();
+        for status in [401, 403, 404] {
+            assert!(
+                refusals.iter().any(|code| code.status() == status),
+                "the catalogue lists a {status} refusal"
+            );
+        }
+        for code in ProblemCode::ALL {
+            let status = code.status();
+            if matches!(status, 401 | 403) {
+                assert!(refusals.contains(code), "{} is a refusal", code.code());
+            }
+        }
+        for code in refusals {
+            let response = refusal_problem(code, FailedCheck::Visibility);
+            assert_eq!(response.status().as_u16(), code.status());
+            assert_eq!(noted(&response), Some(FailedCheck::Visibility));
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_refusal_code_without_its_check_stops_a_debug_build() {
+        let refusals = refusal_codes();
+        assert!(!refusals.is_empty());
+        for code in refusals {
+            let outcome = std::panic::catch_unwind(|| fixed_problem(code));
+            assert!(
+                outcome.is_err(),
+                "{} was built without a check",
+                code.code()
+            );
+        }
     }
 
     #[test]

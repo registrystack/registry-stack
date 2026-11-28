@@ -428,6 +428,15 @@ impl<'de> Deserialize<'de> for ProfileOperation {
     }
 }
 
+/// The facade path of one bound operation: the record type in place of the
+/// record-type parameter's placeholder, wherever the placeholder sits in the
+/// path. The listener, the effective contract and the checks read the path
+/// through this one rule.
+#[must_use]
+pub fn concrete_facade_path(path: &str, record_type_parameter: &str, record_type: &str) -> String {
+    path.replace(&format!("{{{record_type_parameter}}}"), record_type)
+}
+
 impl ProfileOperation {
     /// Whether the operation only reads: a GET, or a POST declaring
     /// `readOnly`.
@@ -603,6 +612,23 @@ fn default_success_status() -> registry_platform_yaml::BoundedU32<200, 299> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_concrete_facade_path_substitutes_a_whole_or_partial_segment() {
+        use super::concrete_facade_path;
+        assert_eq!(
+            concrete_facade_path("/v1/{type}/{id}", "type", "case"),
+            "/v1/case/{id}"
+        );
+        assert_eq!(
+            concrete_facade_path("/v1/{type}.json", "type", "case"),
+            "/v1/case.json"
+        );
+        assert_eq!(
+            concrete_facade_path("/v1/cases", "type", "case"),
+            "/v1/cases"
+        );
+    }
+
     use super::*;
 
     #[test]

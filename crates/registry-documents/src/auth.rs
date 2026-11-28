@@ -20,7 +20,7 @@ use std::sync::Arc;
 use registry_documents_core::{
     AccessProfiles, AccessRefusal, ActorKind, ActorKindClaim, Caller, VerifiedTokenFacts,
 };
-use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
+use registry_platform_authcommon::{validate_compact_access_token, DeclaredScope, FailedCheck};
 use registry_platform_oidc::{
     actor_kind, ClaimError, ClaimNames, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
     ASSERTION_ISSUER_CLAIM,
@@ -31,6 +31,8 @@ pub struct DocumentsAuthenticator {
     verifier: TokenVerifier,
     claim_names: ClaimNames,
     profiles: AccessProfiles,
+    /// The claim the deployment reads scopes from, as configured.
+    scope_claim: String,
     /// Whether the deployment declared any assertion authority at all.
     binds_assertion_issuers: bool,
 }
@@ -48,6 +50,7 @@ impl DocumentsAuthenticator {
             .validate()
             .expect("the default contextual claim names are valid");
         Self {
+            scope_claim: verifier.scope_claim.clone(),
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             profiles,
@@ -59,6 +62,16 @@ impl DocumentsAuthenticator {
     /// A refusal names the check it failed, for the operator's counter and
     /// log line. The answer to the caller does not carry it.
     pub async fn authenticate(&self, token: &str) -> Result<Caller, AuthenticationError> {
+        self.authenticate_declaring(token)
+            .await
+            .map_err(|refusal| refusal.error)
+    }
+
+    /// As [`Self::authenticate`], and a scope refusal also carries what the
+    /// deployment declared about it: the scope claim name, the scope the
+    /// profile requires, and the profile's id. None of it comes from the
+    /// token.
+    pub async fn authenticate_declaring(&self, token: &str) -> Result<Caller, DeclaredRefusal> {
         validate_compact_access_token(token)
             .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
         let verified = self
@@ -76,9 +89,7 @@ impl DocumentsAuthenticator {
             tracing::debug!(
                 "an exchanged credential arrived at a deployment that declared no assertion authority"
             );
-            return Err(AuthenticationError::Profile(
-                FailedCheck::TokenAssertionIssuer,
-            ));
+            return Err(AuthenticationError::Profile(FailedCheck::TokenAssertionIssuer).into());
         }
         let client_id = verified
             .matched_client_id()
@@ -94,9 +105,29 @@ impl DocumentsAuthenticator {
         self.profiles
             .resolve(&facts)
             .map_err(|refusal| match refusal {
-                AccessRefusal::Profile => AuthenticationError::Profile(self.profile_check(&facts)),
-                AccessRefusal::Claims => AuthenticationError::Claims(claims_check(&facts)),
+                AccessRefusal::Profile => {
+                    let check = self.profile_check(&facts);
+                    let declared = (check == FailedCheck::Scope)
+                        .then(|| self.declared_scope(&facts))
+                        .flatten();
+                    DeclaredRefusal {
+                        error: AuthenticationError::Profile(check),
+                        declared,
+                    }
+                }
+                AccessRefusal::Claims => AuthenticationError::Claims(claims_check(&facts)).into(),
             })
+    }
+
+    /// The scope claim, the scope and the access profile a scope refusal is
+    /// about, all from configuration.
+    fn declared_scope(&self, facts: &VerifiedTokenFacts<'_>) -> Option<DeclaredScope> {
+        let missing = self.profiles.missing_scope(facts)?;
+        Some(
+            DeclaredScope::new(&self.scope_claim)
+                .with_required_scope(missing.scope)
+                .with_access_profile(missing.profile),
+        )
     }
 
     /// Which check a profile refusal failed. The access profiles answer only
@@ -144,6 +175,23 @@ impl std::fmt::Debug for DocumentsAuthenticator {
             .field("verifier", &"<redacted>")
             .field("binds_assertion_issuers", &self.binds_assertion_issuers)
             .finish_non_exhaustive()
+    }
+}
+
+/// A refusal of authentication with the values the deployment declared about
+/// it, when it is a scope refusal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeclaredRefusal {
+    pub error: AuthenticationError,
+    pub declared: Option<DeclaredScope>,
+}
+
+impl From<AuthenticationError> for DeclaredRefusal {
+    fn from(error: AuthenticationError) -> Self {
+        Self {
+            error,
+            declared: None,
+        }
     }
 }
 
@@ -353,6 +401,33 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn a_scope_refusal_declares_the_configured_values_and_none_of_the_tokens() {
+        let mut unscoped = citizen_claims();
+        unscoped["scope"] = json!("canary-scope-from-the-token");
+        let refusal = authenticator()
+            .authenticate_declaring(&token(unscoped))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal.error,
+            AuthenticationError::Profile(FailedCheck::Scope)
+        );
+        let declared = refusal.declared.expect("a scope refusal declares values");
+        assert_eq!(declared.scope_claim(), "scope");
+        assert_eq!(declared.required_scope(), Some("documents:own"));
+        assert_eq!(declared.access_profile(), Some("citizen"));
+        assert!(!format!("{declared:?}").contains("canary-scope-from-the-token"));
+        // Another refusal declares nothing.
+        let mut unprofiled = citizen_claims();
+        unprofiled["azp"] = json!("unprofiled-client");
+        let other = authenticator()
+            .authenticate_declaring(&token(unprofiled))
+            .await
+            .unwrap_err();
+        assert_eq!(other.declared, None);
+    }
+
+    #[tokio::test]
     async fn a_token_outside_every_profile_is_a_profile_refusal() {
         let mut unscoped = citizen_claims();
         unscoped["scope"] = json!("documents:read");
@@ -464,6 +539,29 @@ pub(crate) mod tests {
             AuthenticationError::Unavailable.failed_check(),
             FailedCheck::KeySourceUnavailable
         );
+    }
+
+    /// A key endpoint the verifier refuses to contact, or a static key set it
+    /// cannot use, is counted under `key-source-unavailable` and answers the
+    /// refusal a credential gets (401), not the 503 of a key set that could
+    /// not be fetched or read. The operator pages say so.
+    #[test]
+    fn a_key_source_the_verifier_refuses_is_counted_unavailable_and_answers_a_refusal() {
+        use registry_platform_oidc::{OidcEndpoint, StaticJwksError};
+        for error in [
+            OidcError::EndpointRefused {
+                endpoint: OidcEndpoint::DiscoveredCrossOriginJwks,
+                remedy: "declare the endpoint",
+            },
+            OidcError::InsecureHttpRequiresOptIn,
+            OidcError::StaticKeySet(StaticJwksError::Empty),
+        ] {
+            assert_eq!(
+                verifier_failure(&error),
+                AuthenticationError::Refused(FailedCheck::KeySourceUnavailable),
+                "{error:?}"
+            );
+        }
     }
 
     #[test]

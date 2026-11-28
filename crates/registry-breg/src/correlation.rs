@@ -9,7 +9,9 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
-use registry_platform_authcommon::{record_refusal, FailedCheck, RefusalNote};
+use std::sync::{Arc, Mutex, PoisonError};
+
+use registry_platform_authcommon::{record_refusal, DeclaredScope, FailedCheck, RefusalNote};
 use registry_platform_httpsec::{Problem, ProblemBody, TraceContext, TraceId};
 use serde_json::Value;
 use uuid::Uuid;
@@ -23,7 +25,38 @@ use uuid::Uuid;
 pub struct RequestCorrelation {
     request_id: Uuid,
     trace: TraceContext,
+    declared_scope: DeclaredScopeSlot,
 }
+
+/// The operator-declared values of the scope check a request failed. A scope
+/// refusal fills it, the recording layer reads it, and nothing in it is
+/// written to the response. Every clone of one request's correlation shares
+/// the slot.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DeclaredScopeSlot(Arc<Mutex<Option<DeclaredScope>>>);
+
+impl DeclaredScopeSlot {
+    pub(crate) fn set(&self, declared: DeclaredScope) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(declared);
+    }
+
+    fn get(&self) -> Option<DeclaredScope> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+// The slot is bookkeeping for the recording layer, not part of a
+// correlation's identity.
+impl PartialEq for DeclaredScopeSlot {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for DeclaredScopeSlot {}
 
 impl RequestCorrelation {
     #[must_use]
@@ -31,6 +64,7 @@ impl RequestCorrelation {
         Self {
             request_id: Uuid::new_v4(),
             trace: TraceContext::from_headers(headers),
+            declared_scope: DeclaredScopeSlot::default(),
         }
     }
 
@@ -39,6 +73,7 @@ impl RequestCorrelation {
         Self {
             request_id: Uuid::new_v4(),
             trace: TraceContext::server_created(),
+            declared_scope: DeclaredScopeSlot::default(),
         }
     }
 
@@ -50,6 +85,10 @@ impl RequestCorrelation {
     #[must_use]
     pub fn trace_id(&self) -> &TraceId {
         &self.trace.trace_id
+    }
+
+    pub(crate) fn declared_scope_slot(&self) -> DeclaredScopeSlot {
+        self.declared_scope.clone()
     }
 
     fn apply_trace(&self, headers: &mut HeaderMap) {
@@ -445,6 +484,17 @@ pub(crate) fn finish_response(
         );
     }
     correlation.apply_trace(response.headers_mut());
+    if let Some(problem) = &problem {
+        if matches!(problem.status.as_u16(), 401 | 403)
+            && response.extensions().get::<RefusalNote>().is_none()
+        {
+            debug_assert!(false, "a refusal was answered without its failed check");
+            tracing::error!(
+                code = problem.code,
+                "a refusal was answered without its failed check"
+            );
+        }
+    }
     record_noted_refusal(&response, correlation);
 
     let status = status_class(response.status());
@@ -467,10 +517,12 @@ pub(crate) fn finish_response(
 /// folded answer is not itself a refusal.
 pub(crate) fn record_noted_refusal(response: &Response, correlation: &RequestCorrelation) {
     if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
+        let declared = correlation.declared_scope.get();
         record_refusal!(
             crate::metrics::process_refusal_recorder(),
             note,
-            trace_id = correlation.trace_id()
+            trace_id = correlation.trace_id(),
+            declared = declared.as_ref()
         );
     }
 }
@@ -499,4 +551,59 @@ pub(crate) fn status_class(status: StatusCode) -> &'static str {
 
 fn duration_milliseconds(elapsed: std::time::Duration) -> u64 {
     u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod refusal_guard_tests {
+    use super::*;
+
+    fn refusal_statuses() -> [StatusCode; 2] {
+        [
+            StatusCode::from_u16(401).expect("401 is a status"),
+            StatusCode::FORBIDDEN,
+        ]
+    }
+
+    fn finish(response: Response) -> Response {
+        let correlation = RequestCorrelation::from_headers(&HeaderMap::new());
+        finish_response(response, &correlation, "GET", Instant::now())
+    }
+
+    #[test]
+    fn a_401_or_403_with_its_check_is_answered_unchanged() {
+        for status in refusal_statuses() {
+            let response = note_refusal(
+                problem_response(status, "Refused", "Refused.", "authentication.refused"),
+                FailedCheck::CredentialMissing,
+            );
+            assert_eq!(finish(response).status(), status);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_401_or_403_without_a_check_stops_a_debug_build() {
+        for status in refusal_statuses() {
+            let outcome = std::panic::catch_unwind(|| {
+                finish(problem_response(
+                    status,
+                    "Refused",
+                    "Refused.",
+                    "authentication.refused",
+                ))
+            });
+            assert!(outcome.is_err(), "{status} was answered without a check");
+        }
+    }
+
+    #[test]
+    fn a_404_without_a_check_is_an_unknown_route() {
+        let response = finish(problem_response(
+            StatusCode::NOT_FOUND,
+            "Not Found",
+            "The requested resource was not found.",
+            "resource.not_found",
+        ));
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

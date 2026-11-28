@@ -10,7 +10,7 @@
 # ctl names the crate of the matching tool. It is null where the tool is a
 # binary of the runtime's own crate (coordinatorctl) or where none exists.
 #
-# usesPostgres, verifiesTokens and rstackDevPlan describe `main`. A milestone
+# usesPostgres, verifiesTokens and rstackDevPlan describe `main`. A change
 # that changes one edits the row in the same commit.
 
 schema: registry.journey-products/v1

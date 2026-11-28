@@ -197,6 +197,86 @@ fn a_runtime_url_user_that_is_not_the_deployment_runtime_role_is_refused_before_
 }
 
 #[test]
+fn a_runtime_url_that_names_no_user_is_refused_as_missing_its_user() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    for url in [
+        "postgres://db.example.org:5432/coordinator",
+        "not a postgresql url",
+    ] {
+        let output = provision_with(
+            &runtime,
+            &["--print-sql"],
+            Some(database_url("coordinator_migration", MIGRATION_PASSWORD)),
+            Some(url.to_owned()),
+        );
+        assert_refused(
+            &output,
+            "coordinator.runtime-config.runtime-role-mismatch",
+            "/database/runtimeUrlRef",
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("names no user"),
+            "the refusal says the URL has no user: {stderr}"
+        );
+        assert!(
+            !stderr.contains("does not log in as"),
+            "a missing user is not reported as another user: {stderr}"
+        );
+    }
+}
+
+/// Every other verb takes `--runtime-config` before or after its name, and
+/// `provision` does too.
+#[test]
+fn the_runtime_file_may_be_given_before_the_verb() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    let run = |arguments: &[&std::ffi::OsStr]| {
+        Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+            .args(arguments)
+            .env(
+                "COORDINATOR_MIGRATION_URL",
+                database_url("coordinator_migration", MIGRATION_PASSWORD),
+            )
+            .env(
+                "COORDINATOR_DATABASE_URL",
+                database_url("coordinator_runtime", RUNTIME_PASSWORD),
+            )
+            .output()
+            .unwrap()
+    };
+    let before = run(&[
+        "--runtime-config".as_ref(),
+        runtime.as_os_str(),
+        "provision".as_ref(),
+        "--print-sql".as_ref(),
+    ]);
+    let after = run(&[
+        "provision".as_ref(),
+        "--runtime-config".as_ref(),
+        runtime.as_os_str(),
+        "--print-sql".as_ref(),
+    ]);
+    assert_eq!(
+        before.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&before.stderr)
+    );
+    assert_eq!(before.stdout, after.stdout, "the same plan either way");
+
+    let missing = run(&["provision".as_ref(), "--print-sql".as_ref()]);
+    assert_eq!(missing.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(
+        stderr.contains("missing required argument") && stderr.contains("provision --help"),
+        "the usage error says an argument is missing and where to read: {stderr}"
+    );
+}
+
+#[test]
 fn an_unreadable_runtime_url_secret_is_refused_without_a_password() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = runtime_file(directory.path());

@@ -51,7 +51,7 @@ use registry_messaging_core::{
     PROVIDER_CALLBACK_TOKEN_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use registry_platform_authcommon::{
-    parse_bearer_token, record_refusal, BearerParseError, FailedCheck, RefusalNote,
+    parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
 };
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
@@ -954,12 +954,12 @@ impl PreviewRecord {
 
 async fn authenticate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
     let result = match bearer_token(headers) {
-        Ok(token) => state.authenticator.authenticate(token).await,
-        Err(check) => Err(AuthenticationError::Refused(check)),
+        Ok(token) => state.authenticator.authenticate_declaring(token).await,
+        Err(check) => Err(AuthenticationError::Refused(check).into()),
     };
-    result.map_err(|error| {
-        state.metrics.record_authentication_refusal(error);
-        authentication_problem(error)
+    result.map_err(|refusal| {
+        state.metrics.record_authentication_refusal(refusal.error);
+        authentication_problem(refusal.error).with_declared(refusal.declared)
     })
 }
 
@@ -1003,6 +1003,9 @@ fn authentication_problem(error: AuthenticationError) -> HttpError {
 pub struct HttpError {
     problem: ProblemCode,
     check: Option<FailedCheck>,
+    /// What the deployment declared about a scope refusal. It rides with the
+    /// check to the recording layer and is never written to the response.
+    declared: Option<DeclaredScope>,
 }
 
 impl HttpError {
@@ -1012,7 +1015,14 @@ impl HttpError {
         Self {
             problem,
             check: Some(check),
+            declared: None,
         }
+    }
+
+    /// Attach the values a scope refusal's log line may name.
+    #[must_use]
+    pub(crate) fn with_declared(self, declared: Option<DeclaredScope>) -> Self {
+        Self { declared, ..self }
     }
 
     /// An answer whose check follows from its problem code alone: the
@@ -1028,7 +1038,11 @@ impl HttpError {
                 None
             }
         };
-        Self { problem, check }
+        Self {
+            problem,
+            check,
+            declared: None,
+        }
     }
 
     /// The problem this answer carries.
@@ -1112,7 +1126,8 @@ async fn record_refusals(
         record_refusal!(
             metrics.refusal_recorder(),
             note,
-            trace_id = current_trace().trace_id
+            trace_id = current_trace().trace_id,
+            declared = response.extensions().get::<DeclaredScope>()
         );
     }
     response
@@ -1146,7 +1161,11 @@ fn retry_after_seconds(wait: std::time::Duration) -> u64 {
 
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
-        problem_answer(self.problem, self.check)
+        let mut response = problem_answer(self.problem, self.check);
+        if let Some(declared) = self.declared {
+            response.extensions_mut().insert(declared);
+        }
+        response
     }
 }
 
@@ -3168,6 +3187,49 @@ mod tests {
         }
     }
 
+    /// A scope refusal's line names the values the deployment declared: the
+    /// scope claim it reads, the scope the profile requires and the profile.
+    /// The scope the token carries never reaches the line, and no other
+    /// refusal writes any of the three.
+    #[tokio::test]
+    async fn a_scope_refusal_line_names_the_declared_scope_and_none_of_the_tokens() {
+        use crate::smtp::tests::Captured;
+        let message = "/v1/messages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+        let canary = "canary:never-logged";
+        let mut scoped = sender_claims();
+        scoped["registry_scopes"] = json!(canary);
+        let (first_app, _metrics) = app();
+        let captured = Captured::install();
+        let response = first_app
+            .oneshot(request("GET", message, bearer(&token(scoped)), None))
+            .await
+            .unwrap();
+        let logs = captured.finish();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!logs.contains(canary), "{logs}");
+        assert!(logs.contains("failed_check=\"scope\""), "{logs}");
+        assert!(logs.contains("scope_claim=\"registry_scopes\""), "{logs}");
+        assert!(logs.contains("required_scope=\"messaging:send\""), "{logs}");
+        assert!(logs.contains("access_profile=\"case-notices\""), "{logs}");
+
+        let mut unprofiled = sender_claims();
+        unprofiled["azp"] = json!(UNPROFILED_CLIENT);
+        unprofiled["registry_scopes"] = json!(canary);
+        let (second_app, _metrics) = app();
+        let captured = Captured::install();
+        let response = second_app
+            .oneshot(request("GET", message, bearer(&token(unprofiled)), None))
+            .await
+            .unwrap();
+        let logs = captured.finish();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(logs.contains("failed_check=\"access-profile\""), "{logs}");
+        for name in ["scope_claim", "required_scope", "access_profile="] {
+            assert!(!logs.contains(name), "{name}: {logs}");
+        }
+        assert!(!logs.contains(canary), "{logs}");
+    }
+
     #[tokio::test]
     async fn a_key_endpoint_outage_counts_under_the_key_source() {
         use crate::smtp::tests::Captured;
@@ -3342,14 +3404,20 @@ mod tests {
         let logs = captured.finish();
         assert!(logs.contains("failed_check=\"scope\""), "{logs}");
         assert!(logs.contains("scopeClaim"), "{logs}");
+        // The scope refusal names the configured scope claim, scope and
+        // profile, and nothing the credential or the request carried.
+        for needle in [
+            "scope_claim=\"registry_scopes\"",
+            "required_scope=\"messaging:send\"",
+            "access_profile=\"case-notices\"",
+        ] {
+            assert!(logs.contains(needle), "logs lack {needle:?}:\n{logs}");
+        }
         for needle in [
             credential.as_str(),
             "messaging:read",
             "case-system",
             "registry_actor_kind",
-            "registry_scopes",
-            "messaging:send",
-            "case-notices",
             "m-1",
         ] {
             assert!(!logs.contains(needle), "logs carry {needle:?}:\n{logs}");
@@ -3364,6 +3432,9 @@ mod tests {
         let logs = captured.finish();
         assert!(logs.contains("failed_check=\"actor-kind\""), "{logs}");
         assert!(!logs.contains("scopeClaim"), "{logs}");
+        for needle in ["scope_claim", "required_scope", "access_profile="] {
+            assert!(!logs.contains(needle), "logs carry {needle:?}:\n{logs}");
+        }
     }
 
     fn sender_claims_with_scope(scope: &str) -> serde_json::Value {

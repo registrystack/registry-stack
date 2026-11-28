@@ -272,7 +272,7 @@ impl JobRuntimeConfig {
         // platforms). A path that cannot be canonicalized is left to
         // the loader's own unreadable refusal.
         let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        RuntimeConfigLoader::new(RuntimeEnvelope {
+        RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
             api_version: registry_adapter_core::ADAPTER_JOB_RUNTIME_API_VERSION,
             kind: registry_adapter_core::ADAPTER_JOB_RUNTIME_KIND,
         })
@@ -2098,7 +2098,7 @@ endpoints: []
     /// The job runtime config reads through the shared loader.
     #[test]
     fn the_loader_reads_the_job_runtime_config() {
-        let loader = registry_platform_config::RuntimeConfigLoader::new(
+        let loader = registry_platform_config::RuntimeConfigLoader::new_without_posture(
             registry_platform_config::RuntimeEnvelope {
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
@@ -2112,7 +2112,7 @@ endpoints: []
     /// reader's own code, pointer, and source position.
     #[test]
     fn an_undeclared_member_refuses_with_its_pointer_at_every_depth() {
-        let loader = registry_platform_config::RuntimeConfigLoader::new(
+        let loader = registry_platform_config::RuntimeConfigLoader::new_without_posture(
             registry_platform_config::RuntimeEnvelope {
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
@@ -2147,7 +2147,7 @@ endpoints: []
     /// shape.
     #[test]
     fn the_job_and_facade_envelopes_refuse_each_other() {
-        let job = registry_platform_config::RuntimeConfigLoader::new(
+        let job = registry_platform_config::RuntimeConfigLoader::new_without_posture(
             registry_platform_config::RuntimeEnvelope {
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
@@ -2161,7 +2161,7 @@ endpoints: []
                 .is_err(),
             "the job loader refuses the facade envelope"
         );
-        let facade = registry_platform_config::RuntimeConfigLoader::new(
+        let facade = registry_platform_config::RuntimeConfigLoader::new_without_posture(
             registry_platform_config::RuntimeEnvelope {
                 api_version: ADAPTER_RUNTIME_API_VERSION,
                 kind: ADAPTER_RUNTIME_KIND,
@@ -2207,7 +2207,7 @@ endpoints: []
     /// and how to fix it, not only that the value is invalid.
     #[test]
     fn each_hook_ingress_refusal_names_its_rule_and_the_fix() {
-        let loader = registry_platform_config::RuntimeConfigLoader::new(
+        let loader = registry_platform_config::RuntimeConfigLoader::new_without_posture(
             registry_platform_config::RuntimeEnvelope {
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
@@ -2261,7 +2261,7 @@ endpoints: []
     }
 
     fn loader() -> registry_platform_config::RuntimeConfigLoader {
-        registry_platform_config::RuntimeConfigLoader::new(
+        registry_platform_config::RuntimeConfigLoader::new_without_posture(
             registry_platform_config::RuntimeEnvelope {
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,

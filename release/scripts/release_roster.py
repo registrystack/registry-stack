@@ -50,9 +50,11 @@ operator CLI, and installer in v0.44.0. Client facades are governed independentl
 
 ``ADAPTER_FIRST_RELEASE`` decides when the Registry Adapter binaries join the
 Stack train: the ``adapter`` facade, the ``adapterctl`` author tool and their
-installer, on every supported platform, from v0.46.0. The facade has no image
-yet. The ``adapter-job`` host stays source-build only until its release build
-enables a destination.
+installer, on every supported platform, from v0.46.0.
+``ADAPTER_IMAGE_FIRST_RELEASE`` independently decides when the facade image and
+its image-specific security evidence join. The image stays held until that
+evidence is ready. The ``adapter-job`` host stays source-build only until its
+release build enables a destination.
 
 ``LANGUAGE_SERVER_FIRST_RELEASE`` decides when the standalone Registry Stack
 language server joins the Stack train for the editor hosts that consume it:
@@ -104,6 +106,8 @@ DOCUMENTS_FIRST_RELEASE: tuple[int, int, int] | None = None
 COORDINATOR_BINARY_FIRST_RELEASE: tuple[int, int, int] = (0, 44, 0)
 
 ADAPTER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 46, 0)
+
+ADAPTER_IMAGE_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 LANGUAGE_SERVER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 46, 1)
 
@@ -285,6 +289,16 @@ def adapter_in_release(version: tuple[int, int, int]) -> bool:
     return first_release is not None and tuple(version) >= first_release
 
 
+def adapter_image_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release at ``version`` ships the Registry Adapter image.
+
+    Binary distribution does not waive the independent image evidence gate.
+    The constant is read at call time so tests can patch it.
+    """
+    first_release = ADAPTER_IMAGE_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
 def language_server_in_release(version: tuple[int, int, int]) -> bool:
     """Return whether the release ships the standalone language server."""
 
@@ -345,6 +359,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     adapter.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     adapter.set_defaults(in_release=adapter_in_release)
+    adapter_image = commands.add_parser(
+        "adapter-image-in-release",
+        help="print true when the release version ships the Adapter image, else false",
+    )
+    adapter_image.add_argument("version", type=version_argument, help="release version as X.Y.Z")
+    adapter_image.set_defaults(in_release=adapter_image_in_release)
     language_server = commands.add_parser(
         "language-server-in-release",
         help="print true when the release ships the standalone language server",

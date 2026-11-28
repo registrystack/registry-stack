@@ -348,8 +348,7 @@ key source and a refused review completion callback all count. So does a request
 `404 resource.not_found` because the caller may not see the target (a missing scope or purpose, a
 row outside the caller's boundary, a refused task grant, a field beyond the profile), and a write
 refused as outside the caller's boundary. A batch of Proposal review contexts answers `200`, and
-each concealed item counts once under its own check. A generic `412` precondition answer, which also
-covers a stale version, and a request for an unknown route are not counted.
+each concealed item counts once under its own check. A `412` for a stale version and a request for an unknown route are not counted. A failed field guard counts under `action-guard`, also when it answers the generic `412`.
 
 Each refusal also writes one `request refused` line at `INFO` level with `failed_check` and the
 request's trace id, at most five lines per check per minute across the process. At `BREG_LOG=warn`
@@ -465,7 +464,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.successor.roles-differ` | The file names other roles than the active activation. | Apply the active package under the new roles, then the successor. |
 | `startup.audit.refused` | The audit destination or hash key was refused. | Secret files are regular, owned by the running user, mode `0400` or `0600`, with one link. The audit directory and its files are owned by the running user, the directory `0700`. |
 | `startup.cursor.refused` | The cursor secret was refused. | As above. |
-| `startup.oidc.refused` | The issuer's key set could not be loaded, or a pinned static key set was refused. | Check that this host reaches and trusts the issuer. For a pinned key set, the message names the rule and the key's position: correct that key. |
+| `startup.oidc.refused` | The issuer's key set could not be loaded, or a pinned static key set was refused. | Check that this host reaches and trusts the issuer. For a pinned key set refused by the shared key rules, the message names the rule and, for a rule about one key, its position: correct that key. A key set refused by BReg's own rules (`use`, `key_ops`, a denied `kid`, the algorithm, or the number of keys) gets the general OIDC message: check those members. |
 | `authentication.refused` | A token was refused. | Check [what a token must carry](../breg/#what-a-token-must-carry); `aud` may be a list of up to 16 that includes the audience. |
 | `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` is invalid. | See [Scrape metrics](#scrape-metrics). |
 | `postgres.connections.pool-over-half` | One pool may take over half the connections. | Lower the pool or raise `max_connections`. |

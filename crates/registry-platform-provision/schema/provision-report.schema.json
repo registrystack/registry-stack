@@ -163,7 +163,7 @@
         },
         "outcome": {
           "$ref": "#/$defs/ReportOutcome",
-          "description": "`not-run` for a statement the run did not reach, the one that failed\nincluded."
+          "description": "`not-run` for a statement the run did not reach, the one that failed\nincluded. After `platform.provision.effect-unconfirmed` the statement\nthe diagnostic names was sent and may have taken effect."
         },
         "scope": {
           "$ref": "#/$defs/ReportScope"
@@ -265,7 +265,7 @@
       "type": "array"
     },
     "executed": {
-      "description": "Whether a statement could have been sent to the server: false for a\nprint-mode run and for a run that stopped before the first statement.",
+      "description": "Whether a statement could have been sent to the server: false for a\nprint-mode run and for a run that stopped before the first statement.\nTrue whenever a statement is listed as run.",
       "type": "boolean"
     },
     "kind": {

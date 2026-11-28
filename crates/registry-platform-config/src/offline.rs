@@ -12,6 +12,7 @@ use registry_platform_yaml::{
 };
 use serde::de::DeserializeOwned;
 
+use crate::loader::Decision;
 use crate::{
     contains_environment_expression, LoadedRuntimeConfig, RuntimeConfigLoader, UNAVAILABLE_CODE,
 };
@@ -32,7 +33,10 @@ pub struct RuntimeFileCheck<T> {
     /// Every loader finding, each naming the file as the path was given. A
     /// finding that depends on the value of a deferred expression is left
     /// out; in its place stands a warning, coded [`INCOMPLETE_CODE`], that
-    /// the check stopped at that member.
+    /// the check stopped at that member. Under a declared posture, each
+    /// development-only setting the file holds is one finding: an error in
+    /// production and a warning in development, with the same code. The
+    /// file is still decoded, so the product's own checks run beside them.
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
@@ -224,6 +228,9 @@ impl RuntimeConfigLoader {
     /// repeat. A member that refuses its stand-in stops the decode: the check
     /// then reports a warning at that member, coded [`INCOMPLETE_CODE`], for
     /// the members it did not read.
+    ///
+    /// The posture is the loader's: a loader made without a posture reports
+    /// no development-only setting.
     pub fn check_offline<T: DeserializeOwned>(
         &self,
         path: &Path,
@@ -241,15 +248,26 @@ impl RuntimeConfigLoader {
         };
         let loaded = bytes.and_then(|bytes| {
             if substitute {
-                self.parse_file::<T>(path, &bytes, &|name| std::env::var(name).ok())
+                self.parse_file::<T>(
+                    path,
+                    &bytes,
+                    &|name| std::env::var(name).ok(),
+                    Decision::Report,
+                )
             } else {
-                self.parse_file_with_stand_ins::<T>(path, &bytes, &|pointer| {
-                    deferred.stand_in(pointer).to_owned()
-                })
+                self.parse_file_with_stand_ins::<T>(
+                    path,
+                    &bytes,
+                    &|pointer| deferred.stand_in(pointer).to_owned(),
+                    Decision::Report,
+                )
             }
         });
         let (loaded, diagnostics, unavailable) = match loaded {
-            Ok(loaded) => (Some(loaded), Vec::new(), false),
+            Ok(loaded) => {
+                let found = loaded.posture.diagnostics(path);
+                (Some(loaded), found, false)
+            }
             Err(error) => (
                 None,
                 error
@@ -413,7 +431,7 @@ mod tests {
     use serde::Deserialize;
     use std::fs;
 
-    const LOADER: RuntimeConfigLoader = RuntimeConfigLoader::new(RuntimeEnvelope {
+    const LOADER: RuntimeConfigLoader = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: "registry.registrystack.org/example-runtime/v1alpha1",
         kind: "ExampleRuntimeConfig",
     });

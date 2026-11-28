@@ -64,7 +64,7 @@ struct Audit {
 }
 
 fn loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new(ENVELOPE).removed_keys(REMOVED)
+    RuntimeConfigLoader::new_without_posture(ENVELOPE).removed_keys(REMOVED)
 }
 
 fn header() -> String {
@@ -1094,7 +1094,7 @@ mod files {
 
 #[test]
 fn the_shared_removed_jwks_uri_key_names_jwks_source() {
-    let loader = RuntimeConfigLoader::new(ENVELOPE)
+    let loader = RuntimeConfigLoader::new_without_posture(ENVELOPE)
         .removed_keys(std::slice::from_ref(&REMOVED_OIDC_JWKS_URI));
     let error = loader
         .parse_str::<serde_json::Value>(
@@ -1119,7 +1119,7 @@ fn the_shared_removed_jwks_uri_key_names_jwks_source() {
 
 #[test]
 fn the_shared_removed_jwks_source_kind_key_names_type() {
-    let loader = RuntimeConfigLoader::new(ENVELOPE)
+    let loader = RuntimeConfigLoader::new_without_posture(ENVELOPE)
         .removed_keys(std::slice::from_ref(&REMOVED_OIDC_JWKS_SOURCE_KIND));
     let error = loader
         .parse_str::<serde_json::Value>(

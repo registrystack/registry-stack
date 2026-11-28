@@ -565,7 +565,7 @@ pub enum Basis {
 pub struct ExpectedCell {
     pub main: Outcome,
     pub target: Outcome,
-    #[serde(deserialize_with = "milestone_or_none")]
+    #[serde(deserialize_with = "change_or_none")]
     pub changed_by: Option<String>,
     pub landed: Option<bool>,
     pub basis: Basis,
@@ -574,7 +574,7 @@ pub struct ExpectedCell {
 }
 
 impl ExpectedCell {
-    /// What a test asserts: `target` where the milestone has landed, `main`
+    /// What a test asserts: `target` where the change has landed, `main`
     /// everywhere else.
     #[must_use]
     pub fn expected(&self) -> &Outcome {
@@ -586,19 +586,33 @@ impl ExpectedCell {
     }
 }
 
-fn milestone_or_none<'de, D: serde::Deserializer<'de>>(
+/// A change name is lowercase kebab-case: `caller-contract`.
+fn is_change_name(text: &str) -> bool {
+    let mut words = text.split('-');
+    let word_ok = |word: &str| {
+        !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    };
+    words
+        .next()
+        .is_some_and(|first| word_ok(first) && first.starts_with(|c: char| c.is_ascii_lowercase()))
+        && words.all(word_ok)
+}
+
+fn change_or_none<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<String>, D::Error> {
     let text = String::deserialize(deserializer)?;
     if text == "none" {
         return Ok(None);
     }
-    let digits = text.strip_prefix('M').unwrap_or("");
-    if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+    if is_change_name(&text) {
         Ok(Some(text))
     } else {
         Err(serde::de::Error::custom(format!(
-            "changedBy `{text}` is neither `none` nor a milestone like `M7`"
+            "changedBy `{text}` is neither `none` nor a lowercase kebab-case change name like `caller-contract`"
         )))
     }
 }
@@ -1095,7 +1109,7 @@ impl TokenCorpus {
             for (product, cell) in &row.products {
                 if cell.landed.is_some() != cell.changed_by.is_some() {
                     return fail(format!(
-                        "`{}` / `{product}`: landed appears exactly when changedBy is a milestone",
+                        "`{}` / `{product}`: landed appears exactly when changedBy is a change name",
                         row.fixture
                     ));
                 }

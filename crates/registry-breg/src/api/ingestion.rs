@@ -708,8 +708,8 @@ fn ingestion_problem(error: IngestionServiceError) -> Response {
         | IngestionServiceError::InvalidTimerWindow { .. } => invalid_request(),
         IngestionServiceError::PreconditionFailed => precondition_failed(),
         IngestionServiceError::NotFound => concealed(FailedCheck::Visibility),
-        IngestionServiceError::ProfileMismatch => crate::correlation::note_refusal(
-            fixed_problem(ProblemCode::IngestionProfileMismatch),
+        IngestionServiceError::ProfileMismatch => refusal_problem(
+            ProblemCode::IngestionProfileMismatch,
             FailedCheck::AccessProfile,
         ),
         IngestionServiceError::RunNotOpen => fixed_problem(ProblemCode::IngestionRunNotOpen),

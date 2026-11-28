@@ -6,11 +6,12 @@ pub mod refusal;
 
 #[doc(hidden)]
 pub use refusal::__refusal_trace_id_seal;
-pub use refusal::{FailedCheck, RefusalTraceId};
 #[cfg(feature = "refusal-recorder")]
 pub use refusal::{
-    RefusalLine, RefusalNote, RefusalRecorder, REFUSAL_LOG_LINES_PER_WINDOW, REFUSAL_LOG_WINDOW,
+    DeclaredScope, RefusalLine, RefusalNote, RefusalRecorder, DECLARED_VALUE_MAX_BYTES,
+    REFUSAL_LOG_LINES_PER_WINDOW, REFUSAL_LOG_WINDOW,
 };
+pub use refusal::{FailedCheck, RefusalTraceId};
 #[cfg(feature = "refusal-recorder")]
 pub use tracing as __tracing;
 

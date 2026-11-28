@@ -1695,6 +1695,8 @@ fn authorization_server_metadata_is_compatible(
 }
 
 fn validate_metadata_url(url: &Url, trust: &TrustProfile) -> Result<(), EvidenceClientError> {
+    // Exactly `127.0.0.1`, the address a supervised development service binds,
+    // so metadata the service publishes cannot name another local listener.
     let exact_local_loopback = url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
         && url.port().is_some_and(|port| port != 0);

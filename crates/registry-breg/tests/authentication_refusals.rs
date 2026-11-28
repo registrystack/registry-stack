@@ -972,10 +972,23 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
         u64::try_from(corpus.len()).expect("corpus length fits"),
         "each malformed token counts once"
     );
-    let log_text = captured
-        .events()
+    // The line budget is shared with the cases above, so the corpus writes
+    // exactly the lines they left: none once they have spent it. The log is
+    // still searched, because anything else the corpus logged must be value-free.
+    let spent = observed
         .iter()
-        .map(Value::to_string)
-        .collect::<String>();
+        .filter(|case| case.expected_check == "credential-malformed")
+        .count();
+    let events = captured.events();
+    let refusal_lines = events
+        .iter()
+        .filter(|event| event["fields"]["message"] == "request refused")
+        .count();
+    assert_eq!(
+        refusal_lines,
+        (registry_platform_authcommon::REFUSAL_LOG_LINES_PER_WINDOW as usize).saturating_sub(spent),
+        "the corpus writes the refusal lines the budget admits"
+    );
+    let log_text = events.iter().map(Value::to_string).collect::<String>();
     assert!(!log_text.contains("canary"), "the corpus reached the log");
 }

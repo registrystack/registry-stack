@@ -12,6 +12,11 @@
   nothing, such as the task grant key set route when task grants are not
   configured, is not counted. Refusal statuses, headers and bodies are
   unchanged.
+- A refusal on the `scope` check also names, in its `request refused` line,
+  the claim that carries scopes, the scope the operation needs and the access
+  profile, each as the configuration or package declares it. The line never
+  names a scope the token held. Refusal statuses, headers and bodies are
+  unchanged.
 - A static key set with a private key member is refused at startup under
   `casework.runtime.unreadable-jwks-secret`, with the rule it broke and the
   key's position. Earlier releases loaded such a set, so remove private
@@ -28,7 +33,9 @@
   `--admin-url-file` or `--admin-url-env` over verified TLS, or prints the SQL
   with `--print-sql` and connects to nothing. Run it again at any time: it
   creates only what is missing and refuses a role that exists with different
-  attributes. It loads the whole runtime file and verifies the package first.
+  attributes. It also grants the runtime role USAGE on the `public` schema,
+  and running it again restores that grant. It loads the whole runtime file
+  and verifies the package first.
 
 - `GET /health` answers `{"status":"ok"}` and `GET /ready` answers
   `{"status":"ready"}` as `application/json`, in place of an empty 200. Both

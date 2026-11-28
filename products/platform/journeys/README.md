@@ -4,7 +4,7 @@ This folder holds the tables behind three acceptance journeys and a static check
 of those tables. A journey walks one product from nothing to a first
 authenticated call, or from a development run to a production start, using only
 what a reader of the documentation has. The tables say where each journey stops
-for each product today and which milestone removes the stop.
+for each product today and which change removes the stop.
 
 ## The three journeys
 
@@ -48,12 +48,12 @@ forms.
 - `journey.promote.<thing>`, `journey.keep.<thing>`, `journey.attach.<thing>`: the
   step named in the form found nothing to work with, lost the written record or
   refused the reader's own setup.
-- `http.<status>.<stage>`: a refused call. The stage is one of the
-  authentication stages the shared OIDC crate reports. The journeys read it
-  from the product's `stage` log field or from the `failed_check` label of its
-  refusal line, mapped onto the stage words (for example `token-key` is `key`
-  and `credential-malformed` is `header`). A label with no stage word leaves the
-  stage empty, and the cell records the problem code instead.
+- `http.<status>.<stage>`: a refused call. The stage is a word from
+  the table's `authenticationStages`. The journeys read the `failed_check` label
+  of the product's last refusal line and map it onto a stage word (for example
+  `token-key` is `key` and `credential-malformed` is `header`). A label with no
+  stage word leaves the stage empty, and the cell records the problem code
+  instead.
 - `product.<dotted code>`: the diagnostic code a product prints.
 
 Each row has a `basis`. A `predicted` row was inferred from reading the code. A
@@ -61,7 +61,7 @@ journey run replaces it with the code the run saw and sets `observed`. A
 harness failure, such as a container that did not start, is never a row.
 
 A journey run in ratchet mode succeeds when every cell matches the table. A
-milestone that fixes a cell deletes the row in the same commit and adds the
+change that fixes a cell deletes the row in the same commit and adds the
 cell to `passes`. A fix that is not recorded fails the run, and so does a new
 failure that the table does not list.
 
@@ -84,7 +84,7 @@ It checks that:
   thresholds, and the full reader-time model
 - the concept list has unique, well-formed entries
 - every journey and product cell appears exactly once, every step belongs to its
-  journey, every code is valid, every failure row names a listed milestone,
+  journey, every code is valid, every failure row names a listed change,
   and every row records its basis and a reason
 - journey scripts, when they exist, call none of `openssl`, `mkcert`, `keytool`,
   `psql`, `docker build` or `docker exec`, outside `lib-assists.sh`, and the

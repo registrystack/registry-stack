@@ -48,8 +48,10 @@ Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/
   Each refusal also writes one `request refused` log line with `failed_check` and the request's
   trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
   a window held back.
-  Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
-  recording a refusal changes nothing the caller receives.
+  A scope refusal's line also names the scope claim the deployment configured and the scope the
+  caller's policy requires, as `scope_claim` and `required_scope`.
+  Apart from those two configured values, neither the counter nor the line holds a token, claim,
+  client, subject, scope or identifier, and recording a refusal changes nothing the caller receives.
   The older `coordinator_authentication_refusals_total{reason}` counter is unchanged.
 - Host users run `coordinatorctl`, which is local operator tooling for a trusted single-user
   machine.

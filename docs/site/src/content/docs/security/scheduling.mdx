@@ -54,6 +54,7 @@ callers holding bearer tokens from a configured issuer.
   ([metrics](../../operate/scheduling/#watch-the-metrics)).
   The `check` label is a closed set of 45 names, every one published at zero, and no caller value
   becomes a label.
+  An answer replayed from a stored receipt is not counted again.
   Each refusal also writes one `request refused` log line with `failed_check` and the request's
   trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
   a window held back.
