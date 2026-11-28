@@ -827,10 +827,32 @@ pub fn load_runtime_config(path: &Path, declared: DeclaredPosture) -> Result<Run
     load_runtime_config_with_env(path, |name| std::env::var(name).ok(), declared)
 }
 
+/// Load the runtime configuration file without requiring `package.root` to
+/// exist on disk yet.
+///
+/// Used by `bregctl provision`, which provisions the database before a package
+/// has been built into `package.root`. Syntax, posture, and file secret
+/// provider root checks still run unchanged.
+pub fn load_runtime_config_without_package_root(
+    path: &Path,
+    declared: DeclaredPosture,
+) -> Result<RuntimeConfig> {
+    load_runtime_config_parts(path, |name| std::env::var(name).ok(), declared, false)
+}
+
 pub fn load_runtime_config_with_env(
     path: &Path,
     lookup: impl Fn(&str) -> Option<String>,
     declared: DeclaredPosture,
+) -> Result<RuntimeConfig> {
+    load_runtime_config_parts(path, lookup, declared, true)
+}
+
+fn load_runtime_config_parts(
+    path: &Path,
+    lookup: impl Fn(&str) -> Option<String>,
+    declared: DeclaredPosture,
+    require_package_root: bool,
 ) -> Result<RuntimeConfig> {
     let raw = runtime_config_loader(declared)
         .load_with::<RawRuntimeConfig>(path, lookup)
@@ -839,7 +861,11 @@ pub fn load_runtime_config_with_env(
         })?;
     let mut config = RuntimeConfig::from_raw(raw)?;
     config.source_path = Some(path.to_path_buf());
-    config.validate_loaded_paths()?;
+    if require_package_root {
+        config.validate_loaded_paths()?;
+    } else {
+        config.validate_secret_provider_root()?;
+    }
     Ok(config)
 }
 
@@ -2157,6 +2183,10 @@ impl RuntimeConfig {
             RuntimeConfigError::UnsafePackageRoot,
             RuntimeConfigError::PackageRootUnavailable,
         )?;
+        self.validate_secret_provider_root()
+    }
+
+    fn validate_secret_provider_root(&self) -> Result<()> {
         if let Some(root) = self.secret_providers.file_root() {
             validate_existing_directory(
                 root,

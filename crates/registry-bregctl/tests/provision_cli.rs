@@ -39,9 +39,6 @@ fn write_runtime(directory: &Path) -> String {
         std::fs::write(&path, value).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
-    // The runtime file's loader requires the package root to be a readable
-    // directory, though provision reads nothing from it.
-    std::fs::create_dir(directory.join("package")).unwrap();
     let runtime = directory.join("runtime.yaml");
     std::fs::write(
         &runtime,
@@ -143,6 +140,19 @@ fn print_sql_writes_the_script_and_no_password() {
     for secret in [MIGRATION_PASSWORD, RUNTIME_PASSWORD] {
         assert!(!stdout.contains(secret), "the script holds no password");
     }
+}
+
+#[test]
+fn print_sql_succeeds_before_the_package_root_exists() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    assert!(!directory.path().join("package").exists());
+    let output = ctl(&["provision", "--runtime-config", &runtime, "--print-sql"]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    assert!(stdout.contains("CREATE ROLE"), "{stdout}");
 }
 
 #[test]

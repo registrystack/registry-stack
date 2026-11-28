@@ -28,9 +28,9 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::EventDestinationActivationError;
 use registry_breg::runtime_config::{
-    check_runtime_config, load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
-    parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
-    RUNTIME_CONFIG_KIND,
+    check_runtime_config, load_runtime_config, load_runtime_config_with_env,
+    load_runtime_config_without_package_root, parse_runtime_config, parse_runtime_config_with_env,
+    RuntimeConfigError, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
 };
 use registry_platform_config::package::{write_sum_file, PackageLimits};
 use registry_platform_config::MetricsBindError;
@@ -4622,6 +4622,51 @@ fn missing_package_root_and_secret_root_are_reported_at_their_own_paths() {
         RuntimeConfigError::SecretProviderRootUnavailable
     );
     assert_eq!(path_of(&secret_error), "/secretProviders/file/root");
+}
+
+#[test]
+fn load_without_package_root_allows_absent_package_but_still_checks_secrets_and_syntax() {
+    let fixture = RuntimeFixture::new();
+    let missing_root_path = fixture.path("runtime-missing-package-root.yaml");
+    fs::write(
+        &missing_root_path,
+        valid_runtime(&fixture.secret_root, &fixture.path("absent-package")),
+    )
+    .expect("runtime config writes");
+    let missing_secret_root_path = fixture.path("runtime-missing-secret-root.yaml");
+    fs::write(
+        &missing_secret_root_path,
+        valid_runtime(
+            &fixture.path("absent-secrets"),
+            &fixture.path("absent-package"),
+        ),
+    )
+    .expect("runtime config writes");
+    let relative_package_root_path = fixture.path("runtime-relative-package-root.yaml");
+    fs::write(
+        &relative_package_root_path,
+        valid_runtime(&fixture.secret_root, Path::new("relative/package")),
+    )
+    .expect("runtime config writes");
+
+    let loaded = load_runtime_config_without_package_root(&missing_root_path, PRODUCTION_POSTURE)
+        .expect("loading without package root accepts a missing package directory");
+    assert_eq!(loaded.package().root(), fixture.path("absent-package"));
+    assert_eq!(
+        load_runtime_config(&missing_root_path, PRODUCTION_POSTURE)
+            .expect_err("the full loader still refuses a missing package root"),
+        RuntimeConfigError::PackageRootUnavailable
+    );
+    assert_eq!(
+        load_runtime_config_without_package_root(&missing_secret_root_path, PRODUCTION_POSTURE)
+            .expect_err("a missing file secret provider root is still refused"),
+        RuntimeConfigError::SecretProviderRootUnavailable
+    );
+    assert_eq!(
+        load_runtime_config_without_package_root(&relative_package_root_path, PRODUCTION_POSTURE)
+            .expect_err("an invalid package root path is still refused"),
+        RuntimeConfigError::InvalidPackage
+    );
 }
 
 /// The verifier applies leeway in whole seconds, so a sub-second value would be

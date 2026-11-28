@@ -13,7 +13,8 @@ use registry_breg::postgres::{
     spatial_bbox_role, MANAGED_SCHEMAS, MIN_POSTGIS_MAJOR, MIN_POSTGIS_MINOR,
 };
 use registry_breg::runtime_config::{
-    load_runtime_config, RuntimeConfig, RuntimeConfigError, RUNTIME_CONFIG_KIND,
+    load_runtime_config_without_package_root, RuntimeConfig, RuntimeConfigError,
+    RUNTIME_CONFIG_KIND,
 };
 use registry_platform_provision::{ProductDatabase, ProvisionInput, SchemaLayout, Spatial};
 use registry_platform_yaml::Diagnostic;
@@ -61,8 +62,9 @@ fn spatial(config: &RuntimeConfig, package: &Path) -> Result<Option<Spatial>, Ve
     }))
 }
 
-/// Reads the runtime file exactly as `apply` does and resolves the two
-/// database URLs and the CA behind `database.caBundleRef`.
+/// Reads the runtime file as `apply` does, without requiring `package.root`
+/// to exist yet, and resolves the two database URLs and the CA behind
+/// `database.caBundleRef`.
 pub(crate) fn load(
     posture: registry_platform_config::DeclaredPosture,
     path: &Path,
@@ -77,7 +79,7 @@ pub(crate) fn load(
             "Pass --runtime-config as a path that exists.",
         )
     })?;
-    let config = load_runtime_config(&absolute, posture)
+    let config = load_runtime_config_without_package_root(&absolute, posture)
         .map_err(|error| runtime_file_refused(&absolute, &error))?;
     // The same checks `apply` makes: each URL parses and logs in as the role
     // the file names for it.
