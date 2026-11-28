@@ -32,7 +32,7 @@ same region request as each, and see one answered and the other refused. You con
 For the local commands in this tutorial, declare development in your shell.
 `rstack dev` sets this value for the processes it starts.
 
-```bash
+```sh
 export REGISTRY_STACK_POSTURE=development
 ```
 
@@ -99,7 +99,7 @@ rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-excerpt
-warning[evidence.posture.local-assurance] local-target.yaml /assuranceProfile
+warning[evidence.posture.local-assurance] local-target.yaml:1:1 /assuranceProfile
   local assurance permits locally held signing keys; production refuses it
   next: Build a production or evidence-grade package with a Transit signer.
 0 errors, 1 warning in 1 file
