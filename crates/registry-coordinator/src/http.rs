@@ -279,12 +279,7 @@ pub(crate) fn problem(error: CoordinatorError) -> Response {
         );
     }
     let check = refusal_check(&error, problem);
-    let pointer = if problem == ProblemCode::EventDevelopmentPeer {
-        error.field.as_deref()
-    } else {
-        None
-    };
-    let mut response = problem_response_at(problem, pointer);
+    let mut response = problem_response(problem);
     if let Some(check) = check {
         use crate::error::RefusalDetail;
         let mut note = RefusalNote::new(check);

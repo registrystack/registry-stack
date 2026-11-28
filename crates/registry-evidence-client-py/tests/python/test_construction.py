@@ -26,6 +26,20 @@ import registry_evidence_client as revc  # noqa: E402
 
 
 class ConstructionTest(unittest.TestCase):
+    def test_development_peer_refusal_is_an_explicit_option(self):
+        for refuse in (False, True):
+            with self.subTest(refuse=refuse):
+                self.assertIsInstance(
+                    revc.EvidenceClient(
+                        "https://evidence.example.invalid/",
+                        fixtures.VALID_JWKS,
+                        [],
+                        "construction-test-token",
+                        refuse_development_peer=refuse,
+                    ),
+                    revc.EvidenceClient,
+                )
+
     def test_exchange_authorization_constructs_offline_and_rejects_ambiguous_token(self):
         # Synthetic P-256 key matching the committed public test fixture.
         key = {

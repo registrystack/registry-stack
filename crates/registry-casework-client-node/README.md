@@ -113,3 +113,5 @@ reference, queue, ownership, and `sort` (`due`, `subject`, or `reference`).
 returns a bounded page. Caseload and clock preview/apply calls apply only the
 revision-fenced preview ID. Keep filters and caller profiles unchanged across
 snapshot cursors; after `410 review.result-expired`, start again without one.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

@@ -98,6 +98,7 @@ pub fn command() -> Command {
         .arg(
             Arg::new("posture")
                 .long("posture")
+                .global(true)
                 .value_name("POSTURE")
                 .help("Declared posture: development or production. Unset means production."),
         )
@@ -759,8 +760,7 @@ fn activate_hooks(
         Duration::from_secs(
             u64::from(config.retention.hook_payload_retention_days.get()) * 24 * 60 * 60,
         ),
-    )?
-    .with_development_witness(config.development.as_ref()))
+    )?)
 }
 
 /// The logical database id the runtime document names. A document without
@@ -1620,6 +1620,34 @@ mod tests {
                 .contains("identity.databaseId is required"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn serve_accepts_posture_in_both_positions() {
+        for args in [
+            [
+                "documents",
+                "--runtime-config",
+                "/runtime.yaml",
+                "--posture",
+                "development",
+                "serve",
+            ],
+            [
+                "documents",
+                "--runtime-config",
+                "/runtime.yaml",
+                "serve",
+                "--posture",
+                "development",
+            ],
+        ] {
+            let parsed = command().try_get_matches_from(args).unwrap();
+            assert_eq!(
+                parsed.get_one::<String>("posture").map(String::as_str),
+                Some("development")
+            );
+        }
     }
 
     #[test]

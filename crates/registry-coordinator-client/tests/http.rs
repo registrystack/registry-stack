@@ -1668,7 +1668,7 @@ async fn reads_and_reconciliation_are_never_resent() {
 #[tokio::test]
 async fn a_problem_with_a_pointer_preserves_the_code_and_discards_the_pointer() {
     let server = Server::new(status()).await;
-    let mut document = problem_document(400, "event.development-peer");
+    let mut document = problem_document(400, "event.invalid");
     document["pointer"] = json!("/sensitive-canary");
     server.answer(400, PROBLEM_MEDIA, &document.to_string());
 
@@ -1680,7 +1680,7 @@ async fn a_problem_with_a_pointer_preserves_the_code_and_discards_the_pointer() 
         .expect("the event problem is a refusal");
     assert!(matches!(
         &error,
-        CoordinatorClientError::Problem { status: 400, code } if code == "event.development-peer"
+        CoordinatorClientError::Problem { status: 400, code } if code == "event.invalid"
     ));
     assert!(!format!("{error:?}").contains("sensitive-canary"));
 }
@@ -1916,8 +1916,8 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
         names.sort();
         names
     };
-    let mut event_problem = problem_document(400, "event.development-peer");
-    event_problem["pointer"] = json!("/posture");
+    let mut event_problem = problem_document(400, "event.invalid");
+    event_problem["pointer"] = json!("/subject");
     for (schema, value) in [
         (&schemas["RunStatus"], status()),
         (&schemas["RunInspection"], inspection()),

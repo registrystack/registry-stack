@@ -193,7 +193,7 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
             Outcome::Admitted(Some(caller.actor_kind))
         }
         Err(AuthenticationFailure {
-            error: AuthenticationError::Claims(_),
+            error: AuthenticationError::Claims(_) | AuthenticationError::DevelopmentAssertion,
             ..
         }) => refusal("claims"),
         Err(AuthenticationFailure {

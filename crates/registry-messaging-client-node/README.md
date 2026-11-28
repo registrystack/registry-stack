@@ -31,3 +31,5 @@ caller-chosen key with a current token. It makes one receipt request, never
 replays the mutation and never retries. `receipt.unresolved` leaves the
 original effect unknown; a missing or expired receipt does not prove absence.
 The error's `outcomeUnknown` describes this read, not the original effect.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

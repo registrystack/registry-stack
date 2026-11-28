@@ -14158,6 +14158,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn production_runtime_accepts_a_loopback_http_issuer() {
+        use registry_platform_config::{
+            DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+        };
+
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let envelope = RuntimeEnvelope {
+            api_version: "id.registrystack.org/formats/adapter/runtime/v1alpha1",
+            kind: "AdapterRuntimeConfig",
+        };
+        let binding =
+            serde_json::to_string(&oauth_binding("https://cases.example.invalid")).unwrap();
+        let document = format!(
+            "apiVersion: {}
+kind: {}
+id: case-deployment
+endpoints: [{binding}]
+listener: {{bind: '127.0.0.1:8080'}}
+database: {{runtimeUrlRef: 'secret:env/DB_RUNTIME', migrationUrlRef: 'secret:env/DB_MIGRATION'}}
+oidc:
+  issuers:
+    primary: {{issuer: 'http://127.0.0.1:8082', audience: case-api, allowedClients: [portal]}}
+allowedPrivateCidrs: [10.0.0.0/8]
+audit: {{retentionDays: 90}}
+",
+            envelope.api_version, envelope.kind
+        );
+        let loaded = RuntimeConfigLoader::new(
+            envelope,
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Flag,
+            },
+        )
+        .parse_str::<AdapterRuntimeConfig>(&document, |_| None)
+        .expect("production reads the runtime with a loopback issuer");
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&loaded.config);
+        let findings = check_runtime(&ws, &loaded.config);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
     /// A binding naming a trust profile the runtime config does not declare
     /// is refused at the binding's `tlsTrustProfile` member.
     #[test]

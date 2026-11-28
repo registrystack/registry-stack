@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The `documents` runtime accepts `--posture` before or after `serve` and refuses repeated declarations.
+
 - BREAKING: Rust client configurations take a peer policy in `DocumentsClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
 
 - Document Store accepts development S3 and content-verifier responses when the runtime declares development.
@@ -16,7 +18,7 @@
   A service must still name the custodian and is refused `request.unprocessable`
   without one. The OpenAPI `ReserveDocumentRequest` no longer requires
   `custodian`.
-- Development Document Store hook captures include `"posture":"development"` in the signed canonical body. Production capture and replay of unmarked deliveries keep their original wire form. A production worker dead-letters a retained development-marked envelope with `payload-refused` before sending.
+- Signed deliveries have the same form in both postures.
 - BREAKING: The runtime accepts access tokens from several issuers. The issuer
   members move under `authentication.oidc.issuers.ISSUER_ID`, one entry per
   issuer: `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`,

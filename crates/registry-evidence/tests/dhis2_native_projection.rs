@@ -210,7 +210,8 @@ fn captured_http_failure(status: u16) -> Value {
 #[tokio::test]
 async fn maintained_native_dhis2_route_projects_facts_through_evidence_only() {
     let (_temporary, bundle) = projected_bundle();
-    let programs = compile_sources(&bundle).expect("compile the listener-free Evidence sources");
+    let programs = compile_sources(&bundle, registry_evidence::config::Posture::Production)
+        .expect("compile the listener-free Evidence sources");
     let source = programs
         .get(SOURCE_ID)
         .expect("the native projected source compiled");
@@ -257,7 +258,8 @@ async fn maintained_native_dhis2_route_projects_facts_through_evidence_only() {
 #[tokio::test]
 async fn maintained_native_dhis2_route_normalizes_only_not_found_without_provider_values() {
     let (_temporary, bundle) = projected_bundle();
-    let programs = compile_sources(&bundle).expect("compile the listener-free Evidence sources");
+    let programs = compile_sources(&bundle, registry_evidence::config::Posture::Production)
+        .expect("compile the listener-free Evidence sources");
     let source = programs
         .get(SOURCE_ID)
         .expect("the native projected source compiled");

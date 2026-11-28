@@ -14,6 +14,19 @@ async fn main() {
     initialize_logging(level);
 
     let matches = registry_casework::command().get_matches();
+    // Clap can collapse a global flag repeated across the subcommand boundary.
+    let repeated_posture = std::env::args_os()
+        .skip(1)
+        .filter(|argument| {
+            let argument = argument.as_encoded_bytes();
+            argument == b"--posture" || argument.starts_with(b"--posture=")
+        })
+        .nth(1)
+        .is_some();
+    if repeated_posture {
+        eprintln!("casework: [platform.posture.conflict] Declare --posture only once.");
+        std::process::exit(2);
+    }
     let declared = match registry_platform_config::declared(
         matches.get_one::<String>("posture").map(String::as_str),
     ) {

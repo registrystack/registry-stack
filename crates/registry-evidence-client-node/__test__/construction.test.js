@@ -205,3 +205,10 @@ test('fromProfile returns the public wrapper and preserves consumer subclasses',
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('strict development-peer policy is an explicit boolean option', () => {
+  for (const refuseDevelopmentPeer of [false, true]) {
+    assert.ok(new EvidenceClient(validConfig({ refuseDevelopmentPeer })));
+  }
+  assertConfigurationRefusal(() => new EvidenceClient(validConfig({ refuseDevelopmentPeer: 'true' })));
+});

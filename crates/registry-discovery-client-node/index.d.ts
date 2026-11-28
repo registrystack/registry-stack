@@ -21,7 +21,7 @@ export declare class DiscoveryClient {
 
 export interface DiscoveryClientOptions {
   baseUrl: string
-  allowDevelopmentPeer?: boolean
+  refuseDevelopmentPeer?: boolean
   attemptTimeoutMilliseconds?: number
   connectTimeoutMilliseconds?: number
   maximumResponseBytes?: number

@@ -238,19 +238,20 @@ async fn main() -> ExitCode {
         | Command::LocalAuditLastOperation { posture, .. } => Some(posture),
         _ => None,
     };
-    let declared = if let Some(flag) = flag {
-        match declared(flag.as_deref()) {
-            Ok(declared) => declared,
-            Err(error) => {
-                eprintln!(
-                    "{}: {} {}",
-                    error.code(),
-                    error.message(),
-                    error.suggested_action()
-                );
-                return ExitCode::from(2);
-            }
+    let resolved = match declared(flag.and_then(|flag| flag.as_deref())) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!(
+                "{}: {} {}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            return ExitCode::from(2);
         }
+    };
+    let declared = if flag.is_some() {
+        resolved
     } else {
         DeclaredPosture {
             posture: Posture::Production,
@@ -470,7 +471,7 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
                 kernel_compile_error("fixture bundle compilation failed", error)
             })?;
-            let source_plans = compile_bundle_source_plans(&bundle)?;
+            let source_plans = compile_bundle_source_plans(&bundle, declared.posture)?;
             let mut trace = FixtureTrace::default();
             let summary = evaluate_fixture(
                 &bundle,
@@ -624,7 +625,7 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             }
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
-            let _source_plans = compile_bundle_source_plans(&bundle)?;
+            let _source_plans = compile_bundle_source_plans(&bundle, declared.posture)?;
             if json {
                 let mut document = package_digest_report(&bundle)?;
                 document["diagnostics"] = report.to_json_value();
@@ -673,7 +674,7 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
                 kernel_compile_error("fixture bundle compilation failed", error)
             })?;
-            let source_plans = compile_bundle_source_plans(&bundle)?;
+            let source_plans = compile_bundle_source_plans(&bundle, declared.posture)?;
             // This hidden seam is driven by Evidencectl. It uses the same trace
             // type and privacy-canary gate as deployment evaluation so an
             // editable project can be diagnosed before it has a runtime file.
@@ -738,7 +739,7 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
                 kernel_compile_error("fixture bundle compilation failed", error)
             })?;
-            let source_plans = compile_bundle_source_plans(&bundle)?;
+            let source_plans = compile_bundle_source_plans(&bundle, declared.posture)?;
             let record =
                 record_fixture_facts(&bundle, &kernel, &source_plans, &fixture, None).await?;
             println!(
@@ -983,7 +984,7 @@ async fn run_check(request: CheckRequest) -> ExitCode {
             );
             compiled = false;
         }
-        if let Err(error) = compile_bundle_source_plans(&bundle) {
+        if let Err(error) = compile_bundle_source_plans(&bundle, request.declared.posture) {
             push_command_error(&mut check, "evidence.source.plan-refused", error);
             compiled = false;
         }
@@ -1542,8 +1543,9 @@ fn package_digest_report(bundle: &Bundle) -> Result<Value, CliError> {
 
 fn compile_bundle_source_plans(
     bundle: &Bundle,
+    posture: Posture,
 ) -> Result<BTreeMap<String, OfflineSourceProgram>, CommandError> {
-    compile_sources(bundle)
+    compile_sources(bundle, posture)
         .map_err(|error| kernel_compile_error("source pack compilation failed", error))
 }
 
@@ -2339,6 +2341,7 @@ async fn evaluate_fixture_with_fact_record(
                 let (outcome, recorded_match) = if matched_facts.is_some() {
                     evaluate_fixture_acquisition_recording(
                         bundle,
+                        source_plans,
                         kernel,
                         requirement,
                         case,
@@ -2354,6 +2357,7 @@ async fn evaluate_fixture_with_fact_record(
                     (
                         evaluate_fixture_acquisition(
                             bundle,
+                            source_plans,
                             kernel,
                             requirement,
                             case,
@@ -2491,8 +2495,10 @@ struct FixtureSelectors<'a> {
     derivation: &'a Value,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn evaluate_fixture_acquisition(
     bundle: &Bundle,
+    source_plans: &BTreeMap<String, OfflineSourceProgram>,
     kernel: &OfflineKernel,
     requirement: &RequirementConfig,
     case: &JsonMap<String, Value>,
@@ -2502,6 +2508,7 @@ async fn evaluate_fixture_acquisition(
 ) -> Result<Result<KernelOutcome, KernelError>, CliError> {
     evaluate_fixture_acquisition_inner(
         bundle,
+        source_plans,
         kernel,
         requirement,
         case,
@@ -2514,8 +2521,10 @@ async fn evaluate_fixture_acquisition(
     .map(|(outcome, _)| outcome)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn evaluate_fixture_acquisition_recording(
     bundle: &Bundle,
+    source_plans: &BTreeMap<String, OfflineSourceProgram>,
     kernel: &OfflineKernel,
     requirement: &RequirementConfig,
     case: &JsonMap<String, Value>,
@@ -2531,6 +2540,7 @@ async fn evaluate_fixture_acquisition_recording(
 > {
     evaluate_fixture_acquisition_inner(
         bundle,
+        source_plans,
         kernel,
         requirement,
         case,
@@ -2545,6 +2555,7 @@ async fn evaluate_fixture_acquisition_recording(
 #[allow(clippy::too_many_arguments)]
 async fn evaluate_fixture_acquisition_inner(
     bundle: &Bundle,
+    source_plans: &BTreeMap<String, OfflineSourceProgram>,
     kernel: &OfflineKernel,
     requirement: &RequirementConfig,
     case: &JsonMap<String, Value>,
@@ -2567,9 +2578,7 @@ async fn evaluate_fixture_acquisition_inner(
     let recorded = case
         .get("source")
         .ok_or(CliError("fixture acquisition is unavailable"))?;
-    let plans =
-        compile_sources(bundle).map_err(|_| CliError("fixture source pack cannot compile"))?;
-    let plan = plans
+    let plan = source_plans
         .get(requirement.initial_source())
         .ok_or(CliError("fixture source pack is unavailable"))?;
     let expected_facts = verify_expected_facts
@@ -3229,6 +3238,7 @@ async fn evaluate_reference_fixture(
             )?;
             let error = validate_reference_parameter_mutation(
                 bundle,
+                source_plans,
                 requirement,
                 cases,
                 mutation,
@@ -4077,8 +4087,10 @@ fn validate_reference_derivation_mutation(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_reference_parameter_mutation(
     bundle: &Bundle,
+    source_plans: &BTreeMap<String, OfflineSourceProgram>,
     requirement: &registry_evidence::config::RequirementConfig,
     cases: &[Value],
     mutation: &JsonMap<String, Value>,
@@ -4131,6 +4143,7 @@ async fn validate_reference_parameter_mutation(
     // to the case, so they are recorded and dropped rather than attributed.
     let outcome = evaluate_fixture_acquisition(
         &disposable,
+        source_plans,
         &kernel,
         disposable_requirement,
         &acquisition_case,
@@ -6098,7 +6111,7 @@ mod tests {
     async fn reference_fixture_evaluates_declared_unresolved_without_problem_data() {
         let bundle = checked_offline_bundle("products/evidence/fixtures/acceptance/adult-status");
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).unwrap();
-        let source_plans = compile_bundle_source_plans(&bundle).unwrap();
+        let source_plans = compile_bundle_source_plans(&bundle, Posture::Production).unwrap();
         let source_fixture = serde_json::to_value(&bundle.fixtures["fixtures/cases.yaml"]).unwrap();
         let mut acquisition = source_fixture["cases"]
             .as_array()
@@ -6199,6 +6212,7 @@ mod tests {
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).unwrap();
         let outcome = evaluate_fixture_acquisition(
             &bundle,
+            &compile_sources(&bundle, Posture::Production).unwrap(),
             &kernel,
             requirement,
             source_case.as_object().unwrap(),
@@ -6226,6 +6240,7 @@ mod tests {
         assert_eq!(
             validate_reference_parameter_mutation(
                 &bundle,
+                &compile_sources(&bundle, Posture::Production).unwrap(),
                 requirement,
                 cases,
                 mutation["derivationParameterMutation"].as_object().unwrap(),
@@ -6276,6 +6291,7 @@ mod tests {
             assert_eq!(
                 evaluate_fixture_acquisition(
                     &bundle,
+                    &compile_sources(&bundle, Posture::Production).unwrap(),
                     &kernel,
                     requirement,
                     case.as_object().unwrap(),
@@ -6474,7 +6490,7 @@ mod tests {
             OFFLINE_AUDIENCE,
         )
         .unwrap();
-        let programs = compile_bundle_source_plans(&bundle).unwrap();
+        let programs = compile_bundle_source_plans(&bundle, Posture::Production).unwrap();
         let recorded =
             fixture_acquisition(&serde_json::json!({"intercepts":[],"exchanges":[]})).unwrap();
         assert!(programs[requirement.initial_source()]
@@ -6629,13 +6645,15 @@ mod tests {
         .expect("exact package closure");
         let mut bundle = Bundle::load_as_found(&root, &verified).expect("bundle loads");
         assert_eq!(
-            compile_bundle_source_plans(&bundle).unwrap().len(),
+            compile_bundle_source_plans(&bundle, Posture::Production)
+                .unwrap()
+                .len(),
             bundle.config.sources.len()
         );
         let mut config = serde_json::to_value(&bundle.config).unwrap();
         config["sources"]["source-a"]["route"] = Value::String("undeclared-route".to_owned());
         bundle.config = EvidenceConfig::parse_projection(&config).unwrap();
-        assert!(compile_bundle_source_plans(&bundle).is_err());
+        assert!(compile_bundle_source_plans(&bundle, Posture::Production).is_err());
     }
 
     /// The offline harness must serve the fetch-set form as completely as it
@@ -6656,7 +6674,8 @@ mod tests {
 
         let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-        let source_plans = compile_bundle_source_plans(&bundle).expect("source plans compile");
+        let source_plans = compile_bundle_source_plans(&bundle, Posture::Production)
+            .expect("source plans compile");
         let fixture = Path::new(
             bundle.config.requirements[0]
                 .fixtures
@@ -6738,6 +6757,7 @@ mod tests {
             assert_eq!(
                 evaluate_fixture_acquisition(
                     &bundle,
+                    &compile_sources(&bundle, Posture::Production).unwrap(),
                     &kernel,
                     requirement,
                     case.as_object().unwrap(),
@@ -6756,6 +6776,7 @@ mod tests {
         assert_eq!(
             evaluate_fixture_acquisition(
                 &bundle,
+                &compile_sources(&bundle, Posture::Production).unwrap(),
                 &kernel,
                 requirement,
                 old_form.as_object().unwrap(),
@@ -6802,7 +6823,7 @@ mod tests {
         let derivation =
             fixture_selector_value(&resolved, &requirement.derivation.selector_inputs).unwrap();
         let observed_at = fixture_observed_at(positive, Some(common), None).unwrap();
-        let programs = compile_sources(&bundle).unwrap();
+        let programs = compile_sources(&bundle, Posture::Production).unwrap();
         let program = &programs[requirement.initial_source()];
         let actual_facts = match program
             .execute(
@@ -6823,6 +6844,7 @@ mod tests {
         });
         assert!(evaluate_fixture_acquisition(
             &bundle,
+            &compile_sources(&bundle, Posture::Production).unwrap(),
             &kernel,
             requirement,
             exact.as_object().unwrap(),
@@ -6844,6 +6866,7 @@ mod tests {
         let mut mismatch_trace = FixtureTrace::default();
         let mismatch = evaluate_fixture_acquisition(
             &bundle,
+            &compile_sources(&bundle, Posture::Production).unwrap(),
             &kernel,
             requirement,
             mismatched.as_object().unwrap(),
@@ -6875,6 +6898,7 @@ mod tests {
         });
         let invalid = evaluate_fixture_acquisition(
             &bundle,
+            &compile_sources(&bundle, Posture::Production).unwrap(),
             &kernel,
             requirement,
             schema_invalid.as_object().unwrap(),
@@ -6904,6 +6928,7 @@ mod tests {
         let mut failed_source_trace = FixtureTrace::default();
         let failed_source = evaluate_fixture_acquisition(
             &bundle,
+            &compile_sources(&bundle, Posture::Production).unwrap(),
             &kernel,
             requirement,
             failed_source_case.as_object().unwrap(),
@@ -6947,6 +6972,7 @@ mod tests {
         assert_eq!(
             evaluate_fixture_acquisition(
                 &bundle,
+                &compile_sources(&bundle, Posture::Production).unwrap(),
                 &kernel,
                 requirement,
                 no_match_case.as_object().unwrap(),
@@ -6994,7 +7020,8 @@ mod tests {
 
         let bundle = Arc::new(bundle);
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-        let source_plans = compile_bundle_source_plans(&bundle).expect("source plans compile");
+        let source_plans = compile_bundle_source_plans(&bundle, Posture::Production)
+            .expect("source plans compile");
         let positive = record_fixture_facts(
             &bundle,
             &kernel,
@@ -7046,7 +7073,7 @@ mod tests {
             }
             let bundle = Arc::new(bundle);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).unwrap();
-            let source_plans = compile_bundle_source_plans(&bundle).unwrap();
+            let source_plans = compile_bundle_source_plans(&bundle, Posture::Production).unwrap();
             let mut results = Vec::new();
             for case_id in case_ids {
                 results.push(
@@ -7114,7 +7141,8 @@ mod tests {
 
             let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-            let source_plans = compile_bundle_source_plans(&bundle).expect("source plans compile");
+            let source_plans = compile_bundle_source_plans(&bundle, Posture::Production)
+                .expect("source plans compile");
             let fixture = Path::new(
                 bundle.config.requirements[0]
                     .fixtures
@@ -7159,7 +7187,8 @@ mod tests {
 
         let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-        let source_plans = compile_bundle_source_plans(&bundle).expect("source plans compile");
+        let source_plans = compile_bundle_source_plans(&bundle, Posture::Production)
+            .expect("source plans compile");
         let fixture = Path::new(
             bundle.config.requirements[0]
                 .fixtures
@@ -7225,7 +7254,8 @@ mod tests {
 
         let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-        let source_plans = compile_bundle_source_plans(&bundle).expect("source plans compile");
+        let source_plans = compile_bundle_source_plans(&bundle, Posture::Production)
+            .expect("source plans compile");
         for requirement in &bundle.config.requirements {
             let fixture = Path::new(
                 requirement
@@ -7270,7 +7300,8 @@ mod tests {
 
         let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-        let source_plans = compile_bundle_source_plans(&bundle).expect("source plans compile");
+        let source_plans = compile_bundle_source_plans(&bundle, Posture::Production)
+            .expect("source plans compile");
         assert_eq!(bundle.config.requirements.len(), 4);
         for requirement in &bundle.config.requirements {
             assert_eq!(
@@ -7331,7 +7362,8 @@ mod tests {
 
             let bundle = Arc::new(Bundle::load(directory.path()).expect("reference bundle loads"));
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
-            let source_plans = compile_bundle_source_plans(&bundle).expect("source plans compile");
+            let source_plans = compile_bundle_source_plans(&bundle, Posture::Production)
+                .expect("source plans compile");
             for requirement in &bundle.config.requirements {
                 let fixture_path = requirement
                     .fixtures

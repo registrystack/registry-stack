@@ -87,7 +87,7 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_status_and_lease(
     assert_eq!(fs::read_to_string(lease).unwrap(), "lease-inherited\n");
     assert_eq!(
         fs::read_to_string(capture).unwrap(),
-        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n")
+        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n--posture\nproduction\n")
     );
 }
 
@@ -117,7 +117,12 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/path.yaml"]
+        [
+            "--runtime-config",
+            "/tmp/path.yaml",
+            "--posture",
+            "production"
+        ]
     );
 }
 
@@ -156,7 +161,12 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/managed.yaml"]
+        [
+            "--runtime-config",
+            "/tmp/managed.yaml",
+            "--posture",
+            "production"
+        ]
     );
 }
 
@@ -179,9 +189,13 @@ fn serve_preserves_flag_and_environment_declarations_and_refuses_conflicts() {
         (
             None,
             Some("development"),
-            "development\n--runtime-config\n/tmp/runtime.yaml\n",
+            "development\n--runtime-config\n/tmp/runtime.yaml\n--posture\ndevelopment\n",
         ),
-        (None, None, "unset\n--runtime-config\n/tmp/runtime.yaml\n"),
+        (
+            None,
+            None,
+            "unset\n--runtime-config\n/tmp/runtime.yaml\n--posture\nproduction\n",
+        ),
         (Some("production"), Some("development"), ""),
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_discoveryctl"));

@@ -231,8 +231,8 @@ class GeneratedOpenApiTests(unittest.TestCase):
             self.assertEqual(entry["title"], properties["title"]["const"])
             self.assertEqual(entry["description"], properties["detail"]["const"])
             self.assertEqual(entry["httpStatuses"][0], properties["status"]["const"])
-        self.assertEqual(34, len(self.contract["entries"]))
-        self.assertEqual(85, len(self.openapi["components"]["schemas"]))
+        self.assertEqual(35, len(self.contract["entries"]))
+        self.assertEqual(86, len(self.openapi["components"]["schemas"]))
 
     def test_every_operation_answers_exactly_the_problems_it_was_mapped(self) -> None:
         for key, expected in GENERATOR.OPERATION_PROBLEMS.items():
@@ -633,10 +633,12 @@ class GeneratedOpenApiTests(unittest.TestCase):
             challenge = item["responses"].get("401", {}).get("headers", {}).get("WWW-Authenticate")
             if item["x-scheduling-authority"] == "unauthenticated":
                 self.assertNotIn("authentication.refused", codes, key)
+                self.assertNotIn("platform.task-grant.development-assertion", codes, key)
                 self.assertNotIn("profile.not-authorized", codes, key)
                 self.assertIsNone(challenge, key)
             else:
                 self.assertIn("authentication.refused", codes, key)
+                self.assertIn("platform.task-grant.development-assertion", codes, key)
                 self.assertIn("profile.not-authorized", codes, key)
                 self.assertEqual("Bearer", challenge["schema"]["const"], key)
 
@@ -1019,7 +1021,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
                          set(problem["properties"]))
         self.assertEqual(["code", "detail", "status", "title", "traceId", "type"],
                          sorted(problem["required"]))
-        self.assertEqual(34, len(problem["properties"]["code"]["enum"]))
+        self.assertEqual(35, len(problem["properties"]["code"]["enum"]))
         httpsec = GENERATOR.production_source(ROOT, GENERATOR.HTTPSEC_SOURCE)
         http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
         body = GENERATOR.rust_struct_fields(httpsec, "ProblemBody")

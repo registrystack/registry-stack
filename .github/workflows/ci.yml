@@ -783,6 +783,12 @@ jobs:
         # Coordinator crate is refused wherever it lives.
         run: python3 products/coordinator/scripts/check_dependency_direction.py
 
+      - name: Development runner reach
+        run: python3 products/platform/scripts/check_dev_runner_reach.py
+
+      - name: Development runner reach tests
+        run: python3 products/platform/scripts/test_dev_runner_reach.py
+
       - name: Cargo deny
         run: cargo deny check
 

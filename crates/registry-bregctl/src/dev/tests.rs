@@ -3151,7 +3151,7 @@ fn activation_preflight_refuses_a_successful_doctor_posture_finding() {
     let refusal = activation(true, &report).unwrap_err();
     assert!(refusal
         .to_string()
-        .contains("breg.activation.posture-mismatch"));
+        .contains("platform.activation.posture-mismatch"));
     assert!(refusal.to_string().contains("bregctl dev stop --remove"));
     assert!(refusal.to_string().contains("bregctl dev start"));
 }

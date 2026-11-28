@@ -49,7 +49,7 @@ const ACTIVATION_AUDIT_OPERATION_ID: &str = "breg.activation";
 /// The audit schema of each activation's request and response entries.
 pub const ACTIVATION_AUDIT_SCHEMA: &str = "breg-activation-audit/v1";
 
-pub const POSTURE_MISMATCH_CODE: &str = "breg.activation.posture-mismatch";
+pub const POSTURE_MISMATCH_CODE: &str = "platform.activation.posture-mismatch";
 
 pub const fn posture_mismatch_message(recorded: Posture) -> &'static str {
     match recorded {
@@ -2651,6 +2651,14 @@ mod tests {
     use crate::physical_names::PhysicalNameInventory;
 
     use super::*;
+
+    #[test]
+    fn activation_posture_mismatch_uses_the_platform_code() {
+        assert_eq!(
+            POSTURE_MISMATCH_CODE,
+            "platform.activation.posture-mismatch"
+        );
+    }
 
     #[test]
     fn premaintenance_pool_failures_and_initial_invariants_keep_distinct_recovery() {

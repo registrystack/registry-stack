@@ -19,6 +19,7 @@ export interface ClientOptions {
    */
   token?: () => string | undefined | Promise<string | undefined>
   allowInsecureHttp?: boolean
+  refuseDevelopmentPeer?: boolean
   timeoutMs?: number
   maxResponseBytes?: number
   fetch?: typeof fetch
@@ -73,6 +74,7 @@ export interface Answer<T> {
   data: T
   status: number
   headers: Headers
+  developmentPeer: boolean
   idempotencyKey?: string
 }
 
@@ -81,7 +83,7 @@ export interface WireText<Media extends string = string> { text: string; mediaTy
 
 export type ErrorKind = 'refused' | 'unreachable' | 'unexpected'
 export type ErrorReason = 'token' | 'input' | 'network' | 'timeout' | 'aborted'
-  | 'too-large' | 'media' | 'schema' | 'unsafe-integer' | 'status' | 'stale' | 'sign-in-expired' | 'configuration'
+  | 'too-large' | 'development-peer' | 'media' | 'schema' | 'unsafe-integer' | 'status' | 'stale' | 'sign-in-expired' | 'configuration'
 
 interface ErrorInfo {
   product?: string
@@ -599,6 +601,7 @@ export class Transport {
     wait(this.#timeout)
     let response: ResponseHead | undefined
     let raw: Uint8Array | undefined
+    let developmentPeer = false
     let problem: Record<string, unknown> | undefined
     let idempotencyKey: string | undefined
     let token: string | undefined
@@ -624,6 +627,14 @@ export class Transport {
         outcomeUnknown,
       })
       return ownError
+    }
+    const receive = (head: ResponseHead) => {
+      response = head
+      developmentPeer = head.headers.get('registry-posture')?.split(',').some(value =>
+        /^[\t\n\f\r ]*development[\t\n\f\r ]*$/u.test(value)) ?? false
+      if (developmentPeer && this.#options.refuseDevelopmentPeer) {
+        throw failure('refused', 'development-peer')
+      }
     }
     try {
       callerSignal = values.signal
@@ -697,12 +708,17 @@ export class Transport {
       const Xhr = xhrConstructor()
       if (pageMode && progress && body !== undefined && Xhr !== undefined) {
         raw = await xhrBytes(Xhr, url, operation.method, headers, body, signal, answerLimit, progress,
-          head => { response = head }, moved, downloads === true)
+          receive, moved, downloads === true)
       } else {
         const fetched = await abortable(fetcher(url, {
           method: operation.method, headers, body, redirect: 'manual', credentials: pageMode ? 'same-origin' : 'omit', signal,
         }), signal)
-        response = fetched
+        try {
+          receive(fetched)
+        } catch (error) {
+          void fetched.body?.cancel().catch(() => {})
+          throw error
+        }
         moved()
         if (body !== undefined) progress?.(size, size)
         raw = await readBytes(fetched, answerLimit(fetched), signal, moved,
@@ -759,7 +775,7 @@ export class Transport {
           data = { bytes: raw, mediaType: media }
           break
       }
-      return { data: data as T, status: response.status, headers: response.headers, idempotencyKey }
+      return { data: data as T, status: response.status, headers: response.headers, developmentPeer, idempotencyKey }
     } catch (error) {
       if (ownError && error === ownError) throw ownError
       if (stage === 'input' && error instanceof InputError) throw new TypeError(error.message)

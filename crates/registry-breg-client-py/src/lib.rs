@@ -1762,7 +1762,7 @@ struct BaseRegistryClient {
 #[pymethods]
 impl BaseRegistryClient {
     #[new]
-    #[pyo3(signature = (base_url, authorization=None, attempt_timeout_seconds=None, connect_timeout_seconds=None, user_agent=None, maximum_response_bytes=None, trusted_root_certificates=None, maximum_mutation_retries=None))]
+    #[pyo3(signature = (base_url, authorization=None, attempt_timeout_seconds=None, connect_timeout_seconds=None, user_agent=None, maximum_response_bytes=None, trusted_root_certificates=None, maximum_mutation_retries=None, refuse_development_peer=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -1774,9 +1774,15 @@ impl BaseRegistryClient {
         maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         trusted_root_certificates: Option<Vec<u8>>,
         maximum_mutation_retries: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let (authorization, private_roots) = authorization_from_python(authorization)
             .map_err(|error| conversion_error(py, "configuration", error))?;
+        let peer_policy = if refuse_development_peer {
+            breg_client_sdk::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            breg_client_sdk::PeerPolicy::AcceptDevelopmentPeer
+        };
         let config = config_from_parts(
             base_url,
             &authorization,
@@ -1792,6 +1798,7 @@ impl BaseRegistryClient {
                 .map(|value| parse_maximum_response_bytes(py, value))
                 .transpose()?,
             trusted_root_certificates,
+            peer_policy,
         )
         .map_err(|error| config_error(py, error))?;
         let config = match maximum_mutation_retries {

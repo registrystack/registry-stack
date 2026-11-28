@@ -22,25 +22,31 @@ use registry_platform_yaml::{Diagnostic, Report};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let declared = match &cli.command {
+    let posture = match &cli.command {
         Command::Check { posture, .. }
         | Command::Serve { posture, .. }
-        | Command::Inspect { posture, .. } => match declared(posture.as_deref()) {
-            Ok(declared) => declared,
-            Err(error) => {
-                eprintln!(
-                    "{}: {} {}",
-                    error.code(),
-                    error.message(),
-                    error.suggested_action()
-                );
-                return ExitCode::from(2);
-            }
-        },
-        Command::Openapi { .. } => DeclaredPosture {
+        | Command::Inspect { posture, .. } => posture.as_deref(),
+        Command::Openapi { .. } => None,
+    };
+    let resolved = match declared(posture) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!(
+                "{}: {} {}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let declared = if matches!(cli.command, Command::Openapi { .. }) {
+        DeclaredPosture {
             posture: Posture::Production,
             source: PostureSource::Default,
-        },
+        }
+    } else {
+        resolved
     };
     if let Command::Check {
         config,
@@ -185,12 +191,13 @@ fn check(
     environment: bool,
     declared: DeclaredPosture,
 ) -> ExitCode {
-    let (diagnostics, unavailable) = match absolute_lexical(path) {
+    let (diagnostics, unavailable, explicit_settings) = match absolute_lexical(path) {
         Ok(absolute) => {
             let check = check_file(&absolute, environment, declared);
             (
                 as_given(check.diagnostics, &absolute, path),
                 check.unavailable,
+                check.explicit_settings,
             )
         }
         Err(_) => (
@@ -201,6 +208,7 @@ fn check(
                 "Pass an absolute path, or run the command from a directory that exists.",
             )],
             true,
+            vec![],
         ),
     };
     let mut report = Report::new(diagnostics);
@@ -221,7 +229,17 @@ fn check(
         ("complete", 0)
     };
     match format {
-        OutputFormat::Human => eprint!("{}", report.render_human()),
+        OutputFormat::Human => {
+            for found in explicit_settings {
+                eprintln!(
+                    "Explicit production setting {} at {}. {}.",
+                    found.setting.code,
+                    found.pointer.as_deref().unwrap_or_default(),
+                    found.setting.summary
+                );
+            }
+            eprint!("{}", report.render_human());
+        }
         OutputFormat::Json => println!(
             "{}",
             serde_json::json!({
@@ -232,6 +250,8 @@ fn check(
                 "kind": CHECK_REPORT_KIND,
                 "filesChecked": usize::from(!unavailable),
                 "diagnostics": report.to_json_value(),
+                "explicitProductionSettings": explicit_settings.iter()
+                    .map(|found| found.report_line(path.to_str())).collect::<Vec<_>>(),
             })
         ),
     }

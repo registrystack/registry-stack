@@ -39,6 +39,14 @@ test('provider authenticates one document from a development peer and invalid in
     const original=new Error('value-free provider refusal');original.kind='token';
     await assert.rejects(client.render({bearerToken:async()=>{throw original;}},'receipt',{issuedAt:'2026-10-23T00:00:00Z',data:{}}),error=>error===original);
     assert.equal(requests,2);
+    const refusing = new RenderClient({
+      baseUrl: `http://127.0.0.1:${server.address().port}`,
+      refuseDevelopmentPeer: true,
+    });
+    await assert.rejects(
+      refusing.render(provider, 'receipt', { issuedAt: '2026-10-23T00:00:00Z', data: {} }),
+      (error) => error.kind === 'development-peer',
+    );
 
   } finally { await new Promise(resolve=>server.close(resolve)); }
 });

@@ -15,6 +15,7 @@ use registry_scheduling_core::ProblemCode;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RefusalCode {
     AuthenticationRefused,
+    DevelopmentAssertion,
     GrantLifetimeTooLong,
     OperationNotAuthorized,
     ProfileNotAuthorized,
@@ -26,6 +27,7 @@ impl RefusalCode {
     pub const fn problem(self) -> ProblemCode {
         match self {
             Self::AuthenticationRefused => ProblemCode::AuthenticationRefused,
+            Self::DevelopmentAssertion => ProblemCode::PlatformTaskGrantDevelopmentAssertion,
             Self::GrantLifetimeTooLong => ProblemCode::GrantLifetimeTooLong,
             Self::OperationNotAuthorized => ProblemCode::OperationNotAuthorized,
             Self::ProfileNotAuthorized => ProblemCode::ProfileNotAuthorized,
@@ -40,6 +42,7 @@ impl RefusalCode {
     pub const fn of(problem: ProblemCode) -> Option<Self> {
         match problem {
             ProblemCode::AuthenticationRefused => Some(Self::AuthenticationRefused),
+            ProblemCode::PlatformTaskGrantDevelopmentAssertion => Some(Self::DevelopmentAssertion),
             ProblemCode::GrantLifetimeTooLong => Some(Self::GrantLifetimeTooLong),
             ProblemCode::OperationNotAuthorized => Some(Self::OperationNotAuthorized),
             ProblemCode::ProfileNotAuthorized => Some(Self::ProfileNotAuthorized),

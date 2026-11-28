@@ -93,6 +93,13 @@ class RenderJourney(unittest.TestCase):
                 caller.render("canary-render-token", "receipt", request)
             self.assertEqual(captured.exception.kind, "protocol")
             self.assertTrue(captured.exception.outcome_unknown)
+            refusing = client.RenderClient(
+                {"baseUrl": f"http://127.0.0.1:{server.server_port}"},
+                refuse_development_peer=True,
+            )
+            with self.assertRaises(client.RenderClientError) as caught:
+                refusing.render(provider, "receipt", request)
+            self.assertEqual(caught.exception.kind, "development-peer")
         finally:
             server.shutdown()
             server.server_close()

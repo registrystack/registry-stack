@@ -855,6 +855,8 @@ The Casework and Messaging listeners and Mailpit SMTP connection use `loopback-p
 
 ## Run isolation
 
+The run builds an ordinary package, and its generated runtime files and database contain development settings that production refuses.
+
 Each run listens on loopback, creates separate databases and migration and runtime logins, and pins its own public signing key in the runtime files.
 The local issuer signs under the project's issuer name with a key unique to the run.
 Use synthetic test people and keep the issuer's private directory under your user account.

@@ -299,3 +299,5 @@ each Evidence development prerelease and smokes it from a fresh virtual
 environment. That workflow stamps the prerelease version into `pyproject.toml`
 before building, so this crate's own copy of the workspace version stays the
 released one.
+
+The client accepts development-marked responses by default. Set `refuse_development_peer=True` when constructing the client to reject them.

@@ -455,16 +455,19 @@ class EvidenceClient:
         maximum_response_bytes: Optional[int] = ...,
         max_metadata_bytes: Optional[int] = ...,
         authorization: Optional[Mapping[str, Any]] = ...,
+        refuse_development_peer: bool = False,
     ) -> None: ...
     @staticmethod
     def from_profile(
         profile_path: str,
         private_key_jwk: Optional[Mapping[str, Any]] = ...,
+        refuse_development_peer: bool = False,
     ) -> "EvidenceClient": ...
     @staticmethod
     def from_profile_with_authorization(
         profile_path: str,
         authorization: Mapping[str, Any],
+        refuse_development_peer: bool = False,
     ) -> "EvidenceClient": ...
     def refresh_metadata(self) -> None: ...
     def request(

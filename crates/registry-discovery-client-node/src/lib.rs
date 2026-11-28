@@ -22,7 +22,7 @@ const MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BYTES: usize = 4 * 1024 * 1024;
 #[napi(object)]
 pub struct DiscoveryClientOptions {
     pub base_url: String,
-    pub allow_development_peer: Option<bool>,
+    pub refuse_development_peer: Option<bool>,
     pub attempt_timeout_milliseconds: Option<f64>,
     pub connect_timeout_milliseconds: Option<f64>,
     pub maximum_response_bytes: Option<f64>,
@@ -189,7 +189,7 @@ impl DiscoveryClient {
         let options = match options {
             Either::A(base_url) => DiscoveryClientOptions {
                 base_url,
-                allow_development_peer: None,
+                refuse_development_peer: None,
                 attempt_timeout_milliseconds: None,
                 connect_timeout_milliseconds: None,
                 maximum_response_bytes: None,
@@ -199,10 +199,10 @@ impl DiscoveryClient {
         };
         let base_url = url::Url::parse(&options.base_url)
             .map_err(|_| error(DiscoveryClientError::Configuration))?;
-        let peer_policy = if options.allow_development_peer == Some(true) {
-            registry_discovery_client::PeerPolicy::AcceptDevelopmentPeer
-        } else {
+        let peer_policy = if options.refuse_development_peer == Some(true) {
             registry_discovery_client::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            registry_discovery_client::PeerPolicy::AcceptDevelopmentPeer
         };
         let mut config = DiscoveryClientConfig::new(base_url, peer_policy);
         if let Some(milliseconds) = options.attempt_timeout_milliseconds {

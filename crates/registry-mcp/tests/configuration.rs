@@ -469,6 +469,15 @@ fn published_endpoint_refusals_name_both_migrations() {
 }
 
 #[test]
+fn production_accepts_loopback_http_jwks_for_an_https_issuer() {
+    let mut config = citizen();
+    config["resourceServer"]["jwksSource"] =
+        json!({"type": "uri", "uri": "http://127.0.0.1:8082/keys"});
+    let report = check_with_posture(&config, Posture::Production);
+    assert!(!report.has_errors(), "{}", report.render_human());
+}
+
+#[test]
 fn an_http_issuer_beyond_loopback_names_its_one_remedy() {
     let mut config = citizen();
     config["resourceServer"]["issuer"] = json!("http://issuer.example.test");

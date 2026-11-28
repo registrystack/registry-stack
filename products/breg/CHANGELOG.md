@@ -1,6 +1,10 @@
 # Base Registry Engine changelog
 
 ## Unreleased
+- Production refuses verified bearer tokens marked as development even when they carry no task grant.
+- BReg Review reports its loopback HTTP sign-in issuer as an explicit production setting.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
 
 - The published runtime schema types each `authentication.oidc.issuers` key as a local identifier (`propertyNames: {$ref: LocalId}`), as the other products' issuer maps do.
 
@@ -11,7 +15,7 @@
 - Production BReg returns HTTP 401 with `platform.task-grant.development-assertion`
   for a signed development task assertion.
 
-- `bregctl status` reports an error with code `breg.activation.posture-mismatch` from the database state row and exits 1 on mismatch.
+- `bregctl status` reports an error with code `platform.activation.posture-mismatch` from the database state row and exits 1 on mismatch.
 - The JSON status report for a posture mismatch carries `ok: false` and `status: domain-refusal`. It includes available activation ledger details.
 - `bregctl doctor` includes the recorded posture mismatch alongside startup refusals for maintenance or a different active digest.
 - Successful development `bregctl plan` and `bregctl apply` report development settings in text and in the JSON `diagnostics` array.
@@ -87,7 +91,7 @@
   its other checks pass. If a later check fails, doctor keeps the posture
   finding beside the refusal. `status` and `doctor` locate it at `/database`.
 - `bregctl migration reconcile` and the timer operator report
-  `breg.activation.posture-mismatch` when the recorded posture differs.
+  `platform.activation.posture-mismatch` when the recorded posture differs.
 - `bregctl verify`, `migration explain`, runtime-bound `diff`, and runtime-backed
   generation include accepted development settings in their success diagnostics.
 - Hook listing and Proposal retention include accepted development settings
@@ -96,7 +100,7 @@
   retention preserve runtime posture refusal codes, pointers, and remedies.
 - Hook operations, external projection maintenance, import authority commands,
   instance claim commands, and operator identity checks report
-  `breg.activation.posture-mismatch` at `/database` when they detect a mismatch.
+  `platform.activation.posture-mismatch` at `/database` when they detect a mismatch.
 - `bregctl generate odrl` refuses an incompatible `--runtime-config` selector
   with `generate.arguments` before writing output.
 - `bregctl dev` declares development for its child processes and marks the

@@ -109,9 +109,10 @@ fn check_activation_posture(regression: Option<Regression>) {
                         .replace("runtime: registry_runtime", &format!("runtime: {role}"))
                         .replace("principal: registry_principal", "principal: principal")
                         .replace("    purpose: registry_purpose\n", "")
-                        .replace(
-                            "    jwksCache:\n",
-                            "    jwksSource:\n      type: static\n      documentRef: secret:file/oidc-jwks\n    jwksCache:\n",
+                        .replacen(
+                            "\n        jwksCache:\n",
+                            "\n        jwksSource:\n          type: static\n          documentRef: secret:file/oidc-jwks\n        jwksCache:\n",
+                            1,
                         ),
                 )
                 .unwrap();
@@ -226,7 +227,7 @@ fn check_activation_posture(regression: Option<Regression>) {
                             );
                             let output = status(declared);
                             let report = json_stdout(&output);
-                            assert_eq!(report["diagnostics"][0]["code"], "breg.activation.posture-mismatch", "{report}");
+                            assert_eq!(report["diagnostics"][0]["code"], "platform.activation.posture-mismatch", "{report}");
                             assert_eq!(output.status.code(), Some(1), "{report}");
                             assert_eq!(report["status"], "domain-refusal", "{report}");
                             assert!(report["registryRevision"].is_string(), "{report}");
@@ -242,7 +243,7 @@ fn check_activation_posture(regression: Option<Regression>) {
                             let report = json_stdout(&output);
                             assert_eq!(output.status.code(), Some(1), "{report}");
                             let diagnostics = report["diagnostics"].as_array().unwrap();
-                            for code in ["startup.database.unready", "breg.activation.posture-mismatch"] {
+                            for code in ["startup.database.unready", "platform.activation.posture-mismatch"] {
                                 assert!(diagnostics.iter().any(|item| item["code"] == code), "{report}");
                             }
                         }
@@ -272,7 +273,7 @@ fn check_activation_posture(regression: Option<Regression>) {
                     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
                     let report = json_stdout(&refused);
                     assert_eq!(
-                        report["diagnostics"][0]["code"], "breg.activation.posture-mismatch",
+                        report["diagnostics"][0]["code"], "platform.activation.posture-mismatch",
                         "{report}"
                     );
                 }
@@ -291,7 +292,7 @@ fn check_activation_posture(regression: Option<Regression>) {
                     let refused = run(&arguments);
                     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
                     let report = json_stdout(&refused);
-                    assert_eq!(report["diagnostics"][0]["code"], "breg.activation.posture-mismatch", "{report}");
+                    assert_eq!(report["diagnostics"][0]["code"], "platform.activation.posture-mismatch", "{report}");
                     assert_eq!(report["diagnostics"][0]["path"], "/database", "{report}");
                 }
 
@@ -299,7 +300,7 @@ fn check_activation_posture(regression: Option<Regression>) {
                 assert_eq!(checked.status.code(), Some(1), "{checked:?}");
                 let checked = json_stdout(&checked);
                 assert_eq!(
-                    checked["diagnostics"][0]["code"], "breg.activation.posture-mismatch",
+                    checked["diagnostics"][0]["code"], "platform.activation.posture-mismatch",
                     "{checked}"
                 );
                 assert_eq!(checked["ledger"], before["ledger"]);
@@ -325,8 +326,8 @@ fn check_activation_posture(regression: Option<Regression>) {
                 let has_code = |member: &str, code: &str| {
                     doctor_report[member].as_array().unwrap().iter().any(|item| item["code"] == code)
                 };
-                assert!(has_code("diagnostics", "breg.activation.posture-mismatch"), "{doctor_report}");
-                assert!(has_code("advisories", "breg.activation.posture-mismatch"), "{doctor_report}");
+                assert!(has_code("diagnostics", "platform.activation.posture-mismatch"), "{doctor_report}");
+                assert!(has_code("advisories", "platform.activation.posture-mismatch"), "{doctor_report}");
                 if declared == "development" {
                     assert!(has_code("advisories", "breg.posture.http-public-origin"), "{doctor_report}");
                 }
@@ -368,7 +369,7 @@ fn check_activation_posture(regression: Option<Regression>) {
                 assert_eq!(refused.status.code(), Some(1), "{refused:?}");
                 let report = json_stdout(&refused);
                 assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| item["code"] == "startup.cursor.refused"), "{report}");
-                assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| item["code"] == "breg.activation.posture-mismatch"), "{report}");
+                assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| item["code"] == "platform.activation.posture-mismatch"), "{report}");
                 let refresh_config = config_root.path().join("invalid-refresh.yaml");
                 let source = fs::read_to_string(&config).unwrap();
                 fs::write(&refresh_config, format!("{source}
@@ -394,7 +395,7 @@ externalRefresh:
                 );
                 assert!(
                     refresh_report["diagnostics"].as_array().unwrap().iter().any(
-                        |item| item["code"] == "breg.activation.posture-mismatch"
+                        |item| item["code"] == "platform.activation.posture-mismatch"
                             && item["path"] == "/database"
                     ),
                     "{refresh_report}"

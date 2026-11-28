@@ -247,6 +247,7 @@ export type EvidenceExchangeAuthorizationConfig = {
 /** The configuration `new EvidenceClient(...)` reads. */
 export interface EvidenceClientConfig {
   baseUrl: string
+  refuseDevelopmentPeer?: boolean
   trustedJwks: TrustedJwks
   revokedKeyIds: ReadonlyArray<string>
   /** Configure exactly one of `token` or `authorization`. */
@@ -281,10 +282,11 @@ export declare class EvidenceClient extends NativeEvidenceClient {
    * intended for an in-memory secret-manager result; it is never retained by
    * the JavaScript wrapper.
    */
-  static fromProfile(path: string, privateKeyJwk?: Readonly<Record<string, unknown>>): EvidenceClient
+  static fromProfile(path: string, privateKeyJwk?: Readonly<Record<string, unknown>>, refuseDevelopmentPeer?: boolean): EvidenceClient
   static fromProfileWithAuthorization(
     path: string,
     authorization: { exchange: EvidenceExchangeAuthorizationConfig },
+    refuseDevelopmentPeer?: boolean,
   ): EvidenceClient
 }
 

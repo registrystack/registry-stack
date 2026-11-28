@@ -495,8 +495,8 @@ async fn current_maintained_pack_matrix_executes_exact_routes_within_the_shared_
         .unwrap_or_else(|error| panic!("{fixture_name}: {error}"));
         let bundle = registry_evidence::bundle::Bundle::load_as_found(&root, &verified)
             .unwrap_or_else(|error| panic!("{fixture_name}: {error}"));
-        let programs =
-            compile_sources(&bundle).unwrap_or_else(|error| panic!("{fixture_name}: {error}"));
+        let programs = compile_sources(&bundle, registry_evidence::config::Posture::Production)
+            .unwrap_or_else(|error| panic!("{fixture_name}: {error}"));
 
         for requirement in &bundle.config.requirements {
             let fixture_path = requirement.fixtures.as_ref().unwrap().as_str();

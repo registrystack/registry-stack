@@ -554,8 +554,8 @@ The residuals refer to these obligations by number.
    require the development posture. Production uses Transit for field encryption.
    Development HTTP responses carry `Registry-Posture: development`, and journal
    entries carry `posture`. Production BReg refuses development task-grant
-   status responses and signed development task assertions. Production also
-   refuses development Evidence and Review peers. A development BReg accepts
+   status responses, verified bearer tokens marked as development, and
+   development Evidence and Review peers. A development BReg accepts
    development peers for all three clients. BReg omits HSTS on loopback
    listeners in development. Production sends HSTS on every API listener.
    Run your stack under one posture. A deployment that uses key-file signing in Render or
@@ -565,6 +565,7 @@ The residuals refer to these obligations by number.
         crates/registry-breg/src/api/mod.rs, authenticated_router_with_listener;
         crates/registry-breg/src/startup.rs, open_registry_audit;
         crates/registry-breg/src/auth.rs, grant_context_check;
+        crates/registry-breg/tests/http_auth.rs, production_refuses_a_marked_token_without_grant_claims;
         crates/registry-platform-oidc/src/task_grant.rs, TaskGrantStatusClient;
         crates/registry-breg/src/runtime_config.rs, review_client_respects_the_runtime_posture;
         crates/registry-breg/tests/postgres_action_evidence.rs, real_evidence_service_resolves_exact_selector_and_commits_verified_postgres_result. */}

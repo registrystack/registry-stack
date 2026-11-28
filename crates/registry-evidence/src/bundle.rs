@@ -563,18 +563,18 @@ impl SourceExtract {
 impl RuntimeDocument {
     pub fn load(path: impl AsRef<Path>, declared: DeclaredPosture) -> Result<Self, BundleError> {
         let path = path.as_ref();
-        let bytes = Self::read(path)?;
+        let bytes = Self::read(path, declared.posture)?;
         let loaded =
             RuntimeConfig::parse_yaml_with(&bytes, declared, |name| std::env::var(name).ok())
                 .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
         Self::capture(path, bytes, loaded)
     }
 
-    fn read(path: &Path) -> Result<Vec<u8>, BundleError> {
+    fn read(path: &Path, posture: Posture) -> Result<Vec<u8>, BundleError> {
         if path.file_name().and_then(|name| name.to_str()) != Some(RUNTIME_FILE) {
             return Err(BundleError::InvalidPath);
         }
-        require_trusted_runtime_path(path).map_err(|error| {
+        require_trusted_runtime_path(path, posture).map_err(|error| {
             BundleError::Refused(Box::new(Report::new(error.diagnostics().to_vec())))
         })?;
         let metadata = fs::symlink_metadata(path).map_err(|_| BundleError::Unavailable)?;
@@ -699,7 +699,7 @@ impl DeploymentInputs {
         declared: DeclaredPosture,
     ) -> Result<Self, BundleError> {
         let path = runtime_path.as_ref();
-        let bytes = RuntimeDocument::read(path)?;
+        let bytes = RuntimeDocument::read(path, declared.posture)?;
         let mut loaded = RuntimeConfig::inspect_yaml(path, &bytes, declared, true)
             .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
         let mut bundle = Bundle::preflight_runtime_package(path, &mut loaded, false)?;
@@ -6744,7 +6744,7 @@ mod tests {
         let result = RuntimeDocument::load(
             &runtime_path,
             registry_platform_config::DeclaredPosture {
-                posture: registry_platform_config::Posture::Development,
+                posture: registry_platform_config::Posture::Production,
                 source: registry_platform_config::PostureSource::Flag,
             },
         );
@@ -6758,12 +6758,8 @@ mod tests {
             panic!("one path refusal is reported");
         };
         assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
-        assert!(diagnostic
-            .message
-            .contains("owned by root or the runtime user"));
-        assert!(diagnostic
-            .suggested_action
-            .contains("remove group and other write permission"));
+        assert!(diagnostic.message.contains("is writable by its group"));
+        assert!(diagnostic.suggested_action.contains("chmod g-w "));
 
         // Everything the operator can re-freeze is already frozen here, so the
         // refusal has to name the one input outside the bundle. Re-freezing the

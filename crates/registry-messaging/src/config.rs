@@ -2316,12 +2316,8 @@ pub(crate) mod tests {
     fn assert_unsafe_runtime(error: registry_platform_config::RuntimeConfigError) {
         let diagnostic = error.deciding_diagnostic();
         assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
-        assert!(diagnostic
-            .message
-            .contains("owned by root or the runtime user"));
-        assert!(diagnostic
-            .suggested_action
-            .contains("remove group and other write permission"));
+        assert!(diagnostic.message.contains("is writable by its group"));
+        assert!(diagnostic.suggested_action.contains("chmod g-w "));
     }
 
     #[cfg(unix)]

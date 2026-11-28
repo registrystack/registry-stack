@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Runtime checks and startup logs report loopback HTTP issuer and JWKS endpoints as explicit production settings.
+- Development allows group-writable runtime configuration paths. Ownership and permission refusals identify the first failing path and how to fix it.
+- Loopback plaintext database transport reports a bracketed-host diagnostic when it refuses a bracketed IP literal.
 
 - Managed Coordinator runs reuse their local connection issuer address so workflows already waiting can resume after a restart.
 
@@ -9,6 +12,9 @@
 - Starting the standalone canonical-review Casework template identifies the missing facility-registry pair and gives the pairing command before PostgreSQL starts.
 
 - Managed `rstack dev` projects keep their PostgreSQL data, audit journals and keys across stops. Start with `--clean` to clear a stopped project's development data. Runs using a supplied PostgreSQL server still drop their databases and roles at stop.
+- The TypeScript client exposes the development response mark and accepts `refuseDevelopmentPeer: true` to refuse development peers.
+
+- CI checks which crates can link development and test tooling and selects development runner tests when any host changes.
 
 - `rstack dev` writes each product's run issuer as the one entry, `main`, of its issuer set, so BReg, Messaging, Scheduling, Documents, Coordinator, the Adapter and Render read the runtime files a run generates.
 - BREAKING: `ObjectStoreError` and `VerifierError` add `DevelopmentPeer` variants. Migration: Update exhaustive matches.
@@ -56,9 +62,8 @@
   For Node services and tools, run `npm install @registrystack/client-node` and change imports to `@registrystack/client-node`.
   `@registrystack/client` is now the Fetch-based browser and edge client.
 - `rstack client generate` runs the application’s local `registry-generate` with the BReg CLI resolved by `rstack`.
-- The shared signed hook verifier accepts a development envelope when the receiver explicitly allows development. The default verifier checks the signature before refusing the mark with `development-peer`.
+- Signed deliveries have the same form in both postures.
 
-- A production hook delivery worker dead-letters development-marked envelopes on their next attempt with `payload-refused`. A development worker can deliver the captured bytes unchanged.
 - The shared `provision` command reports every runtime loader diagnostic in text and JSON and exits 1 on refusal.
 
 - Fetch-based TypeScript clients, generated from each registry's contract, are
@@ -119,7 +124,6 @@
   `requiredFilters` makes one of its equality-filter alternatives required. The
   client checks the same rules before sending and refuses with a `TypeError`
   that names the property and profile, never a filter value.
-- Platform Hooks refuses development-marked signed envelopes at its verifier with `development-peer`. Development producers can include the mark in the signed bytes, and delivery retries or replay keep the exact stored payload.
 
 - Registry MCP and MCP Edge refuse HTTP issuers in production.
   Migration: Configure an HTTPS issuer, or declare development for a test deployment that needs HTTP.

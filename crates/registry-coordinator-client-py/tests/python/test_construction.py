@@ -14,6 +14,17 @@ REQUEST = {"workflow": "nursing-notice", "workflowRevision": "sha256:00000000000
 
 
 class ConstructionTests(unittest.TestCase):
+    def test_development_peer_refusal_is_an_explicit_option(self) -> None:
+        for refuse in (False, True):
+            with self.subTest(refuse=refuse):
+                self.assertIsInstance(
+                    CoordinatorClient(
+                        "https://coordinator.example.invalid/",
+                        refuse_development_peer=refuse,
+                    ),
+                    CoordinatorClient,
+                )
+
     def test_constructs_without_retaining_credentials(self) -> None:
         client = CoordinatorClient(BASE)
         self.assertIsInstance(client, CoordinatorClient)

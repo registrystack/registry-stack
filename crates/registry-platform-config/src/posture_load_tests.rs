@@ -98,6 +98,44 @@ fn parse(
 }
 
 #[test]
+fn production_reports_each_authored_loopback_http_issuer_endpoint() {
+    let loader = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Production));
+    let https = no_setting();
+    let loopback_issuer = https.replace("https://issuer.example.test", "http://127.0.0.1:8082");
+    let loopback_jwks = https.replace(
+        "    audience: api",
+        "    jwksSource: {type: uri, uri: 'http://[::1]:8082/keys'}\n    audience: api",
+    );
+    for (document, expected) in [
+        (https, None),
+        (loopback_issuer, Some("/authentication/oidc/issuer")),
+        (loopback_jwks, Some("/authentication/oidc/jwksSource/uri")),
+    ] {
+        let loaded = parse(&loader, &document).expect("production loads the issuer");
+        loaded
+            .config
+            .authentication
+            .oidc
+            .provider
+            .check("authentication.oidc")
+            .unwrap();
+        let settings = loaded.posture.explicit_settings();
+        if let Some(pointer) = expected {
+            let [setting] = settings else {
+                panic!("expected one explicit setting, got {settings:?}")
+            };
+            assert_eq!(
+                setting.setting.code,
+                "platform.posture.issuer-loopback-plaintext"
+            );
+            assert_eq!(setting.pointer.as_deref(), Some(pointer));
+        } else {
+            assert!(settings.is_empty());
+        }
+    }
+}
+
+#[test]
 fn production_refuses_every_shared_development_setting_and_lists_each_with_its_pointer() {
     let loader = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Production));
     let error = parse(&loader, &every_setting()).expect_err("production refuses");

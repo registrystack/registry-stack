@@ -155,6 +155,8 @@ pub struct RuntimeCheck {
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
+    /// Explicit production settings from fully evaluated fields.
+    pub explicit_settings: Vec<registry_platform_config::FoundExplicitSetting>,
 }
 
 /// Check the runtime file at the absolute `path` as `evidence-oid4vci serve`
@@ -188,8 +190,21 @@ pub fn check_file(path: &Path, substitute: bool, declared: DeclaredPosture) -> R
         );
     }
     in_file_order(&mut diagnostics);
+    let explicit_settings = check
+        .loaded
+        .iter()
+        .flat_map(|loaded| loaded.posture.explicit_settings())
+        .filter(|found| {
+            found
+                .pointer
+                .as_deref()
+                .is_none_or(|pointer| !check.defers(pointer))
+        })
+        .cloned()
+        .collect();
     RuntimeCheck {
         diagnostics,
+        explicit_settings,
         unavailable: check.unavailable,
     }
 }
@@ -1016,8 +1031,10 @@ pub struct OffersDocument {
     pub claims: ClaimNamesDocument,
     /// The authorization server that issues offer tokens, compared exactly
     /// against a token's `iss`. Use HTTPS or loopback HTTP in production.
+    #[serde(deserialize_with = "registry_platform_config::deserialize_issuer_endpoint")]
     pub issuer: Url,
     /// The offer-token issuer's key set. Use HTTPS or loopback HTTP in production.
+    #[serde(deserialize_with = "registry_platform_config::deserialize_issuer_endpoint")]
     pub jwks_uri: Url,
     /// Permit plain HTTP beyond loopback to the offer-token issuer and to
     /// `jwksUri` in the development posture.
@@ -1953,12 +1970,8 @@ store:
             .iter()
             .find(|diagnostic| diagnostic.code == "platform.runtime-config.unsafe-file")
             .expect("the ownership refusal is reported");
-        assert!(diagnostic
-            .message
-            .contains("owned by root or the runtime user"));
-        assert!(diagnostic
-            .suggested_action
-            .contains("remove group and other write permission"));
+        assert!(diagnostic.message.contains("is writable by its group"));
+        assert!(diagnostic.suggested_action.contains("chmod g-w "));
     }
 
     #[cfg(unix)]

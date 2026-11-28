@@ -1553,12 +1553,12 @@ class CiChangesTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
-                self.assertEqual(outputs["rust_packages"], ["registry-cli-docs", "registry-coordinator"])
+                self.assertEqual(outputs["rust_packages"], ["registry-cli-docs", "registry-coordinator", "registry-rstack"])
                 self.assertTrue(outputs["coordinator"])
                 self.assertFalse(outputs["messaging_postgres"])
                 self.assertEqual(
                     outputs["rust_matrix"]["include"],
-                    [{"name": "developer-tools", "packages": ["registry-cli-docs", "registry-coordinator"], "all_features": False}],
+                    [{"name": "developer-tools", "packages": ["registry-cli-docs", "registry-coordinator", "registry-rstack"], "all_features": False}],
                 )
 
         for dependency in (
@@ -3673,7 +3673,7 @@ on:
     ) -> None:
         """The registry-rstack dev_run tests drive the bregctl and caseworkctl
         built beside rstack, which link registry-rstack-dev and host
-        `rstack dev`. A change to the library or to either host runs them, and
+        `rstack dev`. A change to the library or to any host runs them, and
         the shard builds both hosts before it tests."""
         for path, packages in (
             (
@@ -3682,6 +3682,14 @@ on:
             ),
             ("crates/registry-bregctl/src/lib.rs", {"registry-rstack"}),
             ("crates/registry-caseworkctl/src/lib.rs", {"registry-rstack"}),
+            ("crates/registry-adapterctl/src/lib.rs", {"registry-rstack"}),
+            ("crates/registry-coordinator/src/cli.rs", {"registry-rstack"}),
+            ("crates/registry-discoveryctl/src/lib.rs", {"registry-rstack"}),
+            ("crates/registry-documentsctl/src/lib.rs", {"registry-rstack"}),
+            ("crates/registry-evidencectl/src/lib.rs", {"registry-rstack"}),
+            ("crates/registry-messagingctl/src/lib.rs", {"registry-rstack"}),
+            ("crates/registry-render/src/cli.rs", {"registry-rstack"}),
+            ("crates/registry-schedulingctl/src/lib.rs", {"registry-rstack"}),
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
@@ -4714,7 +4722,7 @@ class LockfileSelectionTest(unittest.TestCase):
         self.assertFalse(change.native)
 
         outputs = classify(self.workspace, ("Cargo.lock",), lock_change=change)
-        expected = sorted(self.workspace.affected_packages({"registry-render"}))
+        expected = sorted(self.workspace.affected_packages({"registry-render"}) | {"registry-rstack"})
         self.assertEqual(outputs["rust_packages"], expected)
         self.assertLess(len(expected), len(self.workspace.package_names))
         self.assertFalse(outputs["platform"])

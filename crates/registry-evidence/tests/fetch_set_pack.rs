@@ -94,7 +94,8 @@ fn surviving_spouse_pack_closes_one_bounded_three_send_route_and_preserves_cases
     )
     .expect("the acceptance package has an exact checksum closure");
     let bundle = Arc::new(Bundle::load_as_found(&root, &verified).expect("package loads"));
-    compile_sources(&bundle).expect("the reviewed source route compiles");
+    compile_sources(&bundle, registry_evidence::config::Posture::Production)
+        .expect("the reviewed source route compiles");
     OfflineKernel::compile(Arc::clone(&bundle)).expect("the Evidence kernel compiles");
 
     let authored = yaml("evidence.yaml");

@@ -62,7 +62,8 @@ async fn dhis2_reference_reuses_the_maintained_pack_and_replays_both_routes() {
     .expect("the DHIS2 reference package has an exact checksum closure");
     let bundle = Bundle::load_as_found(&bundle_root, &verified)
         .expect("the DHIS2 reference uses current pack-source bindings");
-    let programs = compile_sources(&bundle).expect("both DHIS2 pack routes compile purely");
+    let programs = compile_sources(&bundle, registry_evidence::config::Posture::Production)
+        .expect("both DHIS2 pack routes compile purely");
 
     assert_eq!(bundle.config.sources.len(), 2);
     for (_, source) in bundle.config.sources.iter() {

@@ -17,12 +17,17 @@ struct RenderClient {
 #[pymethods]
 impl RenderClient {
     #[new]
-    fn new(config: &str) -> PyResult<Self> {
+    #[pyo3(signature = (config, refuse_development_peer=false))]
+    fn new(config: &str, refuse_development_peer: bool) -> PyResult<Self> {
         let config: RenderClientConfig =
             serde_json::from_value(parse_json_strict(config.as_bytes()).map_err(|_| fixed())?)
                 .map_err(|_| fixed())?;
-        let inner = CoreClient::new(config, render_client_sdk::PeerPolicy::AcceptDevelopmentPeer)
-            .map_err(mapped)?;
+        let peer_policy = if refuse_development_peer {
+            render_client_sdk::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            render_client_sdk::PeerPolicy::AcceptDevelopmentPeer
+        };
+        let inner = CoreClient::new(config, peer_policy).map_err(mapped)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

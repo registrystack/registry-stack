@@ -1149,6 +1149,40 @@ async fn production_refuses_a_signed_development_task_assertion() {
 }
 
 #[tokio::test]
+async fn production_refuses_a_marked_token_without_grant_claims() {
+    let harness = contextual_harness().await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let path = format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-human");
+    let mut claims = json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "azp": "agent-client",
+        "registry_actor_kind": "human",
+        "registry_purpose": "record-review",
+        "scope": "registry.read",
+        "iat": now,
+        "exp": now + 600,
+    });
+    let unmarked = harness.signed_token(claims.clone(), "JWT");
+    let response = harness.send(&path, &[bearer(&unmarked)], None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    claims[registry_platform_oidc::POSTURE_CLAIM] = json!("development");
+    let marked = harness.signed_token(claims, "JWT");
+    let response = harness.send(&path, &[bearer(&marked)], None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.headers()["www-authenticate"], "Bearer");
+    assert_eq!(
+        body_json(response).await["code"],
+        "platform.task-grant.development-assertion"
+    );
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn task_grant_tokens_are_issued_for_at_most_fifteen_minutes() {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

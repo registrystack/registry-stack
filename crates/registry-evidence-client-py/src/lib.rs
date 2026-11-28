@@ -882,6 +882,14 @@ struct EvidenceClient {
     runtime: tokio::runtime::Runtime,
 }
 
+fn peer_policy(refuse_development_peer: bool) -> evidence_client_sdk::PeerPolicy {
+    if refuse_development_peer {
+        evidence_client_sdk::PeerPolicy::RefuseDevelopmentPeer
+    } else {
+        evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer
+    }
+}
+
 #[pymethods]
 impl EvidenceClient {
     /// Build a client for one deployment.
@@ -910,6 +918,7 @@ impl EvidenceClient {
         maximum_response_bytes=None,
         max_metadata_bytes=None,
         authorization=None,
+        refuse_development_peer=false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -925,6 +934,7 @@ impl EvidenceClient {
         maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         max_metadata_bytes: Option<&Bound<'_, PyAny>>,
         authorization: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let trusted_jwks_json = python_to_json(trusted_jwks)
             .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
@@ -957,6 +967,7 @@ impl EvidenceClient {
             max_metadata_bytes
                 .map(|value| configuration_u64(py, value, "max_metadata_bytes"))
                 .transpose()?,
+            peer_policy(refuse_development_peer),
         )
         .map_err(|error| to_py_err(py, &map_config_error(&error)))?;
         let inner = py
@@ -981,11 +992,12 @@ impl EvidenceClient {
     /// it replaces the profile's file or environment key reference, which is
     /// the intended integration point for a deployment secret manager.
     #[staticmethod]
-    #[pyo3(signature = (profile_path, private_key_jwk=None))]
+    #[pyo3(signature = (profile_path, private_key_jwk=None, refuse_development_peer=false))]
     fn from_profile(
         py: Python<'_>,
         profile_path: &str,
         private_key_jwk: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let profile = RealEvidenceClientProfile::from_file(profile_path).map_err(|error| {
             // A profile path and the private-key reference are deployment
@@ -1003,10 +1015,7 @@ impl EvidenceClient {
             to_py_err(py, &mapped)
         })?;
         let inner = match private_key_jwk {
-            None => RealEvidenceClient::from_profile(
-                profile,
-                evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
-            ),
+            None => RealEvidenceClient::from_profile(profile, peer_policy(refuse_development_peer)),
             Some(value) => {
                 let value = python_to_json(value)
                     .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
@@ -1023,7 +1032,7 @@ impl EvidenceClient {
                 RealEvidenceClient::from_profile_with_key(
                     profile,
                     key,
-                    evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+                    peer_policy(refuse_development_peer),
                 )
             }
         }
@@ -1043,10 +1052,12 @@ impl EvidenceClient {
     /// through a context-bound staff exchange. The exchange must match the
     /// discovered issuer and the profile's fixed OAuth request parameters.
     #[staticmethod]
+    #[pyo3(signature = (profile_path, authorization, refuse_development_peer=false))]
     fn from_profile_with_authorization(
         py: Python<'_>,
         profile_path: &str,
         authorization: &Bound<'_, PyAny>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let profile = RealEvidenceClientProfile::from_file(profile_path).map_err(|_| {
             to_py_err(
@@ -1070,7 +1081,7 @@ impl EvidenceClient {
         let inner = RealEvidenceClient::from_profile_with_authorization(
             profile,
             exchange,
-            evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+            peer_policy(refuse_development_peer),
         )
         .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
         let runtime = tokio::runtime::Builder::new_current_thread()

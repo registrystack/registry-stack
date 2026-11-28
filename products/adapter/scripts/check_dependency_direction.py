@@ -42,10 +42,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import runpy
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+# products/platform/scripts/check_dev_runner_reach.py owns the host permits.
+_dev_runner_gate = runpy.run_path(str(
+    Path(__file__).resolve().parents[2] / "platform/scripts/check_dev_runner_reach.py"
+))
+_DEV_RUNNER = _dev_runner_gate["DEV_RUNNER"]
+_DEV_RUNNER_HOSTS = _dev_runner_gate["ALLOWLIST"][_DEV_RUNNER]
 
 ADAPTER_PREFIX = "registry-adapter"
 
@@ -344,7 +352,8 @@ def authoring_refused(start, names, every, linked) -> set[str]:
         else:
             permits = lambda name: (
                 engine_may_reach("registry-adapterctl", name)
-                or name in {CLI_REPORT, "registry-rstack-dev"}
+                or name == CLI_REPORT
+                or (name == _DEV_RUNNER and "registry-adapterctl" in _DEV_RUNNER_HOSTS)
                 or (name == IDENTITY_TOOLING and dependency_name == IDENTITY_TOOLING)
             )
         for reached in {dependency, *linked_closure(dependency, linked)}:

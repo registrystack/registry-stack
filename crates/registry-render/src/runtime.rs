@@ -2294,12 +2294,8 @@ mod tests {
             .iter()
             .find(|diagnostic| diagnostic.code == "platform.runtime-config.unsafe-file")
             .expect("the ownership refusal is reported");
-        assert!(diagnostic
-            .message
-            .contains("owned by root or the runtime user"));
-        assert!(diagnostic
-            .suggested_action
-            .contains("remove group and other write permission"));
+        assert!(diagnostic.message.contains("is writable by its group"));
+        assert!(diagnostic.suggested_action.contains("chmod g-w "));
     }
 
     #[cfg(unix)]
@@ -3050,6 +3046,23 @@ mod tests {
                 codes(&problem)
             );
         }
+    }
+
+    #[test]
+    fn production_runtime_accepts_a_loopback_http_issuer() {
+        let (_dir, home) = home();
+        let text = with_issuers(
+            &home,
+            &issuer_entry("main", "http://127.0.0.1:8082", "[portal]", ""),
+            "",
+        );
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, &text).expect("runtime file");
+        let declared = DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Flag,
+        };
+        load_with_positions(&file, declared).expect("production loads a loopback HTTP issuer");
     }
 
     #[test]

@@ -1083,6 +1083,7 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
             "userAgent",
             "trustedRootCertificates",
             "maximumMutationRetries",
+            "refuseDevelopmentPeer",
         ],
         "configuration",
         "client configuration contains an unsupported field",
@@ -1097,6 +1098,7 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
             "userAgent",
             "trustedRootCertificates",
             "maximumMutationRetries",
+            "refuseDevelopmentPeer",
         ],
         "configuration",
         "client configuration options must be omitted instead of null",
@@ -1109,10 +1111,21 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
     )?;
     let base_url = Url::parse(&base_url)
         .map_err(|_| binding_error("configuration", "baseUrl must be a URL"))?;
-    let mut config = BaseRegistryClientConfig::new(
-        base_url,
-        registry_breg_client::PeerPolicy::AcceptDevelopmentPeer,
-    );
+    let refuse_development_peer = object
+        .get("refuseDevelopmentPeer")
+        .map(|value| {
+            value.as_bool().ok_or_else(|| {
+                binding_error("configuration", "refuseDevelopmentPeer must be a boolean")
+            })
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let peer_policy = if refuse_development_peer {
+        registry_breg_client::PeerPolicy::RefuseDevelopmentPeer
+    } else {
+        registry_breg_client::PeerPolicy::AcceptDevelopmentPeer
+    };
+    let mut config = BaseRegistryClientConfig::new(base_url, peer_policy);
     if let Some(value) = object.get("authorization") {
         if let Some(provider) = authorization_provider(value)? {
             config = config.with_token_provider(provider);

@@ -987,3 +987,15 @@ test('list refuses received runs outside the intersected state and attention fil
   empty = true;
   assert.deepEqual(await client.list('token', 1, null, 'attention', false), {kind: 'complete', value: {runs: []}});
 });
+
+test('strict development-peer policy is an explicit boolean option', () => {
+  const { CoordinatorClient } = require('../client');
+  const baseUrl = 'https://coordinator.example.invalid/';
+  for (const refuseDevelopmentPeer of [false, true]) {
+    assert.ok(new CoordinatorClient({ baseUrl, refuseDevelopmentPeer }));
+  }
+  assert.throws(
+    () => new CoordinatorClient({ baseUrl, refuseDevelopmentPeer: 'true' }),
+    (error) => error.kind === 'configuration',
+  );
+});

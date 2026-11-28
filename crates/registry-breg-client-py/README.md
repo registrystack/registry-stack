@@ -330,3 +330,5 @@ fresh client authentication and bypasses the service cache;
 methods release the GIL during network work and return a credential string for
 explicit use by the application. Keep that string out of logs and persistent
 state. The resource server still validates the signed authority and bounds.
+
+The client accepts development-marked responses by default. Set `refuse_development_peer=True` when constructing the client to reject them.

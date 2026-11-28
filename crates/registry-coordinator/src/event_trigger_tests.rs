@@ -102,65 +102,21 @@ fn an_event_signed_with_its_trigger_key_is_admitted() {
 }
 
 #[test]
-fn production_refuses_a_signed_development_event_with_a_posture_diagnostic() {
-    let mut value = event();
-    value["posture"] = json!("development");
-    let (body, headers) = signed(&value);
-    let Err(error) = verify(&body, &headers) else {
-        panic!("production admitted a development event");
-    };
-    assert_eq!(error.code, "event-development-peer");
-    assert_eq!(error.field.as_deref(), Some("/posture"));
-}
-
-#[tokio::test]
-async fn signed_development_events_follow_posture_after_authentication() {
-    use registry_platform_config::Posture;
-
+fn signed_posture_members_are_refused_after_authentication() {
     let original = event();
     let mut marked = original.clone();
     marked["posture"] = json!("development");
     let (body, headers) = signed(&marked);
     let (_, wrong_signature) = signed(&original);
-    let verify = |posture, headers| {
-        verify_delivery_with_posture(
-            &source(),
-            &trigger(),
-            "record-saved",
-            headers,
-            &body,
-            &keys(KEY, None),
-            SystemTime::now(),
-            posture,
-        )
+    let Err(error) = verify(&body, &headers) else {
+        panic!("an event with an unknown posture member was admitted");
     };
-    let Err(error) = verify(Posture::Production, &headers) else {
-        panic!("production admitted a development event");
+    assert_eq!(error.code, "event-invalid");
+    let Err(error) = verify(&body, &wrong_signature) else {
+        panic!("an event with a bad signature was admitted");
     };
-    let response = event_problem(error);
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(!response
-        .headers()
-        .contains_key(axum::http::header::WWW_AUTHENTICATE));
-    let bytes = axum::body::to_bytes(response.into_body(), 16_384)
-        .await
-        .unwrap();
-    let problem: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(problem["code"], "event.development-peer");
-    assert_eq!(problem["pointer"], "/posture");
-
-    assert_eq!(
-        verify(Posture::Development, &headers).unwrap().value,
-        original
-    );
-    for posture in [Posture::Production, Posture::Development] {
-        let Err(error) = verify(posture, &wrong_signature) else {
-            panic!("an event with a bad signature was admitted");
-        };
-        assert_eq!(error.code, "event-unauthenticated");
-        assert_eq!(error.check, Some(FailedCheck::DeliverySignature));
-        assert!(error.field.is_none());
-    }
+    assert_eq!(error.code, "event-unauthenticated");
+    assert_eq!(error.check, Some(FailedCheck::DeliverySignature));
 }
 
 #[test]

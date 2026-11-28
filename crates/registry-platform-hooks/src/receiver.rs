@@ -106,8 +106,6 @@ pub enum HookDeliveryError {
     Signature(#[from] DeliverySignatureError),
     #[error("the hook delivery body is not a canonical hook envelope")]
     InvalidEnvelope,
-    #[error("the hook delivery declares development")]
-    DevelopmentPeer,
     #[error("webhook-id does not match the hook envelope id")]
     IdMismatch,
 }
@@ -121,7 +119,6 @@ impl HookDeliveryError {
             Self::InvalidContentType => "invalid-content-type",
             Self::Signature(error) => error.code(),
             Self::InvalidEnvelope => "invalid-envelope",
-            Self::DevelopmentPeer => "development-peer",
             Self::IdMismatch => "id-mismatch",
         }
     }
@@ -131,19 +128,6 @@ impl HookDeliveryError {
 pub fn verify_hook_delivery<'a, H>(
     delivery: HookDelivery<'a, H>,
     freshness: DeliveryFreshness,
-) -> Result<VerifiedHookDelivery<'a>, HookDeliveryError>
-where
-    H: IntoIterator<Item = (&'a str, &'a [u8])>,
-{
-    verify_hook_delivery_with_posture(delivery, freshness, false)
-}
-
-/// Verify exact signed bytes using the receiving runtime's declared posture.
-/// Set `allow_development` only when the receiving runtime declared development.
-pub fn verify_hook_delivery_with_posture<'a, H>(
-    delivery: HookDelivery<'a, H>,
-    freshness: DeliveryFreshness,
-    allow_development: bool,
 ) -> Result<VerifiedHookDelivery<'a>, HookDeliveryError>
 where
     H: IntoIterator<Item = (&'a str, &'a [u8])>,
@@ -183,15 +167,8 @@ where
             delivery_signature::verify_authenticity(delivery.keys, content)
         }
     }?;
-    let envelope = HookEnvelope::from_canonical_bytes_with_posture(
-        delivery.body,
-        &EnvelopeLimits::default(),
-        allow_development,
-    )
-    .map_err(|error| match error {
-        crate::envelope::HookEnvelopeError::DevelopmentPeer => HookDeliveryError::DevelopmentPeer,
-        _ => HookDeliveryError::InvalidEnvelope,
-    })?;
+    let envelope = HookEnvelope::from_canonical_bytes(delivery.body, &EnvelopeLimits::default())
+        .map_err(|_| HookDeliveryError::InvalidEnvelope)?;
     if envelope.id != id {
         return Err(HookDeliveryError::IdMismatch);
     }
@@ -461,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_hook_delivery_refuses_a_signed_development_envelope() {
+    fn verify_hook_delivery_refuses_a_signed_envelope_with_a_posture_member() {
         let original = std::str::from_utf8(HOOK_BODY).unwrap();
         let marked = original.replace(",\"source\":", ",\"posture\":\"development\",\"source\":");
         let keys = hook_keys();
@@ -478,11 +455,7 @@ mod tests {
         };
         let error =
             verify_hook_delivery(delivery(), DeliveryFreshness::CallerEnforced).unwrap_err();
-        assert_eq!(error.code(), "development-peer");
-        let accepted =
-            verify_hook_delivery_with_posture(delivery(), DeliveryFreshness::CallerEnforced, true)
-                .unwrap();
-        assert_eq!(accepted.body, marked.as_bytes());
+        assert_eq!(error.code(), "invalid-envelope");
     }
 
     #[test]

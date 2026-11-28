@@ -47,6 +47,8 @@ runtime also check cross-field rules and references that no table can show.
 
 <ConfigurationReference contracts={reference.contracts} prefix="server" />
 
+The build posture never enters the package. A development-only property of a package must be derivable from its content and refused by production load, as the placeholder identity is.
+
 BReg takes its deployment posture from `REGISTRY_STACK_POSTURE` or `--posture`.
 The accepted values are `development` and `production`. Omission selects
 `production`. Both declarations must agree when both are set.

@@ -424,6 +424,7 @@ pub fn command() -> Command {
         .arg(
             Arg::new("posture")
                 .long("posture")
+                .global(true)
                 .value_name("POSTURE")
                 .help("Declared posture: development or production. Unset means production."),
         )
@@ -1475,6 +1476,34 @@ mod tests {
                 .is_err(),
             "the metrics listener closes with the API listener"
         );
+    }
+
+    #[test]
+    fn serve_accepts_posture_in_both_positions() {
+        for args in [
+            [
+                "casework",
+                "--runtime-config",
+                "/runtime.yaml",
+                "--posture",
+                "development",
+                "serve",
+            ],
+            [
+                "casework",
+                "--runtime-config",
+                "/runtime.yaml",
+                "serve",
+                "--posture",
+                "development",
+            ],
+        ] {
+            let parsed = command().try_get_matches_from(args).unwrap();
+            assert_eq!(
+                parsed.get_one::<String>("posture").map(String::as_str),
+                Some("development")
+            );
+        }
     }
 
     #[test]

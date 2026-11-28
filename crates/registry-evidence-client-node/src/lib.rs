@@ -626,6 +626,14 @@ pub struct EvidenceClient {
     inner: Arc<RealEvidenceClient>,
 }
 
+fn peer_policy(refuse_development_peer: bool) -> registry_evidence_client::PeerPolicy {
+    if refuse_development_peer {
+        registry_evidence_client::PeerPolicy::RefuseDevelopmentPeer
+    } else {
+        registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer
+    }
+}
+
 #[napi]
 impl EvidenceClient {
     /// Build a client for one deployment. `trustedJwks` and `revokedKeyIds` are
@@ -653,8 +661,15 @@ impl EvidenceClient {
     /// integration; it is parsed without ever rendering its contents in an
     /// error. Profile paths and file-backed secrets remain inside the core
     /// client and are likewise redacted there.
-    #[napi(factory, ts_args_type = "path: string, privateKeyJwk?: any")]
-    pub fn from_profile(path: String, private_key_jwk: Option<serde_json::Value>) -> Result<Self> {
+    #[napi(
+        factory,
+        ts_args_type = "path: string, privateKeyJwk?: any, refuseDevelopmentPeer?: boolean"
+    )]
+    pub fn from_profile(
+        path: String,
+        private_key_jwk: Option<serde_json::Value>,
+        refuse_development_peer: Option<bool>,
+    ) -> Result<Self> {
         catch_panic("constructing the client from a profile", || {
             let profile =
                 registry_evidence_client::EvidenceClientProfile::from_file(PathBuf::from(path))
@@ -671,12 +686,12 @@ impl EvidenceClient {
                     RealEvidenceClient::from_profile_with_key(
                         profile,
                         private_key,
-                        registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer,
+                        peer_policy(refuse_development_peer.unwrap_or(false)),
                     )
                 }
                 None => RealEvidenceClient::from_profile(
                     profile,
-                    registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer,
+                    peer_policy(refuse_development_peer.unwrap_or(false)),
                 ),
             }
             .map_err(|error| to_napi_error(map_client_error(&error)))?;
@@ -689,10 +704,14 @@ impl EvidenceClient {
     /// Build a profile-driven client with a context-bound staff exchange.
     /// The profile's discovered authority and pinned OAuth request parameters
     /// must match the immutable provider before the first token is acquired.
-    #[napi(factory, ts_args_type = "path: string, authorization: any")]
+    #[napi(
+        factory,
+        ts_args_type = "path: string, authorization: any, refuseDevelopmentPeer?: boolean"
+    )]
     pub fn from_profile_with_authorization(
         path: String,
         authorization: serde_json::Value,
+        refuse_development_peer: Option<bool>,
     ) -> Result<Self> {
         catch_panic(
             "constructing the client from a profile and exchange",
@@ -705,7 +724,7 @@ impl EvidenceClient {
                 let client = RealEvidenceClient::from_profile_with_authorization(
                     profile,
                     exchange,
-                    registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer,
+                    peer_policy(refuse_development_peer.unwrap_or(false)),
                 )
                 .map_err(|error| to_napi_error(map_client_error(&error)))?;
                 Ok(Self {

@@ -236,7 +236,11 @@ OPERATION_IDS = {
 # material, and an issuer that cannot be reached is an outage on this side,
 # answered with Retry-After rather than a challenge the caller cannot satisfy.
 EDGE = ["request.body-too-large", "request.method-not-allowed"]
-AUTHENTICATION = ["authentication.refused", "profile.not-authorized"]
+AUTHENTICATION = [
+    "authentication.refused",
+    "platform.task-grant.development-assertion",
+    "profile.not-authorized",
+]
 JSON_BODY = [
     "request.invalid",
     "request.unprocessable",
@@ -1536,6 +1540,7 @@ def verify_operation_problems(
             # never opens the store.
             required |= {
                 "authentication.refused",
+                "platform.task-grant.development-assertion",
                 "profile.not-authorized",
                 "service.unavailable",
             }

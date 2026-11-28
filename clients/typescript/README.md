@@ -6,6 +6,11 @@ and WebCrypto. The source modules use erasable TypeScript and have no runtime
 dependencies. The package and source generator require Node 24 or later. The browser build emits standard ES modules and declarations in
 `dist/`.
 
+Responses marked `Registry-Posture: development` set `answer.developmentPeer` to `true`.
+Set `refuseDevelopmentPeer: true` to reject such answers with the `development-peer` reason.
+The TypeScript client treats mapped IPv4 loopback addresses such as `::ffff:127.0.0.1` as non-loopback.
+The Rust clients accept them as loopback.
+
 ## Call a product
 
 One generated file per service holds the two entry points. A service has named Base Registry Engine (BReg) registers and shared products. The

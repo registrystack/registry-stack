@@ -124,7 +124,7 @@ An authenticated malformed envelope answers `400 event.invalid`.
 The event grants no authority for the calls the run then makes.
 
 {/* Evidence: crates/registry-coordinator/src/event_trigger.rs, MAXIMUM_EVENT_BYTES,
-    verify_hook_delivery_with_posture, verify_delivery, receive;
+    verify_hook_delivery, verify_delivery, receive;
     crates/registry-coordinator/src/http/admission_contracts.rs, event_path;
     crates/registry-coordinator/src/http.rs, router, http_edge. */}
 

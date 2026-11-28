@@ -479,7 +479,6 @@ pub struct ActivatedHooks {
     identity: HookRuntimeIdentity,
     schema: String,
     delivery_source: String,
-    development: bool,
     payload_retention: Duration,
     retry_delays_ms: Arc<[i64]>,
 }
@@ -524,7 +523,6 @@ impl ActivatedHooks {
             identity,
             schema: database_schema,
             delivery_source,
-            development: false,
             payload_retention,
             retry_delays_ms: retry_delays_ms().into(),
         })
@@ -538,15 +536,6 @@ impl ActivatedHooks {
     #[must_use]
     pub fn destination_binding_digest(&self) -> &str {
         &self.destinations.binding_digest
-    }
-
-    #[must_use]
-    pub(crate) fn with_development_witness(
-        mut self,
-        witness: Option<&registry_platform_config::DevelopmentWitness>,
-    ) -> Self {
-        self.development = witness.is_some();
-        self
     }
 
     /// Capture one canonical envelope and one delivery row for every hook on
@@ -597,12 +586,9 @@ impl ActivatedHooks {
                 causation: Causation::root(&id),
             };
             let limits = EnvelopeLimits::tightened_to(MAXIMUM_PAYLOAD_BYTES);
-            let payload = if self.development {
-                envelope.to_development_canonical_bytes(&limits)
-            } else {
-                envelope.to_canonical_bytes(&limits)
-            }
-            .map_err(|_| HookCaptureError::InvalidCapture)?;
+            let payload = envelope
+                .to_canonical_bytes(&limits)
+                .map_err(|_| HookCaptureError::InvalidCapture)?;
             self.insert_outbox(
                 transaction,
                 event_id,
@@ -718,7 +704,6 @@ impl ActivatedHooks {
         store: PostgresStore,
         audit: DocumentsAudit,
     ) -> HookDeliveryService {
-        let posture = store.posture;
         let seams = DocumentsDeliverySeams {
             store,
             audit,
@@ -732,8 +717,7 @@ impl ActivatedHooks {
                     schema: self.schema.clone(),
                     delivery_source: self.delivery_source.clone(),
                 },
-            )
-            .with_posture(posture),
+            ),
         }
     }
 }

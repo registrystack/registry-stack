@@ -10,6 +10,26 @@ const write: Operation = { ...read, method: 'POST', keyed: true, mutating: true,
 const ok = () => Response.json({ items: [] })
 const baseUrl = 'https://example.org/prefix'
 
+test('development answers expose their mark and can be refused', async () => {
+  for (const [posture, developmentPeer] of [
+    [null, false], ['production', false], ['Development', false],
+    ['development', true], ['production, development', true],
+  ] as const) {
+    const fetch = async () => Response.json({ items: [] }, {
+      headers: posture === null ? {} : { 'Registry-Posture': posture },
+    })
+    const accepting = new Transport({ baseUrl, fetch })
+    assert.equal((await accepting.call(read)).developmentPeer, developmentPeer)
+    const refusing = new Transport({ baseUrl, fetch, refuseDevelopmentPeer: true })
+    if (developmentPeer) {
+      await assert.rejects(refusing.call(read), (error: unknown) =>
+        error instanceof RegistryError && error.reason === 'development-peer' && error.raw === undefined)
+    } else {
+      assert.equal((await refusing.call(read)).developmentPeer, false)
+    }
+  }
+})
+
 test('base URL, path values, tokens and controlled request headers', async () => {
   for (const bad of ['http://example.org', 'http://127.0.0.1.example.com', 'http://127.0.0.1.nip.io:8080',
     'https://user@example.org', 'https://example.org?', 'https://example.org#', 'file:///tmp', baseUrl + '//child']) {

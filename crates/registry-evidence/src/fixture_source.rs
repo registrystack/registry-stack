@@ -28,7 +28,7 @@ use tempfile::TempDir;
 
 use crate::{
     bundle::{Bundle, RuntimeBindingPlanError, SourcePack},
-    config::{AssuranceProfile, Posture, SourceConfig},
+    config::{Posture, SourceConfig},
     kernel::KernelError,
     model::LookupResult,
     pack_source::authorized_route_inputs,
@@ -315,13 +315,8 @@ impl OfflineSourceProgram {
 /// Runtime secrets and captured deployment extracts are never consulted here.
 pub fn compile_sources(
     bundle: &Bundle,
+    posture: Posture,
 ) -> Result<BTreeMap<String, OfflineSourceProgram>, KernelError> {
-    // Offline replay has no runtime document. The governed assurance
-    // profile fixes the posture under which its bundle can run.
-    let posture = match bundle.config.assurance_profile {
-        AssuranceProfile::Local => Posture::Development,
-        AssuranceProfile::Production | AssuranceProfile::EvidenceGrade => Posture::Production,
-    };
     let protocols =
         crate::host_protocol::registry_with_posture(posture).map_err(|_| KernelError::Bundle)?;
     bundle
@@ -483,7 +478,8 @@ mod tests {
             "urn:registry-evidence:offline-evaluation",
         )
         .expect("fixture authorization");
-        let programs = compile_sources(&bundle).expect("source pack compiles");
+        let programs = compile_sources(&bundle, crate::config::Posture::Production)
+            .expect("source pack compiles");
         let program = &programs[requirement.initial_source()];
         let assets = program
             .materialize_single_extract_in(

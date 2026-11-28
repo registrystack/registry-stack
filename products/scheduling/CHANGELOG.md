@@ -1,6 +1,9 @@
 # Registry Scheduling changelog
 
 ## Unreleased
+- Production rejects verified bearer tokens marked as development with a 401, `platform.task-grant.development-assertion`, and a Bearer challenge.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
 
 - BREAKING: Rust client configurations take a peer policy in `SchedulingClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
 - Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.

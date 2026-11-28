@@ -221,6 +221,7 @@ Correct the responsible policy, grants, or credentials and rerun the test before
   address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name
   `localhost`, which the runtime connects to only through loopback addresses. `a.localhost` and
   `localhost.` are ordinary named hosts. Allow plain `http` only to loopback.
+  The runtime trusts loopback, so anything that shares its host or Pod network can stand in for a loopback issuer or database.
 - Leave `allowedPrivateCidrs` out unless a destination needs a private address. An omitted or empty
   list admits no private address. Name the smallest range that holds the service when one does.
 - Do not let an edge cache store an authenticated response. BReg, Casework and Registry Evidence

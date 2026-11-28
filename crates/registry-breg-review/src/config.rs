@@ -150,6 +150,7 @@ pub struct RuntimeConfig {
 pub struct SignInConfig {
     /// The provider's issuer. An https URL with no query or fragment; plain
     /// HTTP is accepted on loopback in both postures.
+    #[serde(deserialize_with = "registry_platform_config::deserialize_issuer_endpoint")]
     pub issuer: Url,
     /// The page's client identifier at the provider.
     pub client_id: ExternalId,
@@ -486,6 +487,8 @@ pub struct RuntimeCheck {
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
+    /// Explicit production settings from fully evaluated fields.
+    pub explicit_settings: Vec<registry_platform_config::FoundExplicitSetting>,
 }
 
 impl RuntimeConfig {
@@ -683,6 +686,18 @@ fn read_runtime(
         }
     }
     let unavailable = check.unavailable;
+    let explicit_settings = check
+        .loaded
+        .iter()
+        .flat_map(|loaded| loaded.posture.explicit_settings())
+        .filter(|found| {
+            found
+                .pointer
+                .as_deref()
+                .is_none_or(|pointer| !check.defers(pointer))
+        })
+        .cloned()
+        .collect();
     let loaded = check.loaded.filter(|_| {
         !diagnostics
             .iter()
@@ -692,6 +707,7 @@ fn read_runtime(
         loaded,
         RuntimeCheck {
             diagnostics,
+            explicit_settings,
             unavailable,
         },
     )
@@ -1524,6 +1540,52 @@ audit:
                 "breg.posture.review-http-public-origin"
             );
         }
+    }
+
+    #[test]
+    fn production_runtime_accepts_a_loopback_http_issuer() {
+        let source = document().replace(
+            "issuer: https://id.example",
+            "issuer: http://127.0.0.1:8082",
+        );
+        let (_directory, path) = written(&source);
+        let declared = DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Flag,
+        };
+        RuntimeConfig::load_with_posture(&path, declared)
+            .unwrap_or_else(|error| panic!("{}", error.render_human()));
+    }
+
+    #[test]
+    fn production_check_lists_the_loopback_sign_in_issuer() {
+        let source = document().replace(
+            "issuer: https://id.example",
+            "issuer: http://127.0.0.1:8082",
+        );
+        let (_directory, path) = written(&source);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let request = crate::check::CheckRequest {
+            runtime: &path,
+            environment: false,
+            format: crate::check::OutputFormat::Json,
+            deny_warnings: true,
+            posture: DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Flag,
+            },
+        };
+        assert_eq!(crate::check::run(&request, &mut stdout, &mut stderr), 0);
+        let report: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        let matching: Vec<_> = report["explicitProductionSettings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|setting| setting["code"] == "platform.posture.issuer-loopback-plaintext")
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0]["pointer"], "/signIn/issuer");
     }
 
     #[test]
