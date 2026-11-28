@@ -2,7 +2,7 @@
 apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
 kind: RStackScenarios
 scenarios:
-  - id: native-review-handoff
+  - id: native-review-ask-answer-handoff
     steps:
       - id: staff-queue
         product: casework
@@ -79,12 +79,87 @@ scenarios:
         headers: {If-Match: '"{{taskRevision}}"', Idempotency-Key: claim-task, Registry-Source-Profile: reviewer}
         expect: {status: 200}
         capture: {claimRevision: {type: pointer, pointer: /revision}}
+      - id: ask-for-document
+        product: casework
+        as: reviewer
+        method: POST
+        path: "/v1/review-tasks/{{task}}/asks"
+        headers: {If-Match: '"{{claimRevision}}"', Idempotency-Key: ask-document, Registry-Source-Profile: reviewer}
+        body: {text: Please provide one supporting document., wants: [{kind: document}]}
+        expect: {status: 200, json: {/task/marker: waiting, /ask/state: open}}
+        capture:
+          ask: {type: pointer, pointer: /ask/askId}
+          due: {type: pointer, pointer: /ask/dueAt}
+      - id: await-mirrored-ask
+        product: breg
+        as: operator
+        method: GET
+        path: "/v1/proposals/{{proposal}}"
+        expect: {status: 200, json: {/status: awaiting-party, /turn: party, /asks/0/id: "{{ask}}"}}
+        poll: {maximumWaitMilliseconds: 60000, pollIntervalMilliseconds: 500}
+        capture: {askedEtag: {type: header, header: etag}}
+      - id: find-party-turn
+        product: breg
+        as: operator
+        method: GET
+        path: /v1/proposals?turn=party
+        expect: {status: 200, json: {/items/0/id: "{{proposal}}"}}
+      - id: add-supporting-document
+        product: breg
+        as: operator
+        method: POST
+        path: "/v1/proposals/{{proposal}}/additions/supporting"
+        headers: {If-Match: "{{askedEtag}}", Idempotency-Key: supporting-document}
+        raw: {contentType: text/plain, base64: U3ludGhldGljIHN1cHBvcnRpbmcgZG9jdW1lbnQuCg==}
+        expect: {status: 200}
+        capture:
+          addition: {type: pointer, pointer: /additions/supporting/items/0/id}
+          addedEtag: {type: header, header: etag}
+      - id: answer-through-source
+        product: breg
+        as: operator
+        method: POST
+        path: "/v1/proposals/{{proposal}}/asks/{{ask}}/answer"
+        headers: {If-Match: "{{addedEtag}}", Idempotency-Key: answer-document}
+        body: {text: Synthetic explanation for this correction., additions: ["{{addition}}"]}
+        expect: {status: 200, json: {/status: in-review, /submissionVersion: "{{submissionVersion}}", /effectDigest: "{{effectDigest}}"}}
+      - id: await-answer-delivery
+        product: casework
+        as: reviewer
+        method: GET
+        path: "/v1/review-tasks/{{task}}"
+        headers: {Registry-Source-Profile: reviewer}
+        expect: {status: 200, json: {/taskId: "{{task}}", /requestId: "{{request}}", /marker: answered}}
+        poll: {maximumWaitMilliseconds: 60000, pollIntervalMilliseconds: 500}
+        capture: {answerTaskRevision: {type: pointer, pointer: /revision}}
+      - id: read-live-answer
+        product: casework
+        as: reviewer
+        method: GET
+        path: "/v1/review-tasks/{{task}}/context"
+        headers: {Registry-Source-Profile: reviewer}
+        expect:
+          status: 200
+          json:
+            /asks/0/askId: "{{ask}}"
+            /asks/0/taskId: "{{task}}"
+            /asks/0/answer/text: Synthetic explanation for this correction.
+            /asks/0/answer/documents/0/id: "{{addition}}"
+        capture:
+          downloadEffect: {type: value, pointer: /asks/0/answer/documents/0/download/path, query: effectDigest}
+          downloadSchema: {type: value, pointer: /asks/0/answer/documents/0/download/path, query: contextSchemaDigest}
+      - id: download-cited-file
+        product: breg
+        as: reviewer
+        method: GET
+        path: "/v1/proposals/{{proposal}}/additions/{{addition}}?accessProfile=reviewer&submissionVersion={{submissionVersion}}&reviewAskId={{ask}}&effectDigest={{downloadEffect}}&contextSchemaDigest={{downloadSchema}}"
+        expect: {status: 200}
       - id: approve-correction
         product: casework
         as: reviewer
         method: POST
         path: "/v1/review-tasks/{{task}}/decisions"
-        headers: {If-Match: '"{{claimRevision}}"', Idempotency-Key: approve-correction, Registry-Source-Profile: reviewer}
+        headers: {If-Match: '"{{answerTaskRevision}}"', Idempotency-Key: approve-correction, Registry-Source-Profile: reviewer}
         body: {decision: {type: approve, outcome: approved}}
         expect: {status: 204}
       - id: read-review-result

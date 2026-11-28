@@ -8,17 +8,176 @@ issuer does not prove a production OAuth deployment. No UI or domain rules.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
+from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import time
+from urllib.parse import urlsplit
 
 import yaml
 
-from proof import check_cleanup, check_correlation, check_minimized, check_observations
+from proof import check_ask_loop, check_cleanup, check_correlation, check_minimized, check_observations
 from support import Harness, INPUTS, ROOT, hashes, port, write, yaml_write
+
+
+class JourneyHarness(Harness):
+    """Observe real Casework traffic and real signed hook delivery without keeping content."""
+
+    def __init__(self, output, binaries):
+        super().__init__(output, binaries)
+        # The maintained helper carries this across launchers that strip DYLD variables.
+        if os.environ.get("REGISTRY_CARGO_RUNTIME_LIBRARY_PATH"):
+            self.env["DYLD_FALLBACK_LIBRARY_PATH"] = os.environ["REGISTRY_CARGO_RUNTIME_LIBRARY_PATH"]
+        self.observers = []
+        self.casework_requests = []
+        self.created_request_ids = set()
+        self.asked_events = []
+        self.observation_lock = threading.Lock()
+
+    def listen(self, handler):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.observers.append(server)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return f"http://127.0.0.1:{server.server_port}"
+
+    def observe_casework(self, origin):
+        harness = self
+
+        class Observer(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                return
+
+            def exchange(self):
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 <= size <= 1024 * 1024:
+                    self.send_error(413)
+                    return
+                body = self.rfile.read(size)
+                connection = HTTPConnection(urlsplit(origin).netloc, timeout=15)
+                try:
+                    connection.request(self.command, self.path, body, dict(self.headers))
+                    response = connection.getresponse()
+                    content = response.read(1024 * 1024 + 1)
+                    assert len(content) <= 1024 * 1024, "Casework observer response exceeded bound"
+                    authorization = self.headers.get("Authorization")
+                    actor = next(
+                        (
+                            role
+                            for role, token in harness.tokens.items()
+                            if authorization == "Bearer " + token
+                        ),
+                        "unauthenticated",
+                    )
+                    actor = "applicant" if actor == "operator" else actor
+                    with harness.observation_lock:
+                        harness.casework_requests.append(
+                            {
+                                "actor": actor,
+                                "method": self.command,
+                                "path": urlsplit(self.path).path,
+                                "status": response.status,
+                            }
+                        )
+                        if (
+                            self.command == "POST"
+                            and urlsplit(self.path).path == "/v1/review-requests"
+                            and response.status in (200, 201)
+                        ):
+                            harness.created_request_ids.add(json.loads(content)["requestId"])
+                        write(harness.output / "casework-requests.json", harness.casework_requests)
+                    self.send_response(response.status)
+                    for name, value in response.getheaders():
+                        if name.lower() not in ("connection", "transfer-encoding", "content-length"):
+                            self.send_header(name, value)
+                    self.send_header("Content-Length", str(len(content)))
+                    self.end_headers()
+                    self.wfile.write(content)
+                finally:
+                    connection.close()
+
+            do_GET = do_POST = do_DELETE = do_PATCH = exchange
+
+        self.casework_origin = self.listen(Observer)
+        return self.casework_origin
+
+    def receive_hooks(self):
+        harness = self
+        key = os.urandom(32).hex().encode()
+        (self.secret_root / "ask-hook-key").write_bytes(key)
+
+        class Receiver(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                return
+
+            def do_POST(self):
+                size = int(self.headers.get("Content-Length", "0"))
+                if self.path != "/events" or not 0 < size <= 8192:
+                    self.send_error(400)
+                    return
+                body = self.rfile.read(size)
+                identifier, timestamp = (
+                    self.headers.get("webhook-id", ""),
+                    self.headers.get("webhook-timestamp", ""),
+                )
+                expected = (
+                    "v1,"
+                    + base64.b64encode(
+                        hmac.digest(
+                            key, identifier.encode() + b"." + timestamp.encode() + b"." + body, "sha256"
+                        )
+                    ).decode()
+                )
+                if not hmac.compare_digest(self.headers.get("webhook-signature", ""), expected):
+                    self.send_error(403)
+                    return
+                event = json.loads(body)
+                if event["type"] != "proposal.asked" or event["id"] != identifier:
+                    self.send_error(400)
+                    return
+                data = event["data"]
+                with harness.observation_lock:
+                    harness.asked_events.append(
+                        {
+                            "id": event["id"],
+                            "type": event["type"],
+                            "data": {
+                                name: data[name] for name in ("proposalId", "submissionVersion", "transition")
+                            },
+                        }
+                    )
+                    write(harness.output / "asked-events.json", harness.asked_events)
+                self.send_response(204)
+                self.end_headers()
+
+        self.hook_origin = self.listen(Receiver)
+
+    def raw(self, origin, path, token, *, body=None, method="GET", headers=None):
+        """Bounded file exchange. Bytes remain in memory and never enter proof output."""
+        connection = HTTPConnection(urlsplit(origin).netloc, timeout=15)
+        try:
+            connection.request(method, path, body, {**(headers or {}), "Authorization": "Bearer " + token})
+            response = connection.getresponse()
+            content = response.read(1024 * 1024 + 1)
+            assert len(content) <= 1024 * 1024, "file exchange exceeded bound"
+            return response.status, content, {key.lower(): value for key, value in response.getheaders()}
+        finally:
+            connection.close()
+
+    def cleanup(self):
+        try:
+            return super().cleanup()
+        finally:
+            for server in self.observers:
+                server.shutdown()
+                server.server_close()
 
 
 def breg_runtime(h, name, package, origin, casework):
@@ -66,7 +225,20 @@ def breg_runtime(h, name, package, origin, casework):
             "path": str(h.output / (name + "-audit/audit.jsonl")),
         },
         "cursor": {"secretRef": "secret:file/cursor-key", "maximumAgeSeconds": 300},
-        "destinations": {"hooks": {}},
+        "destinations": {
+            "hooks": {
+                "ask-observer": {
+                    "origin": h.hook_origin,
+                    "path": "/events",
+                    "networkProfile": "loopback-development-http",
+                    "dnsFamily": "dual-stack-strict",
+                    "allowedPrivateCidrs": [],
+                    "hmacSha256KeyRef": "secret:file/ask-hook-key",
+                    "classificationCeiling": "internal",
+                    "deliveryCeilings": {"attemptTimeoutMilliseconds": 1000, "maximumAttempts": 3},
+                }
+            }
+        },
         "reviewAuthorities": {
             "casework": {
                 "endpoint": casework,
@@ -226,7 +398,7 @@ def activate_casework(h, source_package, source, origin):
     h.ctl("caseworkctl", "review-apply", "apply", "--runtime-config", runtime)
     h.start("casework", [h.binaries["casework"], "--runtime-config", runtime, "serve"], origin)
     status, _, _ = h.http(
-        origin,
+        h.casework_origin,
         "/v1/directory/bootstrap",
         h.tokens["administrator"],
         "administrator",
@@ -241,6 +413,30 @@ def activate_casework(h, source_package, source, origin):
     )
     h.check("review-directory-bootstrap", status == 200)
     return checked["policyBindings"][0]
+
+
+def registry_connection(origin):
+    return {
+        "endpoints": {
+            "registry": {
+                "origin": origin,
+                "authentication": {"type": "static-authorization", "tokenRef": "secret:file/source-token"},
+            }
+        }
+    }
+
+
+def bind_static_fixture(fixture):
+    """Match this journey's static source credential, retaining all HTTP/privacy cases."""
+    for case in fixture["cases"]:
+        acquisition = case.get("acquisition")
+        if acquisition:
+            acquisition["intercepts"] = [
+                item for item in acquisition["intercepts"] if item["type"] != "token-endpoint"
+            ]
+            acquisition["exchanges"] = [
+                item for item in acquisition["exchanges"] if not item["request"].get("tokenRequest")
+            ]
 
 
 def activate_evidence(h, source_project, source, origin):
@@ -299,6 +495,10 @@ def activate_evidence(h, source_project, source, origin):
         shutil.copyfile(
             ROOT / "products/breg/evidence/starter" / directory / name, project / directory / name
         )
+    fixture_path = project / "fixtures/record-active.yaml"
+    fixture = yaml.safe_load(fixture_path.read_text())
+    bind_static_fixture(fixture)
+    yaml_write(fixture_path, fixture)
     target_dir = h.output / "target"
     h.run(
         "evidence-target",
@@ -320,10 +520,9 @@ def activate_evidence(h, source_project, source, origin):
         maximumTokenLifetimeSeconds=3600,
         jwksSource={"type": "uri", "uri": h.issuer_url + "/.well-known/jwks.json"},
     )
-    target["connections"]["registry"] = {
-        "origin": source,
-        "authentication": {"type": "static-authorization", "tokenRef": "secret:file/source-token"},
-    }
+    target["connections"]["registry"] = registry_connection(source)
+    # This composition replaced the starter's extract-backed source with HTTP.
+    target["extracts"] = {}
     target["signer"].update(
         privateKeyRef="secret:file/signing-p256-private-jwk",
         publicJwkFile="signing-public.jwk.json",
@@ -342,7 +541,11 @@ def activate_evidence(h, source_project, source, origin):
     yaml_write(authority_path, authority)
     h.ctl("evidencectl", "evidence-check", "check", project, "--target", target_dir)
     fixture = h.ctl("evidencectl", "evidence-fixtures", "test", project, "--target", target_dir)
-    h.check("evidence-11-fixture-cases", fixture["passed"] and fixture["fixtures"][0]["evaluatedCases"] == 11)
+    h.fixture_cases = len(yaml.safe_load(fixture_path.read_text())["cases"])
+    h.check(
+        "evidence-fixture-cases",
+        fixture["passed"] and fixture["fixtures"][0]["evaluatedCases"] == h.fixture_cases,
+    )
     candidate = h.output / "evidence-candidate"
     h.ctl(
         "evidencectl", "evidence-package", "package", project, "--target", target_dir, "--output", candidate
@@ -473,6 +676,143 @@ def seed_record(h, source):
     return record["data"]["recordIdentifier"]
 
 
+def await_served(label, read, ready):
+    deadline = time.monotonic() + 90
+    while True:
+        observation = read()
+        if observation[0] == 200 and ready(observation[1]):
+            return observation
+        if time.monotonic() > deadline:
+            raise RuntimeError(label + " did not reach its served state")
+        time.sleep(0.25)
+
+
+def ask_and_answer(h, source, casework, source_call, task_path, claimed, submitted, accepted, correlation):
+    observed = {"submitted": submitted, "accepted": accepted, "correlations": [correlation]}
+    status, asked, _ = h.http(
+        casework,
+        task_path + "/asks",
+        h.tokens["staff"],
+        "staff",
+        {"text": "Please provide one supporting document.", "wants": [{"kind": "document"}]},
+        "POST",
+        {
+            "If-Match": '"' + str(claimed["revision"]) + '"',
+            "Idempotency-Key": "ask-document",
+            "Registry-Source-Profile": "reviewer",
+        },
+    )
+    h.check(
+        "task-holder-asks-for-one-document-with-due-date", status == 200 and bool(asked["ask"].get("dueAt"))
+    )
+    observed["asked"] = asked
+    proposal_path = "/v1/proposals/" + submitted["id"]
+    ask_id = asked["ask"]["askId"]
+    _, party, headers = await_served(
+        "mirrored ask",
+        lambda: source_call(proposal_path),
+        lambda value: (
+            value.get("status") == "awaiting-party"
+            and any(ask["id"] == ask_id for ask in value.get("asks", []))
+        ),
+    )
+    observed["party"] = party
+    h.check("mirrored-ask-returns-the-party-turn", party["turn"] == "party")
+    status, page, _ = source_call("/v1/proposals?turn=party&limit=100")
+    h.check(
+        "party-list-includes-the-asked-proposal",
+        status == 200 and any(item["id"] == submitted["id"] for item in page["items"]),
+    )
+    observed["partyPage"] = page
+    deadline = time.monotonic() + 90
+    while True:
+        with h.observation_lock:
+            events = [event for event in h.asked_events if event["data"]["proposalId"] == submitted["id"]]
+        if events:
+            observed["hook"] = events[0]
+            break
+        if time.monotonic() > deadline:
+            raise RuntimeError("signed asked hook did not arrive")
+        time.sleep(0.25)
+    h.check("asked-hook-delivered-and-signed", True)
+    answer_text, file_bytes = (
+        "Synthetic explanation for this correction.",
+        b"Synthetic supporting document.\n",
+    )
+    link = party["additions"]["supporting"]["links"]["add"]
+    status, body, _ = h.raw(
+        source,
+        link["path"] + "?accessProfile=" + link["accessProfile"],
+        h.tokens["operator"],
+        body=file_bytes,
+        method="POST",
+        headers={
+            "Content-Type": "text/plain",
+            "If-Match": link["ifMatch"],
+            "Idempotency-Key": "supporting-document",
+        },
+    )
+    h.check("applicant-added-one-file", status == 200)
+    added = json.loads(body)
+    files = added["additions"]["supporting"]["items"]
+    h.check(
+        "added-file-metadata-matches-bytes",
+        len(files) == 1 and files[0]["sha256"] == hashlib.sha256(file_bytes).hexdigest(),
+    )
+    file_id = files[0]["id"]
+    observed["additionId"] = file_id
+    ask = next(item for item in added["asks"] if item["id"] == ask_id)
+    link = ask["links"]["answer"]
+    status, answered, _ = source_call(
+        link["path"],
+        body={"text": answer_text, "additions": [file_id]},
+        method="POST",
+        headers={"If-Match": link["ifMatch"], "Idempotency-Key": "answer-document"},
+    )
+    h.check("applicant-answered-and-returned-to-review", status == 200 and answered["status"] == "in-review")
+    observed["answered"] = answered
+    _, task, _ = await_served(
+        "delivered answer marker",
+        lambda: h.http(
+            casework, task_path, h.tokens["staff"], "staff", headers={"Registry-Source-Profile": "reviewer"}
+        ),
+        lambda value: value.get("marker") == "answered",
+    )
+    observed["task"] = task
+    h.check("casework-received-the-answer-marker", True)
+    status, context, _ = h.http(
+        casework,
+        task_path + "/context",
+        h.tokens["staff"],
+        "staff",
+        headers={"Registry-Source-Profile": "reviewer"},
+    )
+    h.check("holder-reads-live-answer", status == 200)
+    observed["context"] = context
+    answer = next(item for item in context["asks"] if item["askId"] == ask_id)["answer"]
+    link = answer["documents"][0]["download"]
+    separator = "&" if "?" in link["path"] else "?"
+    status, downloaded, headers = h.raw(
+        source, link["path"] + separator + "accessProfile=" + link["accessProfile"], h.tokens["staff"]
+    )
+    h.check(
+        "holder-downloads-the-cited-file-under-own-token",
+        status == 200
+        and downloaded == file_bytes
+        and headers.get("x-content-type-options") == "nosniff"
+        and headers.get("cache-control") == "no-store"
+        and headers.get("content-disposition", "").startswith("attachment"),
+    )
+    observed["download"] = downloaded
+    status, correlation, _ = source_call(proposal_path + "/review-status", "context-status", "review-status")
+    h.check(
+        "answer-keeps-the-accepted-request",
+        status == 200 and correlation["requestId"] == accepted["requestId"],
+    )
+    observed["correlations"].append(correlation)
+    return observed, task, answer_text, file_bytes
+
+
 def reviewed_correction(h, source, casework, policy, record_id):
     def source_call(path, role="operator", profile="operator", body=None, method="GET", headers=None):
         separator = "&" if "?" in path else "?"
@@ -597,6 +937,9 @@ def reviewed_correction(h, source, casework, policy, record_id):
         },
     )
     h.check("independent-human-claimed", status == 200)
+    observed, claimed, answer_text, file_bytes = ask_and_answer(
+        h, source, casework, source_call, task_path, claimed, submitted, accepted, correlation
+    )
     status, _, _ = h.http(
         casework,
         task_path + "/decisions",
@@ -611,6 +954,21 @@ def reviewed_correction(h, source, casework, policy, record_id):
         },
     )
     h.check("human-decision-recorded", status == 204)
+    status, decided, _ = h.http(
+        casework, task_path, h.tokens["staff"], "staff", headers={"Registry-Source-Profile": "reviewer"}
+    )
+    h.check(
+        "the-task-that-asked-is-the-task-that-decided", status == 200 and decided["taskId"] == task["taskId"]
+    )
+    observed["decidedTask"] = decided
+    status, correlation, _ = source_call(proposal_path + "/review-status", "context-status", "review-status")
+    h.check("decision-keeps-the-accepted-request", status == 200)
+    observed["correlations"].append(correlation)
+    with h.observation_lock:
+        observed["requests"] = list(h.casework_requests)
+        observed["createdRequestIds"] = sorted(h.created_request_ids)
+    write(h.output / "ask-loop.json", check_ask_loop(observed, answer_text, file_bytes))
+    h.check("one-request-one-task-ask-answer-decision-and-no-applicant-token-in-casework", True)
     status, result, _ = h.http(
         casework, "/v1/review-requests/" + task["requestId"] + "/result", h.tokens["producer"], "requester"
     )
@@ -655,7 +1013,10 @@ def reviewed_correction(h, source, casework, policy, record_id):
         "exact-source-correction-committed",
         status == 200 and after["data"]["domainData"]["status"] == "active",
     )
-    write(h.output / "applied-submission.json", applied)
+    write(
+        h.output / "applied-submission.json",
+        {key: applied[key] for key in ("id", "actionId", "submissionVersion", "revision", "state", "status")},
+    )
 
 
 def main():
@@ -683,7 +1044,7 @@ def main():
     assert all(path.is_file() and os.access(path, os.X_OK) for path in binaries.values()), (
         "build all six product binaries first"
     )
-    h = Harness(output, binaries)
+    h = JourneyHarness(output, binaries)
     versions = {
         name: h.run("version-" + name, [binary, "--version"]).strip() for name, binary in binaries.items()
     }
@@ -715,9 +1076,11 @@ def main():
     try:
         h.database()
         h.identity()
-        source, casework, evidence = [f"http://127.0.0.1:{port()}" for _ in range(3)]
+        h.receive_hooks()
+        source, casework_origin, evidence = [f"http://127.0.0.1:{port()}" for _ in range(3)]
+        casework = h.observe_casework(casework_origin)
         source_project, source_package, source_runtime = activate_source(h, source, casework)
-        policy = activate_casework(h, source_package, source, casework)
+        policy = activate_casework(h, source_package, source, casework_origin)
         h.start("breg", [h.binaries["breg"], "--runtime-config", source_runtime], source)
         evidence_project, client = activate_evidence(h, source_project, source, evidence)
         record_id = seed_record(h, source)
@@ -768,13 +1131,13 @@ def main():
                 "passed": success,
                 "journeyChecksPassed": len(h.checks),
                 "journeyChecksFailed": 0 if success else 1,
-                "fixtureCases": 11 if "evidence-11-fixture-cases" in h.checks else 0,
+                "fixtureCases": getattr(h, "fixture_cases", 0) if "evidence-fixture-cases" in h.checks else 0,
                 "skipped": 0,
                 "cleanup": cleanup,
             },
         )
     print(
-        f"PASS: {len(h.checks)} journey checks; 11 synthetic fixture cases; cleanup verified. Owner-only evidence: {output}"
+        f"PASS: {len(h.checks)} journey checks; {h.fixture_cases} synthetic fixture cases; cleanup verified. Owner-only evidence: {output}"
     )
 
 
