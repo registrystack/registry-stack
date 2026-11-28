@@ -65,7 +65,7 @@ Use `--posture development` for a development runtime file.
 The listener's `tlsTermination: loopback-plaintext` restricts its bind address to loopback in either posture.
 `database.transport: loopback-plaintext` allows a PostgreSQL socket, a loopback IP, or `localhost`.
 `database.transport: private-network-plaintext` requires development.
-A non-loopback HTTP issuer requires development and `authentication.oidc.allowInsecureHttp: true`.
+A non-loopback HTTP issuer requires development and `allowInsecureHttp: true` in its entry under `authentication.oidc.issuers`.
 A loopback HTTP issuer needs no opt-in.
 
 {/* Evidence: crates/registry-messaging/src/config.rs finish_load, check_database, check_oidc;
@@ -173,7 +173,7 @@ The runtime requires TLS on both.
 `database.caBundleRef` optionally selects the PEM bundle of a private CA.
 `database.testOnlyPlaintext: true` is accepted only by a build that carries the `postgres-test` feature.
 
-`authentication.oidc` requires `issuer`, `audience`, and `allowedClients`.
+Each entry under `authentication.oidc.issuers` requires `issuer`, `audience`, and `allowedClients`.
 `allowedClients` is required. Write `from-package` to admit exactly the requester clients of the package's access profiles, so the clients are written once, in the package. A list is also accepted. It lists at least one distinct client and must include every requester client that an access profile names, or the runtime refuses to start with `messaging.runtime.profile-client-not-allowed`. A profile that no admitted client could reach is refused at load.
 Messaging refuses an omitted member, an empty list, a repeated client and the `unrestricted` keyword with `messaging.runtime.allowed-clients-required`.
 `scopeClaim` defaults to `scope`.

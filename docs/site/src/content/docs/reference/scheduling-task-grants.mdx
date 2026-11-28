@@ -253,15 +253,17 @@ In the Registry Scheduling runtime, use that issuer and audience, admit the clie
 ```yaml
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:scheduling
-    scopeClaim: scope
     readsScope: scheduling:read
-    allowedClients:
-      - scheduling-agent
-    assertionIssuers:
-      scheduling-agent:
-        - https://casework.example.test/task-authority
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:scheduling
+        scopeClaim: scope
+        allowedClients:
+          - scheduling-agent
+        assertionIssuers:
+          scheduling-agent:
+            - https://casework.example.test/task-authority
 
 taskGrantStatus:
   - sourceIssuer: https://casework.example.test/task-authority

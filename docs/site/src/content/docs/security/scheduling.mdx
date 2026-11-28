@@ -147,7 +147,7 @@ The guarantees hold only when you meet these obligations.
     (SCHEDULING-RES-07).
 13. Apply a new package to a new database when a refusal reports a pre-1.0 schema.
     No release upgrades that state in place.
-14. Use an HTTPS issuer and leave `authentication.oidc.allowInsecureHttp` unset.
+14. Use an HTTPS issuer and leave `allowInsecureHttp` unset in every issuer entry.
     Declare only issuer and JWKS addresses you intend Scheduling to reach (SCHEDULING-RES-10).
 
 {/* Evidence: crates/registry-scheduling/src/store.rs refuse_pre_1_0_schema, UnsupportedPostgres;
@@ -330,8 +330,8 @@ it is listed with them.
 
 ### SCHEDULING-RES-10: declared issuer and key endpoints are trusted
 
-- Condition: the runtime file names an issuer or JWKS URI, or sets
-  `authentication.oidc.allowInsecureHttp: true`.
+- Condition: the runtime file names an issuer or JWKS URI, or an issuer entry sets
+  `allowInsecureHttp: true`.
 - Consequence: Scheduling trusts a declared issuer or JWKS URI on the operator's word.
   Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
   keys and mint tokens Scheduling accepts.

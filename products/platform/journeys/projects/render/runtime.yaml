@@ -12,8 +12,10 @@ package:
   root: @WORK@/package
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:render
-    allowedClients: [portal]
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:render
+        allowedClients: [portal]
 audit:
   path: @WORK@/audit.jsonl

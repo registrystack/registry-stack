@@ -171,15 +171,17 @@ package:
   root: /var/lib/breg/build-1/package
 authentication:
   oidc:
-    issuer: https://issuer.example.com
-    audience: urn:breg:facility-registry
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [operator-editor, registrar, reader]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
+    issuers:
+      main:
+        issuer: https://issuer.example.com
+        audience: urn:breg:facility-registry
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [operator-editor, registrar, reader]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -204,18 +206,18 @@ schema cannot tell you:
 - **`package.root`** is the package directory `package` published. Once you have the package,
   you may add `package.expectedDigest` with the reported package digest, and startup then refuses
   any other package at that path.
-- **`authentication.oidc.allowedClients`** lists the OAuth clients whose tokens the registry
-  accepts, or `unrestricted`. A project that names clients itself, for example in a profile's
+- **`authentication.oidc.issuers.ISSUER_ID.allowedClients`** lists the OAuth clients whose
+  tokens the registry accepts, or `unrestricted`. A project that names clients itself, for example in a profile's
   `requesterClients`, needs each of them listed, so `unrestricted` does not start with such a
   project.
-- **`authentication.oidc.issuer`** must be `https`; plain `http` is accepted only on an IPv4
+- **`authentication.oidc.issuers.ISSUER_ID.issuer`** must be `https`; plain `http` is accepted only on an IPv4
   loopback host. The key set comes from the issuer's discovery document unless `jwksSource`
   names a URI or pins a static document.
 
 Three optional sections matter only for some projects. `taskGrantStatus` pins, per task-grant
 issuer such as Casework or a chat assistant's task authority, the endpoint and the registry's own credentials it uses to check that a task grant is still
 current. `wasmExecution` sets the backend and the module and guest-memory ceilings for WASM
-handlers. `authentication.oidc.assertionIssuers` lists, per client, the assertion authorities
+handlers. `authentication.oidc.issuers.ISSUER_ID.assertionIssuers` lists, per client, the assertion authorities
 that client may exchange a subject token from; once written, a client it does not list may
 exchange from none. Webhook destinations are bound in [Bind webhook receivers](../breg-webhooks/), field
 encryption in [Field encryption for restricted fields](../../configure/breg-field-encryption/), and
@@ -661,7 +663,7 @@ Verified the package against the runtime it is bound to.
 `doctor` opens every startup dependency without binding the listener, stops at the first one that
 refuses, and otherwise lists them all, then its advisories. PostgreSQL
 advisories leave the exit status unchanged. Production refuses
-`authentication.oidc.allowInsecureHttp: true` in the runtime file.
+`allowInsecureHttp: true` in any issuer entry of the runtime file.
 
 ```sh
 bregctl doctor --runtime-config /etc/breg/runtime.yaml
@@ -801,16 +803,18 @@ Do not edit managed tables to make a retry pass.
 ### Resolve signing keys
 
 OIDC key resolution is deployment configuration, not governed package content.
-If `authentication.oidc.jwksSource` is omitted, BReg uses discovery.
+If an issuer entry omits `jwksSource`, BReg uses discovery.
 Name the key set location directly with `type: uri` and an `https` `uri` (plain `http` only on an IPv4 loopback host), which the verifier fetches and refreshes the way it does a discovered key set.
 Or pin a static document through a protected secret reference:
 
 ```yaml
 authentication:
   oidc:
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
+    issuers:
+      main:
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
 ```
 
 The static document must be a bounded, duplicate-free set of public keys that matches the configured algorithm, signature use, verification operation, key identifier policy, and key shape.

@@ -1404,7 +1404,7 @@ fn explicit_unrestricted_clients_are_logged_and_reported_but_absent_from_readine
     let text = String::from_utf8_lossy(&human.stdout);
     assert!(
         text.contains(&format!(
-            "Explicit production setting render.posture.unrestricted-oidc-clients at {pointer}."
+            "Explicit production setting platform.posture.unrestricted-clients at {pointer}."
         )),
         "{text}"
     );

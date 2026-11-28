@@ -208,7 +208,7 @@ The TCP user timeout applies on Linux only.
 
 ## Authentication
 
-`authentication.oidc` requires `issuer` and `audience`.
+Each entry under `authentication.oidc.issuers` requires `issuer` and `audience`.
 The issuer is an exact `https` URL without credentials, query or fragment.
 The audience is at most 512 characters.
 For the shared access-token profile (algorithms, token type, audience, scope and actor separation, issuer-network policy, lifetime and safe diagnostics), see [Request an access token from your own code](../../configure/request-an-access-token/).
@@ -252,16 +252,18 @@ Only development accepts `unrestricted`. Production requires a list on every lis
 Under `operator-controlled-upstream`, development requires a list too (`casework.runtime.allowed-clients-required`).
 A configured `taskAuthority` requires a list in either mode, and its `issuer` is an absolute `http` or `https` URL with a host and no user information.
 
-`scopeClaim` defaults to `registry_scopes` for compatibility with existing deployments.
-Stock ThunderID emits `scope`, so the maintained example and `caseworkctl init` set that explicit override.
-`humanIdentity` defaults to claim `registry_actor_kind` with value `human` and applies only to human roles.
+`scopeClaim` defaults to `scope`, the claim stock ThunderID emits.
+An issuer that writes scopes in `registry_scopes` needs `scopeClaim: registry_scopes` in its entry.
+A person is a caller whose actor kind resolves to `human`: the kind the issuer entry's `actorKind` declares, or its `clientActorKinds` declares for the token's client, else the token's `registry_actor_kind` claim.
+The removed field `authentication.oidc.humanIdentity` is refused with that replacement.
 Principal selection belongs exclusively to each authored `accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`.
 The removed runtime field `authentication.oidc.principalClaim` is refused with that replacement.
 Casework trusts one issuer, so every access profile a person uses (staff, supervisor, administrator, an initiator profile and any other requester profile) must name the same `principalClaim`; `casework.yaml` is refused with `casework.access-profile.mixed-principal-claims` otherwise.
 Profiles a trusted producer uses are services and share one claim among themselves, which may differ from the people's.
 A service requester profile must be named by a trusted producer's `profile` to be compared apart from people; no Casework route serves a service through any other requester profile.
 
-{/* Evidence: crates/registry-casework/src/config.rs OidcConfig, TaskAuthorityConfig, default_scope_claim, default_human_identity_claim;
+{/* Evidence: crates/registry-casework/src/config.rs OidcConfig, TaskAuthorityConfig;
+    crates/registry-platform-config/src/caller_issuers.rs default_scope_claim;
     crates/registry-casework/src/task_grants/native_exchange_tests.rs unrestricted */}
 
 ### Revoked keys and token lifetime
@@ -292,16 +294,17 @@ Each entry names:
 - the exact trusted `act.sub`;
 - the exact subject-token issuer recorded by the exchange;
 - one scope used only for delegated staff reads;
-- a token lifetime ceiling of 1 through 300 seconds.
+- a token lifetime ceiling of 1 through 300 seconds;
+- `representedHuman`, the claim and value that say the represented person is human.
 
 The delegated token must carry every Staff profile scope plus that one read scope; unrelated extra scopes grant no authority on these dedicated routes.
-It also carries one Casework audience, the configured human assertion, no grant claims and no nested actor.
+It also carries one Casework audience, the binding's `representedHuman` claim with its value, no grant claims and no nested actor.
 An `act.iss` is optional, and when present it must equal the verified token issuer.
 The ordinary authentication path continues to refuse a configured delegated-reader client's token when it has `act` or the delegated-read scope.
 
-Configure `humanIdentity` against an issuer-verified claim about the represented person, and preserve it through both exchanges.
-The gateway's current actor category can be `service` while the subject is human, so that category alone cannot establish subject identity.
-Direct human credentials must carry the configured claim too.
+Set `representedHuman` to an issuer-verified claim about the represented person, for example `representedHuman: {claim: registry_subject_actor_kind, value: human}`, and preserve it through both exchanges.
+The token's own actor kind is the gateway's and can be `service` while the subject is human, so it is not read as the represented person's.
+A delegated staff read whose token does not carry the binding's value is refused with 403 `profile.not-human`.
 The issuer, rather than tool arguments, supplies the subject, purpose and jurisdiction claims used downstream.
 
 {/* Evidence: crates/registry-casework/src/config.rs DelegatedStaffReaderConfig;

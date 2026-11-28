@@ -127,7 +127,7 @@ matter most:
 | `identity.databaseId` | A name for the one database this deployment owns. The service refuses a database recorded for another. |
 | `package.root` and `package.expectedDigest` | The package directory, and the digest `documentsctl package` printed. |
 | `database.caBundleRef` | The PEM bundle of the CA that signs the database certificate, when a private CA does. It replaces the system roots. |
-| `authentication.oidc` | The `issuer`, the `audience` your tokens carry, `allowedClients` (a list that covers every client an access profile names, or `from-package`), and `jwksSource` when the runtime should not fetch the issuer's keys itself. See [Access tokens](#access-tokens). |
+| `authentication.oidc.issuers` | One entry per issuer, keyed by an id you choose: the `issuer`, the `audience` your tokens carry, `allowedClients` (a list that covers every client an access profile names, or `from-package`), and `jwksSource` when the runtime should not fetch the issuer's keys itself. See [Access tokens](#access-tokens). |
 | `storage.type` | `database` or `s3`. The first upload pins the choice: a later start under another backend or bucket is refused. |
 | `storage.maximumDocumentBytes` | The largest version the deployment takes: 16 MiB by default on both backends. On `s3` you may raise it up to 64 MiB. |
 | `contentVerification` | `type: http` with the verifier's `url`, `authorizationRef`, and `policyId`. `type: disabled` approves everything and is accepted only on a development loopback listener. |
@@ -163,8 +163,8 @@ profile. Every token must have:
 | Part | Requirement |
 | ---- | ----------- |
 | Header | `typ: at+jwt` (or `application/at+jwt`), `alg` `RS256` or `ES256`, and a `kid` naming a key in the issuer's key set |
-| `iss` | Exactly `authentication.oidc.issuer` |
-| `aud` | `authentication.oidc.audience` |
+| `iss` | Exactly the `issuer` of an entry in `authentication.oidc.issuers` |
+| `aud` | That entry's `audience` |
 | `exp` | A time in the future; `nbf`, when present, is checked too |
 | `azp`, or `client_id` when there is no `azp` | A client in `allowedClients` and in the `requesterClients` of the profile the caller should resolve to |
 | `scope` (or the claim `scopeClaim` names) | Every scope in that profile's `requiredScopes`, as a space-separated string or an array |
@@ -174,7 +174,7 @@ profile. Every token must have:
 A token that fails verification, lacks its principal, or carries a `registry_actor_kind` that is not
 a string answers `401 authentication.refused`. A verified token that resolves to no profile, because
 of its client, a missing scope, or its actor kind, answers `403 profile.not-authorized`. A token issued through a token exchange is refused
-unless `authentication.oidc.assertionIssuers` names the authority it came from.
+unless the issuer entry's `assertionIssuers` names the authority it came from.
 
 By default the runtime fetches the issuer's keys through its discovery document and follows its key
 rotation. When the runtime cannot reach the issuer, or a local test issuer publishes no discovery
@@ -183,9 +183,11 @@ document, pin the keys instead:
 ```yaml
 authentication:
   oidc:
-    jwksSource:
-      type: static
-      documentRef: secret:file/jwks.json
+    issuers:
+      main:
+        jwksSource:
+          type: static
+          documentRef: secret:file/jwks.json
 ```
 
 The secret holds a JSON Web Key Set of RSA or EC public keys, and every key needs its own non-empty

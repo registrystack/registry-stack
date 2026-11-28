@@ -113,7 +113,8 @@ In development, the public and metrics listeners add `Registry-Posture: developm
 - `database.runtimeUrlRef` and `database.migrationUrlRef`: two PostgreSQL URLs. Give them
   different roles. With one role for both, the serving credential could rewrite the activation
   record, and `apply`, `status`, and `serve` say so.
-- `authentication.oidc`: your `issuer`, `audience`, and the exact `allowedClients` that may call.
+- `authentication.oidc.issuers`: an entry with your `issuer`, `audience`, and the exact
+  `allowedClients` that may call.
 - `taskGrantStatus`: either a list of the task authorities Scheduling asks about every grant
   before it books, or `unchecked-final-fifteen-minutes`, which asks nothing and accepts only a
   grant with 15 minutes or less left.

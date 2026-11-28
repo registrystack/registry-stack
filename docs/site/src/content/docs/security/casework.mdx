@@ -236,7 +236,7 @@ The residuals refer to these obligations by number.
        crates/registry-casework/src/http.rs, review_result_feed. */}
 7. Treat reviewer-written public reasons as released text (`CASEWORK-RES-06`).
    {/* Evidence: crates/registry-review-protocol/src/lib.rs, check_public_reason. */}
-8. Use an HTTPS issuer and list the admitted OAuth clients. Production refuses `authentication.oidc.allowInsecureHttp: true` and `allowedClients: unrestricted`.
+8. Use an HTTPS issuer and list the admitted OAuth clients. Production refuses `allowInsecureHttp: true` and `allowedClients: unrestricted` in any issuer entry.
    Declare only issuer and JWKS addresses you intend Casework to reach (`CASEWORK-RES-08`).
    {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http,
        unrestricted_clients_setting;
@@ -244,7 +244,7 @@ The residuals refer to these obligations by number.
        crates/registry-casework/tests/startup_refusal.rs,
        development_startup_logs_the_settings_before_opening_dependencies. */}
 9. When a signing key is compromised or retiring, list its `kid` in
-   `authentication.oidc.revokedKeyIds`, and list the `kid` of any republished copy of that key too.
+   `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds`, and list the `kid` of any republished copy of that key too.
    Restart every instance, because the list is read at startup.
    Revoke the key at the issuer and at every other relying party (`CASEWORK-RES-09`).
    {/* Evidence: crates/registry-casework/src/config.rs, revoked_key_ids,
@@ -375,8 +375,8 @@ identifiers.
 
 ### `CASEWORK-RES-08`: declared issuer and key endpoints are trusted
 
-- Condition: the runtime file names an issuer or a JWKS URI, or sets
-  `authentication.oidc.allowInsecureHttp: true` in development.
+- Condition: the runtime file names an issuer or a JWKS URI, or an issuer entry sets
+  `allowInsecureHttp: true` in development.
 - Consequence: Casework trusts a declared issuer or JWKS URI on the operator's word.
   Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
   keys and mint tokens Casework accepts.
@@ -398,7 +398,7 @@ identifiers.
 
 ### `CASEWORK-RES-09`: key refusal is by `kid`, locally, at startup
 
-- Condition: `authentication.oidc.revokedKeyIds` lists a compromised or retiring key, or
+- Condition: `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds` lists a compromised or retiring key, or
   `maximumTokenLifetimeSeconds` is set.
 - Consequence: refusal matches the `kid` the issuer assigns, so a compromised key republished under
   another `kid` is accepted until that `kid` is listed too.

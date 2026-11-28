@@ -338,7 +338,7 @@ Messaging and Scheduling use:
   address.
 - Cloud metadata and link-local addresses are refused for declared and discovered endpoints alike.
   Redirects are disabled.
-- Plain HTTP is accepted at load only with `deployment.authentication.allowInsecureHttp: true`, or
+- Plain HTTP is accepted at load only with `deployment.authentication.issuers.ISSUER_ID.allowInsecureHttp: true`, or
   over loopback in either posture. The explicit setting requires development.
   The setting never extends plain HTTP to a discovered endpoint on another origin.
 

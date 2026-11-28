@@ -24,7 +24,8 @@ issuer, the audience, the clients it admits, the claims it reads, and its access
 launcher runs each product's public `generate identity-facts` command and never reads another
 product's files. It merges the facts, reads your deployment file, and renders the result.
 
-- **The issuer** comes from the products' `oidc.issuer` and is written as `server.public_url`.
+- **The issuer** comes from the `issuer` of the products' issuer entries and is written as
+  `server.public_url`.
   The products must agree; the deployment file never states it.
 - **The deployment file** (`PlatformIdentityDeployment`) holds the organisation unit, each client's
   public key file and grants, browser applications, users, and the environment variable name for

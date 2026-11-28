@@ -150,7 +150,7 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   When it is set, these are the only roots trusted; when it is omitted, the system's trusted roots are used.
 - `database.testOnlyPlaintext` is accepted only by builds with the `postgres-test` feature, for the PostgreSQL test suites.
   An operator build refuses it with `platform.database.test-only-plaintext`.
-- `authentication.oidc` is the shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), with `allowedClients` and `scopeClaim` (default `scope`).
+- `authentication.oidc.issuers` holds one shared OIDC issuer entry per issuer id (`issuer`, `audience`, `jwksSource`), with `allowedClients` and `scopeClaim` (default `scope`).
   `allowedClients` is required. Write `from-package` to admit exactly the `requesterClients` of the package's access profiles, so the clients are written once, in `documents.yaml`. A list is also accepted, and it must include every client an access profile names, or the runtime refuses to start with `documents.runtime.profile-client-not-allowed`. Clients in the list that no profile names are admitted by the verifier but reach no profile. `unrestricted` and an empty list are refused.
   Each client named under `assertionIssuers` must be one of the admitted clients, or the runtime refuses to start with `documents.runtime.assertion-issuer-client-not-allowed`.
   `jwksSource` defaults to the key set that the issuer's discovery document names.

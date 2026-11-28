@@ -62,13 +62,16 @@ Each product applies its own policy to HTTP issuers and key URIs on loopback.
     crates/registry-evidence/src/config.rs, deployable_profiles_refuse_non_loopback_http_and_the_insecure_http_opt_in;
     crates/registry-evidence-oid4vci/src/config.rs, supervised_local_development_findings. */}
 
-For an HTTP issuer elsewhere, set the runtime's `allowInsecureHttp` field beside `issuer`:
+For an HTTP issuer elsewhere, set the runtime's `allowInsecureHttp` field beside `issuer`. In a
+runtime file that lists issuers in an issuer set, that is inside the issuer's entry:
 
 ```yaml
 authentication:
   oidc:
-    issuer: http://identity.internal:8080
-    allowInsecureHttp: true
+    issuers:
+      main:
+        issuer: http://identity.internal:8080
+        allowInsecureHttp: true
 ```
 
 The runtime logs a warning at startup while this setting is active. Keep it limited to a trusted

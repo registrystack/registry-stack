@@ -44,14 +44,15 @@ struct IdentityFactsArgs {
     /// The authored Adapter project.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Absolute path to the Adapter runtime configuration.
-    #[arg(long, value_name = "ABS")]
+    /// Runtime configuration file: its oidc block and the project's access
+    /// profiles state the facts.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
     /// Write the identity facts to this file.
     #[arg(long, value_name = "FILE")]
     output: PathBuf,
     /// Absolute path to the payment connection configuration.
-    #[arg(long, value_name = "ABS")]
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
     payments_config: Option<PathBuf>,
     /// The issuer entry to describe when the runtime lists more than one.
     #[arg(long, value_name = "ID")]
