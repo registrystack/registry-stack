@@ -79,10 +79,16 @@ fn scoped_url(base: &str, schema: &str) -> String {
 /// plain thread: it cannot nest inside this test's runtime.
 fn undelivered(config: &Path, limit: i64) -> Value {
     let config = config.to_path_buf();
-    std::thread::spawn(move || registry_schedulingctl::intents::undelivered(&config, limit))
-        .join()
-        .expect("intents does not panic")
-        .expect("intents succeeds")
+    std::thread::spawn(move || {
+        registry_schedulingctl::intents::undelivered(
+            &config,
+            limit,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+    })
+    .join()
+    .expect("intents does not panic")
+    .expect("intents succeeds")
 }
 
 async fn seed_claim(client: &tokio_postgres::Client, claim_id: Uuid) {
@@ -211,10 +217,13 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         "0123456789abcdef0123456789abcdef",
     );
 
-    let config = RuntimeConfig::load(&config_path).expect("the runtime configuration loads");
+    let config = RuntimeConfig::load(&config_path, registry_scheduling::config::DEFAULT_POSTURE)
+        .expect("the runtime configuration loads");
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment secret provider configures");
-    let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
+    let store =
+        PostgresStore::connect_migration(&config.database, &resolver, config.development_witness())
+            .unwrap();
     store.migrate().await.expect("the schema migrates");
 
     let seed = tokio_postgres::connect(&scoped_url(&base, &schema), tokio_postgres::NoTls)

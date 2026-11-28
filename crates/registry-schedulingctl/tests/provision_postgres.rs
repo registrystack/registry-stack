@@ -246,7 +246,13 @@ async fn provision_then_apply_then_serve_with_split_roles() {
 
     let server = tokio::spawn({
         let runtime = runtime.clone();
-        async move { registry_scheduling::runtime::serve_from_path(&runtime).await }
+        async move {
+            registry_scheduling::runtime::serve_from_path(
+                &runtime,
+                registry_scheduling::config::DEFAULT_POSTURE,
+            )
+            .await
+        }
     });
     let mut ready = None;
     for _ in 0..300 {

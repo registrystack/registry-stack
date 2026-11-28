@@ -24,6 +24,7 @@ mod templates;
 use anyhow::Result;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_platform_audit::AuditUnavailable;
+use registry_platform_config::DeclaredPosture;
 use registry_platform_yaml::{Diagnostic, Report};
 use registry_scheduling::config::RuntimeConfigError;
 use registry_scheduling::hooks::HookActivationError;
@@ -89,6 +90,12 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct ServeArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file passed unchanged to the Scheduling runtime.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -110,6 +117,15 @@ struct InitArgs {
 
 #[derive(Debug, Args)]
 struct CheckArgs {
+    /// Check under the production posture.
+    #[arg(long)]
+    production: bool,
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
@@ -152,6 +168,12 @@ struct PackageArgs {
 
 #[derive(Debug, Args)]
 struct ActivationArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
@@ -159,6 +181,12 @@ struct ActivationArgs {
 
 #[derive(Debug, Args)]
 struct ApplyArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
@@ -184,6 +212,12 @@ enum RecordsCommand {
 
 #[derive(Debug, Args)]
 struct RecordsApplyArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long = "runtime-config", value_name = "FILE")]
     config: PathBuf,
@@ -194,6 +228,12 @@ struct RecordsApplyArgs {
 
 #[derive(Debug, Args)]
 struct IntentsArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long = "runtime-config", value_name = "FILE")]
     config: PathBuf,
@@ -268,6 +308,7 @@ where
                     OutputFormat::Json,
                     stdout,
                     stderr,
+                    None,
                 )
                 .is_err()
                 {
@@ -291,6 +332,7 @@ where
                     OutputFormat::Json,
                     stdout,
                     stderr,
+                    None,
                 )
                 .is_err()
                 {
@@ -303,6 +345,54 @@ where
         }
     }
     let Cli { format, command } = cli;
+    let name = command_path(&command);
+    let (flag, production) = match &command {
+        Command::Serve(args) => (Some(&args.posture), false),
+        Command::Check(args) => (Some(&args.posture), args.production),
+        Command::Provision(args) => (Some(&args.posture), false),
+        Command::Plan(args) | Command::Status(args) => (Some(&args.posture), false),
+        Command::Apply(args) => (Some(&args.posture), false),
+        Command::Records(args) => match &args.command {
+            RecordsCommand::Apply(args) => (Some(&args.posture), false),
+        },
+        Command::Intents(args) => (Some(&args.posture), false),
+        _ => (None, false),
+    };
+    let posture = if let Some(flag) = flag {
+        let flag = flag.as_deref();
+        let refusal = |code: &str, message: &str, action: &str| {
+            report::failure(
+                name,
+                USAGE_EXIT,
+                vec![json!({
+                    "severity": "error", "code": code, "path": "/posture",
+                    "message": message, "suggestedAction": action,
+                })],
+            )
+        };
+        let declaration = if production && flag == Some("development") {
+            Err(refusal(
+                "platform.posture.conflict",
+                "--production and --posture development contradict each other",
+                "Use one of them.",
+            ))
+        } else {
+            registry_platform_config::declared(flag.or(production.then_some("production")))
+                .map_err(|error| refusal(error.code(), error.message(), error.suggested_action()))
+        };
+        match declaration {
+            Ok(declared) => Some(declared),
+            Err(report) => {
+                return match write_failure(&report, format, stdout, stderr, None) {
+                    Ok(()) => ExitCode::from(USAGE_EXIT),
+                    Err(_) => output_failed(stderr),
+                }
+            }
+        }
+    } else {
+        None
+    };
+    let declared = posture.unwrap_or(registry_scheduling::config::DEFAULT_POSTURE);
     let command = match command {
         Command::Api(args) => {
             return api_command(format_requested, stderr, || {
@@ -328,13 +418,13 @@ where
             });
         }
         Command::Serve(args) => {
-            return serve(args, format, format_requested, stdout, stderr);
+            return serve(args, declared, format, format_requested, stdout, stderr);
         }
-        Command::Provision(args) => return provision(&args, format),
+        Command::Provision(args) => return provision(&args, format, declared),
         command => command,
     };
     let command_name = command_path(&command);
-    match run(Cli { format, command }) {
+    match run(Cli { format, command }, declared) {
         Ok(mut report) => {
             // The exit code already tells the caller whether this refused;
             // the JSON must agree instead of reporting "ok": true underneath
@@ -345,7 +435,7 @@ where
             } else if refusal {
                 report["ok"] = json!(false);
             }
-            let outcome = write_success(&report, format, stdout, stderr);
+            let outcome = write_success(&report, format, stdout, stderr, posture);
             if outcome != ExitCode::SUCCESS {
                 return outcome;
             }
@@ -365,6 +455,7 @@ where
                     exit,
                     stdout,
                     stderr,
+                    posture,
                 )
                 .is_err()
                 {
@@ -378,6 +469,7 @@ where
                 format,
                 stdout,
                 stderr,
+                posture,
             )
             .is_err()
             {
@@ -434,7 +526,11 @@ fn command_path(command: &Command) -> &'static str {
 /// Runs the shared `provision` command, which writes its own report and sets
 /// its own exit code. The global `--format` selects its report as it selects
 /// every other command's.
-fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFormat) -> ExitCode {
+fn provision(
+    args: &registry_platform_provision::ProvisionArgs,
+    format: OutputFormat,
+    declared: registry_platform_config::DeclaredPosture,
+) -> ExitCode {
     let shared = match format {
         OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
         OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
@@ -444,11 +540,11 @@ fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFo
         registry_platform_buildinfo::DISPLAY_VERSION,
         args,
         shared,
-        provision::load,
+        |path| provision::load(path, declared),
     )
 }
 
-fn run(cli: Cli) -> Result<Value> {
+fn run(cli: Cli, declared: DeclaredPosture) -> Result<Value> {
     match cli.command {
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
@@ -460,9 +556,9 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Init(args) => project::init(&args.project, &args.template),
         Command::Check(args) => {
             let checked = if args.runtime_config.is_some() {
-                project::check(&args.project, false)
+                project::check(&args.project, false, declared)
             } else {
-                project::check_with_acceptances(&args.project, args.deny_warnings)
+                project::check_with_acceptances(&args.project, args.deny_warnings, declared)
             };
             match &args.runtime_config {
                 Some(runtime_config) => project::check_runtime_config(
@@ -471,6 +567,7 @@ fn run(cli: Cli) -> Result<Value> {
                     args.environment,
                     args.deny_warnings,
                     checked,
+                    declared,
                 ),
                 None => checked,
             }
@@ -481,22 +578,24 @@ fn run(cli: Cli) -> Result<Value> {
             Some(output) => project::package(&args.project, &output, args.revision.as_deref()),
             None => project::package_dry_run(&args.project, args.revision.as_deref()),
         },
-        Command::Plan(args) => activation::plan(&args.runtime_config),
+        Command::Plan(args) => activation::plan(&args.runtime_config, declared),
         Command::Apply(args) => activation::apply(
             &args.runtime_config,
             args.operator_reference.as_deref(),
             &args.backups,
+            declared,
         ),
-        Command::Status(args) => activation::status(&args.runtime_config),
+        Command::Status(args) => activation::status(&args.runtime_config, declared),
         Command::Records(args) => match args.command {
-            RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records),
+            RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records, declared),
         },
-        Command::Intents(args) => intents::undelivered(&args.config, args.limit),
+        Command::Intents(args) => intents::undelivered(&args.config, args.limit, declared),
     }
 }
 
 fn serve(
     args: ServeArgs,
+    declared: DeclaredPosture,
     format: OutputFormat,
     format_requested: bool,
     stdout: &mut dyn io::Write,
@@ -512,6 +611,7 @@ fn serve(
                 OutputFormat::Json,
                 stdout,
                 stderr,
+                Some(declared),
             )
             .is_err()
             {
@@ -546,6 +646,7 @@ fn serve(
     command
         .arg("--runtime-config")
         .arg(args.runtime_config)
+        .args(["--posture", declared.posture.as_str()])
         .arg("serve");
     replace_with_service(command, "scheduling", stderr)
 }
@@ -718,6 +819,7 @@ fn write_configuration_report(
     exit: u8,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
+    posture: Option<DeclaredPosture>,
 ) -> io::Result<()> {
     if format == OutputFormat::Json {
         let mut envelope = json!({
@@ -729,7 +831,7 @@ fn write_configuration_report(
         if let Some(files) = report.files_checked() {
             envelope["filesChecked"] = json!(files);
         }
-        report::write(&envelope, stdout)
+        report::write_with_posture(&envelope, stdout, posture)
     } else {
         write_check_verdict(command, stderr);
         let _ = write!(stderr, "{}", report.render_human());
@@ -820,6 +922,22 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
             }),
         );
     }
+    if let Some(StoreError::DatabaseTransport(error)) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<StoreError>())
+    {
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({
+                "severity": "error",
+                "code": error.code(),
+                "artifact": "database",
+                "path": "/database/transport",
+                "message": error.to_string(),
+                "suggestedAction": error.suggested_action(),
+            }),
+        );
+    }
     if let Some(activation::Refusal(refusal)) = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<activation::Refusal>())
@@ -832,7 +950,10 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
                 "artifact": "database",
                 "path": "database",
                 "message": format!("{error:#}"),
-                "suggestedAction": "Run the command the message names, or correct what it names, then retry.",
+                "suggestedAction": match refusal {
+                    StoreError::PostureMismatch { action, .. } => *action,
+                    _ => "Run the command the message names, or correct what it names, then retry.",
+                },
             }),
         );
     }
@@ -884,9 +1005,10 @@ fn write_success(
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
+    posture: Option<DeclaredPosture>,
 ) -> ExitCode {
     let result = match format {
-        OutputFormat::Json => report::write(report, stdout),
+        OutputFormat::Json => report::write_with_posture(report, stdout, posture),
         OutputFormat::Human => render_human(report, stdout),
     };
     if result.is_ok() {
@@ -907,9 +1029,10 @@ fn write_failure(
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
+    posture: Option<DeclaredPosture>,
 ) -> io::Result<()> {
     if format == OutputFormat::Json {
-        return report::write(report, stdout);
+        return report::write_with_posture(report, stdout, posture);
     }
     write_check_verdict(report["command"].as_str().unwrap_or(""), stderr);
     if let Some(diagnostics) = report["diagnostics"].as_array() {
@@ -991,7 +1114,7 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
 fn checked_diagnostics(report: &Value) -> io::Result<Option<Report>> {
     let Some(diagnostics) = report
         .get("diagnostics")
-        .filter(|_| report.get("filesChecked").is_some())
+        .filter(|_| report.get("filesChecked").is_some() || report["command"] == "status")
     else {
         return Ok(None);
     };
@@ -1131,7 +1254,12 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS);
         report["project"] = json!(relative);
         let mut written = Vec::new();
-        report::write(&report, &mut written).unwrap();
+        report::write_with_posture(
+            &report,
+            &mut written,
+            Some(registry_scheduling::config::DEFAULT_POSTURE),
+        )
+        .unwrap();
         let committed = std::fs::read_to_string(
             root.join("products/scheduling/examples/formats/ctl-report.json"),
         )
@@ -1410,9 +1538,10 @@ mod tests {
             }
         }
         let audit = registry_scheduling::audit::SchedulingAudit::new(
-            registry_platform_audit::AuditWriter::from_line_sink_without_posture(Box::new(
-                Refusing,
-            )),
+            registry_platform_audit::AuditWriter::from_line_sink(
+                Box::new(Refusing),
+                registry_platform_config::Posture::Production,
+            ),
         );
         // A stream append waits on the Tokio timer.
         let unavailable = tokio::runtime::Builder::new_current_thread()

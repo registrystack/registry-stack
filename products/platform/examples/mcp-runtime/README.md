@@ -3,11 +3,11 @@
 Check the citizen example from the source workspace without resolving a credential:
 
 ```sh
-cargo run --locked -p registry-mcp -- --runtime-config "$PWD/products/platform/examples/mcp-runtime/runtime.example.yaml" check
+cargo run --locked -p registry-mcp -- --runtime-config "$PWD/products/platform/examples/mcp-runtime/runtime.example.yaml" check --production
 ```
 
-The example selects the existing BReg citizen tools explicitly.
-Its issuer, registry and review origins are placeholders; an offline pass establishes configuration validity, not access to a running service.
+The example publishes HTTPS resource, issuer, and review URLs and selects the existing BReg citizen tools explicitly.
+Its endpoints are placeholders. The offline check validates the configuration without contacting those services.
 Use the institution's independently operated issuer and task authority for protected BReg operations.
 
 The staff example selects the separate delegated-read contract explicitly:

@@ -54,6 +54,23 @@ that every value is accepted.
 {/* Generated from src/data/generated/messaging-configuration.json by
     docs/site/scripts/generate-messaging-configuration.mjs. Run npm run generate from docs/site. */}
 
+
+## Deployment posture
+
+With neither `--posture` nor `REGISTRY_STACK_POSTURE`, the deployment uses `production`.
+The two inputs must agree when both are present.
+Use `--posture development` for a development runtime file.
+`check` reports development settings as errors in production and warnings in development.
+
+The listener's `tlsTermination: loopback-plaintext` restricts its bind address to loopback in either posture.
+`database.transport: loopback-plaintext` allows a PostgreSQL socket, a loopback IP, or `localhost`.
+`database.transport: private-network-plaintext` requires development.
+A non-loopback HTTP issuer requires development and `authentication.oidc.allowInsecureHttp: true`.
+A loopback HTTP issuer needs no opt-in.
+
+{/* Evidence: crates/registry-messaging/src/config.rs finish_load, check_database, check_oidc;
+    crates/registry-platform-config/src/blocks.rs plaintext_permitted. */}
+
 ## The runtime file
 
 Registry Messaging reads one versioned operator document, selected with
@@ -111,7 +128,7 @@ The runtime, `messagingctl check`, and `messagingctl apply` refuse a package who
 
 `listener` is required.
 `listener.bind` is one numeric socket address and must be explicit, such as `127.0.0.1:8107`.
-`listener.tlsTermination` is required: use `operator-controlled-upstream` behind an operator-managed TLS edge, or `development-loopback` for direct local development, which is refused on any non-loopback bind.
+`listener.tlsTermination` is required: use `operator-controlled-upstream` behind an operator-managed TLS edge, or `loopback-plaintext` for direct local development, which is refused on any non-loopback bind.
 `listener.networkExposure` defaults to `private-address`; `container-private` permits an unspecified bind only for a listener kept on a private container network.
 A public unicast address is refused under every combination.
 
@@ -235,8 +252,8 @@ An `smtp` connection takes these keys:
 | Key | Required | Meaning |
 |---|---|---|
 | `host` | yes | The relay's DNS name or IP literal, at most 253 bytes; the name TLS verifies |
-| `tls` | yes | `starttls`, `implicit`, or `development-loopback` (plaintext to a loopback relay, accepted only by a test build or behind a `development-loopback` listener) |
-| `port` | no | Defaults to 587 for `starttls` and 465 for `implicit`; required for `development-loopback` |
+| `tls` | yes | `starttls`, `implicit`, or `loopback-plaintext` (plaintext to a loopback relay, valid in either posture) |
+| `port` | no | Defaults to 587 for `starttls` and 465 for `implicit`; required for `loopback-plaintext` |
 | `authentication` | no | `usernameRef` and `passwordRef` |
 | `attemptTimeoutMilliseconds` | no | One attempt's whole budget, 1000 to 60000, default 30000 |
 | `caBundleRef` | no | A PEM root trusted besides the public web roots |

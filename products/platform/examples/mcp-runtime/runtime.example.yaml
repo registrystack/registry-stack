@@ -5,14 +5,14 @@ name: Citizen registry assistant
 logLevel: info
 listener:
   bind: 127.0.0.1:8110
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   # Listener stays on loopback; any upstream proxy must enforce its own boundary.
   networkExposure: private-address
 secretProviders:
   environment: {}
 resourceServer:
-  resource: http://127.0.0.1:8110/mcp
-  issuer: http://127.0.0.1:8111
+  resource: https://127.0.0.1:8110/mcp
+  issuer: https://127.0.0.1:8111
   jwksSource:
     type: static
     documentRef: secret:env/MCP_JWKS
@@ -58,4 +58,4 @@ bindings:
         application:
           action: update-details
           targetInput: person
-        reviewBaseUrl: http://127.0.0.1:8113/
+        reviewBaseUrl: https://127.0.0.1:8113/

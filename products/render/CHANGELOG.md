@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- BREAKING: An undeclared posture is production. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `check` without a declared posture reports development settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: Render accepts `assuranceProfile: local` in development and `assuranceProfile: production` in production. Migration: Use assuranceProfile: local under development, and build a production bundle for production.
+- BREAKING: Render local seals carry a signed `/Reason`. Migration: No change.
+- BREAKING: `/ready` gains `posture` and `developmentSettings`. Migration: No change for probes that read the status code.
+- BREAKING: Render audit lines gain `posture`. Migration: Audit readers with a closed line parser accept the posture member.
+- BREAKING: Development responses carry `Registry-Posture: development` and production refuses development peers. Migration: Point production runtimes at production peers.
+
 - A secret file Render refuses names the failed check and its fix.
 
 - A scope refusal writes the scope claim name and the scope the route

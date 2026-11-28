@@ -25,6 +25,7 @@ fn run(binary: &Path, capture: &Path, arguments: &[&str]) -> Output {
         .args(arguments)
         .env("DISCOVERY_BIN", binary)
         .env("RUNTIME_CAPTURE", capture)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("RSTACK_GENERATION_DIR")
         .output()
         .expect("discoveryctl starts")
@@ -65,6 +66,7 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_status_and_lease(
         .env("DISCOVERY_BIN", &binary)
         .env("RUNTIME_CAPTURE", &capture)
         .env("RUNTIME_LEASE_CAPTURE", &lease)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("RSTACK_GENERATION_DIR")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -103,6 +105,7 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
         .env("PATH", path)
         .env("RUNTIME_CAPTURE", &capture)
         .env_remove("DISCOVERY_BIN")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("RSTACK_GENERATION_DIR")
         .output()
         .expect("discoveryctl starts");
@@ -138,6 +141,7 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
         .args(["serve", "--runtime-config", "/tmp/managed.yaml"])
         .env("PATH", poisoned_path)
         .env("RUNTIME_CAPTURE", &capture)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env("RSTACK_GENERATION_DIR", &generation)
         .env("RSTACK_DISCOVERY_BIN", &selected)
         .env("RSTACK_RELEASE_TAG", "v-test")
@@ -153,6 +157,68 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
             .skip(1)
             .collect::<Vec<_>>(),
         ["--runtime-config", "/tmp/managed.yaml"]
+    );
+}
+
+#[test]
+fn serve_preserves_flag_and_environment_declarations_and_refuses_conflicts() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("discovery");
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\nprintf '%s\\n' \"${REGISTRY_STACK_POSTURE-unset}\" \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    for (flag, environment, expected) in [
+        (
+            Some("development"),
+            None,
+            "unset\n--runtime-config\n/tmp/runtime.yaml\n--posture\ndevelopment\n",
+        ),
+        (
+            None,
+            Some("development"),
+            "development\n--runtime-config\n/tmp/runtime.yaml\n",
+        ),
+        (None, None, "unset\n--runtime-config\n/tmp/runtime.yaml\n"),
+        (Some("production"), Some("development"), ""),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_discoveryctl"));
+        command
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .env_remove("RSTACK_GENERATION_DIR")
+            .env("DISCOVERY_BIN", &binary)
+            .args(["serve", "--runtime-config", "/tmp/runtime.yaml"]);
+        if let Some(flag) = flag {
+            command.args(["--posture", flag]);
+        }
+        if let Some(environment) = environment {
+            command.env("REGISTRY_STACK_POSTURE", environment);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.stdout, expected.as_bytes());
+        if expected.is_empty() {
+            assert_eq!(output.status.code(), Some(2));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("platform.posture.conflict"));
+        } else {
+            assert!(output.status.success(), "{output:?}");
+        }
+    }
+}
+
+#[test]
+fn serve_help_describes_the_selected_runtime_configuration() {
+    let output = Command::new(env!("CARGO_BIN_EXE_discoveryctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["serve", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("Run the Discovery service with the selected runtime configuration"),
+        "{stdout}"
     );
 }
 

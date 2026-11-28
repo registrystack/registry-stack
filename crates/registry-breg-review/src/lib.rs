@@ -43,8 +43,11 @@ use clap::{value_parser, Arg, ArgAction, Command};
 use jsonwebtoken::Algorithm;
 use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig};
 use registry_platform_audit::{AuditProfile, AuditWriter};
+use registry_platform_config::{
+    DevelopmentSetting, FoundSetting, Posture, PostureReport, SettingOrigin,
+};
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_httpsec::{security_headers_without_posture, CspBuilder};
+use registry_platform_httpsec::{security_headers, CspBuilder};
 use registry_platform_httputil::client::{PrivateKeyJwt, PrivateKeyJwtConfig};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
@@ -96,9 +99,22 @@ pub fn command() -> Command {
                 .required(true)
                 .value_parser(value_parser!(PathBuf)),
         )
+        .arg(
+            Arg::new("posture")
+                .long("posture")
+                .global(true)
+                .value_name("POSTURE")
+                .help("Declared posture: development or production. Unset means production."),
+        )
         .subcommand_required(true)
         .subcommand(
             Command::new("check")
+                .arg(
+                    Arg::new("production")
+                        .long("production")
+                        .action(ArgAction::SetTrue)
+                        .help("Declare production posture."),
+                )
                 .about("Check the runtime file offline, reading no secret and opening no socket")
                 .long_about(
                     "Check the runtime file offline, reading no secret and opening no socket.\n\n\
@@ -137,6 +153,8 @@ pub fn command() -> Command {
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("{0}")]
+    Posture(String),
+    #[error("{0}")]
     Secret(String),
     #[error("signIn.clientKeyRef does not hold a private JWK the page can sign with")]
     ClientKey,
@@ -162,9 +180,9 @@ pub(crate) struct Cookies {
 }
 
 impl Cookies {
-    fn for_mode(development: bool) -> Self {
-        if development {
-            // Plain loopback HTTP cannot carry a Secure cookie, and a
+    fn for_mode(plaintext_origin: bool) -> Self {
+        if plaintext_origin {
+            // Plain HTTP cannot carry a Secure cookie, and a
             // `__Host-` name requires one.
             Self {
                 session: "breg-review-session",
@@ -201,6 +219,7 @@ impl Cookies {
 
 /// Everything a request handler shares.
 pub(crate) struct App {
+    posture: PostureReport,
     pub issuer: String,
     pub client_id: String,
     pub scopes: Vec<String>,
@@ -492,14 +511,23 @@ fn limiter(rate: RateLimitConfig) -> Result<TokenBucketLimiter, RuntimeError> {
 fn discovered_endpoint(
     document: &registry_platform_oidc::DiscoveryDocument,
     member: &str,
-    development: bool,
 ) -> Result<Url, RuntimeError> {
     document
         .extra
         .get(member)
         .and_then(serde_json::Value::as_str)
         .and_then(|value| Url::parse(value).ok())
-        .filter(|url| allowed_discovered_endpoint(url, development))
+        .filter(|url| {
+            if member == "authorization_endpoint" {
+                matches!(url.scheme(), "http" | "https")
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.host().is_some()
+                    && url.fragment().is_none()
+            } else {
+                allowed_discovered_endpoint(url)
+            }
+        })
         .ok_or_else(|| {
             RuntimeError::Discovery(format!(
                 "{member} is missing or is not an endpoint this runtime may call"
@@ -554,7 +582,7 @@ struct Offline {
 /// Read and parse the secrets of a loaded configuration and compile the
 /// templates, failing on the first fault. It neither calls the provider nor
 /// opens the audit journal.
-fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
+fn offline(config: &RuntimeConfig, redirect_uri: Url) -> Result<Offline, RuntimeError> {
     let secrets = config.secret_providers.resolver().map_err(|error| {
         RuntimeError::Secret(describe_secret_failure(
             "secretProviders",
@@ -597,7 +625,7 @@ fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
     Ok(Offline {
         client_key,
         audit_profile,
-        redirect_uri: config.redirect_uri(),
+        redirect_uri,
         registry,
         templates,
         per_citizen: limiter(config.rate_limits.per_citizen)?,
@@ -605,25 +633,78 @@ fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
     })
 }
 
+fn posture_refusal(posture: &PostureReport, source: &str) -> RuntimeError {
+    let diagnostics = posture.diagnostics(std::path::Path::new(source));
+    let finding = diagnostics
+        .last()
+        .expect("the refused setting was recorded");
+    RuntimeError::Posture(format!(
+        "{} [{}] {}. {}",
+        finding.path, finding.code, finding.message, finding.suggested_action
+    ))
+}
+
 /// Build the page from a validated runtime configuration. Startup reads the
 /// secrets, fetches the provider's discovery document, opens the audit
 /// journal, and compiles the templates, and fails on the first fault.
 pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
-    build(config, None).await
+    build(
+        config,
+        None,
+        &PostureReport::new(config::default_posture()),
+        None,
+    )
+    .await
 }
 
-/// Build the page as [`router`] does, but write its audit stream to `writer`
+pub async fn router_with_posture(
+    loaded: registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
+) -> Result<Router, RuntimeError> {
+    build(
+        loaded.config,
+        None,
+        &loaded.posture,
+        loaded.development.as_ref(),
+    )
+    .await
+}
+
+/// Build the page as [`router_with_posture`] does, using the supplied audit sink
 /// instead of opening the configured journal. Tests use it to hold an audit
 /// destination whose refusals they control.
 #[doc(hidden)]
 pub async fn router_with_audit_writer(
-    config: RuntimeConfig,
-    writer: AuditWriter,
+    loaded: registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
+    sink: Box<dyn std::io::Write + Send>,
 ) -> Result<Router, RuntimeError> {
-    build(config, Some(writer)).await
+    let writer = AuditWriter::from_line_sink(sink, loaded.posture.posture());
+    build(
+        loaded.config,
+        Some(writer),
+        &loaded.posture,
+        loaded.development.as_ref(),
+    )
+    .await
 }
 
-async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Router, RuntimeError> {
+async fn build(
+    config: RuntimeConfig,
+    writer: Option<AuditWriter>,
+    posture: &PostureReport,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+) -> Result<Router, RuntimeError> {
+    let mut posture = posture.clone();
+    let origin = config
+        .public_origin(development.filter(|_| posture.posture() == Posture::Development))
+        .map_err(|_| {
+            config.record_public_origin(&mut posture);
+            posture_refusal(&posture, "publicOrigin")
+        })?
+        .to_url();
+    let plaintext_origin = origin.scheme() == "http";
+    let redirect_uri = origin
+        .join(config::CALLBACK_PATH)
+        .map_err(|_| RuntimeError::Posture("Use a valid public origin.".to_owned()))?;
     let Offline {
         client_key,
         audit_profile,
@@ -632,8 +713,8 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         templates,
         per_citizen,
         global_sign_in,
-    } = offline(&config)?;
-    let development = config.development();
+    } = offline(&config, redirect_uri)?;
+    let loopback_listener = config.loopback_listener();
     let issuer = config.sign_in.issuer.as_str().to_owned();
     // Sign-in sends client credentials to the token endpoint, so the page
     // never opts in to plain HTTP beyond loopback.
@@ -650,9 +731,26 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     )
     .await
     .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
-    let authorization_endpoint =
-        discovered_endpoint(&discovery, "authorization_endpoint", development)?;
-    let token_endpoint = discovered_endpoint(&discovery, "token_endpoint", development)?;
+    let authorization_endpoint = discovered_endpoint(&discovery, "authorization_endpoint")?;
+    if authorization_endpoint.scheme() != "https" {
+        static HTTP_AUTHORIZATION_ENDPOINT: DevelopmentSetting = DevelopmentSetting {
+            code: "breg.posture.review-http-authorization-endpoint",
+            key: "authorization_endpoint",
+            summary: "The discovered authorization endpoint is plain http",
+            production:
+                "Publish an https authorization_endpoint in the issuer's discovery document.",
+        };
+        posture.record(FoundSetting {
+            setting: &HTTP_AUTHORIZATION_ENDPOINT,
+            pointer: Some("/signIn/discovery/authorization_endpoint".to_owned()),
+            position: None,
+            origin: SettingOrigin::RuntimeFile,
+        });
+        if posture.posture() == Posture::Production {
+            return Err(posture_refusal(&posture, "OIDC discovery"));
+        }
+    }
+    let token_endpoint = discovered_endpoint(&discovery, "token_endpoint")?;
     let requires_iss = discovery
         .extra
         .get("authorization_response_iss_parameter_supported")
@@ -684,11 +782,12 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
 
     let writer = match writer {
         Some(writer) => writer,
-        None => AuditWriter::open_without_posture(
+        None => AuditWriter::open(
             config
                 .audit
                 .destination()
                 .map_err(|error| RuntimeError::Audit(error.to_string()))?,
+            posture.posture(),
         )
         .await
         .map_err(|error| RuntimeError::Audit(error.operator_description()))?,
@@ -702,6 +801,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     .map_err(|_| RuntimeError::Audit("the client pseudonym could not be derived".to_owned()))?;
 
     let app = Arc::new(App {
+        posture: posture.clone(),
         issuer,
         client_id: config.sign_in.client_id.as_str().to_owned(),
         scopes: scopes(&config),
@@ -720,7 +820,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         journal,
         per_citizen,
         global_sign_in,
-        cookies: Cookies::for_mode(development),
+        cookies: Cookies::for_mode(plaintext_origin),
         maximum_session: Duration::from_secs(config.session.maximum_lifetime_seconds.get()),
         sign_in_lifetime: Duration::from_secs(config.session.sign_in_lifetime_seconds.get()),
     });
@@ -728,8 +828,8 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     let csp = CspBuilder::deny_by_default()
         .with_style_src(&["'self'"])
         .with_form_action(&["'self'"]);
-    let mut headers = security_headers_without_posture(csp);
-    if development {
+    let mut headers = security_headers(csp, posture.posture());
+    if loopback_listener && posture.posture() == Posture::Development {
         headers = headers.without_hsts();
     }
     Ok(Router::new()
@@ -779,7 +879,9 @@ async fn health() -> Response {
 
 async fn ready(axum::extract::State(app): axum::extract::State<Arc<App>>) -> Response {
     if app.journal.ready().await {
-        json_status(StatusCode::OK, "{\"status\":\"ready\"}")
+        let mut body = app.posture.ready_member();
+        body.insert("status".to_owned(), serde_json::json!("ready"));
+        axum::Json(body).into_response()
     } else {
         json_status(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -887,10 +989,7 @@ mod tests {
                 ),
             ]),
         };
-        for member in ["authorization_endpoint", "token_endpoint"] {
-            assert!(discovered_endpoint(&document, member, false).is_err());
-            assert!(discovered_endpoint(&document, member, true).is_err());
-        }
+        assert!(discovered_endpoint(&document, "token_endpoint").is_err());
         assert!(matches!(
             IssuerNetworkPolicy::new("http://id.example:8090", false),
             Err(registry_platform_oidc::OidcError::InsecureHttpRequiresOptIn)

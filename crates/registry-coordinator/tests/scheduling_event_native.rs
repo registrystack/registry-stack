@@ -385,7 +385,7 @@ async fn coordinator(
         .as_object_mut()
         .unwrap()
         .remove("applications");
-    runtime["database"] = json!({"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"});
+    runtime["database"] = json!({"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url","transport":"loopback-plaintext"});
     runtime["eventSources"] = json!({"scheduling":{
         "source":format!("urn:registrystack:scheduling:{}", support::scheduling::SCHEDULING_ID),
         "triggers":{"scheduling-lifecycle":trigger_keys}
@@ -394,7 +394,7 @@ async fn coordinator(
         "databaseId":format!("coordinator-scheduling-{}", uuid::Uuid::new_v4().simple()),
         "runtimeRole":role,
         "packages":[{"root":package,"expectedDigest":digest}],
-        "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback"},
+        "listener":{"bind":address.to_string(),"tlsTermination":"loopback-plaintext"},
         "authentication":{"issuer":issuer.issuer(),"audience":"urn:coordinator:scheduling-lifecycle",
             "scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},
             "policies":{"lifecycle-operator":{"subjects":["operations-lead"],"requiredScopes":["coordinator:operate"],

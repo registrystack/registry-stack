@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitCode};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_platform_config::{declared_from, PostureReport, POSTURE_ENV};
+pub use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 
@@ -76,7 +78,7 @@ enum Command {
         #[command(subcommand)]
         command: registry_cli_api::ConnectionCommand,
     },
-    /// Run the production Discovery service with the selected runtime.
+    /// Run the Discovery service with the selected runtime configuration.
     Serve(ServeArgs),
     /// Check an authoring project, a runtime file, or an index without
     /// network I/O.
@@ -98,9 +100,12 @@ enum Command {
         /// its own exactly as `discovery --runtime-config` parses it at startup.
         #[arg(long, value_name = "FILE")]
         index: Option<PathBuf>,
-        /// Accept an http loopback catalog URL, for development.
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
+        /// Check under the production posture.
         #[arg(long)]
-        allow_loopback: bool,
+        production: bool,
         /// Fill the runtime file's ${NAME} expressions from this process's
         /// environment and check the values they produce.
         #[arg(long)]
@@ -121,9 +126,9 @@ enum Command {
         /// The new directory the package is written to.
         #[arg(long, value_name = "DIRECTORY")]
         output: PathBuf,
-        /// Accept an http loopback catalog URL, for development.
-        #[arg(long)]
-        allow_loopback: bool,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// Optional operator revision recorded in the package envelope.
         #[arg(long)]
         revision: Option<String>,
@@ -141,6 +146,9 @@ struct ServeArgs {
     /// Runtime configuration file passed unchanged to the Discovery runtime.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    posture: Option<String>,
 
     /// Discovery runtime executable for an unmanaged installation.
     #[arg(long, hide = true, env = "DISCOVERY_BIN", value_name = "BINARY")]
@@ -168,6 +176,7 @@ pub fn main_entry() -> ExitCode {
     );
     main_entry_from(
         std::env::args_os(),
+        std::env::var_os(POSTURE_ENV).as_deref(),
         &mut io::stdout().lock(),
         &mut io::stderr().lock(),
     )
@@ -175,6 +184,7 @@ pub fn main_entry() -> ExitCode {
 
 fn main_entry_from<I, T>(
     args: I,
+    posture_environment: Option<&OsStr>,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> ExitCode
@@ -204,12 +214,52 @@ where
             if machine {
                 let _ = report::write(
                     &envelope("usage", report::USAGE_EXIT, json!({"diagnostics": [usage]})),
+                    None,
                     stdout,
                 );
             } else {
                 let _ = write!(stderr, "{}", usage.render_human());
             }
             return ExitCode::from(report::USAGE_EXIT);
+        }
+    };
+    let posture = match &arguments.command {
+        Command::Check {
+            posture,
+            production,
+            ..
+        } => {
+            if *production && posture.as_deref() == Some("development") {
+                return posture_usage(
+                    "platform.posture.conflict",
+                    "--production and --posture development contradict each other",
+                    "Use one of them.",
+                    machine,
+                    stdout,
+                    stderr,
+                );
+            }
+            Some(declared_from(
+                posture.as_deref().or(production.then_some("production")),
+                posture_environment,
+            ))
+        }
+        Command::Package { posture, .. } | Command::Serve(ServeArgs { posture, .. }) => {
+            Some(declared_from(posture.as_deref(), posture_environment))
+        }
+        _ => None,
+    };
+    let posture = match posture.transpose() {
+        Ok(posture) => posture,
+        Err(error) => {
+            return posture_usage(
+                error.code(),
+                error.message(),
+                error.suggested_action(),
+                machine,
+                stdout,
+                stderr,
+            )
         }
     };
     match arguments.command {
@@ -245,17 +295,17 @@ where
             project,
             runtime_config,
             index,
-            allow_loopback,
             environment,
             format,
             deny_warnings,
+            ..
         } => check(
             &CheckRequest {
                 project,
                 runtime_config,
                 index,
                 options: ProjectOptions {
-                    allow_loopback,
+                    declared: posture.expect("check resolves posture"),
                     environment,
                 },
                 format,
@@ -264,9 +314,12 @@ where
             stdout,
             stderr,
         ),
-        command => match run(command) {
-            Ok(line) => {
+        command => match run(command, posture) {
+            Ok((line, diagnostics)) => {
                 let _ = writeln!(stdout, "{line}");
+                for diagnostic in diagnostics {
+                    let _ = write!(stdout, "{}", diagnostic.render_human());
+                }
                 ExitCode::SUCCESS
             }
             Err(error) => {
@@ -275,6 +328,27 @@ where
             }
         },
     }
+}
+
+fn posture_usage(
+    code: &str,
+    message: &str,
+    action: &str,
+    machine: bool,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    let usage = Diagnostic::error(code, "", message, action);
+    if machine {
+        let _ = report::write(
+            &envelope("usage", report::USAGE_EXIT, json!({"diagnostics": [usage]})),
+            None,
+            stdout,
+        );
+    } else {
+        let _ = write!(stderr, "{}", usage.render_human());
+    }
+    ExitCode::from(report::USAGE_EXIT)
 }
 
 fn api_command(
@@ -323,7 +397,8 @@ fn check(
         diagnostics.extend(inspected.report.into_diagnostics());
     }
     if let Some(path) = &request.runtime_config {
-        let (checked, missing) = inspect_runtime_file(path, request.options.environment);
+        let (checked, missing) =
+            inspect_runtime_file(path, request.options.environment, request.options.declared);
         unavailable |= missing;
         files += checked.files_checked().unwrap_or(0);
         diagnostics.extend(checked.into_diagnostics());
@@ -334,6 +409,13 @@ fn check(
         unavailable |= checked.unavailable;
         files += checked.report.files_checked().unwrap_or(0);
         index = checked.index;
+        if let Some(index) = &index {
+            let mut posture = PostureReport::new(request.options.declared);
+            registry_discovery::record_index_posture(index, &mut posture, |host| {
+                registry_platform_httputil::loopback::loopback_host(host).is_some()
+            });
+            diagnostics.extend(posture.diagnostics(path));
+        }
         diagnostics.extend(checked.report.into_diagnostics());
     }
     let mut report = Report::new(diagnostics);
@@ -370,7 +452,11 @@ fn check(
                 "mappingRevision": index.mapping_revision,
             });
         }
-        let _ = report::write(&envelope("check", exit, body), stdout);
+        let _ = report::write(
+            &envelope("check", exit, body),
+            Some(request.options.declared),
+            stdout,
+        );
     } else if exit == 0 {
         if let Some((origins, mappings)) = counts {
             let _ = writeln!(stdout, "valid origins={origins} mappings={mappings}");
@@ -415,7 +501,10 @@ fn envelope(command: &str, exit: u8, mut body: Value) -> Value {
     body
 }
 
-fn run(command: Command) -> Result<String, String> {
+fn run(
+    command: Command,
+    declared: Option<DeclaredPosture>,
+) -> Result<(String, Vec<Diagnostic>), String> {
     match command {
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
@@ -425,8 +514,8 @@ fn run(command: Command) -> Result<String, String> {
         Command::Package {
             project,
             output,
-            allow_loopback,
             revision,
+            ..
         } => tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -436,16 +525,17 @@ fn run(command: Command) -> Result<String, String> {
                     .block_on(package_project(
                         &project,
                         &output,
-                        allow_loopback,
+                        declared.expect("package resolves posture"),
                         revision.as_deref(),
                     ))
                     .map(|package| {
-                        format!(
+                        let line = format!(
                             "packaged packageDigest={} catalogRevision={} mappingRevision={}",
                             package.package_digest,
                             package.index.catalog_revision,
                             package.index.mapping_revision
-                        )
+                        );
+                        (line, package.posture_diagnostics)
                     })
                     .map_err(|error| error.to_string())
             }),
@@ -472,6 +562,9 @@ fn serve(args: ServeArgs, stderr: &mut dyn io::Write) -> ExitCode {
     };
     let mut command = ProcessCommand::new(binary);
     command.arg("--runtime-config").arg(args.runtime_config);
+    if let Some(posture) = args.posture {
+        command.args(["--posture", &posture]);
+    }
     replace_with_service(command, "discovery", stderr)
 }
 
@@ -529,6 +622,7 @@ mod tests {
         let mut stderr = Vec::new();
         let exit = main_entry_from(
             std::iter::once("discoveryctl").chain(args.iter().copied()),
+            None,
             &mut stdout,
             &mut stderr,
         );
@@ -550,7 +644,18 @@ mod tests {
         let base = std::env::temp_dir()
             .canonicalize()
             .expect("the temporary directory resolves");
-        TempDir::new_in(base).expect("temporary directory")
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            tempfile::Builder::new()
+                .permissions(fs::Permissions::from_mode(0o700))
+                .tempdir_in(base)
+                .expect("temporary directory")
+        }
+        #[cfg(not(unix))]
+        {
+            TempDir::new_in(base).expect("temporary directory")
+        }
     }
 
     /// A copy of the shipped fixture project with `edit` applied.
@@ -571,9 +676,19 @@ mod tests {
         root
     }
 
+    fn copy_runtime(root: &Path) {
+        fs::copy(
+            Path::new(FIXTURE).join("runtime.yaml"),
+            root.join("runtime.yaml"),
+        )
+        .expect("runtime");
+    }
+
     #[test]
     fn cfg_diag_1_a_clean_check_reports_json_in_the_ctl_envelope() {
-        let (exit, stdout, stderr) = run_cli(&["check", "--project", FIXTURE, "--format", "json"]);
+        let fixture = fixture_copy(copy_runtime);
+        let root = fixture.path().to_str().unwrap();
+        let (exit, stdout, stderr) = run_cli(&["check", "--project", root, "--format", "json"]);
         assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
         assert!(stderr.is_empty(), "{stderr}");
         assert!(
@@ -597,11 +712,13 @@ mod tests {
     /// command's own output.
     #[test]
     fn cfg_schema_1_the_report_example_is_the_check_output() {
+        let fixture = fixture_copy(copy_runtime);
+        let root = fixture.path().to_str().unwrap();
         let example = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../products/discovery/fixtures/ctl-report/check.json"
         );
-        let (exit, stdout, _) = run_cli(&["check", "--project", FIXTURE, "--format", "json"]);
+        let (exit, stdout, _) = run_cli(&["check", "--project", root, "--format", "json"]);
         assert_eq!(exit, ExitCode::SUCCESS, "{stdout}");
         let committed = fs::read_to_string(example).expect("the report example");
         let sample: Value = serde_json::from_str(&committed).expect("the report example parses");
@@ -628,7 +745,9 @@ mod tests {
 
     #[test]
     fn cfg_diag_2_a_clean_check_prints_the_counts_and_the_summary() {
-        let (exit, stdout, stderr) = run_cli(&["check", "--project", FIXTURE]);
+        let fixture = fixture_copy(copy_runtime);
+        let root = fixture.path().to_str().unwrap();
+        let (exit, stdout, stderr) = run_cli(&["check", "--project", root]);
         assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
         assert_eq!(
             stdout,
@@ -865,7 +984,9 @@ mod tests {
 
     #[test]
     fn cfg_check_1_the_runtime_file_checks_on_its_own_and_with_the_project() {
-        let runtime = Path::new(FIXTURE).join("runtime.yaml");
+        let fixture = fixture_copy(copy_runtime);
+        let root = fixture.path().to_str().unwrap();
+        let runtime = fixture.path().join("runtime.yaml");
         let runtime = runtime.to_str().unwrap();
         let (exit, stdout, stderr) =
             run_cli(&["check", "--runtime-config", runtime, "--format", "json"]);
@@ -877,7 +998,7 @@ mod tests {
         let (exit, stdout, stderr) = run_cli(&[
             "check",
             "--project",
-            FIXTURE,
+            root,
             "--runtime-config",
             runtime,
             "--format",
@@ -889,7 +1010,8 @@ mod tests {
 
     #[test]
     fn cfg_diag_2_a_refused_runtime_file_prints_its_diagnostic_and_exits_one() {
-        let runtime = Path::new(FIXTURE).join("runtime.yaml");
+        let fixture = fixture_copy(copy_runtime);
+        let runtime = fixture.path().join("runtime.yaml");
         let runtime = runtime.to_str().unwrap();
         let (exit, stdout, stderr) = run_cli(&["check", "--runtime-config", runtime]);
         assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
@@ -914,6 +1036,68 @@ mod tests {
         assert_eq!(report["status"], "domain-refusal");
         assert_eq!(report["ok"], false);
         assert!(!report["diagnostics"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn runtime_config_check_reports_package_posture() {
+        use registry_discovery::{
+            canonical_index_bytes, catalog_revision, package_limits, INDEX_FILE, PACKAGE_COMMAND,
+        };
+
+        let root = fixture_copy(copy_runtime);
+        let runtime = root.path().join("runtime.yaml");
+        let package = root.path().join("package");
+        let text = fs::read_to_string(&runtime)
+            .unwrap()
+            .replace("/srv/registry-discovery/package", package.to_str().unwrap());
+        fs::write(&runtime, text).unwrap();
+
+        let mut index =
+            registry_discovery::load_index(&Path::new(FIXTURE).join(INDEX_FILE)).unwrap();
+        index.origins[0].catalog_url = "http://127.0.0.1/catalog.jsonld".into();
+        index.services[0].origin_url = index.origins[0].catalog_url.clone();
+        index.catalog_revision = catalog_revision(&index.services).unwrap();
+        let files = std::collections::BTreeMap::from([(
+            INDEX_FILE.to_owned(),
+            canonical_index_bytes(&index).unwrap(),
+        )]);
+        registry_platform_config::write_package(
+            &package,
+            &files,
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .unwrap();
+
+        for (posture, code) in [("production", 1), ("development", 0)] {
+            let (exit, stdout, stderr) = run_cli(&[
+                "check",
+                "--runtime-config",
+                runtime.to_str().unwrap(),
+                "--posture",
+                posture,
+                "--format",
+                "json",
+            ]);
+            assert_eq!(exit, ExitCode::from(code), "{stdout}{stderr}");
+            let report = json(&stdout);
+            let diagnostics = report["diagnostics"].as_array().unwrap();
+            assert_eq!(diagnostics.len(), 2, "{report}");
+            let severity = if posture == "production" {
+                "error"
+            } else {
+                "warning"
+            };
+            for (finding, pointer) in diagnostics
+                .iter()
+                .zip(["/origins/0/catalogUrl", "/services/0/originUrl"])
+            {
+                assert_eq!(finding["code"], "discovery.posture.loopback-catalog-url");
+                assert_eq!(finding["path"], pointer);
+                assert_eq!(finding["severity"], severity);
+            }
+        }
     }
 
     #[test]
@@ -979,7 +1163,7 @@ mod tests {
             "discovery-index.json",
         ])
         .expect("the retired command reaches its migration refusal");
-        let message = run(arguments.command).unwrap_err();
+        let message = run(arguments.command, None).unwrap_err();
         assert!(message.contains("discoveryctl package"), "{message}");
 
         assert!(Arguments::try_parse_from([

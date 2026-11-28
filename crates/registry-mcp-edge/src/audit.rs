@@ -102,12 +102,13 @@ impl ToolAuditLog {
             }
         }
 
-        Self::new(AuditWriter::from_line_sink_without_posture(Box::new(
-            RefusingSink {
+        Self::new(AuditWriter::from_line_sink(
+            Box::new(RefusingSink {
                 accepted,
                 writes: Arc::new(Mutex::new(0)),
-            },
-        )))
+            }),
+            registry_platform_config::Posture::Production,
+        ))
     }
 }
 

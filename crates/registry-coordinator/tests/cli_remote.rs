@@ -841,3 +841,62 @@ async fn check_now_needs_a_run_and_a_step_and_calls_no_service_without_them() {
     assert_eq!(output.status.code(), Some(2));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn doctor_refuses_a_development_peer_only_in_production() {
+    let server = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let token = root.path().join("token");
+    fs::write(&token, TOKEN).unwrap();
+    Mock::given(method("GET"))
+        .and(path("/v1/doctor"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Registry-Posture", "development")
+                .set_body_json(json!({"activationReady":true,"state":{}})),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    for (posture, success) in [("production", false), ("development", true)] {
+        let origin = server.uri();
+        let token = token.clone();
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+                .args([
+                    "--format",
+                    "json",
+                    "--posture",
+                    posture,
+                    "doctor",
+                    "--url",
+                    &origin,
+                    "--token-file",
+                ])
+                .arg(token)
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.success(), success, "{report}");
+        if success {
+            assert_eq!(report["activationReady"], true);
+        } else {
+            let diagnostic = &report["diagnostics"][0];
+            assert!(diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .contains("declared development"));
+            assert!(diagnostic["suggestedAction"]
+                .as_str()
+                .unwrap()
+                .contains("--posture development"));
+            assert!(diagnostic["suggestedAction"]
+                .as_str()
+                .unwrap()
+                .contains("production Coordinator"));
+        }
+    }
+}

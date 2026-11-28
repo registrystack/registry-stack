@@ -72,7 +72,7 @@ package:
   expectedDigest: {digest}
 listener:
   bind: 127.0.0.1:0
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
 secretProviders:
   file:
@@ -94,7 +94,10 @@ audit:
 storage:
   type: database
 contentVerification:
-  type: disabled
+  type: http
+  url: http://127.0.0.1:9/verify
+  authorizationRef: secret:file/hook-key
+  policyId: documents-test
 cleanup:
   erasure: active
 destinations:

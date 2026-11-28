@@ -125,7 +125,7 @@ no `import`, `eval`, `print` or `debug`.
 SMTP requires `STARTTLS` or implicit TLS, verifies the certificate against the configured host
 name, sends no credential to a relay that does not offer `STARTTLS`, and cannot have a header line
 opened from template data.
-Plain `http` and `development-loopback` SMTP are limited to loopback.
+Plain `http` and `loopback-plaintext` SMTP are limited to loopback.
 Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which Messaging connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
 SMTP refuses `localhost.` and `gateway.localhost`, and connects only to the loopback address it
 checked.
@@ -164,7 +164,7 @@ In split-role mode the runtime credential cannot write either ledger or own Mess
 migration credential holder is trusted to change them.
 PostgreSQL 17 or newer is required, and the server version is checked before any migration or
 activation write.
-A shipped runtime refuses `database.testOnlyPlaintext: true`, so database traffic is TLS.
+The runtime uses verified TLS by default. Plaintext PostgreSQL requires an explicit transport setting.
 
 {/* Evidence: crates/registry-messaging/src/package.rs
     a_symbolic_link_anywhere_in_the_package_is_refused;
@@ -220,7 +220,7 @@ subject.
 `messagingctl check` reads no database, network or secret.
 
 `rstack dev` is the supported way to run Messaging on a developer's machine.
-A run listens on loopback only and runs the runtime on a `development-loopback` listener (refused on
+A run listens on loopback only and runs the runtime on a `loopback-plaintext` listener (refused on
 any non-loopback bind).
 It publishes its PostgreSQL and Mailpit containers on 127.0.0.1 and labels them with the run, so
 `stop`, TTL expiry and `stop --recover` remove them.
@@ -273,6 +273,19 @@ No diagnostic repeats a value read from the file or environment.
     a_removed_key_names_the_key_that_replaced_it,
     a_retired_api_version_names_its_replacement. */}
 
+
+## Deployment posture
+
+Production is the default.
+Development responses carry `Registry-Posture: development`, and audit lines carry the process posture.
+Production peers refuse development neighbours.
+Deploy Messaging and its Registry Stack peers under the same posture.
+Activate a fresh database to change the deployment posture.
+
+{/* Evidence: crates/registry-messaging/src/runtime.rs open_audit;
+    crates/registry-messaging/src/http.rs http_edge;
+    crates/registry-messaging/src/activation.rs posture_mismatch. */}
+
 ## Operator obligations
 
 The boundaries hold only if your deployment does the following.
@@ -309,7 +322,7 @@ The boundaries hold only if your deployment does the following.
    `failed_check="scope"` with a fixed remedy that names `authentication.oidc.scopeClaim` and
    `accessProfiles` `requiredScopes`, never a claim, scope or profile value.
 10. Set `allowedPrivateCidrs` only for relays and providers you run, and treat
-    `allowInsecureHttp: true` as a loopback or test setting; startup warns when it is set.
+    `allowInsecureHttp: true` only in development. Loopback HTTP needs no opt-in.
     With it, an attacker on the network path to the issuer can substitute keys.
     Declare only issuer and JWKS addresses you intend Messaging to reach, because a declared private
     address is trusted on your word (MESSAGING-RES-09).

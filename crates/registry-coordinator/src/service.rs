@@ -38,20 +38,32 @@ struct Cli {
     /// Milliseconds between worker polls.
     #[arg(long,default_value_t=100,value_parser=clap::value_parser!(u64).range(10..=10_000))]
     poll_ms: u64,
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Serve authenticated recovery operations with worker dispatch disabled.
     #[arg(long)]
     recovery_only: bool,
 }
-async fn execute(cli: Cli) -> Result<()> {
+async fn execute(cli: Cli, declared: registry_platform_config::DeclaredPosture) -> Result<()> {
     let shutdown = shutdown_signal()?;
-    let runtime = Arc::new(RuntimeConfig::load(&cli.runtime_config)?);
+    let runtime = Arc::new(RuntimeConfig::load_with_posture(
+        &cli.runtime_config,
+        declared,
+    )?);
+    if let Some(posture) = &runtime.posture {
+        posture.log_startup();
+    }
     let d = deployment::config(&runtime)?;
     let workflows = Arc::new(deployment::load_workflows(d)?);
     workflows.validate(&runtime)?;
     let event_keys = event_ingress_keys(&runtime, cli.recovery_only)?;
     let authenticator = Arc::new(
         d.authentication
-            .authenticator(&runtime.secret_providers, d.local())
+            .authenticator(&runtime.secret_providers)
             .await?,
     );
     let store = deployment::open(&runtime, false).await?;
@@ -102,8 +114,11 @@ async fn execute(cli: Cli) -> Result<()> {
     let server = axum::serve(listener, http::router(state))
         .with_graceful_shutdown(stop_requested(stopped.clone()));
     let metrics_server = metrics_listener.map(|listener| {
-        axum::serve(listener, metrics::metrics_router(store.clone()))
-            .with_graceful_shutdown(stop_requested(stopped.clone()))
+        axum::serve(
+            listener,
+            metrics::metrics_router_with_posture(store.clone(), declared.posture),
+        )
+        .with_graceful_shutdown(stop_requested(stopped.clone()))
     });
     let server = async {
         let public = async {
@@ -382,7 +397,20 @@ where
 }
 
 pub async fn run() -> std::process::ExitCode {
-    match execute(Cli::parse()).await {
+    let cli = Cli::parse();
+    let declared = match registry_platform_config::declared(cli.posture.as_deref()) {
+        Ok(declared) => declared,
+        Err(error) => {
+            eprintln!(
+                "{}: {} {}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            return std::process::ExitCode::from(2);
+        }
+    };
+    match execute(cli, declared).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");

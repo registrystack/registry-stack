@@ -25,7 +25,9 @@ use registry_discovery_client::{
     EvidenceTypeResolveSelectionExt, MatchedCapability, ServiceSearchSelectionExt,
     ServiceSelection,
 };
-use registry_discoveryctl::{package_project_at, BuildError};
+use registry_discoveryctl::{
+    package_project_at, BuildError, DeclaredPosture, Posture, PostureSource,
+};
 use registry_evidence::config::EvidenceConfig;
 use registry_evidence_client::{
     AssuranceProfile, EvidenceClient, EvidenceClientConfig, EvidenceRequestSpec,
@@ -545,10 +547,14 @@ async fn complete_evidence_journey_builds_selects_trusts_and_invokes_a_signed_as
     let project = TempDir::new().expect("the Discovery authoring project creates");
     write_authoring_project(project.path(), &provider, false);
     let package_root = project.path().join("discovery-package");
+    let declared = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
     package_project_at(
         project.path(),
         &package_root,
-        true,
+        declared,
         None,
         OffsetDateTime::UNIX_EPOCH,
     )
@@ -562,7 +568,7 @@ async fn complete_evidence_journey_builds_selects_trusts_and_invokes_a_signed_as
     let invalid = package_project_at(
         project.path(),
         &package_root,
-        true,
+        declared,
         None,
         OffsetDateTime::UNIX_EPOCH,
     )

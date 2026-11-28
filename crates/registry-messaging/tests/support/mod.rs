@@ -285,21 +285,29 @@ impl Harness {
         write_package_inputs(&package_root, &inputs, None).expect("the installed starter package");
         let runtime_path =
             write_runtime(root.path(), &package_root, &isolated.reference, providers);
-        let config = RuntimeConfig::load(&runtime_path).expect("the runtime configuration");
+        let config =
+            RuntimeConfig::load(&runtime_path, registry_messaging::config::DEFAULT_POSTURE)
+                .expect("the runtime configuration");
         apply_activation(&config, &ApplyRequest::default())
             .await
             .expect("apply the starter");
 
         let package = Arc::new(load_package(&package_root).expect("the starter").package);
         let secrets = config.secret_resolver().expect("the secret resolver");
-        let store = PostgresStore::connect_runtime(&config.database, &secrets).expect("the store");
+        let store = PostgresStore::connect_runtime(
+            &config.database,
+            &secrets,
+            config.development_witness(),
+        )
+        .expect("the store");
         let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             AUDIT_SECRET.as_bytes().to_vec(),
         ))
         .expect("the audit profile");
         let audit = Arc::new(MessagingAudit::new(
-            AuditWriter::open_without_posture(
+            AuditWriter::open(
                 config.audit.destination().expect("audit destination"),
+                registry_platform_config::Posture::Production,
             )
             .await
             .expect("the audit writer"),
@@ -341,6 +349,9 @@ impl Harness {
             false,
         ));
         let app = router(HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_messaging::config::DEFAULT_POSTURE,
+            ),
             authenticator,
             readiness: Readiness::Store {
                 store: store.clone(),
@@ -508,6 +519,9 @@ impl Harness {
             loaded.receipt_providers(),
         ));
         router(HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_messaging::config::DEFAULT_POSTURE,
+            ),
             authenticator: Arc::new(MessagingAuthenticator::new(
                 verifier(&self.admitted()),
                 keys(),
@@ -550,6 +564,9 @@ impl Harness {
             loaded.receipt_providers(),
         ));
         router(HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_messaging::config::DEFAULT_POSTURE,
+            ),
             authenticator: Arc::new(MessagingAuthenticator::new(
                 verifier(&self.admitted()),
                 keys(),
@@ -601,10 +618,14 @@ impl Harness {
             .uri("/metrics")
             .body(Body::empty())
             .unwrap();
-        let response = metrics_router(Arc::clone(&self.metrics), Some(self.store.clone()))
-            .oneshot(request)
-            .await
-            .unwrap();
+        let response = metrics_router(
+            Arc::clone(&self.metrics),
+            Some(self.store.clone()),
+            registry_platform_config::Posture::Production,
+        )
+        .oneshot(request)
+        .await
+        .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()

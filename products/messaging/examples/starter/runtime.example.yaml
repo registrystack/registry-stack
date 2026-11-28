@@ -23,11 +23,11 @@ package:
   root: /srv/registry-messaging/package
 listener:
   bind: 127.0.0.1:8107
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
   # `operator-controlled-upstream` is the production value: the runtime itself
   # stays plaintext and an operator-managed TLS edge terminates transport in
-  # front of it. `development-loopback` is direct plaintext, refused on any
+  # front of it. `loopback-plaintext` is direct plaintext, refused on any
   # non-loopback bind. `networkExposure: container-private` additionally
   # permits an unspecified bind for a listener kept on a private container
   # network.
@@ -47,17 +47,17 @@ secretProviders:
   # reference must resolve under a provider declared here.
   # environment: {}
 database:
-  # The least-privilege service connection and the operator-run migration
-  # connection, each a PostgreSQL URL held in the secret provider. The
-  # runtime requires TLS on the database connection.
+  # The least-privilege service connection and operator migration connection
+  # each use a PostgreSQL URL held in the secret provider.
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
   # The PEM bundle of the private CA in front of PostgreSQL, when the
   # deployment terminates database TLS with one.
   # caBundleRef: secret:file/postgres-ca.pem
-  # `testOnlyPlaintext: true` is the one plaintext escape, and only a build
-  # carrying the `postgres-test` feature accepts it.
-  # testOnlyPlaintext: true
+  # The transport defaults to verified-tls. Use loopback-plaintext for
+  # a loopback PostgreSQL host in either posture, or private-network-plaintext
+  # for a private network under the development posture.
+  # transport: verified-tls
 authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
@@ -102,9 +102,8 @@ providers:
   mail-relay:
     type: smtp
     host: smtp.example.org
-    # `starttls` (port 587) or `implicit` (port 465). `development-loopback`
-    # is plaintext to a loopback relay, accepted only by a test build or
-    # behind a `development-loopback` listener.
+    # `starttls` (port 587) or `implicit` (port 465). `loopback-plaintext`
+    # is plaintext to a loopback relay and requires an explicit port.
     tls: starttls
     authentication:
       usernameRef: secret:file/smtp-username

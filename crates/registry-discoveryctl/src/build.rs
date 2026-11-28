@@ -5,14 +5,17 @@ use std::path::Path;
 use std::time::Duration;
 
 use registry_discovery::{
-    canonical_index_bytes, catalog_revision, mapping_revision, validate_index,
-    CompiledEvidenceMapping, DiscoveryIndex, EvidenceTypeAlternative, OriginSummary, ServiceRecord,
-    INDEX_API_VERSION, INDEX_FILE, INDEX_KIND, MAXIMUM_INDEX_BYTES, MAXIMUM_PACKAGE_BYTES,
-    MAXIMUM_PACKAGE_DEPTH, MAXIMUM_PACKAGE_FILES, PACKAGE_COMMAND,
+    canonical_index_bytes, catalog_revision, mapping_revision, record_index_posture,
+    validate_index, CompiledEvidenceMapping, DiscoveryIndex, EvidenceTypeAlternative,
+    OriginSummary, ServiceRecord, INDEX_API_VERSION, INDEX_FILE, INDEX_KIND, MAXIMUM_INDEX_BYTES,
+    MAXIMUM_PACKAGE_BYTES, MAXIMUM_PACKAGE_DEPTH, MAXIMUM_PACKAGE_FILES, PACKAGE_COMMAND,
 };
-use registry_platform_config::{write_package, PackageError, PackageLimits, VerifiedPackage};
+use registry_platform_config::{
+    write_package, DeclaredPosture, PackageError, PackageLimits, Posture, PostureReport,
+    VerifiedPackage,
+};
 use registry_platform_httputil::{
-    read_bounded, validate_response_headers_without_peer_policy, FetchUrlPolicy,
+    read_bounded, validate_response_headers, FetchUrlPolicy, PeerPolicy,
 };
 use reqwest::header::{ACCEPT, CONTENT_ENCODING, CONTENT_TYPE};
 use sha2::{Digest as _, Sha256};
@@ -57,18 +60,19 @@ pub enum BuildError {
 pub struct PackagedDiscovery {
     pub index: DiscoveryIndex,
     pub package_digest: String,
+    pub posture_diagnostics: Vec<registry_platform_yaml::Diagnostic>,
 }
 
 pub async fn package_project(
     project_root: &Path,
     output: &Path,
-    allow_loopback: bool,
+    declared: DeclaredPosture,
     revision: Option<&str>,
 ) -> Result<PackagedDiscovery, BuildError> {
     package_project_with_timeouts(
         project_root,
         output,
-        allow_loopback,
+        declared,
         revision,
         None,
         DNS_TIMEOUT,
@@ -80,14 +84,14 @@ pub async fn package_project(
 pub async fn package_project_at(
     project_root: &Path,
     output: &Path,
-    allow_loopback: bool,
+    declared: DeclaredPosture,
     revision: Option<&str>,
     built_at: OffsetDateTime,
 ) -> Result<PackagedDiscovery, BuildError> {
     package_project_with_timeouts(
         project_root,
         output,
-        allow_loopback,
+        declared,
         revision,
         Some(built_at),
         DNS_TIMEOUT,
@@ -99,15 +103,19 @@ pub async fn package_project_at(
 async fn package_project_with_timeouts(
     project_root: &Path,
     output: &Path,
-    allow_loopback: bool,
+    declared: DeclaredPosture,
     revision: Option<&str>,
     fixed_built_at: Option<OffsetDateTime>,
     dns_timeout: Duration,
     fetch_timeout: Duration,
 ) -> Result<PackagedDiscovery, BuildError> {
-    let checked = check_project(project_root, allow_loopback)?;
+    let checked = check_project(project_root, declared)?;
+    let policy = match declared.posture {
+        Posture::Production => FetchUrlPolicy::strict(),
+        Posture::Development => FetchUrlPolicy::https_or_loopback(),
+    };
     let (mut origins, mut services) =
-        fetch_origins(&checked, allow_loopback, dns_timeout, fetch_timeout).await?;
+        fetch_origins(&checked, declared, &policy, dns_timeout, fetch_timeout).await?;
     origins.sort_by(|left, right| left.origin_id.cmp(&right.origin_id));
     services.sort_by(|left, right| left.record_id.cmp(&right.record_id));
     let mut mappings = compile_mappings(checked.mappings);
@@ -134,10 +142,22 @@ async fn package_project_with_timeouts(
         services,
         mappings,
     };
+    let mut posture = PostureReport::new(declared);
+    record_index_posture(&index, &mut posture, |host| {
+        registry_platform_httputil::loopback::loopback_host(host).is_some()
+    });
+    let index_path = output.join(INDEX_FILE);
+    posture.decide(&index_path).map_err(|error| {
+        BuildError::Project(ProjectError {
+            report: registry_platform_yaml::Report::new(error.diagnostics().to_vec()),
+            unavailable: false,
+        })
+    })?;
     let package = write_index_package(&index, output, revision, MAXIMUM_INDEX_BYTES)?;
     Ok(PackagedDiscovery {
         index,
         package_digest: package.digest().to_owned(),
+        posture_diagnostics: posture.diagnostics(&index_path),
     })
 }
 
@@ -159,14 +179,14 @@ fn write_index_package(
 
 async fn fetch_origins(
     project: &CheckedProject,
-    allow_loopback: bool,
+    declared: DeclaredPosture,
+    policy: &FetchUrlPolicy,
     dns_timeout: Duration,
     fetch_timeout: Duration,
 ) -> Result<(Vec<OriginSummary>, Vec<ServiceRecord>), BuildError> {
-    let policy = if allow_loopback {
-        FetchUrlPolicy::https_or_loopback()
-    } else {
-        FetchUrlPolicy::strict()
+    let peer_policy = match declared.posture {
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
     };
     let mut origins = Vec::new();
     let mut services = Vec::new();
@@ -185,7 +205,7 @@ async fn fetch_origins(
             .send()
             .await
             .map_err(|_| BuildError::Fetch)?;
-        validate_response_headers_without_peer_policy(response.headers())
+        validate_response_headers(response.headers(), peer_policy)
             .map_err(|_| BuildError::Fetch)?;
         if response.status() != reqwest::StatusCode::OK
             || !exact_profile_media_type(response.headers())
@@ -398,6 +418,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn package_fetch_refuses_a_development_peer_in_production() {
+        let service = ServiceDescription::new(
+            "urn:example:service:evidence".into(),
+            ServiceKind::Evidence,
+            "Example Evidence".into(),
+            "Public minimum-disclosure assertions".into(),
+            "https://evidence.example.org".into(),
+            ServiceRoles::default(),
+            vec!["urn:example:jurisdiction".into()],
+            vec!["https://registrystack.org/evidence/profile/v1".into()],
+            vec!["urn:example:evidence-type:adult-status".into()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let body = render_description(&DiscoveryDescription::new(vec![service]).unwrap()).unwrap();
+        let app = Router::new().route(
+            "/catalog.jsonld",
+            get(move || {
+                let body = body.clone();
+                async move {
+                    Response::builder()
+                        .header(CONTENT_TYPE, MEDIA_TYPE)
+                        .header("Registry-Posture", "development")
+                        .body(Body::from(body))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let project = TempDir::new().unwrap();
+        fs::write(project.path().join("origins.yaml"), format!(
+            "apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1\nkind: DiscoveryOrigins\norigins:\n  evidence:\n    catalogUrl: http://{address}/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n"
+        )).unwrap();
+        fs::create_dir(project.path().join("mappings")).unwrap();
+        let development = DeclaredPosture {
+            posture: Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        };
+        let production = DeclaredPosture {
+            posture: Posture::Production,
+            ..development
+        };
+        let checked = check_project(project.path(), development).unwrap();
+        // Admit the loopback fixture at the network layer so the response reaches the peer check.
+        let result = fetch_origins(
+            &checked,
+            production,
+            &FetchUrlPolicy::https_or_loopback(),
+            DNS_TIMEOUT,
+            FETCH_TIMEOUT,
+        )
+        .await;
+        assert!(matches!(result, Err(BuildError::Fetch)), "{result:?}");
+        let package = package_project(
+            project.path(),
+            &project.path().join("package"),
+            development,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(package.index.services.len(), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn origin_fetch_timeout_leaves_the_previous_output_untouched() {
         let service = ServiceDescription::new(
             "urn:example:service:evidence".into(),
@@ -466,7 +557,10 @@ mod tests {
             package_project_with_timeouts(
                 &project_path,
                 &package_output,
-                true,
+                DeclaredPosture {
+                    posture: Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
                 None,
                 Some(OffsetDateTime::UNIX_EPOCH),
                 DNS_TIMEOUT,

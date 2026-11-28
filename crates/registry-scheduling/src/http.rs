@@ -22,6 +22,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use registry_platform_config::{Posture, PostureReport};
+
 use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE,
@@ -37,10 +39,10 @@ use registry_platform_authcommon::{
     RefusalRecorder,
 };
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit_default, security_headers_without_posture,
-    CspBuilder, FrameworkRejection, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
+    FrameworkRejection, ProblemBody, TraceContext,
 };
-use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_PATH};
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, AvailabilityPreviewRequest,
     CancelAppointmentRequest, CreateAppointmentRequest, ExternalReference, ProblemCode,
@@ -71,6 +73,7 @@ tokio::task_local! {
 
 #[derive(Clone)]
 pub struct HttpState {
+    pub posture: PostureReport,
     pub service: Arc<SchedulingService>,
     pub authenticator: Arc<SchedulingAuthenticator>,
 }
@@ -83,48 +86,53 @@ const APPOINTMENT_HISTORY_ROUTE: &str = "/v1/appointments/{appointment_id}/histo
 const APPOINTMENT_ATTENDANCE_ROUTE: &str = "/v1/appointments/{appointment_id}/attendance";
 /// The operator-private router the metrics listener serves: the series, with
 /// the queues sampled from `store` at each scrape.
-pub fn metrics_router(metrics: Arc<Metrics>, store: PostgresStore) -> Router {
+pub fn metrics_router(metrics: Arc<Metrics>, store: PostgresStore, posture: Posture) -> Router {
     http_edge(
         Router::new()
             .route(METRICS_PATH, get(serve_metrics))
             .with_state(MetricsState { metrics, store }),
+        posture,
     )
 }
 
 pub fn router(state: HttpState) -> Router {
+    let posture = state.posture.posture();
     let refusals = Arc::clone(state.authenticator.refusals());
-    http_edge(with_refusal_recording(
-        Router::new()
-            .route(HEALTH_PATH, get(health))
-            .route(READY_PATH, get(ready))
-            .route("/healthz", get(healthz))
-            .route("/readyz", get(readyz))
-            .route(SCHEDULING_PATH, get(scheduling))
-            .route(SERVICES_PATH, get(list_services))
-            .route(OFFERINGS_PATH, get(list_offerings))
-            .route(RESOURCES_PATH, get(list_resources))
-            .route(LOCATIONS_PATH, get(list_locations))
-            .route(AVAILABILITY_PATH, get(availability))
-            .route(AVAILABILITY_PREVIEW_PATH, post(preview_availability))
-            .route(AVAILABILITY_EXPLAIN_PATH, get(explain))
-            .route(BUSY_SOURCE_PREVIEW_PATH, post(preview_source_busy))
-            .route(BUSY_SOURCE_APPLY_PATH, post(apply_source_busy))
-            .route(HOLDS_PATH, post(create_hold))
-            .route(HOLD_ROUTE, delete(release_hold))
-            .route(
-                OPERATIONAL_APPOINTMENTS_PATH,
-                get(list_operational_appointments),
-            )
-            .route(APPOINTMENTS_PATH, get(list_appointments))
-            .route(APPOINTMENTS_PATH, post(create_appointment))
-            .route(APPOINTMENT_RECEIPT_PATH, post(appointment_receipt))
-            .route(APPOINTMENT_ROUTE, get(get_appointment))
-            .route(APPOINTMENT_RESCHEDULE_ROUTE, post(reschedule_appointment))
-            .route(APPOINTMENT_CANCEL_ROUTE, post(cancel_appointment))
-            .route(APPOINTMENT_HISTORY_ROUTE, get(appointment_history))
-            .route(APPOINTMENT_ATTENDANCE_ROUTE, put(record_attendance)),
-        refusals,
-    ))
+    http_edge(
+        with_refusal_recording(
+            Router::new()
+                .route(HEALTH_PATH, get(health))
+                .route(READY_PATH, get(ready))
+                .route("/healthz", get(healthz))
+                .route("/readyz", get(readyz))
+                .route(SCHEDULING_PATH, get(scheduling))
+                .route(SERVICES_PATH, get(list_services))
+                .route(OFFERINGS_PATH, get(list_offerings))
+                .route(RESOURCES_PATH, get(list_resources))
+                .route(LOCATIONS_PATH, get(list_locations))
+                .route(AVAILABILITY_PATH, get(availability))
+                .route(AVAILABILITY_PREVIEW_PATH, post(preview_availability))
+                .route(AVAILABILITY_EXPLAIN_PATH, get(explain))
+                .route(BUSY_SOURCE_PREVIEW_PATH, post(preview_source_busy))
+                .route(BUSY_SOURCE_APPLY_PATH, post(apply_source_busy))
+                .route(HOLDS_PATH, post(create_hold))
+                .route(HOLD_ROUTE, delete(release_hold))
+                .route(
+                    OPERATIONAL_APPOINTMENTS_PATH,
+                    get(list_operational_appointments),
+                )
+                .route(APPOINTMENTS_PATH, get(list_appointments))
+                .route(APPOINTMENTS_PATH, post(create_appointment))
+                .route(APPOINTMENT_RECEIPT_PATH, post(appointment_receipt))
+                .route(APPOINTMENT_ROUTE, get(get_appointment))
+                .route(APPOINTMENT_RESCHEDULE_ROUTE, post(reschedule_appointment))
+                .route(APPOINTMENT_CANCEL_ROUTE, post(cancel_appointment))
+                .route(APPOINTMENT_HISTORY_ROUTE, get(appointment_history))
+                .route(APPOINTMENT_ATTENDANCE_ROUTE, put(record_attendance)),
+            refusals,
+        ),
+        posture,
+    )
     .with_state(state)
 }
 
@@ -215,7 +223,7 @@ fn busy_store_problem(error: BusyStoreError) -> HttpError {
     }
 }
 
-fn http_edge<S>(router: Router<S>) -> Router<S>
+fn http_edge<S>(router: Router<S>, posture: Posture) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -224,7 +232,7 @@ where
         .method_not_allowed_fallback(method_not_allowed)
         .layer(request_body_limit_default())
         .layer(middleware::from_fn(http_boundary))
-        .layer(security_headers_without_posture(CspBuilder::restrictive()).without_hsts())
+        .layer(security_headers(CspBuilder::restrictive(), posture).without_hsts())
 }
 
 async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
@@ -274,9 +282,11 @@ async fn health() -> Response {
 }
 
 /// Ready on the same terms as `readyz`.
-async fn ready(State(state): State<HttpState>) -> Result<Response, HttpError> {
+async fn ready(State(state): State<HttpState>) -> Result<Json<serde_json::Value>, HttpError> {
     if state.service.ready().await.is_ok() {
-        Ok(probe_response(READY_BODY))
+        let mut body = state.posture.ready_member();
+        body.insert("status".to_owned(), serde_json::Value::from("ready"));
+        Ok(Json(serde_json::Value::Object(body)))
     } else {
         Err(HttpError::plain(ProblemCode::ServiceUnavailable))
     }
@@ -289,12 +299,8 @@ async fn healthz() -> StatusCode {
 /// Ready only while the database is at this release's schema and the audit
 /// destination still accepts entries: a stopped writer refuses every
 /// commitment, so a load balancer must stop routing to this process.
-async fn readyz(State(state): State<HttpState>) -> Result<StatusCode, HttpError> {
-    if state.service.ready().await.is_ok() {
-        Ok(StatusCode::OK)
-    } else {
-        Err(HttpError::plain(ProblemCode::ServiceUnavailable))
-    }
+async fn readyz(state: State<HttpState>) -> Result<Json<serde_json::Value>, HttpError> {
+    ready(state).await
 }
 
 async fn scheduling(
@@ -1080,13 +1086,17 @@ fn idempotency_key(headers: &HeaderMap) -> Result<&str, HttpError> {
     Ok(value)
 }
 
+#[derive(Clone)]
+struct DevelopmentGrantPeer;
+
 /// One answer from the closed vocabulary, as an HTTP answer: every product
 /// decision and every request-edge rejection renders through the same pinned
 /// document. A refusal of authority also carries the check it failed, which
 /// reaches the operator's counter and log line through the response
 /// extensions and never the caller's body.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HttpError {
+    development_grant_peer: bool,
     problem: ProblemCode,
     note: Option<RefusalNote>,
     /// The operator-declared scope values a scope refusal's log line names.
@@ -1108,6 +1118,7 @@ impl HttpError {
             problem,
             note: None,
             declared: None,
+            development_grant_peer: false,
         }
     }
 
@@ -1117,6 +1128,7 @@ impl HttpError {
             problem: code.problem(),
             note: Some(RefusalNote::new(check)),
             declared: None,
+            development_grant_peer: false,
         }
     }
 
@@ -1126,6 +1138,7 @@ impl HttpError {
             problem: ProblemCode::ServiceUnavailable,
             note: Some(RefusalNote::new(check)),
             declared: None,
+            development_grant_peer: false,
         }
     }
 
@@ -1158,6 +1171,10 @@ impl From<ServiceError> for HttpError {
     fn from(error: ServiceError) -> Self {
         match error {
             ServiceError::Problem(problem) => Self::plain(problem),
+            ServiceError::DevelopmentGrantPeer => Self {
+                development_grant_peer: true,
+                ..Self::unavailable(FailedCheck::TaskGrantStatus)
+            },
             ServiceError::Refused { code, check } => Self::refused(code, check),
         }
     }
@@ -1166,6 +1183,10 @@ impl From<ServiceError> for HttpError {
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
         let mut response = problem_response(self.problem);
+        if self.development_grant_peer {
+            response.extensions_mut().insert(DevelopmentGrantPeer);
+        }
+
         if let Some(note) = self.note {
             response.extensions_mut().insert(note);
         }
@@ -1197,12 +1218,31 @@ async fn record_refusals(
     if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
         let trace = current_trace();
         let declared = response.extensions().get::<DeclaredScope>();
-        record_refusal!(
-            recorder,
-            note,
-            trace_id = &trace.trace_id,
-            declared = declared
-        );
+        if response
+            .extensions()
+            .get::<DevelopmentGrantPeer>()
+            .is_some()
+        {
+            if let Some(line) = recorder.record(note.check) {
+                tracing::warn!(
+                    decision = "refused",
+                    failed_check = line.failed_check,
+                    suppressed = line.suppressed,
+                    trace_id = %trace.trace_id,
+                    error_code = registry_platform_oidc::task_grant::DEVELOPMENT_PEER_CODE,
+                    pointer = "/taskGrantStatus",
+                    suggested_action = "Point the runtime at a production grant authority.",
+                    "task grant refused"
+                );
+            }
+        } else {
+            record_refusal!(
+                recorder,
+                note,
+                trace_id = &trace.trace_id,
+                declared = declared
+            );
+        }
     }
     response
 }
@@ -1360,6 +1400,7 @@ mod tests {
                 .route("/v1/explain-query", get(explain_query))
                 .route(HOLD_ROUTE, delete(identified))
                 .route(APPOINTMENT_ROUTE, get(identified)),
+            Posture::Production,
         )
     }
 
@@ -1395,6 +1436,8 @@ mod tests {
             ),
             "key-source-unavailable" => authentication_problem(AuthenticationError::Unavailable),
             "plain" => HttpError::plain(ProblemCode::RequestInvalid),
+            "grant-peer" => ServiceError::DevelopmentGrantPeer.into(),
+            "grant-unavailable" => ServiceError::Problem(ProblemCode::ServiceUnavailable).into(),
             other => unreachable!("no refusal case named {other}"),
         }
     }
@@ -1403,10 +1446,10 @@ mod tests {
         async fn refuse(Path(case): Path<String>) -> HttpError {
             refusal_case(&case)
         }
-        http_edge(with_refusal_recording(
-            Router::new().route("/refuse/{case}", get(refuse)),
-            recorder,
-        ))
+        http_edge(
+            with_refusal_recording(Router::new().route("/refuse/{case}", get(refuse)), recorder),
+            Posture::Production,
+        )
     }
 
     fn refusal_exposition(recorder: &RefusalRecorder) -> String {
@@ -1477,6 +1520,37 @@ mod tests {
             serde_json::from_str(include_str!("../tests/golden/refusal-answers.json"))
                 .expect("the golden file is JSON");
         assert_eq!(Value::Object(observed), golden);
+    }
+
+    #[tokio::test]
+    async fn development_grant_peer_is_logged_without_changing_the_answer() {
+        use tracing::instrument::WithSubscriber as _;
+        let recorder = Arc::new(RefusalRecorder::new("scheduling").unwrap());
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let app = refusal_router(Arc::clone(&recorder));
+        let peer = app
+            .clone()
+            .oneshot(traced_request("GET", "/refuse/grant-peer"))
+            .with_subscriber(captured.subscriber())
+            .await
+            .unwrap();
+        let unavailable = app
+            .oneshot(traced_request("GET", "/refuse/grant-unavailable"))
+            .await
+            .unwrap();
+        assert_eq!(peer.status(), unavailable.status());
+        assert_eq!(peer.headers(), unavailable.headers());
+        assert_eq!(
+            to_bytes(peer.into_body(), 4096).await.unwrap(),
+            to_bytes(unavailable.into_body(), 4096).await.unwrap(),
+        );
+        let logs = captured.text();
+        assert!(
+            logs.contains("platform.task-grant.development-peer"),
+            "{logs}"
+        );
+        assert!(logs.contains("/taskGrantStatus"), "{logs}");
+        assert!(refusal_exposition(&recorder).contains("check=\"task-grant-status\"} 1"));
     }
 
     #[tokio::test]

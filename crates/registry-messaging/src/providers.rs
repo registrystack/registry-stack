@@ -30,7 +30,7 @@ use registry_platform_config::{ProtectedSecret, SecretResolver};
 use registry_platform_dispatch::SendOutcome;
 use thiserror::Error;
 
-use crate::config::{describe_secret_failure, ProviderConnection, RuntimeConfig, TlsTermination};
+use crate::config::{describe_secret_failure, ProviderConnection, RuntimeConfig};
 use crate::dispatch::{MessageTransport, OutboundMessage, Transports, MINIMUM_ATTEMPT_TIMEOUT};
 use crate::http_provider::{CallbackVerifierConfig, HttpProvider, HttpProviderMessage};
 use crate::package::LoadedPackage;
@@ -74,10 +74,7 @@ pub fn activate_providers(
         let transport: Arc<dyn MessageTransport> = match connection {
             ProviderConnection::Smtp { settings } => Arc::new(SmtpTransport(
                 settings
-                    .activate(
-                        secrets,
-                        config.listener.tls_termination == TlsTermination::DevelopmentLoopback,
-                    )
+                    .activate(secrets)
                     .map_err(|error| refused(error.to_string()))?,
             )),
             ProviderConnection::Http { settings } => {

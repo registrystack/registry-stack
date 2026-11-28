@@ -207,13 +207,21 @@ pub type Seals = BTreeMap<String, Arc<Seal>>;
 /// no signing block. Refuses as `runtime-invalid`, with a diagnostic at the
 /// failing member whose message names the failing piece and repeats no
 /// value; [`crate::runtime::RuntimePositions::place`] gives it its line.
-pub async fn load(runtime: &RenderRuntime) -> Result<Seals, RenderProblem> {
+pub async fn load(
+    runtime: &RenderRuntime,
+    witness: Option<&registry_platform_config::DevelopmentWitness>,
+    peer_policy: registry_platform_httputil::PeerPolicy,
+) -> Result<Seals, RenderProblem> {
     let mut seals = Seals::new();
     let Some(signing) = &runtime.signing else {
         return Ok(seals);
     };
+    let profile = runtime
+        .assurance_profile(witness)
+        .map_err(|error| RenderProblem::new(ProblemKind::RuntimeInvalid, error.to_string()))?;
+    let test_only = profile == Some(crate::runtime::AssuranceProfile::Local);
     for (id, seal) in &signing.seals {
-        let loaded = Seal::load(runtime, id.as_str(), seal).await?;
+        let loaded = Seal::load(runtime, id.as_str(), seal, test_only, peer_policy).await?;
         seals.insert(id.as_str().to_owned(), Arc::new(loaded));
     }
     Ok(seals)
@@ -642,6 +650,8 @@ impl Seal {
         runtime: &RenderRuntime,
         id: &str,
         seal: &SealRuntime,
+        test_only: bool,
+        peer_policy: registry_platform_httputil::PeerPolicy,
     ) -> Result<Self, RenderProblem> {
         let certificate = |finding: ChainFinding| {
             refusal(
@@ -746,14 +756,19 @@ impl Seal {
         let contents_capacity = reserved_space(id, &chain, seal).map_err(certificate)?;
         let timestamp = match &seal.timestamp_authority {
             None => None,
-            Some(authority) => Some(TimestampAuthority::load(runtime, id, authority)?),
+            Some(authority) => Some(TimestampAuthority::load(
+                runtime,
+                id,
+                authority,
+                peer_policy,
+            )?),
         };
         Ok(Self {
             id: id.to_owned(),
             fingerprint: chain.leaf_sha256_fingerprint(),
             signing: SigningPayload {
                 signer_name: chain.display_name().map(str::to_owned),
-                test_only: runtime.seals_are_test_only(),
+                test_only,
             },
             chain,
             signer,
@@ -918,6 +933,7 @@ impl Seal {
             signing_time,
             contents_capacity: self.contents_capacity,
             field_name: SEAL_FIELD_NAME.to_owned(),
+            test_only: self.is_test_only(),
         })
     }
 
@@ -1160,6 +1176,7 @@ struct TimestampAuthority {
     seal_id: String,
     url: reqwest::Url,
     client: reqwest::Client,
+    peer_policy: registry_platform_httputil::PeerPolicy,
 }
 
 const TIMESTAMP_QUERY: &str = "application/timestamp-query";
@@ -1172,9 +1189,10 @@ impl TimestampAuthority {
         runtime: &RenderRuntime,
         seal_id: &str,
         authority: &TimestampAuthorityRuntime,
+        peer_policy: registry_platform_httputil::PeerPolicy,
     ) -> Result<Self, RenderProblem> {
         let Some(reference) = authority.ca_bundle_ref.as_deref() else {
-            return Self::new(seal_id, authority, None);
+            return Self::new(seal_id, authority, None, peer_policy);
         };
         let bundle =
             crate::runtime::resolve_protected_secret(runtime, reference).map_err(|error| {
@@ -1190,13 +1208,19 @@ impl TimestampAuthority {
                      the reference names.",
                 )
             })?;
-        Self::new(seal_id, authority, Some(bundle.expose_secret()))
+        Self::new(
+            seal_id,
+            authority,
+            Some(bundle.expose_secret()),
+            peer_policy,
+        )
     }
 
     fn new(
         seal_id: &str,
         authority: &TimestampAuthorityRuntime,
         trusted_root_certificates: Option<&[u8]>,
+        peer_policy: registry_platform_httputil::PeerPolicy,
     ) -> Result<Self, RenderProblem> {
         let unusable = || {
             refusal(
@@ -1232,6 +1256,7 @@ impl TimestampAuthority {
             seal_id: seal_id.to_owned(),
             url,
             client,
+            peer_policy,
         })
     }
 
@@ -1277,6 +1302,8 @@ impl TimestampAuthority {
             .map_err(|error| {
                 self.failure(TimestampFailure::Unreachable, transport_reason(&error))
             })?;
+        registry_platform_httputil::validate_response_headers(response.headers(), self.peer_policy)
+            .map_err(|_| self.failure(TimestampFailure::Refused, "response-headers"))?;
         if !response.status().is_success() {
             return Err(self.failure(TimestampFailure::Refused, "http-status"));
         }

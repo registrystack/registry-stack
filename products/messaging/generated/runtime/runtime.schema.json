@@ -736,7 +736,7 @@
               "type": "string"
             },
             "port": {
-              "description": "Defaults to 587 for `starttls` and 465 for `implicit`; required for\n`development-loopback`.",
+              "description": "Defaults to 587 for `starttls` and 465 for `implicit`; required for\n`loopback-plaintext`.",
               "format": "uint16",
               "maximum": 65535,
               "minimum": 1,
@@ -943,8 +943,8 @@
           "type": "string"
         },
         {
-          "const": "development-loopback",
-          "description": "Plaintext to a loopback relay, for a local development server only.\nThe host must be a loopback literal or `localhost`, every resolved\naddress must be loopback, and the port must be explicit. Accepted\nonly by a test build or behind a `development-loopback` listener.",
+          "const": "loopback-plaintext",
+          "description": "Plaintext to a loopback relay.\nThe host must be a loopback literal or `localhost`, every resolved\naddress must be loopback, and the port must be explicit.",
           "type": "string"
         }
       ]

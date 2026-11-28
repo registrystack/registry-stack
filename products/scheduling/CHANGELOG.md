@@ -24,9 +24,15 @@
   purpose or a hook destination. Scheduling signs with both keys, current
   first. A previous key equal to the current key is refused.
 
-- A migration adds a posture to the activation ledger. Every activation
-  records production until the runtime declares its posture, and the
-  activation objects in `schedulingctl` reports carry it as `posture`.
+- BREAKING: An undeclared posture is production. Runtime files with development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `check` reports development settings as errors when no posture is declared. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: Use `loopback-plaintext` to bind a plaintext listener to loopback in either posture. Migration: Write tlsTermination: loopback-plaintext; settings it used to relax now follow the posture.
+- BREAKING: Issuer `allowInsecureHttp: true` requires development. Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
+- BREAKING: Plaintext PostgreSQL on a private address requires development. The test-only plaintext diagnostic becomes `platform.database.test-only-plaintext`. Migration: Use database.transport: private-network-plaintext for a database container beside the product. Update scripts that match the old codes.
+- BREAKING: Activation records the deployment posture. Existing rows read as production. Migration: Recreate development databases: a fresh apply is the way.
+- BREAKING: Successful `/ready` replies include `posture` and `developmentSettings` in JSON. Migration: No change for probes that read the status code.
+- BREAKING: Audit lines include the process posture. Migration: Audit readers with a closed line parser accept the posture member.
+- BREAKING: Development responses carry `Registry-Posture: development`, and production peers refuse development responses. Migration: Point production runtimes at production peers.
 
 - Add `schedulingctl provision`. From the two database URLs in the runtime file
   and an administrator URL (`--admin-url-file` or `--admin-url-env`, a role

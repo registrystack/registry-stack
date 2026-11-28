@@ -80,7 +80,7 @@ contentVerification:
   # Required: no document version becomes releasable until this verifier
   # accepts it. The keys match Base Registry Engine attachmentVerification.
   # attemptTimeoutMilliseconds defaults to 10000. `type: disabled` is
-  # accepted only beside `tlsTermination: development-loopback`.
+  # accepted only when the process declares development.
   type: http
   url: https://scanner.example.test/v1/verify
   authorizationRef: secret:file/content-verifier-authorization

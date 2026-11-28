@@ -30,8 +30,8 @@ use registry_platform_authcommon::{
     parse_bearer_token, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
 };
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit_default, security_headers_without_posture,
-    CspBuilder, FrameworkRejection, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
+    FrameworkRejection, ProblemBody, TraceContext,
 };
 
 use serde::de::DeserializeOwned;
@@ -43,6 +43,7 @@ use crate::auth::{AuthenticationError, DocumentsAuthenticator};
 use crate::metrics::{serve_metrics, MetricsState, METRICS_PATH};
 use crate::service::{DocumentService, PageRequest, ServiceError};
 use crate::store::PostgresStore;
+use registry_platform_config::{Posture, PostureReport};
 
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
@@ -59,25 +60,26 @@ pub use registry_documents_core::{
 
 /// Apply the shared fallbacks and boundary layers. `limited` routes take
 /// the default request body limit; `unlimited` routes bound their own body.
-fn finish(limited: Router, unlimited: Router) -> Router {
+fn finish(limited: Router, unlimited: Router, posture: Posture) -> Router {
     limited
         .layer(request_body_limit_default())
         .merge(unlimited)
         .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn(http_boundary))
-        .layer(security_headers_without_posture(CspBuilder::restrictive()).without_hsts())
+        .layer(security_headers(CspBuilder::restrictive(), posture).without_hsts())
 }
 
 /// The operator-private router the metrics listener serves: the series, with
 /// the queues sampled at each scrape. It shares the boundary layers and the
 /// refusals of the serving router, and answers nothing else.
-pub fn metrics_router(state: MetricsState) -> Router {
+pub fn metrics_router(state: MetricsState, posture: Posture) -> Router {
     finish(
         Router::new()
             .route(METRICS_PATH, get(serve_metrics))
             .with_state(state),
         Router::new(),
+        posture,
     )
 }
 
@@ -178,21 +180,23 @@ impl Readiness {
     }
 }
 
-/// `200` with no body while ready; `service.unavailable` otherwise, which
+/// A readiness object while ready; `service.unavailable` otherwise, which
 /// names no cause. The log carries the cause.
-async fn ready(State(readiness): State<Readiness>) -> Response {
+async fn ready(State((readiness, posture)): State<(Readiness, PostureReport)>) -> Response {
     if readiness.is_ready().await {
-        StatusCode::OK.into_response()
+        let mut body = posture.ready_member();
+        body.insert("status".into(), "ready".into());
+        axum::Json(body).into_response()
     } else {
         problem_response(ProblemCode::ServiceUnavailable)
     }
 }
 
 /// The readiness probe, over its own state.
-fn readiness_router(readiness: Readiness) -> Router {
+fn readiness_router(readiness: Readiness, posture: PostureReport) -> Router {
     Router::new()
         .route(READY_PATH, get(ready))
-        .with_state(readiness)
+        .with_state((readiness, posture))
 }
 
 fn current_trace() -> TraceContext {
@@ -247,6 +251,7 @@ pub struct DocumentRoutes {
     pub service: Arc<DocumentService>,
     pub authenticator: Arc<DocumentsAuthenticator>,
     pub readiness: Readiness,
+    pub posture: PostureReport,
 }
 
 impl DocumentRoutes {
@@ -299,9 +304,13 @@ fn authentication_refusal(error: AuthenticationError) -> ServiceError {
 
 /// The served surface: `/health`, `/ready`, and the document routes.
 pub fn router(routes: DocumentRoutes) -> Router {
+    let posture = routes.posture.posture();
     let probes = Router::new()
         .route(HEALTH_PATH, get(health))
-        .merge(readiness_router(routes.readiness.clone()));
+        .merge(readiness_router(
+            routes.readiness.clone(),
+            routes.posture.clone(),
+        ));
     let limited = Router::new()
         .route(DOCUMENTS_PATH, post(reserve).get(list_documents))
         .route(DOCUMENT_PATH, get(read))
@@ -316,7 +325,7 @@ pub fn router(routes: DocumentRoutes) -> Router {
     let unlimited = Router::new()
         .route(UPLOAD_CONTENT_PATH, put(upload))
         .with_state(routes);
-    finish(limited, unlimited)
+    finish(limited, unlimited, posture)
 }
 
 /// An id in a path. One that is not an id names nothing, and the answer
@@ -675,8 +684,12 @@ mod tests {
         finish(
             Router::new()
                 .route(HEALTH_PATH, get(health))
-                .merge(readiness_router(Readiness::Fixed(ready))),
+                .merge(readiness_router(
+                    Readiness::Fixed(ready),
+                    PostureReport::new(crate::config::DEFAULT_POSTURE),
+                )),
             Router::new(),
+            Posture::Production,
         )
     }
 
@@ -723,7 +736,13 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
         let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-        assert!(bytes.is_empty(), "the ready answer carries no body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "status": "ready", "posture": "production", "developmentSettings": [],
+            })
+        );
     }
 
     #[tokio::test]

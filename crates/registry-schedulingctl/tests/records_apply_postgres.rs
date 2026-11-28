@@ -145,17 +145,28 @@ fn scoped_url(base: &str, schema: &str) -> String {
 fn apply(config: &Path, records_path: &Path) -> serde_json::Value {
     let config = config.to_path_buf();
     let records_path = records_path.to_path_buf();
-    std::thread::spawn(move || records::apply(&config, &records_path))
-        .join()
-        .expect("records apply does not panic")
-        .expect("records apply succeeds")
+    std::thread::spawn(move || {
+        records::apply(
+            &config,
+            &records_path,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+    })
+    .join()
+    .expect("records apply does not panic")
+    .expect("records apply succeeds")
 }
 
 fn apply_error(config: &Path, records_path: &Path) -> String {
     let config = config.to_path_buf();
     let records_path = records_path.to_path_buf();
     std::thread::spawn(move || {
-        let error = records::apply(&config, &records_path).expect_err("records apply refuses");
+        let error = records::apply(
+            &config,
+            &records_path,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .expect_err("records apply refuses");
         format!("{error:#}")
     })
     .join()
@@ -166,10 +177,17 @@ fn apply_error(config: &Path, records_path: &Path) -> String {
 /// the first records apply.
 fn activate(config: &Path) {
     let config = config.to_path_buf();
-    std::thread::spawn(move || activation::apply(&config, None, &[]))
-        .join()
-        .expect("apply does not panic")
-        .expect("the package activates");
+    std::thread::spawn(move || {
+        activation::apply(
+            &config,
+            None,
+            &[],
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+    })
+    .join()
+    .expect("apply does not panic")
+    .expect("the package activates");
 }
 
 /// Every `records apply` entry the audit file at `path` holds, in write
@@ -249,10 +267,13 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
         "0123456789abcdef0123456789abcdef",
     );
 
-    let config = RuntimeConfig::load(&config_path).expect("the runtime configuration loads");
+    let config = RuntimeConfig::load(&config_path, registry_scheduling::config::DEFAULT_POSTURE)
+        .expect("the runtime configuration loads");
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment secret provider configures");
-    let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
+    let store =
+        PostgresStore::connect_migration(&config.database, &resolver, config.development_witness())
+            .unwrap();
     activate(&config_path);
 
     let report = apply(&config_path, &root.path().join("first.yaml"));
@@ -420,11 +441,16 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
         "0123456789abcdef0123456789abcdef",
     );
 
-    let config =
-        RuntimeConfig::load(&adopted_config).expect("the adopted runtime configuration loads");
+    let config = RuntimeConfig::load(
+        &adopted_config,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .expect("the adopted runtime configuration loads");
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment secret provider configures");
-    let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
+    let store =
+        PostgresStore::connect_migration(&config.database, &resolver, config.development_witness())
+            .unwrap();
     activate(&adopted_config);
     apply(&adopted_config, &root.path().join("first.yaml"));
     let (before, _) = store.facts().await.expect("the first records landed");
@@ -594,10 +620,13 @@ async fn records_apply_refuses_a_database_where_this_package_is_not_active() {
         "SCHEDULING_RECORDS_INACTIVE_AUDIT",
         "0123456789abcdef0123456789abcdef",
     );
-    let config = RuntimeConfig::load(&config_path).expect("the runtime configuration loads");
+    let config = RuntimeConfig::load(&config_path, registry_scheduling::config::DEFAULT_POSTURE)
+        .expect("the runtime configuration loads");
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment secret provider configures");
-    let store = PostgresStore::connect_migration(&config.database, &resolver).unwrap();
+    let store =
+        PostgresStore::connect_migration(&config.database, &resolver, config.development_witness())
+            .unwrap();
     // The schema is current, so only the missing activation stands between
     // the records and the database.
     store.migrate().await.expect("the schema migrates");

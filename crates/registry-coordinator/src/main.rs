@@ -13,7 +13,11 @@ async fn main() -> std::process::ExitCode {
 /// stream.
 fn initialize_logging() {
     tracing_subscriber::registry()
-        .with(Targets::new().with_target("registry_coordinator", LevelFilter::INFO))
+        .with(
+            Targets::new()
+                .with_target("registry_coordinator", LevelFilter::INFO)
+                .with_target("registry_platform_config::posture", LevelFilter::INFO),
+        )
         .with(
             tracing_subscriber::fmt::layer()
                 .json()

@@ -251,7 +251,7 @@ fn runtime_members(
                     "type": "smtp",
                     "host": "127.0.0.1",
                     "port": endpoints.smtp_port,
-                    "tls": "development-loopback",
+                    "tls": "loopback-plaintext",
                 }),
                 ProviderKind::Http => {
                     let capabilities = loaded
@@ -294,7 +294,7 @@ fn runtime_members(
         "package": {"root": project},
         "listener": {
             "bind": format!("127.0.0.1:{}", endpoints.api_port),
-            "tlsTermination": "development-loopback",
+            "tlsTermination": "loopback-plaintext",
             "networkExposure": "private-address",
         },
         "metricsListener": {"bind": format!("127.0.0.1:{}", endpoints.metrics_port)},
@@ -316,6 +316,7 @@ fn runtime_members(
             "destination": "file",
             "path": root.join("audit/messaging.ndjson"),
             "hashKeyRef": "secret:file/messaging-audit-key",
+            "hashKeyCustody": "development-generated",
         },
         "providers": providers,
     })

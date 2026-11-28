@@ -134,6 +134,12 @@ Validators decide trust in the seal certificate and the timestamp authority.
 
 ### Local seal key files are for test seals
 
+A deployment that seals with a key file runs as development across the stack.
+Production peers refuse responses marked as development.
+Production sealing uses Transit.
+The signed PDF dictionary carries `/Reason (Registry Stack test seal: not an official document)` for a local seal.
+The template, seal metadata, HTTP response and audit also identify a local seal as a test seal.
+
 A `local-jwk` signer's `privateKeyRef` resolves a JWK through the file secret provider, so the key
 is readable by the serving user and, with the worker not a sandbox (see
 [A render worker is not a sandbox](#a-render-worker-is-not-a-sandbox)), by a worker that gained

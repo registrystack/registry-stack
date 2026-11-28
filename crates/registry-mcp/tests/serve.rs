@@ -73,6 +73,22 @@ async fn serve_reaches_readiness_and_stops_gracefully_on_sigterm() {
     service
         .wait_until_ready(&format!("http://{address}/ready"))
         .await;
+    let ready = reqwest::get(format!("http://{address}/ready"))
+        .await
+        .unwrap();
+    assert_eq!(ready.headers()["registry-posture"], "development");
+    assert!(!ready
+        .headers()
+        .contains_key(reqwest::header::STRICT_TRANSPORT_SECURITY));
+    let body: serde_json::Value = ready.json().await.unwrap();
+    assert_eq!(body["posture"], "development");
+    let settings = body["developmentSettings"].as_array().unwrap();
+    for pointer in [
+        "/resourceServer/resource",
+        "/resourceServer/allowInsecureHttp",
+    ] {
+        assert!(settings.iter().any(|setting| setting["pointer"] == pointer));
+    }
     let expires_at = i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -100,7 +116,7 @@ async fn serve_reaches_readiness_and_stops_gracefully_on_sigterm() {
                 .header("host", host)
                 .bearer_auth(token)
                 .header("accept", "application/json, text/event-stream")
-                .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
+                .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_my_details","arguments":{}}}))
                 .send()
                 .await
         }
@@ -137,10 +153,19 @@ async fn serve_reaches_readiness_and_stops_gracefully_on_sigterm() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let audit = std::fs::read_to_string(scratch.path().join("audit.jsonl")).expect("audit journal");
+    let line: serde_json::Value =
+        serde_json::from_str(audit.lines().next().expect("audit record")).unwrap();
+    assert_eq!(line["posture"], "development");
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 operational log");
     assert!(stdout.contains("gateway listening"), "{stdout}");
+    assert!(stdout.contains("posture declared"), "{stdout}");
     assert!(
-        stdout.contains("resourceServer.allowInsecureHttp permits plain HTTP"),
+        stdout.contains("platform.posture.mcp-http-resource"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("platform.posture.insecure-issuer-http"),
         "{stdout}"
     );
     assert!(stdout.contains("shutting down"), "{stdout}");

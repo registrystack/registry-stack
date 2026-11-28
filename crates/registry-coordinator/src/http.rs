@@ -153,17 +153,41 @@ pub fn router(state: HttpState) -> Router {
             post(review_completion),
         )
         .with_state(state.clone());
+    let posture = state.runtime.posture();
+    let loopback_plaintext = state.runtime.deployment.as_ref().is_some_and(|deployment| {
+        matches!(
+            deployment.listener.tls_termination,
+            registry_platform_config::TlsTermination::DevelopmentLoopback
+                | registry_platform_config::TlsTermination::LoopbackPlaintext
+        )
+    });
     let signed_events = Router::new()
         .route(
             "/v1/events/{workflow}/{trigger}",
             post(crate::event_trigger::receive),
         )
         .with_state(state);
-    http_edge(routes, signed_events, refusals)
+    http_edge(routes, signed_events, refusals, posture, loopback_plaintext)
 }
 /// Every route takes at most 128 KiB, except the signed event route, which
 /// takes a body of up to 1 MiB.
-fn http_edge(router: Router, signed_events: Router, refusals: Arc<RefusalRecorder>) -> Router {
+fn http_edge(
+    router: Router,
+    signed_events: Router,
+    refusals: Arc<RefusalRecorder>,
+    posture: registry_platform_config::Posture,
+    loopback_plaintext: bool,
+) -> Router {
+    let headers = registry_platform_httpsec::security_headers(
+        registry_platform_httpsec::CspBuilder::deny_by_default(),
+        posture,
+    );
+    let headers = if posture == registry_platform_config::Posture::Development && loopback_plaintext
+    {
+        headers.without_hsts()
+    } else {
+        headers
+    };
     let signable = crate::event_trigger::MAXIMUM_EVENT_BYTES;
     router
         .layer(DefaultBodyLimit::max(131_072))
@@ -177,9 +201,7 @@ fn http_edge(router: Router, signed_events: Router, refusals: Arc<RefusalRecorde
         .method_not_allowed_fallback(method_not_allowed)
         .layer(middleware::from_fn_with_state(refusals, record_refusals))
         .layer(middleware::from_fn(http_boundary))
-        .layer(registry_platform_httpsec::security_headers_without_posture(
-            registry_platform_httpsec::CspBuilder::deny_by_default(),
-        ))
+        .layer(headers)
 }
 async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
     let trace = TraceContext::from_headers(request.headers());
@@ -414,8 +436,13 @@ fn probe_body(shared: &str, member: &str) -> Value {
 fn live_body() -> Value {
     probe_body(HEALTH_BODY, "live")
 }
-fn ready_body() -> Value {
-    probe_body(READY_BODY, "ready")
+fn ready_body(posture: Option<&registry_platform_config::PostureReport>) -> Value {
+    let default = registry_platform_config::PostureReport::new(crate::runtime::DEFAULT_POSTURE);
+    let mut body = probe_body(READY_BODY, "ready");
+    body.as_object_mut()
+        .expect("readiness body is an object")
+        .extend(posture.unwrap_or(&default).ready_member());
+    body
 }
 async fn live() -> Json<Value> {
     Json(live_body())
@@ -430,7 +457,7 @@ async fn ready(s: HttpState, bindings: Arc<BindingReadiness>) -> Response {
             .check(|| s.store.check_runtime_bindings(&s.runtime))
             .await
     {
-        (StatusCode::OK, Json(ready_body())).into_response()
+        (StatusCode::OK, Json(ready_body(s.runtime.posture.as_ref()))).into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -771,6 +798,8 @@ mod problem_tests {
                 ),
                 Router::new(),
                 Arc::new(RefusalRecorder::new("coordinator").unwrap()),
+                registry_platform_config::Posture::Production,
+                false,
             )
         };
         let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
@@ -823,6 +852,8 @@ mod problem_tests {
                     post(|body: axum::body::Bytes| async move { body.len().to_string() }),
                 ),
                 Arc::new(RefusalRecorder::new("coordinator").unwrap()),
+                registry_platform_config::Posture::Production,
+                false,
             )
         };
         let signable = crate::event_trigger::MAXIMUM_EVENT_BYTES;
@@ -889,10 +920,75 @@ mod problem_tests {
             .flat_map(|path| path.as_object().unwrap().iter())
     }
 
+    #[tokio::test]
+    async fn development_marks_probe_and_fallback_without_loopback_hsts() {
+        use tower::ServiceExt as _;
+        let app = http_edge(
+            Router::new().route(HEALTH_PATH, get(live)),
+            Router::new(),
+            Arc::new(RefusalRecorder::new("coordinator").unwrap()),
+            registry_platform_config::Posture::Development,
+            true,
+        );
+        for (path, status) in [
+            (HEALTH_PATH, StatusCode::OK),
+            ("/unknown", StatusCode::NOT_FOUND),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::get(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()["registry-posture"], "development");
+            assert!(!response.headers().contains_key("strict-transport-security"));
+        }
+    }
+
+    #[tokio::test]
+    async fn hsts_is_omitted_only_in_development_on_loopback() {
+        use registry_platform_config::Posture;
+        use tower::ServiceExt as _;
+
+        for (posture, loopback, expected) in [
+            (Posture::Production, true, true),
+            (Posture::Development, true, false),
+            (Posture::Development, false, true),
+        ] {
+            let app = http_edge(
+                Router::new().route(HEALTH_PATH, get(live)),
+                Router::new(),
+                Arc::new(RefusalRecorder::new("coordinator").unwrap()),
+                posture,
+                loopback,
+            );
+            let response = app
+                .oneshot(
+                    axum::http::Request::get(HEALTH_PATH)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.headers().contains_key("strict-transport-security"),
+                expected,
+                "{posture:?}, loopback={loopback}"
+            );
+        }
+    }
+
     #[test]
     fn probe_bodies_keep_their_own_member_and_add_the_shared_status() {
         assert_eq!(live_body(), json!({"live":true,"status":"ok"}));
-        assert_eq!(ready_body(), json!({"ready":true,"status":"ready"}));
+        assert_eq!(
+            ready_body(None),
+            json!({"ready":true,"status":"ready","posture":"production","developmentSettings":[]})
+        );
     }
 
     #[test]
@@ -908,7 +1004,12 @@ mod problem_tests {
         ] {
             let schema = &document["paths"][path]["get"]["responses"]["200"]["content"]
                 ["application/json"]["schema"];
-            assert_eq!(schema["required"], json!([key, "status"]), "{path}");
+            let required = if path == READY_PATH {
+                json!([key, "status", "posture", "developmentSettings"])
+            } else {
+                json!([key, "status"])
+            };
+            assert_eq!(schema["required"], required, "{path}");
             assert_eq!(schema["properties"][key]["type"], "boolean", "{path}");
             assert_eq!(schema["properties"]["status"]["const"], word, "{path}");
         }
@@ -1441,7 +1542,20 @@ async fn doctor(State(s): State<HttpState>, headers: HeaderMap) -> Response {
             let active =
                 deployment::check_serving(&s.store, &s.runtime, s.workflows.digest()).await;
             let status = s.store.doctor().await?;
-            Ok(json!({"activationReady":active.is_ok(),"state":status}))
+            let findings: Vec<_> = active
+                .as_ref()
+                .err()
+                .filter(|error| error.code == "platform.activation.posture-mismatch")
+                .map(|error| {
+                    json!({
+                        "code": error.code,
+                        "message": error.message,
+                        "suggestedAction": error.suggested_action,
+                    })
+                })
+                .into_iter()
+                .collect();
+            Ok(json!({"activationReady":active.is_ok(),"state":status,"findings":findings}))
         }
         .await,
     )
@@ -1934,7 +2048,19 @@ pub fn openapi() -> Value {
         Value::Object(responses);
     for (path, key, word) in [(HEALTH_PATH, "live", "ok"), (READY_PATH, "ready", "ready")] {
         let mut responses = problem_responses(&[ProblemCode::RequestMethodNotAllowed]);
-        responses.insert("200".into(), json!({"description":"Health result","content":{"application/json":{"schema":{"type":"object","required":[key,"status"],"properties":{key:{"type":"boolean"},"status":{"const":word}}}}}}));
+        let mut schema = json!({"type":"object","required":[key,"status"],"properties":{key:{"type":"boolean"},"status":{"const":word}}});
+        if path == READY_PATH {
+            schema["required"] = json!([key, "status", "posture", "developmentSettings"]);
+            schema["properties"]["posture"] = json!({"enum": ["production", "development"]});
+            schema["properties"]["developmentSettings"] = json!({"type": "array", "items": {
+                "type": "object", "required": ["code", "pointer"],
+                "properties": {"code": {"type": "string"}, "pointer": {"type": "string"}}
+            }});
+        }
+        responses.insert(
+            "200".into(),
+            json!({"description":"Health result","content":{"application/json":{"schema":schema}}}),
+        );
         responses.insert(
             "503".into(),
             json!({"description":"Deployment unavailable or in recovery hold"}),
@@ -1968,7 +2094,7 @@ pub fn openapi() -> Value {
       "EffectStatus":{"type":"object","additionalProperties":false,"required":["step","operation","operationRevision","state"],"properties":{"step":{"type":"string"},"operation":{"$ref":"#/components/schemas/OperationIdentity"},"operationRevision":{"type":"string"},"state":{"type":"string","enum":["accepted","unknown"]}}},
       "WaitStatus":{"type":"object","additionalProperties":false,"required":["step","acceptedStep","completion","completionRevision","timeoutAt","nextObservationAt","notBefore","minimumIntervalSeconds","observations","observationLimit"],"properties":{"step":{"type":"string"},"acceptedStep":{"type":"string"},"completion":{"type":"string"},"completionRevision":{"type":"string"},"timeoutAt":date,"nextObservationAt":{"type":["string","null"],"format":"date-time"},"notBefore":date,"minimumIntervalSeconds":{"type":"integer","minimum":30,"maximum":86400},"observations":{"type":"integer","minimum":0},"observationLimit":{"type":"integer","minimum":1},"lastObservation":{"type":"object","additionalProperties":false,"required":["state","submissionVersion","observedAt","stateSince"],"properties":{"state":{"type":"string"},"turn":{"type":"string"},"submissionVersion":{"type":"integer","minimum":0},"handoffRefusal":{"type":"string"},"observedAt":date,"stateSince":date}},"requestLink":{"type":"string","format":"uri"}}},
       "RunInspection":{"type":"object","required":["run","steps","effects","waits","recovery"],"properties":{"run":{"$ref":"#/components/schemas/RunStatus"},"steps":{"type":"array","items":{"$ref":"#/components/schemas/StepStatus"}},"effects":{"type":"array","items":{"$ref":"#/components/schemas/EffectStatus"}},"waits":{"type":"array","items":{"$ref":"#/components/schemas/WaitStatus"}},"recovery":{"type":"object","required":["retryAllowed"],"properties":{"retryAllowed":{"type":"boolean"},"reason":{"type":["string","null"]},"operation":{"$ref":"#/components/schemas/OperationIdentity"}}}}},
-      "Doctor":{"type":"object","required":["activationReady","state"],"properties":{"activationReady":{"type":"boolean"},"state":{"type":"object","required":["databaseId","schemaVersion","restoreHold","auditReady","admissionsHold","restoreReviewRequired","states","uncertain","terminalPayloads","oldestTerminalPayloadAt","proposalWaitsByTurn","heldRunCount","heldRuns"],"properties":{"databaseId":{"type":"string"},"schemaVersion":{"type":"integer"},"restoreHold":{"type":"boolean"},"auditReady":{"type":"boolean"},"admissionsHold":{"type":"boolean"},"restoreReviewRequired":{"type":"integer","minimum":0},"states":{"type":"object","additionalProperties":{"type":"integer"}},"uncertain":{"type":"integer"},"oldestDueAt":{"type":["string","null"],"format":"date-time"},"terminalPayloads":{"type":"integer","minimum":0},"oldestTerminalPayloadAt":{"type":["string","null"],"format":"date-time"},"proposalWaitsByTurn":{"$ref":"#/components/schemas/ProposalWaitsByTurn"},"heldRunCount":{"type":"integer","minimum":0},"heldRuns":{"$ref":"#/components/schemas/HeldRuns"}}}}},
+      "Doctor":{"type":"object","required":["activationReady","state","findings"],"properties":{"activationReady":{"type":"boolean"},"findings":{"type":"array","maxItems":1,"items":{"type":"object","required":["code","message","suggestedAction"],"properties":{"code":{"const":"platform.activation.posture-mismatch"},"message":{"type":"string"},"suggestedAction":{"type":"string"}}}},"state":{"type":"object","required":["databaseId","schemaVersion","restoreHold","auditReady","admissionsHold","restoreReviewRequired","states","uncertain","terminalPayloads","oldestTerminalPayloadAt","proposalWaitsByTurn","heldRunCount","heldRuns"],"properties":{"databaseId":{"type":"string"},"schemaVersion":{"type":"integer"},"restoreHold":{"type":"boolean"},"auditReady":{"type":"boolean"},"admissionsHold":{"type":"boolean"},"restoreReviewRequired":{"type":"integer","minimum":0},"states":{"type":"object","additionalProperties":{"type":"integer"}},"uncertain":{"type":"integer"},"oldestDueAt":{"type":["string","null"],"format":"date-time"},"terminalPayloads":{"type":"integer","minimum":0},"oldestTerminalPayloadAt":{"type":["string","null"],"format":"date-time"},"proposalWaitsByTurn":{"$ref":"#/components/schemas/ProposalWaitsByTurn"},"heldRunCount":{"type":"integer","minimum":0},"heldRuns":{"$ref":"#/components/schemas/HeldRuns"}}}}},
       "RetryScheduled":{"type":"object","required":["runId","status"],"properties":{"runId":{"type":"string","format":"uuid"},"status":{"const":"retry-scheduled"}}},
       "Hold":{"type":"object","required":["restoreHold"],"properties":{"restoreHold":{"type":"boolean"}}},"Erased":{"type":"object","required":["erased"],"properties":{"erased":{"type":"integer","minimum":0}}},
       "Problem":{"type":"object","additionalProperties":false,"required":["type","title","status","detail","code","traceId"],"properties":{"type":{"type":"string","enum":problem_types},"title":{"type":"string"},"status":{"type":"integer"},"detail":{"type":"string"},"code":{"type":"string","enum":problem_codes},"traceId":{"type":"string"}}}
@@ -2023,6 +2149,8 @@ mod refusal_recording_tests {
             ),
             Router::new(),
             recorder.clone(),
+            registry_platform_config::Posture::Production,
+            false,
         );
         let captured = Captured::default();
         let writer = captured.clone();
@@ -2215,6 +2343,8 @@ mod refusal_recording_tests {
             ),
             Router::new(),
             recorder.clone(),
+            registry_platform_config::Posture::Production,
+            false,
         );
         let response = app
             .oneshot(

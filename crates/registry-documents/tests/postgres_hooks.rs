@@ -21,7 +21,7 @@ use registry_documents_core::{
 use registry_platform_crypto::delivery_signature::{
     verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
 };
-use registry_platform_hooks::delivery::DeliveryOutcome;
+use registry_platform_hooks::delivery::{DeliveryError, DeliveryOutcome};
 use serde_json::{json, Value};
 use support::{
     pdf, reservation, Api, Deployment, FakeVerifier, APP, APPROVE, CITIZEN, DATABASE_STORAGE,
@@ -112,9 +112,10 @@ async fn deployment(project: &str) -> Deployment {
 }
 
 async fn start(deployment: &Deployment, verifier: &Arc<FakeVerifier>) -> (Prepared, Api) {
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares");
+    let prepared =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares");
     let api = Api::new(&prepared);
     (prepared, api)
 }
@@ -722,6 +723,25 @@ async fn a_capture_that_cannot_commit_rolls_its_transition_back() {
 }
 
 #[tokio::test]
+async fn delivery_refuses_a_posture_mismatch_without_sending() {
+    let receiver = MockServer::start().await;
+    let mut deployment = deployment(STARTER_PROJECT).await;
+    deployment.bind_hooks(&format!("{}/document-events", receiver.uri()));
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    upload(&api, 7).await;
+    assert_eq!(prepared.verify_due().await, 1);
+    deployment
+        .execute("UPDATE documents_activations SET posture = 'production'")
+        .await;
+    assert!(matches!(
+        prepared.deliver_hooks_once().await,
+        Err(DeliveryError::Unavailable)
+    ));
+    assert!(receiver.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
     let receiver = MockServer::start().await;
     Mock::given(method("POST"))
@@ -972,7 +992,7 @@ async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
     );
     let deployment = deployment(&project).await;
     let verifier = FakeVerifier::new("binding-a", APPROVE);
-    let error = prepare_with_verifier(&deployment.runtime, verifier)
+    let error = prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect_err("an unbound hook destination refuses startup");
     let message = error.to_string();
@@ -986,19 +1006,18 @@ async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
     let RuntimeError::ConfigurationRefused(report) = &error else {
         panic!("a positioned configuration refusal, not {message}");
     };
-    let found: Vec<(&str, &str)> = report
+    let findings: Vec<_> = report
         .diagnostics()
         .iter()
-        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .filter(|diagnostic| diagnostic.severity == registry_platform_yaml::Severity::Error)
         .collect();
+    assert_eq!(findings.len(), 1);
     assert_eq!(
-        found,
-        [(
-            "documents.runtime.unbound-hook-destination",
-            "/destinations/hooks"
-        )]
+        findings[0].code,
+        "documents.runtime.unbound-hook-destination"
     );
-    let source = report.diagnostics()[0]
+    assert_eq!(findings[0].path, "/destinations/hooks");
+    let source = findings[0]
         .source
         .as_ref()
         .expect("the diagnostic names its file");
@@ -1018,7 +1037,7 @@ async fn a_destination_changed_under_a_pending_delivery_refuses_startup_until_it
 
     // Changing the URL in place while the delivery is pending is refused.
     deployment.bind_hooks("https://moved.example.test/document-events");
-    let error = prepare_with_verifier(&deployment.runtime, verifier.clone())
+    let error = prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
         .await
         .expect_err("a pending delivery pins its destination binding");
     assert!(
@@ -1044,7 +1063,7 @@ async fn a_destination_changed_under_a_pending_delivery_refuses_startup_until_it
 
     // Once it has drained, the same change starts.
     deployment.bind_hooks("https://moved.example.test/document-events");
-    prepare_with_verifier(&deployment.runtime, verifier)
+    prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect("no retained delivery needs the old binding");
 }
@@ -1087,8 +1106,11 @@ async fn a_split_runtime_role_captures_and_delivers_under_its_own_grants() {
         )
     };
     deployment.secret("migration-database-url", &scoped);
-    let config = registry_documents::config::RuntimeConfig::load(&deployment.runtime)
-        .expect("the test runtime document loads");
+    let config = registry_documents::config::RuntimeConfig::load_with_posture(
+        &deployment.runtime,
+        support::TEST_POSTURE,
+    )
+    .expect("the test runtime document loads");
     let applied = registry_documents::runtime::apply_activation(
         &config,
         &registry_documents::activation::ApplyRequest::default(),

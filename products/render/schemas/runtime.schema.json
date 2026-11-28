@@ -832,7 +832,10 @@
     },
     "assuranceProfile": {
       "$ref": "#/$defs/AssuranceProfile",
-      "description": "The assurance boundary of this deployment's seals, the same member\nand values Evidence declares. Required when `signing` declares a\nseal, and unused otherwise. `local` signs with a `local-jwk` key\nfile and marks every seal a test seal; `production` signs through\n`transit` only, so a production key never leaves Transit."
+      "description": "Required when `signing` declares a seal. Under development, `local`\nsigns with a `local-jwk` key file and marks every seal as a test seal.\nUnder production, `production` signs through `transit`.",
+      "x-registry-development-only": [
+        "render.posture.local-assurance"
+      ]
     },
     "audit": {
       "$ref": "#/$defs/AuditRuntime"

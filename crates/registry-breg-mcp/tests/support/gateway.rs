@@ -226,8 +226,18 @@ impl Harness {
 /// Load the runtime configuration at `path` and serve the gateway it
 /// describes on `listener`, exactly as `breg-mcp serve` would.
 pub async fn serve(listener: tokio::net::TcpListener, path: &Path) {
-    let config = RuntimeConfig::load(path).expect("runtime configuration loads");
-    let app = runtime::build(&config).await.expect("gateway builds");
+    let loaded = RuntimeConfig::load_with_posture(
+        path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("runtime configuration loads");
+    let app =
+        runtime::build_with_posture(&loaded.config, &loaded.posture, loaded.development.as_ref())
+            .await
+            .expect("gateway builds");
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("gateway serves");
     });
@@ -334,7 +344,7 @@ pub fn document(values: &Document<'_>) -> String {
 kind: BRegMcpRuntimeConfig
 listener:
   bind: {listen}
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
 secretProviders:
   file:
     root: {secrets}

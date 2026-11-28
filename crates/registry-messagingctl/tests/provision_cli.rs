@@ -133,6 +133,43 @@ fn a_database_name_that_is_a_connection_uri_is_refused_in_print_mode() {
 }
 
 #[test]
+fn print_sql_uses_the_declared_posture() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(
+        &runtime,
+        text.replace(
+            "database:\n",
+            "database:\n  transport: private-network-plaintext\n",
+        ),
+    )
+    .unwrap();
+    let run = |posture: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_messagingctl"));
+        command.env_remove("REGISTRY_STACK_POSTURE").args([
+            "provision",
+            "--runtime-config",
+            &runtime,
+            "--print-sql",
+        ]);
+        if let Some(posture) = posture {
+            command.args(["--posture", posture]);
+        }
+        command.output().unwrap()
+    };
+    let default = run(None);
+    assert!(!default.status.success());
+    let diagnostic = String::from_utf8_lossy(&default.stderr);
+    assert!(
+        diagnostic.contains("platform.posture.database-private-plaintext"),
+        "{diagnostic}"
+    );
+    let development = run(Some("development"));
+    assert!(development.status.success(), "{development:?}");
+}
+
+#[test]
 fn print_sql_writes_the_script_and_no_password() {
     let directory = scratch();
     let runtime = write_runtime(directory.path());

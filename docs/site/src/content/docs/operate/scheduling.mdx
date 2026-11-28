@@ -73,6 +73,26 @@ two commands, and keep it out of the serving container.
     module comment and apply_audited(); crates/registry-schedulingctl/src/records.rs,
     connect_migration(). */}
 
+
+## Declare the deployment posture
+
+The runtime and ctl read `REGISTRY_STACK_POSTURE` or `--posture`.
+The default is `production`.
+For a laptop deployment that uses development settings, run with `rstack dev` or declare `development` explicitly.
+Use the same posture for the entire deployment. Production peers refuse development responses.
+
+`plan`, `apply`, and startup refuse a database activated under a different posture.
+`status` reports the mismatch alongside the ledger and schema information.
+To change posture, apply to a fresh database.
+
+A successful `/ready` returns `status`, `posture`, and `developmentSettings`.
+Each development setting lists its code and configuration pointer.
+In development, the public and metrics listeners add `Registry-Posture: development`.
+
+{/* Evidence: crates/registry-scheduling/src/config.rs finish_load;
+    crates/registry-scheduling/src/http.rs ready, http_edge;
+    crates/registry-scheduling/src/store/activation.rs posture_mismatch. */}
+
 ## Write the runtime file
 
 `schedulingctl init` wrote `runtime.example.yaml` beside your policy. Copy it to the host as
@@ -85,7 +105,7 @@ two commands, and keep it out of the serving container.
 - `identity.databaseId`: a name for the one database this deployment owns. The first `apply`
   records it, and every later command refuses a database that names another.
 - `listener`: `bind`, plus `tlsTermination: operator-controlled-upstream` behind your TLS edge.
-  `development-loopback` is refused on any address but loopback.
+  `loopback-plaintext` is refused on any address but loopback.
 - `secretProviders.file.root` and the `*Ref` keys: secret references such as
   `secret:file/runtime-database-url`, resolved under that root. Write each file with
   `printf '%s'`: a trailing newline is part of the value, and a URL file that ends in one makes
@@ -324,7 +344,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8105/ready
 
 `/ready` answers unavailable while PostgreSQL is unreachable, while the schema is not the one
 this release expects, and while the audit destination refuses writes, because no booking proceeds
-without its audit entry. `/readyz` answers the same way with an empty body.
+without its audit entry. `/readyz` returns the same status and body.
 
 ## Read the deployment
 

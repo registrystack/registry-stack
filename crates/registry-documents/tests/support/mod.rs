@@ -24,6 +24,12 @@ pub const STARTER_PROJECT: &str =
     include_str!("../../../../products/documents/examples/starter/documents.yaml");
 
 pub const DATABASE_STORAGE: &str = "storage:\n  type: database\n";
+pub const TEST_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 pub const DISABLED_VERIFIER: &str = "contentVerification:\n  type: disabled\n";
 
 /// Where the starter hooks deliver until a suite binds a receiver: a
@@ -42,9 +48,10 @@ pub fn database_url() -> String {
 /// An independent in-memory audit sink for direct worker boundary tests.
 pub fn worker_audit() -> registry_documents::audit::DocumentsAudit {
     registry_documents::audit::DocumentsAudit::new(
-        registry_platform_audit::AuditWriter::from_line_sink_without_posture(Box::new(
-            Vec::<u8>::new(),
-        )),
+        registry_platform_audit::AuditWriter::from_line_sink(
+            Box::new(Vec::<u8>::new()),
+            TEST_POSTURE.posture,
+        ),
         registry_platform_audit::AuditProfile::production_from_secret_bytes(
             zeroize::Zeroizing::new(b"documents-canary-audit-key-not-a-secret".to_vec()),
         )
@@ -219,7 +226,7 @@ package:
   root: {package}
 listener:
   bind: 127.0.0.1:0
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
 secretProviders:
   file:
@@ -267,8 +274,11 @@ destinations:
     /// Apply the schema and activate the package over the migration
     /// credential, as `documentsctl apply` does.
     pub async fn migrate(&self) {
-        let config = registry_documents::config::RuntimeConfig::load(&self.runtime)
-            .expect("the test runtime document loads");
+        let config = registry_documents::config::RuntimeConfig::load_with_posture(
+            &self.runtime,
+            TEST_POSTURE,
+        )
+        .expect("the test runtime document loads");
         registry_documents::runtime::apply_activation(
             &config,
             &registry_documents::activation::ApplyRequest::default(),

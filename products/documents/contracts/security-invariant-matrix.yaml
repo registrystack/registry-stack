@@ -67,13 +67,13 @@ invariants:
       others, so later versions could release bytes no verifier inspected.
     enforcementPoint: >-
       The runtime configuration accepts contentVerification type disabled only
-      when the listener declares development-loopback TLS termination.
+      when the process declares development.
     refusal: >-
-      Refuse with documents.runtime.content-verification-disabled at
-      /contentVerification/type.
+      Refuse with documents.posture.content-verification-disabled at
+      /contentVerification.
     negativeTest:
       path: crates/registry-documents/src/config.rs
-      name: disabled_content_verification_requires_development_loopback
+      name: disabled_content_verification_requires_declared_development
   - id: DOCUMENTS-SEC-05
     state: enforced
     threat: >-
@@ -126,18 +126,17 @@ invariants:
   - id: DOCUMENTS-SEC-08
     state: enforced
     threat: >-
-      A hook or verifier destination uses plaintext HTTP outside development,
+      A hook or verifier destination uses plaintext HTTP beyond loopback,
       sending document events or verifier credentials over the network
       unprotected.
     enforcementPoint: >-
       The runtime configuration reads every outbound URL through the shared
-      checked URL type and refuses http outside a development-loopback
-      deployment.
+      checked URL type and refuses HTTP beyond loopback in both postures.
     refusal: >-
       Refuse with documents.runtime.insecure-url at the destination's url.
     negativeTest:
       path: crates/registry-documents/src/config.rs
-      name: a_plaintext_hook_destination_is_refused_outside_development
+      name: a_non_loopback_plaintext_hook_destination_is_refused_in_both_postures
   - id: DOCUMENTS-SEC-09
     state: enforced
     threat: >-

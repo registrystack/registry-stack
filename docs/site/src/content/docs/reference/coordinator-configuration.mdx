@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -64,6 +64,25 @@ choose as `name.*`, as in `workflow.steps.*.next` or `operations.*.uses`.
     products/coordinator/generated/operations/catalog.json.
     Run npm run generate from docs/site. */}
 <ConfigurationReference contracts={reference.contracts} prefix="coordinator" />
+
+## Deployment posture
+
+Declare `development` or `production` with `REGISTRY_STACK_POSTURE` or `--posture`.
+An undeclared posture is production. If you set both, use the same value.
+Run `rstack dev` for development, or declare it on the command you run. The
+`check` command reports development settings as warnings in development and
+errors in production. `check --production` declares production.
+
+Use `listener.tlsTermination: loopback-plaintext` for a loopback bind. Configure
+PostgreSQL separately with `database.transport`. Its default is `verified-tls`.
+Use `loopback-plaintext` for a socket or a loopback host, or
+`private-network-plaintext` in development for a private-network host. A
+loopback HTTP issuer needs no exception. `allowInsecureHttp: true` and
+`jwksSource.type: test-issuer` require development.
+
+{/* Evidence: crates/registry-platform-posture/src/lib.rs declared_from;
+    crates/registry-platform-config/src/blocks.rs DatabaseTransport, plaintext_permitted, OidcIssuerConfig;
+    crates/registry-coordinator/src/runtime.rs loader_with_posture, findings. */}
 
 ## Host operations
 

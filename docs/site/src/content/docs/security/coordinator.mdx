@@ -93,6 +93,19 @@ Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/
     crates/registry-coordinator/src/completion.rs
     an_unknown_recipient_binding_gets_the_signature_refusal. */}
 
+Use one posture across the deployment. Development responses carry
+`Registry-Posture: development`. The Coordinator Rust client and a production
+`coordinatorctl doctor` refuse those responses. Production responses keep HSTS
+behind a TLS proxy on the same host. Development responses omit HSTS on a
+loopback listener.
+
+{/* Evidence: crates/registry-coordinator/src/http.rs hsts_is_omitted_only_in_development_on_loopback;
+    crates/registry-coordinator/tests/cli_remote.rs doctor_refuses_a_development_peer_only_in_production;
+    crates/registry-coordinator-client/src/client.rs send. */}
+
+{/* Evidence: crates/registry-coordinator/src/http.rs http_edge, ready_body;
+    crates/registry-platform-httputil/src/lib.rs PeerPolicy, validate_response_headers. */}
+
 ## Guarantees
 
 Each guarantee names the threat it answers, how Coordinator enforces it, and what it refuses.
@@ -308,17 +321,17 @@ A key set read over plain HTTP can be substituted by an on-path attacker, whose 
 mint access tokens Coordinator accepts.
 
 Enforcement: Coordinator fetches under the shared issuer network policy that Casework, Registry
-Messaging and Scheduling use, or the development loopback policy under `development-loopback`:
+Messaging and Scheduling use:
 
 - The declared issuer and a declared `jwksSource.uri` may resolve to a private or loopback address
   on any origin; both are operator configuration.
 - A discovered `jwks_uri` inherits that allowance only on the issuer's own origin.
   On another origin it must use HTTPS and is refused when it resolves to a private or loopback
-  address, under `development-loopback` too.
+  address.
 - Cloud metadata and link-local addresses are refused for declared and discovered endpoints alike.
   Redirects are disabled.
 - Plain HTTP is accepted at load only with `deployment.authentication.allowInsecureHttp: true`, or
-  on loopback under `development-loopback`.
+  over loopback in either posture. The explicit setting requires development.
   The setting never extends plain HTTP to a discovered endpoint on another origin.
 
 When the runtime file is loaded, Coordinator refuses a plain-HTTP issuer or key URI these rules do
@@ -1006,7 +1019,7 @@ Each residual names the condition under which it applies, its consequence, and t
 
 ### COORDINATOR-RES-13: declared OIDC addresses may be private
 
-- Condition: outside `development-loopback`, the declared issuer and a declared key URI may resolve
+- Condition: the declared issuer and a declared key URI may resolve
   to a private address.
 - Consequence: an operator who declares an internal address points Coordinator at it.
   The residual is shared across products and set out in [Token issuer and key endpoints](../#token-issuer-and-key-endpoints).

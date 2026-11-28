@@ -27,9 +27,12 @@ pub use registry_platform_config::{
     SecretProvidersConfig, TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_config::{
-    ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretResolver,
-    DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    ConfigBlockError, DeclaredPosture, DevelopmentClass, DevelopmentSetting, DevelopmentWitness,
+    Gated, Posture, PostureReport, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+    RuntimeFileCheck, SecretResolver, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND,
+    REMOVED_OIDC_JWKS_URI,
 };
+use registry_platform_httputil::client::transport_protects_the_credential;
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
@@ -127,7 +130,16 @@ pub struct RuntimeConfig {
     pub storage: StorageConfig,
     #[serde(default)]
     pub transfers: TransfersConfig,
-    pub content_verification: ContentVerificationConfig,
+    pub content_verification: Gated<ContentVerificationConfig>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub posture: Option<PostureReport>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    declared: Option<DeclaredPosture>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub development: Option<DevelopmentWitness>,
     pub cleanup: CleanupConfig,
     #[serde(default)]
     pub destinations: DestinationsConfig,
@@ -344,12 +356,31 @@ pub enum ContentVerificationConfig {
         #[cfg_attr(feature = "schema", schemars(flatten))]
         settings: AttachmentVerifierConfig,
     },
-    /// No verifier, accepted only beside `tlsTermination:
-    /// development-loopback`. Every finalized version is recorded as
+    /// No verifier, accepted only when the process declares development.
+    /// Every finalized version is recorded as
     /// approved under the `disabled` verifier binding.
     Disabled {},
 }
 registry_platform_yaml::tagged_union!(ContentVerificationConfig);
+
+static DOCUMENTS_CONTENT_VERIFICATION_DISABLED: DevelopmentSetting = DevelopmentSetting {
+    code: "documents.posture.content-verification-disabled",
+    key: "contentVerification",
+    summary: "Finalized document versions are approved without content verification.",
+    production: "Configure an HTTP content verifier.",
+};
+
+impl DevelopmentClass for ContentVerificationConfig {
+    const SETTINGS: &'static [&'static DevelopmentSetting] =
+        &[&DOCUMENTS_CONTENT_VERIFICATION_DISABLED];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::Disabled {} => Some(&DOCUMENTS_CONTENT_VERIFICATION_DISABLED),
+            Self::Http { .. } => None,
+        }
+    }
+}
 
 impl std::fmt::Debug for ContentVerificationConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -542,10 +573,19 @@ fn refused(findings: &[Finding]) -> String {
     }
 }
 
+pub const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
+
 impl RuntimeConfig {
     #[must_use]
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new_without_posture(DOCUMENTS_RUNTIME_ENVELOPE)
+        Self::loader_with_posture(DEFAULT_POSTURE)
+    }
+
+    pub const fn loader_with_posture(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(DOCUMENTS_RUNTIME_ENVELOPE, declared)
             .removed_keys(DOCUMENTS_REMOVED_KEYS)
             .require_trusted_ownership()
     }
@@ -553,13 +593,29 @@ impl RuntimeConfig {
     /// Load and check the operator document at an absolute path, reading
     /// `${VAR}` expressions from the process environment.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        let loaded = Self::loader().load::<Self>(path.as_ref())?;
-        let findings = loaded.config.findings();
+        Self::load_with_posture(path, DEFAULT_POSTURE)
+    }
+
+    pub fn load_with_posture(
+        path: impl AsRef<Path>,
+        declared: DeclaredPosture,
+    ) -> Result<Self, RuntimeConfigError> {
+        let loaded = Self::loader_with_posture(declared).load::<Self>(path.as_ref())?;
+        loaded.posture.decide(path.as_ref())?;
+        let mut config = loaded.config;
+        config.posture = Some(loaded.posture);
+        config.declared = Some(declared);
+        config.development = loaded.development;
+        let findings = config.findings();
         if findings.is_empty() {
-            Ok(loaded.config)
+            Ok(config)
         } else {
             Err(RuntimeConfigError::Refused(findings))
         }
+    }
+
+    pub fn declared_posture(&self) -> DeclaredPosture {
+        self.declared.unwrap_or(DEFAULT_POSTURE)
     }
 
     /// The resolver for every secret reference this document names.
@@ -576,11 +632,6 @@ impl RuntimeConfig {
         secrets: &SecretResolver,
     ) -> Result<std::sync::Arc<JwksFetcher>, RuntimeConfigError> {
         let provider = &self.authentication.oidc.provider;
-        if provider.allow_insecure_http {
-            tracing::warn!(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            );
-        }
         let network =
             IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
                 .map_err(|_| RuntimeConfigError::Oidc)?;
@@ -691,7 +742,7 @@ impl RuntimeConfig {
                 "documents.runtime.invalid-listener",
                 "/listener",
                 "listener.bind is not allowed for the declared tlsTermination and networkExposure",
-                "Bind a loopback address for development-loopback, a loopback or private address behind operator-controlled-upstream, or the unspecified address only with container-private.",
+                "Bind a loopback address for loopback-plaintext, a loopback or private address behind operator-controlled-upstream, or the unspecified address only with container-private.",
             ));
         }
     }
@@ -746,7 +797,9 @@ impl RuntimeConfig {
                 references.push(("storage.caBundleRef".to_owned(), reference.as_str()));
             }
         }
-        if let ContentVerificationConfig::Http { settings } = &self.content_verification {
+        if let Ok(ContentVerificationConfig::Http { settings }) =
+            self.content_verification.get(self.development.as_ref())
+        {
             references.push((
                 "contentVerification.authorizationRef".to_owned(),
                 settings.authorization_ref.as_str(),
@@ -775,23 +828,23 @@ impl RuntimeConfig {
     }
 
     fn check_database(&self, findings: &mut Vec<Finding>) {
-        if self.database.test_only_plaintext && !cfg!(feature = "postgres-test") {
+        if let Err(error) = self.database.check(cfg!(feature = "postgres-test")) {
             findings.push(Finding::new(
-                "documents.runtime.plaintext-database",
-                "/database/testOnlyPlaintext",
-                "database.testOnlyPlaintext is accepted only by test builds",
-                "Remove database.testOnlyPlaintext and connect over TLS.",
+                error.code(),
+                if self.database.test_only_plaintext {
+                    "/database/testOnlyPlaintext"
+                } else {
+                    "/database/transport"
+                },
+                error.to_string(),
+                error.suggested_action(),
             ));
         }
     }
 
     fn check_oidc(&self, findings: &mut Vec<Finding>) {
         let oidc = &self.authentication.oidc;
-        let development = self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
-        if let Err(error) = oidc
-            .provider
-            .check_without_posture("authentication.oidc", development)
-        {
+        if let Err(error) = oidc.provider.check("authentication.oidc") {
             findings.push(Finding::block("/authentication/oidc", &error));
         }
         if let Err(error) = oidc.clients.check("authentication.oidc") {
@@ -817,13 +870,12 @@ impl RuntimeConfig {
         let StorageConfig::S3 { settings, .. } = &self.storage else {
             return;
         };
-        let development = self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
-        if !settings.url.is_https() && !development {
+        if !transport_protects_the_credential(&settings.url.to_url()) {
             findings.push(Finding::new(
                 "documents.runtime.insecure-url",
                 "/storage/url",
-                "storage.url must be an https URL",
-                "Write an https URL, or run the listener in development-loopback mode.",
+                "storage.url must use HTTPS or HTTP on loopback",
+                "Write an HTTPS URL or use HTTP with a loopback host.",
             ));
         } else if S3Settings::from_config_without_peer_policy(settings).is_err() {
             findings.push(Finding::new(
@@ -836,24 +888,18 @@ impl RuntimeConfig {
     }
 
     fn check_content_verification(&self, findings: &mut Vec<Finding>) {
-        let development = self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
-        match &self.content_verification {
-            ContentVerificationConfig::Disabled {} if !development => {
-                findings.push(Finding::new(
-                    "documents.runtime.content-verification-disabled",
-                    "/contentVerification/type",
-                    "contentVerification type disabled is accepted only beside listener.tlsTermination development-loopback",
-                    "Configure an http content verifier, or run the listener in development-loopback mode.",
-                ));
-            }
+        let Ok(verification) = self.content_verification.get(self.development.as_ref()) else {
+            return;
+        };
+        match verification {
             ContentVerificationConfig::Http { settings }
-                if !settings.url.is_https() && !development =>
+                if !transport_protects_the_credential(&settings.url.to_url()) =>
             {
                 findings.push(Finding::new(
                     "documents.runtime.insecure-url",
                     "/contentVerification/url",
-                    "contentVerification.url must be an https URL",
-                    "Write an https URL, or run the listener in development-loopback mode.",
+                    "contentVerification.url must use HTTPS or HTTP on loopback",
+                    "Write an HTTPS URL or use HTTP with a loopback host.",
                 ));
             }
             ContentVerificationConfig::Http { settings }
@@ -871,14 +917,13 @@ impl RuntimeConfig {
     }
 
     fn check_hook_destinations(&self, findings: &mut Vec<Finding>) {
-        let development = self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
         for (id, destination) in &self.destinations.hooks {
-            if !destination.url.is_https() && !development {
+            if !transport_protects_the_credential(&destination.url.to_url()) {
                 findings.push(Finding::new(
                     "documents.runtime.insecure-url",
                     &format!("/destinations/hooks/{}/url", escape(id)),
-                    format!("destinations.hooks.{id}.url must be an https URL"),
-                    "Write an https URL, or run the listener in development-loopback mode.",
+                    format!("destinations.hooks.{id}.url must use HTTPS or HTTP on loopback"),
+                    "Write an HTTPS URL or use HTTP with a loopback host.",
                 ));
             }
         }
@@ -1045,8 +1090,20 @@ pub fn check_runtime_file(
     substitute: bool,
     project: Option<&DocumentsProject>,
 ) -> RuntimeCheck {
-    let check =
-        RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
+    check_runtime_file_with_posture(path, substitute, project, DEFAULT_POSTURE)
+}
+
+pub fn check_runtime_file_with_posture(
+    path: &Path,
+    substitute: bool,
+    project: Option<&DocumentsProject>,
+    declared: DeclaredPosture,
+) -> RuntimeCheck {
+    let check = RuntimeConfig::loader_with_posture(declared).check_offline::<RuntimeConfig>(
+        path,
+        substitute,
+        stand_in_for,
+    );
     let diagnostics: Vec<Diagnostic> = match &check.loaded {
         Some(loaded) => {
             let mut findings = loaded.config.findings();
@@ -1103,10 +1160,18 @@ fn check_metrics_apart(
 /// each at its position. `None` for a refusal that is not about the file.
 #[must_use]
 pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report> {
+    startup_report_with_posture(path, error, DEFAULT_POSTURE)
+}
+
+pub fn startup_report_with_posture(
+    path: &Path,
+    error: &RuntimeConfigError,
+    declared: DeclaredPosture,
+) -> Option<Report> {
     match error {
         RuntimeConfigError::Load(error) => Some(Report::new(error.diagnostics().to_vec())),
         RuntimeConfigError::Refused(_) => {
-            let report = check_runtime_file(path, true, None).report;
+            let report = check_runtime_file_with_posture(path, true, None, declared).report;
             (!report.is_empty()).then_some(report)
         }
         RuntimeConfigError::SecretProviders(_)
@@ -1148,7 +1213,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["listener", "bind"] => DEFAULT_LISTENER_BIND,
         ["metricsListener", "bind"] => DEFAULT_METRICS_BIND,
         ["metricsListener", "networkExposure"] => "private-address",
-        ["listener", "tlsTermination"] => "development-loopback",
+        ["listener", "tlsTermination"] => "loopback-plaintext",
         ["listener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
         ["package", "root"] | ["audit", "path"] | ["secretProviders", "file", "root"] => {
@@ -1177,9 +1242,17 @@ pub(crate) mod tests {
         include_str!("../../../products/documents/examples/starter/runtime.example.yaml");
 
     fn parse(text: &str) -> Result<RuntimeConfig, RuntimeConfigError> {
-        let config = RuntimeConfig::loader()
-            .parse_str::<RuntimeConfig>(text, |_| None)?
-            .config;
+        parse_with_posture(text, DEFAULT_POSTURE)
+    }
+
+    fn parse_with_posture(
+        text: &str,
+        declared: DeclaredPosture,
+    ) -> Result<RuntimeConfig, RuntimeConfigError> {
+        let loaded = RuntimeConfig::loader_with_posture(declared)
+            .parse_str::<RuntimeConfig>(text, |_| None)?;
+        let mut config = loaded.config;
+        config.development = loaded.development;
         let findings = config.findings();
         if findings.is_empty() {
             Ok(config)
@@ -1337,7 +1410,7 @@ pub(crate) mod tests {
         ));
         assert_eq!(config.storage.maximum_document_bytes(), 16_777_216);
         assert!(matches!(
-            config.content_verification,
+            config.content_verification.get(None).unwrap(),
             ContentVerificationConfig::Http { .. }
         ));
         assert_eq!(config.cleanup.erasure, Erasure::Active);
@@ -1606,18 +1679,77 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn disabled_content_verification_requires_development_loopback() {
+    fn disabled_content_verification_requires_declared_development() {
         let disabled = STARTER_RUNTIME.replace(HTTP_VERIFIER, "  type: disabled\n");
         assert_ne!(disabled, STARTER_RUNTIME);
+        for declared in [
+            DEFAULT_POSTURE,
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Flag,
+            },
+        ] {
+            assert_eq!(
+                codes(parse_with_posture(&disabled, declared).unwrap_err()),
+                ["documents.posture.content-verification-disabled"]
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_verification_is_readable_with_the_development_witness() {
+        let document = STARTER_RUNTIME.replace(HTTP_VERIFIER, "  type: disabled\n");
+        let declared = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let loaded = RuntimeConfig::loader_with_posture(declared)
+            .parse_str::<RuntimeConfig>(&document, |_| None)
+            .unwrap();
         assert_eq!(
-            codes(parse(&disabled).unwrap_err()),
-            ["documents.runtime.content-verification-disabled"]
+            loaded.posture.ready_member()["developmentSettings"],
+            serde_json::json!([{
+                "code": "documents.posture.content-verification-disabled",
+                "pointer": "/contentVerification",
+            }])
         );
-        let development = disabled.replace(
-            "tlsTermination: operator-controlled-upstream",
-            "tlsTermination: development-loopback",
-        );
-        assert!(parse(&development).is_ok());
+        assert!(loaded.config.content_verification.get(None).is_err());
+        assert!(matches!(
+            loaded
+                .config
+                .content_verification
+                .get(loaded.development.as_ref())
+                .unwrap(),
+            ContentVerificationConfig::Disabled {}
+        ));
+    }
+
+    #[test]
+    fn plain_http_transport_accepts_only_loopback() {
+        for (host, accepted) in [("127.0.0.1", true), ("10.0.0.5", false)] {
+            for text in [
+                with_s3(&format!("http://{host}"), ""),
+                STARTER_RUNTIME.replace("https://scanner.example.test", &format!("http://{host}")),
+                STARTER_RUNTIME.replace(
+                    "https://civil-registry.example.test",
+                    &format!("http://{host}"),
+                ),
+            ] {
+                for posture in [Posture::Production, Posture::Development] {
+                    let declared = DeclaredPosture {
+                        posture,
+                        source: PostureSource::Flag,
+                    };
+                    match parse_with_posture(&text, declared) {
+                        Ok(_) => assert!(accepted, "{host}"),
+                        Err(error) => {
+                            assert!(!accepted, "{host}: {error}");
+                            assert_eq!(codes(error), ["documents.runtime.insecure-url"]);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1797,16 +1929,22 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_plaintext_hook_destination_is_refused_outside_development() {
+    fn a_non_loopback_plaintext_hook_destination_is_refused_in_both_postures() {
         let text = STARTER_RUNTIME.replace(
             "url: https://civil-registry.example.test/document-events",
             "url: http://civil-registry.example.test/document-events",
         );
         assert_ne!(text, STARTER_RUNTIME);
-        assert_eq!(
-            codes(parse(&text).unwrap_err()),
-            ["documents.runtime.insecure-url"]
-        );
+        for posture in [Posture::Production, Posture::Development] {
+            let declared = DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            };
+            assert_eq!(
+                codes(parse_with_posture(&text, declared).unwrap_err()),
+                ["documents.runtime.insecure-url"]
+            );
+        }
     }
 
     const HTTP_VERIFIER: &str = "  type: http\n  url: https://scanner.example.test/v1/verify\n  authorizationRef: secret:file/content-verifier-authorization\n  policyId: documents-default\n  attemptTimeoutMilliseconds: 10000\n";
@@ -1935,7 +2073,7 @@ pub(crate) mod tests {
         } else {
             assert_eq!(
                 codes(result.unwrap_err()),
-                ["documents.runtime.plaintext-database"]
+                ["platform.database.test-only-plaintext"]
             );
         }
     }

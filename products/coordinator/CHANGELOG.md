@@ -2,9 +2,42 @@
 
 ## Unreleased
 
+- BREAKING: An undeclared posture is production.
+  Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+
+- BREAKING: `check` reports development settings as errors under the production default.
+  Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+
+- BREAKING: Use `loopback-plaintext` for loopback listener placement.
+  Migration: Set `tlsTermination` to `loopback-plaintext` for a listener behind a TLS proxy on the same host.
+
+- BREAKING: Issuer `allowInsecureHttp: true` requires development.
+  Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
+
+- Development deployments can now set `database.transport` to `private-network-plaintext` for PostgreSQL on the private network.
+
+- Loopback HTTP issuer URLs are accepted in either posture. A non-loopback HTTP issuer requires an explicit development opt-in.
+
+- Production responses keep HSTS behind a TLS proxy on the same host. Development responses omit HSTS when the listener uses a loopback mode.
+
+- BREAKING: Activation records the declared posture. Startup, plan and apply refuse a different posture. Status reports a finding. Existing rows read production.
+  Migration: Recreate development databases: a fresh apply is the way.
+
+- BREAKING: `/ready` returns a JSON object with `posture` and `developmentSettings`.
+  Migration: No change for probes that read the status code.
+
+- BREAKING: Audit lines carry `posture`.
+  Migration: Audit readers with a closed line parser accept the posture member.
+
+- Development responses carry `Registry-Posture: development`. The Coordinator Rust client and `coordinatorctl doctor` running in production posture refuse that mark.
+
+- BREAKING: Set `database.transport` to `loopback-plaintext` for PostgreSQL on the same host in either posture. This replaces the local plaintext database behavior selected by the former listener mode.
+
+- BREAKING: The shared `platform.database.*` codes report transport configuration refusals.
+  Migration: Update scripts that match the old codes.
+
 - BREAKING: protected state schema version 7 records a posture with each
-  activation. Every activation records production until the runtime declares
-  its posture. Version 6 namespaces are refused; settle their Runs with the
+  activation. Version 6 namespaces are refused. Settle their Runs with the
   matching binary, then apply this version to a fresh namespace and database
   identity.
 

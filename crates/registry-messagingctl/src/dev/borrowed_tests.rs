@@ -4,6 +4,7 @@
 //! The stand-in is a shell script each test writes, so no Base Registry
 //! Engine crate is linked and no issuer, container, or key is involved.
 
+use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write as _;
@@ -567,6 +568,10 @@ fn a_refused_borrow_records_no_issuer_and_starts_no_container() {
     // A Docker call would fail as an operational failure naming Docker.
     let failure = run_session(
         &args.start,
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Default,
+        },
         &fixture.loaded,
         &docker::Docker::new(PathBuf::from("/nonexistent/docker")),
         &mut session,

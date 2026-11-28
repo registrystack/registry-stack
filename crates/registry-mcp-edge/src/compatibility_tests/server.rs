@@ -67,9 +67,10 @@ fn gateway_core() -> Arc<GatewayCore> {
         ["unused".to_owned()],
     )
     .expect("binding");
-    let audit = ToolAuditLog::new(AuditWriter::from_line_sink_without_posture(Box::new(
-        io::sink(),
-    )));
+    let audit = ToolAuditLog::new(AuditWriter::from_line_sink(
+        Box::new(io::sink()),
+        registry_platform_config::Posture::Production,
+    ));
     Arc::new(
         GatewayCore::new(
             [binding],
@@ -130,6 +131,12 @@ async fn application(resource: &str) -> Router {
             resource: Url::parse(&options.resource).expect("resource URL"),
             maximum_request_bytes: 4096,
             hsts: false,
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Default,
+                },
+            ),
         },
     )
 }

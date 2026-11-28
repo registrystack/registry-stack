@@ -25,7 +25,7 @@ use registry_platform_crypto::delivery_signature::{
 };
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
-use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_PATH};
 use registry_platform_oidc::{
     task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry},
     JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
@@ -345,7 +345,14 @@ async fn fixture_publishing_with_hook_url(
     pool_ids: &[String],
     hook_url: &str,
 ) -> Fixture {
-    fixture_publishing_with_hook_and_status(policy, pool_ids, hook_url, None).await
+    fixture_publishing_with_hook_and_status(
+        policy,
+        pool_ids,
+        hook_url,
+        None,
+        registry_platform_config::Posture::Production,
+    )
+    .await
 }
 
 async fn fixture_publishing_with_hook_and_status(
@@ -353,6 +360,7 @@ async fn fixture_publishing_with_hook_and_status(
     pool_ids: &[String],
     hook_url: &str,
     task_grant_status: Option<Arc<TaskGrantStatusRegistry>>,
+    posture: registry_platform_config::Posture,
 ) -> Fixture {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
@@ -392,12 +400,13 @@ async fn fixture_publishing_with_hook_and_status(
         transport: None,
     };
     let migration_store =
-        PostgresStore::connect_migration(&database, &secrets).expect("the migration store");
+        PostgresStore::connect_migration(&database, &secrets, None).expect("the migration store");
     migration_store
         .migrate()
         .await
         .expect("the scheduling migrations");
-    let store = PostgresStore::connect_runtime(&database, &secrets).expect("the runtime store");
+    let store =
+        PostgresStore::connect_runtime(&database, &secrets, None).expect("the runtime store");
     // Every handle cloned from this store, the service and the router
     // included, reads the pinned instant as its now.
     let now = pinned_now();
@@ -467,6 +476,7 @@ async fn fixture_publishing_with_hook_and_status(
         &hook_destinations,
         &secrets,
         HookRuntimeIdentity {
+            posture,
             database_id: DATABASE_ID.to_owned(),
             package_digest: PACKAGE_DIGEST.to_owned(),
             scheduling_id: SCHEDULING_ID.to_owned(),
@@ -493,6 +503,9 @@ async fn fixture_publishing_with_hook_and_status(
         .with_task_grant_status(task_grant_status),
     );
     let http = router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
         service,
         authenticator: Arc::new(authenticator()),
     });
@@ -584,10 +597,11 @@ async fn activated_task_status(
             "statusResource": "urn:casework:test"
         }))
         .expect("the status authority configuration");
-    let registry = TaskGrantStatusRegistry::activate_without_peer_policy(
+    let registry = TaskGrantStatusRegistry::activate(
         &[TaskGrantStatusEndpoint::from(&status)],
         AUDIENCE,
         &secrets,
+        registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
     )
     .expect("activate the task-grant status registry");
     (server, Arc::new(registry))
@@ -599,6 +613,7 @@ async fn fixture_with_task_status(status: Arc<TaskGrantStatusRegistry>) -> Fixtu
         &["north-counter".into(), "two-counter".into()],
         "http://127.0.0.1:9/scheduling-hooks",
         Some(status),
+        registry_platform_config::Posture::Production,
     )
     .await
 }
@@ -1704,6 +1719,9 @@ async fn rotating_the_audit_key_keeps_existing_claims_with_their_owner() {
     let digest = policy.policy_digest();
     let rotated_key = AuditHashSecret::new(vec![0x24; 32]).expect("the rotated audit hash secret");
     let rotated = router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
         service: Arc::new(
             SchedulingService::new(
                 fx.store.clone(),
@@ -1909,25 +1927,37 @@ async fn hook_fixture() -> Fixture {
 /// naming the package its hook worker serves, as `schedulingctl apply`
 /// records it, since the worker checks that record in every transaction.
 async fn hook_fixture_at(hook_url: &str) -> Fixture {
+    use registry_platform_config::Posture;
+    hook_fixture_postures(hook_url, Posture::Production, Posture::Production).await
+}
+
+async fn hook_fixture_postures(
+    hook_url: &str,
+    recorded: registry_platform_config::Posture,
+    worker: registry_platform_config::Posture,
+) -> Fixture {
     let policy = read_policy(&observer_policy()).expect("the scheduling hook policy");
-    let fx = fixture_publishing_with_hook_url(
+    let fx = fixture_publishing_with_hook_and_status(
         policy,
         &["north-counter".to_owned(), "two-counter".to_owned()],
         hook_url,
+        None,
+        worker,
     )
     .await;
     registry_platform_activation::append_activation(
         &fx.admin,
         &activation_layout(),
-        &registry_platform_activation::NewActivation::without_posture(
-            Uuid::new_v4(),
-            PACKAGE_DIGEST,
-            DATABASE_ID,
-            None,
-            &[],
-            RoleMode::Single,
-            Some("scheduling_test"),
-        ),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest: PACKAGE_DIGEST,
+            database_id: DATABASE_ID,
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+            posture: recorded,
+        },
     )
     .await
     .expect("record the fixture activation");
@@ -2167,6 +2197,37 @@ async fn a_hook_capture_failure_rolls_back_the_whole_appointment_transaction() {
 }
 
 #[tokio::test]
+async fn hook_delivery_requires_the_workers_posture_to_match() {
+    use registry_platform_config::Posture;
+
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/scheduling-hooks"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&destination)
+        .await;
+    let url = format!("{}/scheduling-hooks", destination.uri());
+    for worker in [Posture::Development, Posture::Production] {
+        let fx = hook_fixture_postures(&url, Posture::Development, worker).await;
+        booked(&fx, 300, 440, "hook-posture").await;
+        let result = fx
+            .hooks
+            .delivery_service(fx.store.clone(), fx.audit.clone())
+            .deliver_once()
+            .await;
+        if worker == Posture::Development {
+            assert_eq!(result.unwrap(), DeliveryOutcome::Delivered);
+        } else {
+            assert!(matches!(
+                result,
+                Err(registry_platform_hooks::delivery::DeliveryError::Unavailable)
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_proposals() {
     let destination = MockServer::start().await;
     Mock::given(method("POST"))
@@ -2399,15 +2460,16 @@ async fn hook_delivery_is_refused_when_the_activation_record_names_another_datab
     registry_platform_activation::append_activation(
         &fx.admin,
         &activation_layout(),
-        &registry_platform_activation::NewActivation::without_posture(
-            Uuid::new_v4(),
-            PACKAGE_DIGEST,
-            "another-scheduling-database",
-            None,
-            &[],
-            RoleMode::Single,
-            Some("scheduling_test"),
-        ),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest: PACKAGE_DIGEST,
+            database_id: "another-scheduling-database",
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     .expect("record an activation naming another database");
@@ -2450,15 +2512,17 @@ async fn hook_delivery_stops_once_the_activation_record_names_another_package() 
     registry_platform_activation::append_activation(
         &fx.admin,
         &activation_layout(),
-        &registry_platform_activation::NewActivation::without_posture(
-            Uuid::new_v4(),
-            "sha256:0000000000000000000000000000000000000000000000000000000000000002",
-            DATABASE_ID,
-            None,
-            &[],
-            RoleMode::Single,
-            Some("scheduling_test"),
-        ),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            database_id: DATABASE_ID,
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     .expect("record a superseding activation");
@@ -2515,6 +2579,7 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         &destinations,
         &secrets,
         HookRuntimeIdentity {
+            posture: registry_platform_config::Posture::Production,
             database_id: DATABASE_ID.to_owned(),
             package_digest: PACKAGE_DIGEST.to_owned(),
             scheduling_id: SCHEDULING_ID.to_owned(),
@@ -2926,6 +2991,9 @@ async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
         7,
     ));
     fx.http = router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
         service,
         authenticator: Arc::new(authenticator()),
     });
@@ -5108,6 +5176,7 @@ async fn an_activation_whose_acknowledgment_was_lost_is_read_back() {
         .expect("the test role")
         .get(0);
     let request = |digest: &'static str| ActivationRequest {
+        posture: registry_platform_config::Posture::Production,
         activation_id: Uuid::new_v4(),
         package_digest: digest,
         database_id: "activation-read-back",
@@ -5173,6 +5242,7 @@ async fn a_records_swap_checks_the_active_package_under_its_locks() {
     fx.store
         .activate(
             &ActivationRequest {
+                posture: registry_platform_config::Posture::Production,
                 activation_id: Uuid::new_v4(),
                 package_digest: first,
                 database_id: "records-ledger",
@@ -5187,6 +5257,7 @@ async fn a_records_swap_checks_the_active_package_under_its_locks() {
         .await
         .expect("the first package activates");
     let expected = |database_id, package_digest| ActivePackage {
+        posture: registry_platform_config::Posture::Production,
         database_id,
         package_digest,
     };
@@ -5235,6 +5306,7 @@ async fn a_records_swap_checks_the_active_package_under_its_locks() {
                 SCHEDULING_ID,
                 &records_without(&[]),
                 &ActivePackage {
+                    posture: registry_platform_config::Posture::Production,
                     database_id: "records-ledger",
                     package_digest: first,
                 },
@@ -5428,9 +5500,12 @@ async fn a_database_that_refuses_at_startup_names_the_step_and_the_cause() {
     let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
         .expect("a temporary deployment root");
     let operator = unreachable_deployment(root.path());
-    let failure = registry_scheduling::runtime::serve_from_path(&operator)
-        .await
-        .expect_err("an unreachable database fails startup");
+    let failure = registry_scheduling::runtime::serve_from_path(
+        &operator,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("an unreachable database fails startup");
     let message = failure.to_string();
     assert!(
         message.contains("schema readiness check"),
@@ -5469,11 +5544,14 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
         1,
     );
     let operator = sealed_deployment(root.path(), &divergent, &scoped, "divergent-startup");
-    let candidate = registry_scheduling::config::RuntimeConfig::load(&operator)
-        .expect("the divergent runtime configuration")
-        .load_policy()
-        .expect("the divergent package verifies")
-        .package_digest;
+    let candidate = registry_scheduling::config::RuntimeConfig::load(
+        &operator,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .expect("the divergent runtime configuration")
+    .load_policy()
+    .expect("the divergent package verifies")
+    .package_digest;
     let published = read_policy(POLICY).expect("the published policy");
     assert_ne!(
         read_policy(&divergent)
@@ -5496,6 +5574,7 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
             store
                 .activate(
                     &ActivationRequest {
+                        posture: registry_platform_config::Posture::Production,
                         activation_id: Uuid::new_v4(),
                         package_digest: &package_digest,
                         database_id: "divergent-startup",
@@ -5526,10 +5605,13 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
         .await
         .expect("the published state")
         .get(0);
-    let error = registry_scheduling::runtime::serve_from_path(&operator)
-        .await
-        .expect_err("startup refuses a package the ledger does not name")
-        .to_string();
+    let error = registry_scheduling::runtime::serve_from_path(
+        &operator,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a package the ledger does not name")
+    .to_string();
     assert!(error.contains("is not the active package"), "{error}");
     let after: Value = fx
         .admin
@@ -5554,10 +5636,13 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
         json!(published.policy_digest()),
         "the stored policy is still the published one"
     );
-    let error = registry_scheduling::runtime::serve_from_path(&operator)
-        .await
-        .expect_err("startup refuses a stored policy its package does not carry")
-        .to_string();
+    let error = registry_scheduling::runtime::serve_from_path(
+        &operator,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a stored policy its package does not carry")
+    .to_string();
     assert!(
         error.contains("not in the state this runtime expects"),
         "{error}"
@@ -5881,16 +5966,18 @@ async fn an_allowed_commitment_writes_its_request_before_and_its_response_after(
     }
 }
 
-/// The shared probe routes answer their fixed bodies with no token. The
-/// older `/healthz` and `/readyz` spellings keep answering an empty 200.
+/// The probe routes answer without a token. Both readiness spellings
+/// report the declared posture.
 #[tokio::test]
 async fn probe_routes_answer_the_shared_bodies_and_the_older_spellings_still_answer() {
     let fx = fixture().await;
+    let ready =
+        json!({"status":"ready","posture":"production","developmentSettings":[]}).to_string();
     for (path, expected) in [
         (HEALTH_PATH, Some(HEALTH_BODY)),
-        (READY_PATH, Some(READY_BODY)),
+        (READY_PATH, Some(ready.as_str())),
         ("/healthz", None),
-        ("/readyz", None),
+        ("/readyz", Some(ready.as_str())),
     ] {
         let response = fx
             .http
@@ -7840,6 +7927,9 @@ async fn republished(fx: &Fixture, policy: SchedulingPolicy, pool_ids: &[String]
         .with_hooks(fx.hooks.clone()),
     );
     router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
         service,
         authenticator: Arc::new(authenticator()),
     })
@@ -10130,7 +10220,8 @@ async fn refuses_a_pre_1_0_ledger_at_migrate_and_readiness(version: i64) {
         test_only_plaintext: true,
         transport: None,
     };
-    let store = PostgresStore::connect_migration(&database, &secrets).expect("the migration store");
+    let store =
+        PostgresStore::connect_migration(&database, &secrets, None).expect("the migration store");
 
     let refusal = store
         .migrate()
@@ -12338,7 +12429,11 @@ mod queue_depth {
         use tower::ServiceExt;
         let fx = hook_fixture().await;
         let metrics = Arc::new(registry_scheduling::metrics::Metrics::default());
-        let app = registry_scheduling::http::metrics_router(metrics, fx.store.clone());
+        let app = registry_scheduling::http::metrics_router(
+            metrics,
+            fx.store.clone(),
+            registry_platform_config::Posture::Development,
+        );
         let response = app
             .clone()
             .oneshot(
@@ -12349,6 +12444,7 @@ mod queue_depth {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["registry-posture"], "development");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();

@@ -34,6 +34,9 @@
 //! dispatch lease: a claimed intent is not claimable again until its lease
 //! passes, and an outcome write only lands for the attempt that owns it.
 
+use registry_platform_config::{
+    DatabaseHost, DatabaseTransport, DatabaseTransportError, DevelopmentWitness,
+};
 use std::collections::HashMap;
 use std::str::FromStr;
 #[cfg(feature = "postgres-test")]
@@ -74,6 +77,7 @@ use crate::config::{describe_secret_failure, DatabaseConfig};
 use crate::hooks::{ActivatedHooks, HookCaptureError};
 
 mod activation;
+pub use activation::{posture_mismatch, POSTURE_MISMATCH};
 mod attempt_key;
 mod attendance;
 mod operational;
@@ -180,6 +184,13 @@ async fn mark_allocation_writer(
 
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("{message}")]
+    PostureMismatch {
+        message: &'static str,
+        action: &'static str,
+    },
+    #[error(transparent)]
+    DatabaseTransport(#[from] DatabaseTransportError),
     #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
     UnsupportedPostgres,
     #[error("the Scheduling database configuration is invalid")]
@@ -348,6 +359,7 @@ impl StoreError {
                 | Self::SchemaNewer { .. }
                 | Self::NotActivated
                 | Self::DatabaseIdMismatch
+                | Self::PostureMismatch { .. }
                 | Self::PackageAlreadyActive { .. }
                 | Self::PackageNotActive { .. }
                 | Self::RoleModeDrift
@@ -960,10 +972,12 @@ impl PostgresStore {
     pub fn connect_runtime(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.runtimeUrlRef",
             &config.runtime_url_ref,
         )
@@ -972,10 +986,12 @@ impl PostgresStore {
     pub fn connect_migration(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.migrationUrlRef",
             &config.migration_url_ref,
         )
@@ -984,6 +1000,7 @@ impl PostgresStore {
     fn connect_reference(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
         field: &'static str,
         reference: &str,
     ) -> Result<Self, StoreError> {
@@ -999,23 +1016,31 @@ impl PostgresStore {
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
-        #[cfg(feature = "postgres-test")]
-        let manager = if config.test_only_plaintext {
+        let hosts = postgres
+            .get_hosts()
+            .iter()
+            .map(|host| match host {
+                tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
+                #[cfg(unix)]
+                tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
+            })
+            .chain(
+                postgres
+                    .get_hostaddrs()
+                    .iter()
+                    .map(|address| DatabaseHost::Tcp(address.to_string())),
+            )
+            .collect::<Vec<_>>();
+        config.check(cfg!(feature = "postgres-test"))?;
+        let transport = config.plaintext_permitted(&hosts, witness)?;
+        let manager = if transport == DatabaseTransport::VerifiedTls && !config.test_only_plaintext
+        {
+            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
+            let connector = tls_connector(config, secrets)?;
+            Manager::from_config(postgres, connector, manager_config)
+        } else {
             postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
             Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
-        } else {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
-        };
-        #[cfg(not(feature = "postgres-test"))]
-        let manager = {
-            if config.test_only_plaintext {
-                return Err(StoreError::Configuration);
-            }
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
         };
         let pool = Pool::builder(manager)
             .max_size(32)

@@ -322,6 +322,43 @@
         ],
         "type": "object"
       },
+      "ReadyStatus": {
+        "properties": {
+          "developmentSettings": {
+            "items": {
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "pointer"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "development",
+              "production"
+            ]
+          },
+          "status": {
+            "const": "ready"
+          }
+        },
+        "required": [
+          "status",
+          "posture",
+          "developmentSettings"
+        ],
+        "type": "object"
+      },
       "Recipient": {
         "description": "Exactly one contact, typed by the channel that carries it: an email address, or an E.164 phone number.",
         "oneOf": [
@@ -598,7 +635,14 @@
         "operationId": "getReady",
         "responses": {
           "200": {
-            "description": "The operation succeeded. The body is empty."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyStatus"
+                }
+              }
+            },
+            "description": "The operation succeeded."
           },
           "405": {
             "content": {

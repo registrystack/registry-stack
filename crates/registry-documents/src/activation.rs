@@ -17,6 +17,8 @@ use serde_json::json;
 use thiserror::Error;
 use uuid::Uuid;
 
+use registry_platform_config::Posture;
+
 use crate::audit::{DocumentsAudit, PACKAGE_ACTIVATION_EVENT};
 use crate::store::{migrate_in, PostgresStore, StoreError, MIGRATIONS, MIGRATION_LOCK_KEY};
 
@@ -138,6 +140,7 @@ pub struct ActivationStatus {
     pub schema_version: Option<i64>,
     pub runtime_role_mode: Option<RoleMode>,
     pub grants_current: Option<bool>,
+    pub findings: Vec<ActivationRefusal>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -154,6 +157,8 @@ pub struct ActivationRefusal {
     pub code: &'static str,
     pub path: &'static str,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_action: Option<&'static str>,
 }
 
 impl ActivationRefusal {
@@ -162,6 +167,7 @@ impl ActivationRefusal {
             code,
             path,
             message: message.into(),
+            suggested_action: None,
         }
     }
 }
@@ -189,6 +195,11 @@ pub enum ActivationError {
     DatabaseIdMismatch,
     #[error("the configured package is not active; run `documentsctl plan --runtime-config FILE` then `documentsctl apply --runtime-config FILE`")]
     PackageNotActive,
+    #[error("platform.activation.posture-mismatch: {message} {action}")]
+    PostureMismatch {
+        message: &'static str,
+        action: &'static str,
+    },
     #[error("the runtime credential has gained authority over the activation boundary; restore the split-role boundary, then apply again")]
     RoleModeWeakened,
     #[error("the runtime credential is missing required grants; run `documentsctl apply --runtime-config FILE` with the migration credential")]
@@ -213,6 +224,7 @@ impl ActivationError {
         match self {
             Self::NotActivated => Some("documentsctl.activation.not-activated"),
             Self::DatabaseIdMismatch => Some("documentsctl.activation.database-id-mismatch"),
+            Self::PostureMismatch { .. } => Some("platform.activation.posture-mismatch"),
             Self::PackageNotActive => Some("documentsctl.activation.package-not-active"),
             Self::RoleModeWeakened => Some("documentsctl.activation.role-mode-weakened"),
             Self::GrantsStale => Some("documentsctl.activation.grants-stale"),
@@ -230,6 +242,36 @@ impl From<tokio_postgres::Error> for ActivationError {
     fn from(error: tokio_postgres::Error) -> Self {
         Self::Store(StoreError::Query(error))
     }
+}
+
+fn posture_mismatch(recorded: Posture, declared: Posture) -> Option<ActivationError> {
+    let (message, action) = match (recorded, declared) {
+        (Posture::Production, Posture::Development) => (
+            "this database was activated in the production posture; a development process never opens it",
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
+        ),
+        (Posture::Development, Posture::Production) => (
+            "this database was activated in the development posture; development data and settings are never promoted in place",
+            "Create a fresh database and apply the package as production: a fresh apply is the way.",
+        ),
+        _ => return None,
+    };
+    Some(ActivationError::PostureMismatch { message, action })
+}
+
+fn posture_finding(active: &Activation, declared: Posture) -> Option<ActivationRefusal> {
+    let ActivationError::PostureMismatch { message, action } =
+        posture_mismatch(active.posture, declared)?
+    else {
+        unreachable!("posture_mismatch returns only posture errors");
+    };
+    let mut finding = ActivationRefusal::new(
+        "platform.activation.posture-mismatch",
+        "/database/runtimeUrlRef",
+        message,
+    );
+    finding.suggested_action = Some(action);
+    Some(finding)
 }
 
 pub async fn plan(
@@ -258,7 +300,11 @@ pub async fn plan(
         .map_err(platform_error)?;
     let observation = observe(&*tx, None).await?;
     let database_id_check = platform::database_id_check(active.as_ref(), database_id);
-    let mut refusals = Vec::new();
+    let mut refusals: Vec<_> = active
+        .as_ref()
+        .and_then(|active| posture_finding(active, store.posture))
+        .into_iter()
+        .collect();
     if database_id_check == DatabaseIdCheck::Differs {
         refusals.push(ActivationRefusal::new(
             "documentsctl.activation.database-id-mismatch",
@@ -336,6 +382,11 @@ pub async fn status(store: &PostgresStore) -> Result<ActivationStatus, Activatio
     let active = history.last().cloned();
     let observation = observe(&*tx, None).await?;
     let result = ActivationStatus {
+        findings: active
+            .as_ref()
+            .and_then(|active| posture_finding(active, store.posture))
+            .into_iter()
+            .collect(),
         active,
         history,
         schema_version: schema.current(),
@@ -469,6 +520,15 @@ async fn apply_begun(
         respond_refused(audit_request, activation_id, package_digest, &refusals).await?;
         return Err(ActivationError::Refused(refusals));
     }
+    if let Some(refusal) = current_active
+        .as_ref()
+        .and_then(|active| posture_finding(active, migration.posture))
+    {
+        let refusals = vec![refusal];
+        drop(tx);
+        respond_refused(audit_request, activation_id, package_digest, &refusals).await?;
+        return Err(ActivationError::Refused(refusals));
+    }
     if split {
         let mut stray = platform::stray_authority(&*tx, &layout(), Some(runtime_role))
             .await
@@ -580,15 +640,16 @@ async fn apply_begun(
     let activation = platform::append_activation(
         &*tx,
         &layout(),
-        &NewActivation::without_posture(
+        &NewActivation {
             activation_id,
             package_digest,
             database_id,
-            operator_reference_hash.as_deref(),
-            &request.backup_references,
+            operator_reference_hash: operator_reference_hash.as_deref(),
+            backup_references: &request.backup_references,
             role_mode,
-            None,
-        ),
+            posture: migration.posture,
+            runtime_role: None,
+        },
     )
     .await
     .map_err(platform_error)?;
@@ -649,20 +710,21 @@ pub async fn check_runtime(
         return Err(ActivationError::LedgerUnreadable);
     }
     crate::store::check_activation_schema(&**client).await?;
-    let active = platform::check_active_package_without_posture(
+    let active = platform::check_active_package(
         &**client,
         &layout(),
         database_id,
         package_digest,
+        store.posture,
     )
     .await
     .map_err(|error| match error {
         platform::ActivePackageError::NotActivated => ActivationError::NotActivated,
         platform::ActivePackageError::DatabaseIdMismatch => ActivationError::DatabaseIdMismatch,
         platform::ActivePackageError::PackageNotActive { .. } => ActivationError::PackageNotActive,
-        // Until this product declares a posture it checks as production,
-        // so a ledger recorded in development is not its active package.
-        platform::ActivePackageError::PostureMismatch { .. } => ActivationError::PackageNotActive,
+        platform::ActivePackageError::PostureMismatch { recorded, declared } => {
+            posture_mismatch(recorded, declared).expect("the postures differ")
+        }
         platform::ActivePackageError::Activation(error) => {
             ActivationError::Store(platform_error(error))
         }

@@ -15,7 +15,7 @@
     {
       "id": "sec-origin-target-confinement",
       "status": "enforced",
-      "threat": "An approved origin redirects or reaches an ambient, private, or metadata target.",
+      "threat": "An approved origin redirects or reaches an ambient, private, or metadata target, or a production build consumes a development-marked response.",
       "enforcementPoint": "discoveryctl exact-target network client.",
       "requiredNegativeBehavior": "Refuse the build and leave no new visible index.",
       "negativeTest": "origin-target-is-confined-to-exact-approved-https",
@@ -61,8 +61,8 @@
       "id": "sec-package-integrity",
       "status": "enforced",
       "threat": "Discovery serves index bytes that differ from the verified package, accepts a changed, missing, or extra package file, or starts on a package other than the optional deployment pin.",
-      "enforcementPoint": "Runtime package verification and exact index-byte capture before listener binding.",
-      "requiredNegativeBehavior": "Refuse startup by file name or with the shared expected and found digest shape before constructing the query directory.",
+      "enforcementPoint": "Runtime package verification, exact index-byte capture, and posture decision before listener binding.",
+      "requiredNegativeBehavior": "Refuse invalid packages and production packages with loopback URL claims before constructing the query directory.",
       "negativeTest": "package-envelope-pin-and-consumed-index-bytes-are-bound",
       "binding": {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape"}
     },

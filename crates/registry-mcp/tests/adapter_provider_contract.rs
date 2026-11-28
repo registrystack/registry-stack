@@ -97,6 +97,7 @@ struct AdapterState {
     operation_status: StatusCode,
     operation_body: Value,
     request_id: Option<String>,
+    response_posture: Option<&'static str>,
     operation_headers: Arc<Mutex<Vec<HeaderMap>>>,
 }
 
@@ -118,6 +119,11 @@ async fn operation(State(state): State<AdapterState>, headers: HeaderMap) -> Res
             "content-type",
             HeaderValue::from_static("application/problem+json"),
         );
+    }
+    if let Some(posture) = state.response_posture {
+        response
+            .headers_mut()
+            .insert("registry-posture", HeaderValue::from_static(posture));
     }
     if let Some(request_id) = state.request_id {
         response.headers_mut().insert(
@@ -170,6 +176,7 @@ async fn invoke_with_options(
         operation_status: actual_status,
         operation_body,
         request_id: request_id.map(str::to_owned),
+        response_posture: None,
         operation_headers: Arc::clone(&operation_headers),
     };
     let app = Router::new()
@@ -470,4 +477,162 @@ async fn bounded_response_and_omitted_empty_arguments_are_distinguished() {
     assert_eq!(failure.code(), "adapter-response-too-large");
     assert!(format!("{failure:?}").contains("0123456789abcdef0123456789abcdef"));
     assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn runtime_admits_development_adapter_responses_only_in_development() {
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
+    use registry_mcp::config::RuntimeConfig;
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+    use registry_platform_testing::{jwks_from_private_jwk, sign_compact_jwt_with_key};
+    use std::os::unix::fs::PermissionsExt;
+    use tower::ServiceExt;
+
+    const RESOURCE: &str = "https://gateway.example.test/mcp";
+    const ISSUER: &str = "https://issuer.example.test";
+    const AUDIENCE: &str = "https://adapter.example.invalid/";
+    let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let kid = key.kid.as_deref().unwrap();
+    let contract = document(200);
+    let operation_headers = Arc::new(Mutex::new(Vec::new()));
+    let state = AdapterState {
+        runtime_contract: contract.clone(),
+        runtime_contract_fetches: Arc::new(AtomicUsize::new(0)),
+        operation_status: StatusCode::OK,
+        operation_body: json!({}),
+        request_id: Some("0123456789abcdef0123456789abcdef".to_owned()),
+        response_posture: Some("development"),
+        operation_headers: Arc::clone(&operation_headers),
+    };
+    let adapter = Router::new()
+        .route(&format!("/{CONTRACT_PATH}"), get(runtime_contract))
+        .route("/records", get(operation))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, adapter).await.unwrap() });
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let token = sign_compact_jwt_with_key(
+        &key,
+        "at+jwt",
+        kid,
+        json!({
+            "iss": ISSUER, "sub": "fixture-subject", "aud": RESOURCE,
+            "client_id": "chat-host", "scope": "fixture:read", "iat": now, "exp": now + 300,
+        }),
+    );
+    for (posture, source) in [
+        (Posture::Production, "static"),
+        (Posture::Development, "test-issuer"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let secrets = root.join("secrets");
+        std::fs::create_dir(&secrets).unwrap();
+        std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for (name, bytes) in [
+            (
+                "jwks",
+                serde_json::to_vec(&jwks_from_private_jwk(&key)).unwrap(),
+            ),
+            ("audit-key", vec![7; 32]),
+            ("machine-token", b"synthetic-adapter-machine-token".to_vec()),
+        ] {
+            let path = secrets.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let contract_path = root.join("contract.json");
+        std::fs::write(&contract_path, serde_json::to_vec(&contract).unwrap()).unwrap();
+        let audit = root.join("audit.jsonl");
+        let path = root.join("runtime.json");
+        let config = json!({
+            "apiVersion":"id.registrystack.org/formats/platform/mcp-runtime/v1alpha1",
+            "kind":"PlatformMcpRuntimeConfig",
+            "name":"Adapter runtime posture fixture",
+            "listener":{"bind":"127.0.0.1:8110","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
+            "secretProviders":{"file":{"root":secrets}},
+            "resourceServer":{"resource":RESOURCE,"issuer":ISSUER,"jwksSource":{"type":source,"documentRef":"secret:file/jwks"},"algorithms":["ES256"],"allowedClients":["chat-host"],"requiredScopes":["fixture:read"]},
+            "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":audit},
+            "rateLimits":{"perPrincipal":{"requestsPerMinute":30,"burst":10},"perClient":{"requestsPerMinute":600,"burst":100}},
+            "bindings":[{"name":"records","tools":["read_records"],"provider":{
+                "type":"adapter","baseUrl":format!("http://{address}/"),"contractFile":contract_path,
+                "contractDigest":contract["digest"],"dataClass":"non-personal","audience":AUDIENCE,
+                "machineTokenRef":"secret:file/machine-token",
+                "operations":{"read_records":{"operation":"records.list","description":"Read records."}}
+            }}]
+        });
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let loaded = RuntimeConfig::load_with_posture(
+            &path,
+            DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            },
+        )
+        .unwrap();
+        let app = registry_mcp::runtime::build_with_posture(&loaded)
+            .await
+            .unwrap();
+        let ready = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .header("host", "gateway.example.test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::OK);
+        assert_eq!(
+            ready.headers().contains_key("strict-transport-security"),
+            posture == Posture::Production
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("host", "gateway.example.test")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("accept", "application/json, text/event-stream")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                            "name":"read_records","arguments":{"path":{},"query":{}}
+                        }})
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 65_536).await.unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        let data = body
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap_or(&body);
+        let reply: Value = serde_json::from_str(data).unwrap();
+        assert_eq!(
+            reply["result"]["isError"].as_bool().unwrap_or(false),
+            posture == Posture::Production,
+            "{reply}"
+        );
+        let text = std::fs::read_to_string(&audit).unwrap();
+        let mark: Value = serde_json::from_str(text.lines().next().expect("tool audit")).unwrap();
+        assert_eq!(mark["posture"], posture.as_str());
+    }
+    assert_eq!(operation_headers.lock().unwrap().len(), 2);
+    task.abort();
 }

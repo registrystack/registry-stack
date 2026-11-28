@@ -243,6 +243,7 @@ async fn provision_then_apply_then_serve_with_split_roles() {
         async move {
             registry_messaging::runtime::serve_from_path(
                 &runtime,
+                registry_messaging::config::DEFAULT_POSTURE,
                 registry_messaging::dispatch::Transports::new(),
             )
             .await

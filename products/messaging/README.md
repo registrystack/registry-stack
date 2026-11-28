@@ -61,7 +61,7 @@ rstack dev stop "$RUN"
 
 The run owns everything it starts: a PostgreSQL server, a pinned Mailpit container every `smtp`
 provider sends to, a mock gateway every `http` provider sends to, and the Messaging runtime on a
-`development-loopback` listener. The containers publish on 127.0.0.1 only and carry the run's label,
+`loopback-plaintext` listener. The containers publish on 127.0.0.1 only and carry the run's label,
 so `stop`, TTL expiry and `stop --recover` remove them with the run. The mock gateway answers each
 send with `queued` and about a quarter of a second later posts a delivery report, signed with the
 run's callback key, to the runtime's callback route, so an SMS reaches `delivered` and an email

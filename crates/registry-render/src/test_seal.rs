@@ -38,6 +38,7 @@ pub(crate) fn run(
     document: &str,
     request: &RenderRequest,
     output: &Path,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<Value, RenderProblem> {
     server::mark_not_dumpable()?;
     match fs::symlink_metadata(output) {
@@ -79,6 +80,7 @@ pub(crate) fn run(
             request,
             &token,
             &package_digest,
+            declared,
         ))?;
         Ok((pdf, report, root))
     })();
@@ -236,8 +238,9 @@ async fn seal_request(
     request: &RenderRequest,
     token: &str,
     digest: &str,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(Vec<u8>, Value), RenderProblem> {
-    let (runtime, _, service) = server::load_service(path).await?;
+    let (runtime, _, service) = server::load_service(path, declared).await?;
     // The serving parent now holds the test signer. Remove its key file before any worker starts.
     fs::remove_file(path.with_file_name("seal.jwk")).map_err(io_problem)?;
     let body = json!({"data":request.data, "issuedAt":request.issued_at.to_rfc3339(),

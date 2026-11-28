@@ -20,7 +20,21 @@ async fn main() {
     };
     initialize_logging(level);
 
-    if let Err(error) = run(&matches).await {
+    let declared = match registry_platform_config::declared(
+        matches.get_one::<String>("posture").map(String::as_str),
+    ) {
+        Ok(declared) => declared,
+        Err(error) => {
+            eprintln!(
+                "{}: {} {}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) = run(&matches, declared).await {
         eprintln!("documents: {error}");
         std::process::exit(1);
     }
@@ -31,7 +45,8 @@ async fn main() {
 fn initialize_logging(level: LevelFilter) {
     let filter = Targets::new()
         .with_target("registry_documents", level)
-        .with_target("registry_documents_core", level);
+        .with_target("registry_documents_core", level)
+        .with_target("registry_platform_config::posture", level);
     tracing_subscriber::registry()
         .with(filter)
         .with(

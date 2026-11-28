@@ -649,7 +649,14 @@ def schemas(problem_entries: list[dict]) -> dict:
             [*busy_counts, "kind", "revision"],
         ),
         "HealthStatus": answer({"status": {**text, "enum": ["ok"]}}, ["status"]),
-        "ReadyStatus": answer({"status": {**text, "enum": ["ready"]}}, ["status"]),
+        "ReadyStatus": answer({
+            "status": {**text, "enum": ["ready"]},
+            "posture": {**text, "enum": ["development", "production"]},
+            "developmentSettings": {
+                "type": "array",
+                "items": answer({"code": text, "pointer": text}, ["code", "pointer"]),
+            },
+        }, ["status", "posture", "developmentSettings"]),
         "SchedulingServiceDocument": answer(
             {"schedulingId": text, "policyRevision": revision, "policyDigest": text},
             ["schedulingId", "policyRevision", "policyDigest"],
@@ -961,7 +968,8 @@ def document(contract: dict) -> dict:
         )},
         "/readyz": {"get": unauthenticated(
             "Readiness, older spelling",
-            "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After. Answers an empty 200 and stays beside /ready for deployments that already probe it.",
+            "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After.",
+            "ReadyStatus",
         )},
         "/v1/scheduling": {"get": operation(
             "Describe this Scheduling deployment",

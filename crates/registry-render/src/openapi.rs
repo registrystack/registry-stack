@@ -46,7 +46,7 @@ pub const OPENAPI_JSON: &str = r##"{
       "get": {
         "summary": "Readiness (issuer keys and audit destination included)",
         "responses": {
-          "200": { "description": "ready. A deployment that seals adds a signing member, one entry per seal: {status: ready} or {status: not-ready, reason: certificate-expired | certificate-not-yet-valid | signer-not-ready}, with testOnly: true for a seal the runtime declares assuranceProfile: local. A seal never changes the status code; readiness never requests a timestamp." },
+          "200": { "content": { "application/json": { "schema": { "type": "object", "required": ["status", "posture", "developmentSettings"], "properties": { "status": { "const": "ready" }, "posture": { "enum": ["development", "production"] }, "developmentSettings": { "type": "array", "items": { "type": "object", "required": ["code"], "properties": { "code": { "type": "string" }, "pointer": { "type": "string" } } } }, "signing": { "type": "object" } } } } }, "description": "ready. A deployment that seals adds a signing member, one entry per seal: {status: ready} or {status: not-ready, reason: certificate-expired | certificate-not-yet-valid | signer-not-ready}, with testOnly: true for a seal the runtime declares assuranceProfile: local. A seal never changes the status code; readiness never requests a timestamp." },
           "503": { "description": "not ready" }
         }
       }

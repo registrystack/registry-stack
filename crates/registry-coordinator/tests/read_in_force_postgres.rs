@@ -120,7 +120,10 @@ async fn two_records_in_force_hold_the_run_until_an_operator_retries() {
                 database_id: namespace.clone(),
                 keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x22; 32])
                     .expect("test keys"),
-                audit: AuditWriter::from_line_sink_without_posture(Box::new(std::io::sink())),
+                audit: AuditWriter::from_line_sink(
+                    Box::new(std::io::sink()),
+                    registry_platform_config::Posture::Production,
+                ),
                 audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                     vec![0x33; 32],
                 ))

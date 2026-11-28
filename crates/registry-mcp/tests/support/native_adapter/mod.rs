@@ -2,6 +2,12 @@
 
 mod source;
 
+const DEVELOPMENT: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 pub use source::{fixture_response, Reply, Source};
 
 use registry_mcp::{config::RuntimeConfig, runtime};
@@ -355,8 +361,9 @@ impl NativeStack {
             directory.path(),
             &operations,
         );
-        let config = RuntimeConfig::load(&gateway_path).expect("gateway runtime config loads");
-        let router = runtime::build(&config)
+        let config = RuntimeConfig::load_with_posture(&gateway_path, DEVELOPMENT)
+            .expect("gateway runtime config loads");
+        let router = runtime::build_with_posture(&config)
             .await
             .expect("gateway router builds");
         tokio::spawn(async move {
@@ -436,8 +443,8 @@ impl NativeStack {
                 "Create is outside this read-only gateway.",
             )],
         );
-        match RuntimeConfig::load(&runtime_path) {
-            Ok(config) => runtime::build(&config)
+        match RuntimeConfig::load_with_posture(&runtime_path, DEVELOPMENT) {
+            Ok(config) => runtime::build_with_posture(&config)
                 .await
                 .expect_err("a producer-declared write cannot build a read-only provider")
                 .to_string(),
@@ -759,7 +766,7 @@ name: Native adapter proof
 logLevel: info
 listener:
   bind: 127.0.0.1:1
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
 secretProviders:
   file:
     root: {secrets}

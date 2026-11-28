@@ -257,6 +257,47 @@ pub fn parse_index(bytes: &[u8]) -> Result<DiscoveryIndex, IndexError> {
     Ok(index)
 }
 
+#[cfg(feature = "runtime-config")]
+pub static LOOPBACK_CATALOG_URL: registry_platform_config::DevelopmentSetting =
+    registry_platform_config::DevelopmentSetting {
+        code: "discovery.posture.loopback-catalog-url",
+        key: "catalogUrl",
+        summary: "the index advertises an address on the reader's own machine",
+        production: "Publish HTTPS URLs on non-loopback hosts.",
+    };
+
+/// Record each loopback address advertised by the index at its wire pointer.
+#[cfg(feature = "runtime-config")]
+pub fn record_index_posture(
+    index: &DiscoveryIndex,
+    report: &mut registry_platform_config::PostureReport,
+    is_loopback_host: impl Fn(&str) -> bool,
+) {
+    use registry_platform_config::{FoundSetting, SettingOrigin};
+
+    let mut record = |value: &str, pointer| {
+        if Url::parse(value)
+            .ok()
+            .and_then(|url| url.host_str().map(&is_loopback_host))
+            .unwrap_or(false)
+        {
+            report.record(FoundSetting {
+                setting: &LOOPBACK_CATALOG_URL,
+                pointer: Some(pointer),
+                position: None,
+                origin: SettingOrigin::Package,
+            });
+        }
+    };
+    for (i, origin) in index.origins.iter().enumerate() {
+        record(&origin.catalog_url, format!("/origins/{i}/catalogUrl"));
+    }
+    for (i, service) in index.services.iter().enumerate() {
+        record(&service.endpoint_url, format!("/services/{i}/endpointUrl"));
+        record(&service.origin_url, format!("/services/{i}/originUrl"));
+    }
+}
+
 fn contains_retired_service_kind(value: &serde_json::Value) -> bool {
     value
         .get("services")

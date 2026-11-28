@@ -35,11 +35,11 @@ identity:
 listener:
   # Required: the IP address and port the runtime listens on.
   bind: 127.0.0.1:8105
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
   # `operator-controlled-upstream` is the production value: the runtime itself
   # stays plaintext and an operator-managed TLS edge terminates transport in
-  # front of it. `development-loopback` is direct plaintext, refused on any
+  # front of it. `loopback-plaintext` is direct plaintext, refused on any
   # non-loopback bind. `networkExposure: container-private` additionally
   # permits an unspecified bind for a listener kept on a private container
   # network.

@@ -719,7 +719,10 @@ impl Store {
             StoreSecurity {
                 database_id: namespace.to_owned(),
                 keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x22; 32])?,
-                audit: AuditWriter::from_line_sink_without_posture(Box::new(std::io::sink())),
+                audit: AuditWriter::from_line_sink(
+                    Box::new(std::io::sink()),
+                    registry_platform_config::Posture::Production,
+                ),
                 audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                     vec![0x33; 32],
                 ))
@@ -736,13 +739,6 @@ impl Store {
         security: StoreSecurity,
         tls: Option<tokio_postgres_rustls::MakeRustlsConnect>,
     ) -> Result<Self> {
-        if !namespace.starts_with("coordinator_") || namespace.len() > 60 {
-            return Err(refused(
-                "namespace-invalid",
-                "use a dedicated coordinator_ lowercase SQL namespace",
-            ));
-        }
-        let table = job_table(namespace)?;
         let config: tokio_postgres::Config = database_url.parse().map_err(unavailable)?;
         let local = !config.get_hosts().is_empty()
             && config.get_hosts().iter().all(|host| match host {
@@ -759,6 +755,22 @@ impl Store {
         {
             return Err(refused("database-tls-required", "use verified TLS with sslmode=require for PostgreSQL; plaintext is restricted to an explicit local connection"));
         }
+        Self::open_config(config, namespace, security, tls).await
+    }
+
+    pub(crate) async fn open_config(
+        config: tokio_postgres::Config,
+        namespace: &str,
+        security: StoreSecurity,
+        tls: Option<tokio_postgres_rustls::MakeRustlsConnect>,
+    ) -> Result<Self> {
+        if !namespace.starts_with("coordinator_") || namespace.len() > 60 {
+            return Err(refused(
+                "namespace-invalid",
+                "use a dedicated coordinator_ lowercase SQL namespace",
+            ));
+        }
+        let table = job_table(namespace)?;
         if security.database_id.is_empty() || security.database_id.len() > 128 {
             return Err(refused(
                 "database-identity-invalid",

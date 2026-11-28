@@ -242,10 +242,20 @@ fn document() -> Value {
         OPENAPI_ROUTE.into(),
         json!({"get": probe_operation("Exact OpenAPI document")}),
     );
-    paths.insert(
-        READY_ROUTE.into(),
-        json!({"get": probe_operation("Immutable index is loaded")}),
-    );
+    let mut ready = probe_operation("Immutable index is loaded");
+    ready["responses"]["200"]["content"] = json!({(JSON): {"schema": {
+        "type": "object",
+        "required": ["status", "posture", "developmentSettings"],
+        "properties": {
+            "status": {"const": "ready"},
+            "posture": {"enum": ["development", "production"]},
+            "developmentSettings": {"type": "array", "items": {
+                "type": "object", "required": ["code"],
+                "properties": {"code": {"type": "string"}, "pointer": {"type": "string"}}
+            }}
+        }
+    }}});
+    paths.insert(READY_ROUTE.into(), json!({"get": ready}));
     paths.insert(
         EVIDENCE_TYPES_ROUTE.into(),
         json!({"post": {

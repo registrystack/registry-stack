@@ -15,7 +15,16 @@ use registry_discovery::{
     EvidenceTypeResolveResponse, OriginSummary, ServiceKind, ServiceRecord, ServiceSearchResponse,
     INDEX_API_VERSION, INDEX_FILE, INDEX_KIND, PACKAGE_COMMAND,
 };
-use registry_platform_config::write_package;
+use registry_platform_config::{write_package, DeclaredPosture, Posture, PostureSource};
+
+const PRODUCTION: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
+const DEVELOPMENT: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Development,
+    source: PostureSource::Flag,
+};
 use tower::ServiceExt as _;
 
 fn index() -> DiscoveryIndex {
@@ -78,12 +87,31 @@ fn app() -> axum::Router {
 
 #[tokio::test]
 async fn verified_package_startup_serves_the_packaged_index_through_the_real_router() {
+    let (temporary, runtime) = packaged_runtime(&index());
+    let response = prepare(&runtime, PRODUCTION)
+        .unwrap()
+        .app()
+        .oneshot(
+            Request::get(
+                "/v1/services?serviceKind=evidence&evidenceType=urn%3Aexample%3Aevidence-type",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let search: ServiceSearchResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(search.items.len(), 1);
+    assert_eq!(search.items[0].record_id, "acceptance-record");
+    drop(temporary);
+}
+
+fn packaged_runtime(index: &DiscoveryIndex) -> (tempfile::TempDir, std::path::PathBuf) {
     let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let package_root = temporary.path().join("package");
-    let files = BTreeMap::from([(
-        INDEX_FILE.to_owned(),
-        canonical_index_bytes(&index()).unwrap(),
-    )]);
+    let files = BTreeMap::from([(INDEX_FILE.to_owned(), canonical_index_bytes(index).unwrap())]);
     let package = write_package(
         &package_root,
         &files,
@@ -116,23 +144,143 @@ logLevel: info
     )
     .unwrap();
 
-    let response = prepare(&runtime)
-        .unwrap()
+    (temporary, runtime)
+}
+
+fn reserve_runtime_address(runtime: &std::path::Path) -> std::net::TcpListener {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let config = fs::read_to_string(runtime).unwrap();
+    fs::write(
+        runtime,
+        config.replace("127.0.0.1:0", &listener.local_addr().unwrap().to_string()),
+    )
+    .unwrap();
+    listener
+}
+
+#[test]
+fn executable_logs_the_source_of_each_posture_declaration() {
+    let (_temporary, runtime) = packaged_runtime(&index());
+    let _listener = reserve_runtime_address(&runtime);
+    for (flag, environment, source, posture) in [
+        (None, None, "default", "production"),
+        (None, Some("development"), "environment", "development"),
+        (Some("development"), None, "flag", "development"),
+    ] {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_discovery"));
+        command
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .arg("--runtime-config")
+            .arg(&runtime);
+        if let Some(flag) = flag {
+            command.args(["--posture", flag]);
+        }
+        if let Some(environment) = environment {
+            command.env("REGISTRY_STACK_POSTURE", environment);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("listener could not be started"), "{stderr}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let events = stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok());
+        assert!(
+            events
+                .into_iter()
+                .any(|event| event["fields"]["message"] == "posture declared"
+                    && event["fields"]["posture_source"] == source
+                    && event["fields"]["posture"] == posture),
+            "{stdout}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn production_refuses_loopback_package_urls() {
+    let mut index = index();
+    index.origins[0].catalog_url = "http://127.0.0.1/catalog.jsonld".into();
+    index.services[0].origin_url = index.origins[0].catalog_url.clone();
+    index.services[0].endpoint_url = "http://localhost/evidence".into();
+    index.catalog_revision = catalog_revision(&index.services).unwrap();
+    let (temporary, runtime) = packaged_runtime(&index);
+    let Err(error) = prepare(&runtime, PRODUCTION) else {
+        panic!("the undeclared production default admitted a loopback catalog");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("discovery.posture.loopback-catalog-url"),
+        "{message}"
+    );
+    for pointer in [
+        "/origins/0/catalogUrl",
+        "/services/0/originUrl",
+        "/services/0/endpointUrl",
+    ] {
+        assert!(message.contains(pointer), "{message}");
+    }
+    assert!(message.contains("rstack dev"), "{message}");
+    assert!(
+        message.contains("REGISTRY_STACK_POSTURE=development"),
+        "{message}"
+    );
+    let _listener = reserve_runtime_address(&runtime);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_discovery"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .arg("--runtime-config")
+        .arg(&runtime)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("discovery.posture.loopback-catalog-url"),
+        "{stderr}"
+    );
+    for pointer in [
+        "/origins/0/catalogUrl",
+        "/services/0/originUrl",
+        "/services/0/endpointUrl",
+    ] {
+        assert!(stderr.contains(pointer), "{stderr}");
+    }
+
+    let log_path = temporary.path().join("startup.log");
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(fs::File::create(&log_path).unwrap())
+        .finish();
+    let prepared = tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        prepare(&runtime, DEVELOPMENT)
+    })
+    .unwrap();
+    let logs = fs::read_to_string(log_path).unwrap();
+    assert!(logs.contains("posture declared"), "{logs}");
+    assert!(logs.contains(r#""development_settings":3"#), "{logs}");
+    assert_eq!(
+        logs.matches("discovery.posture.loopback-catalog-url")
+            .count(),
+        3
+    );
+
+    let response = prepared
         .app()
-        .oneshot(
-            Request::get(
-                "/v1/services?serviceKind=evidence&evidenceType=urn%3Aexample%3Aevidence-type",
-            )
-            .body(Body::empty())
-            .unwrap(),
-        )
+        .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    let search: ServiceSearchResponse = serde_json::from_slice(&body).unwrap();
-    assert_eq!(search.items.len(), 1);
-    assert_eq!(search.items[0].record_id, "acceptance-record");
+    assert_eq!(response.headers()["registry-posture"], "development");
+    let body = to_bytes(response.into_body(), 65536).await.unwrap();
+    let ready: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(ready["posture"], "development");
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["developmentSettings"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        ready["developmentSettings"][0]["pointer"],
+        "/origins/0/catalogUrl"
+    );
 }
 
 #[tokio::test]

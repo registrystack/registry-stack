@@ -15,10 +15,12 @@ use registry_platform_audit::{
     MAX_AUDIT_RETAIN_DAYS, MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::{
-    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerNetworkExposure,
-    LoadedRuntimeConfig, MetricsBindError, MetricsListenerConfig, OidcClientsConfig,
-    OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
-    RuntimeFileCheck, SecretProvider, SecretProvidersConfig, SecretReference,
+    ConfigBlockError, ConfigBlockErrorKind, DeclaredPosture, DevelopmentClass, DevelopmentSetting,
+    DevelopmentWitness, ExplicitProductionSetting, FoundExplicitSetting, FoundSetting, Gated,
+    ListenerBind, ListenerNetworkExposure, LoadedRuntimeConfig, MetricsBindError,
+    MetricsListenerConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, Posture,
+    PostureReport, PostureSource, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    RuntimeFileCheck, SecretProvider, SecretProvidersConfig, SecretReference, SettingOrigin,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, shape_union, BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId,
@@ -123,13 +125,11 @@ pub struct RenderRuntime {
     /// no timestamp call, and cannot seal any document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing: Option<SigningRuntime>,
-    /// The assurance boundary of this deployment's seals, the same member
-    /// and values Evidence declares. Required when `signing` declares a
-    /// seal, and unused otherwise. `local` signs with a `local-jwk` key
-    /// file and marks every seal a test seal; `production` signs through
-    /// `transit` only, so a production key never leaves Transit.
+    /// Required when `signing` declares a seal. Under development, `local`
+    /// signs with a `local-jwk` key file and marks every seal as a test seal.
+    /// Under production, `production` signs through `transit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assurance_profile: Option<AssuranceProfile>,
+    pub assurance_profile: Option<Gated<AssuranceProfile>>,
 }
 
 /// The config path of the exposure key a wildcard metrics refusal names.
@@ -186,11 +186,15 @@ impl RenderRuntime {
             .err()
     }
 
-    /// Whether the deployment's seals are test seals: its assurance profile
-    /// is `local`.
-    #[must_use]
-    pub fn seals_are_test_only(&self) -> bool {
-        self.assurance_profile == Some(AssuranceProfile::Local)
+    /// The configured assurance profile, read with the loader's witness.
+    pub fn assurance_profile(
+        &self,
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<Option<AssuranceProfile>, registry_platform_config::DevelopmentOnlyRefused> {
+        self.assurance_profile
+            .as_ref()
+            .map(|profile| profile.get(witness).copied())
+            .transpose()
     }
 
     /// The seal that `seal_id` binds, or `None` when the runtime has no
@@ -642,6 +646,42 @@ pub enum AssuranceProfile {
     Production,
 }
 
+static RENDER_LOCAL_ASSURANCE: DevelopmentSetting = DevelopmentSetting {
+    code: "render.posture.local-assurance",
+    key: "assuranceProfile",
+    summary: "seals use a local key file and are marked as test seals",
+    production: "Configure assuranceProfile: production and sign through Transit.",
+};
+
+static RENDER_SEALS_NOT_SERVED: DevelopmentSetting = DevelopmentSetting {
+    code: "render.posture.seals-not-served",
+    key: "signing",
+    summary: "the bundle declares seals, but this runtime has no signing block and renders those document types unsealed",
+    production: "Configure signing.seals for the bundle's seals, or deploy a bundle whose documents do not declare seals.",
+};
+
+static RENDER_UNRESTRICTED_CLIENTS: ExplicitProductionSetting = ExplicitProductionSetting {
+    code: "render.posture.unrestricted-oidc-clients",
+    key: "allowedClients",
+    summary: "OIDC admits every client the issuer verifies",
+};
+
+impl DevelopmentClass for AssuranceProfile {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&RENDER_LOCAL_ASSURANCE];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::Local => Some(&RENDER_LOCAL_ASSURANCE),
+            Self::Production => None,
+        }
+    }
+}
+
+pub(crate) const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
+
 /// How `compile --preview-seal` renders the sealed variant: as a test seal
 /// or as an official one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -757,8 +797,8 @@ impl AuditRuntime {
 /// The loader for the Render runtime file, with its removed keys and its
 /// retired apiVersion.
 #[must_use]
-pub const fn runtime_loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new_without_posture(RENDER_RUNTIME_ENVELOPE)
+pub const fn runtime_loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+    RuntimeConfigLoader::new(RENDER_RUNTIME_ENVELOPE, declared)
         .removed_keys(RENDER_REMOVED_KEYS)
         .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
         .require_trusted_ownership()
@@ -778,6 +818,7 @@ pub struct RuntimeCheck {
     /// check ran without `substitute`.
     pub seal_chains_not_read: bool,
     pub seal_capacities: BTreeMap<String, usize>,
+    pub(crate) explicit_production_settings: Vec<FoundExplicitSetting>,
 }
 
 /// Check the runtime file at the absolute `path` as `registry-render serve`
@@ -793,23 +834,23 @@ pub struct RuntimeCheck {
 /// storage (the container preflight proof).
 #[must_use]
 pub fn check_runtime(path: &Path, substitute: bool, audit_root: Option<&Path>) -> RuntimeCheck {
-    check_runtime_with_bundle(path, substitute, audit_root, None)
+    check_runtime_with_bundle(path, substitute, audit_root, None, DEFAULT_POSTURE)
 }
 
 /// [`check_runtime`], and with the `manifest` of the bundle the runtime will
 /// serve, the seal bindings of both files together: a document type that
 /// names a seal the runtime does not bind is an error, and a runtime seal no
 /// document type names is a warning, each placed in the runtime file. With no
-/// `signing` block sealing is off, and a manifest that names seals adds one
-/// warning that its sealed document types render unsealed.
+/// `signing` block, a manifest that names seals requires development posture.
 #[must_use]
 pub fn check_runtime_with_bundle(
     path: &Path,
     substitute: bool,
     audit_root: Option<&Path>,
     manifest: Option<&Manifest>,
+    declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    read_runtime(path, substitute, audit_root, manifest, substitute).1
+    read_runtime(path, substitute, audit_root, manifest, substitute, declared).1
 }
 
 /// Load and validate a runtime file through the shared loader, with the
@@ -817,16 +858,27 @@ pub fn check_runtime_with_bundle(
 /// the `sha256:` digest of its effective configuration; a refusal carries
 /// every finding, each positioned in the file and naming its fix.
 pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
-    load_with_positions(path).map(|(runtime, digest, _)| (runtime, digest))
+    load_with_positions(path, DEFAULT_POSTURE)
+        .map(|(loaded, _)| (loaded.config, loaded.effective_digest))
 }
 
 /// [`load`], with the positions of the file's members, for a refusal found
 /// after the load (a seal that cannot load) to name its line too.
 pub fn load_with_positions(
     path: &Path,
-) -> Result<(RenderRuntime, String, RuntimePositions), RenderProblem> {
-    match read_runtime(path, true, None, None, false) {
-        (Some(loaded), _, positions) => Ok((loaded.config, loaded.effective_digest, positions)),
+    declared: DeclaredPosture,
+) -> Result<(LoadedRuntimeConfig<RenderRuntime>, RuntimePositions), RenderProblem> {
+    match read_runtime(path, true, None, None, false, declared) {
+        (Some(loaded), _, positions) => {
+            loaded.posture.decide(path).map_err(|error| {
+                RenderProblem::new(
+                    ProblemKind::RuntimeInvalid,
+                    "the runtime configuration was refused",
+                )
+                .with_diagnostics(error.diagnostics().to_vec())
+            })?;
+            Ok((loaded, positions))
+        }
         (None, check, _) => {
             let detail = if check.unavailable {
                 "the runtime configuration could not be read"
@@ -874,19 +926,44 @@ fn read_runtime(
     audit_root: Option<&Path>,
     manifest: Option<&Manifest>,
     seal_chains: bool,
+    declared: DeclaredPosture,
 ) -> (
     Option<LoadedRuntimeConfig<RenderRuntime>>,
     RuntimeCheck,
     RuntimePositions,
 ) {
-    let mut check = runtime_loader().check_offline::<RenderRuntime>(path, substitute, stand_in_for);
+    let mut check =
+        runtime_loader(declared).check_offline::<RenderRuntime>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
     let mut unavailable = check.unavailable;
     let mut seal_capacities = BTreeMap::new();
+    let mut explicit_production_settings = Vec::new();
+    let clients_pointer = "/authentication/oidc/allowedClients";
+    let clients_resolved = !check.defers(clients_pointer);
+    if let Some(loaded) = &mut check.loaded {
+        if clients_resolved
+            && loaded
+                .config
+                .authentication
+                .oidc
+                .as_ref()
+                .is_some_and(|oidc| oidc.clients.allowed_clients.is_empty())
+        {
+            let found = FoundExplicitSetting {
+                setting: &RENDER_UNRESTRICTED_CLIENTS,
+                pointer: Some(clients_pointer.to_owned()),
+                position: None,
+                origin: SettingOrigin::RuntimeFile,
+            };
+            loaded.posture.record_explicit(found.clone());
+            explicit_production_settings.push(found);
+        }
+    }
     if let Some(loaded) = &check.loaded {
         let mut audit_refused = false;
         for finding in findings(
             &loaded.config,
+            declared.posture,
             check.defers("/listener/bind"),
             check.defers("/metricsListener/networkExposure"),
         ) {
@@ -904,6 +981,13 @@ fn read_runtime(
             }
         }
         if let Some(manifest) = manifest {
+            let mut posture = PostureReport::new(declared);
+            diagnostics.extend(record_seal_binding_posture(
+                &loaded.config,
+                manifest,
+                path,
+                &mut posture,
+            ));
             for binding in seal_binding_findings(&loaded.config, manifest) {
                 let finding = binding.finding;
                 let mut diagnostic = if binding.at_key {
@@ -997,6 +1081,7 @@ fn read_runtime(
             unavailable,
             seal_capacities,
             seal_chains_not_read,
+            explicit_production_settings,
         },
         RuntimePositions(check),
     )
@@ -1087,6 +1172,7 @@ struct Finding {
 /// yet, so the metrics socket comparison with it waits for the environment.
 fn findings(
     runtime: &RenderRuntime,
+    posture: Posture,
     listener_deferred: bool,
     metrics_exposure_deferred: bool,
 ) -> Vec<Finding> {
@@ -1137,7 +1223,7 @@ fn findings(
     }
     match (&runtime.authentication.oidc, &runtime.authentication.api_key_ref) {
         (Some(oidc), None) => {
-            findings.extend([oidc.provider.check_without_posture("authentication.oidc", true), oidc.clients.check("authentication.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
+            findings.extend([oidc.provider.check("authentication.oidc"), oidc.clients.check("authentication.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
             if let registry_platform_config::JwksSource::Static { document_ref } | registry_platform_config::JwksSource::TestIssuer { document_ref } = &oidc.provider.jwks_source {
                 if let Err(error) = runtime.secret_providers.check_reference("authentication.oidc.jwksSource.documentRef", document_ref) { findings.push(block_finding(&error)); }
             }
@@ -1150,8 +1236,24 @@ fn findings(
     if let Err(error) = runtime.audit.settings() {
         findings.push(audit_finding(&error));
     }
+    // Classify the declaration for diagnostics even when posture refuses it.
+    let profile = runtime.assurance_profile.as_ref().map(|profile| {
+        if profile.development_setting().is_some() {
+            AssuranceProfile::Local
+        } else {
+            AssuranceProfile::Production
+        }
+    });
+    if posture == Posture::Development && profile == Some(AssuranceProfile::Production) {
+        findings.push(Finding {
+            code: "render.posture.assurance-profile-conflict",
+            pointer: "/assuranceProfile".to_owned(),
+            message: "a development process seals with assuranceProfile: local".to_owned(),
+            action: "Write assuranceProfile: local and use a local-jwk key file, or start the deployment as production.".to_owned(),
+        });
+    }
     if let Some(signing) = &runtime.signing {
-        findings.extend(signing_findings(runtime, signing));
+        findings.extend(signing_findings(runtime, signing, profile));
     }
     findings
 }
@@ -1166,12 +1268,13 @@ fn seal_pointer(id: &str) -> String {
 /// Transit socket path is absolute.
 fn signer_findings(
     runtime: &RenderRuntime,
+    profile: Option<AssuranceProfile>,
     id: &str,
     seal: &SealRuntime,
     findings: &mut Vec<Finding>,
 ) {
     let base = seal_pointer(id);
-    let mismatch = match (runtime.assurance_profile, &seal.signer) {
+    let mismatch = match (profile, &seal.signer) {
         (Some(AssuranceProfile::Local), SealSignerRuntime::Transit { .. }) => {
             Some(("local", "a Transit key"))
         }
@@ -1245,7 +1348,11 @@ fn signer_findings(
 /// Every refusal of the `signing` block that needs no bundle: OIDC
 /// authentication, the signer, the certificate path, the timestamp policy,
 /// and the client list.
-fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Finding> {
+fn signing_findings(
+    runtime: &RenderRuntime,
+    signing: &SigningRuntime,
+    profile: Option<AssuranceProfile>,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     let finding = |code: &'static str, pointer: String, message: String, action: &str| Finding {
         code,
@@ -1292,7 +1399,7 @@ fn signing_findings(runtime: &RenderRuntime, signing: &SigningRuntime) -> Vec<Fi
     for (id, seal) in &signing.seals {
         let id = id.as_str();
         let base = seal_pointer(id);
-        signer_findings(runtime, id, seal, &mut findings);
+        signer_findings(runtime, profile, id, seal, &mut findings);
         let ca_bundle_ref = seal
             .timestamp_authority
             .as_ref()
@@ -1421,43 +1528,51 @@ struct BindingFinding {
     finding: Finding,
 }
 
-/// Resolve every seal id the bundle declares against `signing.seals`.
-///
-/// With no `signing` block sealing is off: a bundle that names seals is a
-/// warning, so a development deployment without keys still serves while the
-/// operator learns its sealed document types render unsealed. With one, a
-/// document type that names a seal the runtime does not bind is an error,
-/// and a runtime seal no document type names is a warning.
+/// Record a sealed document served by a runtime without signing.
+pub(crate) fn record_seal_binding_posture(
+    runtime: &RenderRuntime,
+    manifest: &Manifest,
+    path: &Path,
+    posture: &mut PostureReport,
+) -> Vec<Diagnostic> {
+    if runtime.signing.is_some() {
+        return Vec::new();
+    }
+    let documents: Vec<_> = manifest
+        .documents
+        .iter()
+        .filter(|document| document.seal.is_some())
+        .map(|document| document.id.as_str())
+        .collect();
+    if documents.is_empty() {
+        return Vec::new();
+    }
+    posture.record(FoundSetting {
+        setting: &RENDER_SEALS_NOT_SERVED,
+        pointer: Some("/signing".to_owned()),
+        position: None,
+        origin: SettingOrigin::Combination,
+    });
+    posture
+        .diagnostics(path)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.code == RENDER_SEALS_NOT_SERVED.code)
+        .map(|mut diagnostic| {
+            diagnostic.message = format!(
+                "Bundle document types {}: {}",
+                documents.join(", "),
+                diagnostic.message
+            );
+            diagnostic
+        })
+        .collect()
+}
+
+/// Resolve configured bindings. Unbound bundle seals are errors and unused
+/// runtime seals are warnings.
 fn seal_binding_findings(runtime: &RenderRuntime, manifest: &Manifest) -> Vec<BindingFinding> {
     let Some(signing) = &runtime.signing else {
-        let mut sealed: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-        for document in &manifest.documents {
-            if let Some(seal) = document.seal.as_deref() {
-                sealed.entry(seal).or_default().push(document.id.as_str());
-            }
-        }
-        if sealed.is_empty() {
-            return Vec::new();
-        }
-        let documents: Vec<&str> = sealed.values().flatten().copied().collect();
-        let seals: Vec<String> = sealed.keys().map(|seal| format!("`{seal}`")).collect();
-        return vec![BindingFinding {
-            severity: Severity::Warning,
-            at_key: false,
-            finding: Finding {
-                code: "render.runtime.seals-not-served",
-                pointer: String::new(),
-                message: format!(
-                    "the bundle issues document type {} under seal {}; this runtime declares \
-                     no signing block, so they render unsealed and the seal route is absent",
-                    documents.join(", "),
-                    seals.join(", ")
-                ),
-                action: "Declare signing.seals in the runtime file to seal them, or keep \
-                         sealing off only where no sealed document is issued."
-                    .to_owned(),
-            },
-        }];
+        return Vec::new();
     };
     let mut findings = Vec::new();
     let mut unbound: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -1514,10 +1629,9 @@ fn seal_binding_findings(runtime: &RenderRuntime, manifest: &Manifest) -> Vec<Bi
 /// Check the verified package's manifest against the runtime's seals before
 /// serving: the same resolution `registry-render check` reports, without file
 /// positions. An error is a document type whose seal the runtime does not
-/// bind, refused as a runtime problem. With no `signing` block it accepts
-/// every package, since sealing is then off. On success it returns the
-/// warnings, such as a seal no document type uses or a bundle that names
-/// seals served without a `signing` block.
+/// bind, refused as a runtime problem. On success it returns a warning for
+/// each configured seal no document type uses. The posture check handles a
+/// runtime without a `signing` block.
 pub fn validate_seal_bindings(
     runtime: &RenderRuntime,
     manifest: &Manifest,
@@ -1767,10 +1881,20 @@ mod tests {
         )
     }
 
+    const DEVELOPMENT_POSTURE: DeclaredPosture = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+
     fn load_text(home: &Path, text: &str) -> Result<RenderRuntime, RenderProblem> {
         let file = home.join("runtime.yaml");
         std::fs::write(&file, text).expect("runtime file");
-        load(&file).map(|(runtime, _)| runtime)
+        let declared = if text.lines().any(|line| line == "assuranceProfile: local") {
+            DEVELOPMENT_POSTURE
+        } else {
+            DEFAULT_POSTURE
+        };
+        load_with_positions(&file, declared).map(|(loaded, _)| loaded.config)
     }
 
     /// The code and pointer of every finding of a refused file.
@@ -1778,6 +1902,7 @@ mod tests {
         problem
             .diagnostics
             .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
             .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
             .collect()
     }
@@ -2771,8 +2896,7 @@ mod tests {
         assert!(seal.without_timestamp.is_none());
         assert!(seal.allows_client("records-service"));
         assert!(!seal.allows_client("portal"));
-        assert_eq!(runtime.assurance_profile, Some(AssuranceProfile::Local));
-        assert!(runtime.seals_are_test_only());
+        assert!(runtime.assurance_profile(None).is_err());
         assert!(runtime.seal("other").is_none());
     }
 
@@ -2783,10 +2907,9 @@ mod tests {
             load_text(&home, &signing_text(&home, TRANSIT_SEAL)).expect("a transit seal loads");
         let seal = runtime.seal("ministry").expect("the seal is bound");
         assert_eq!(
-            runtime.assurance_profile,
+            runtime.assurance_profile(None).unwrap(),
             Some(AssuranceProfile::Production)
         );
-        assert!(!runtime.seals_are_test_only());
         let SealSignerRuntime::Transit {
             unix_socket_path,
             mount,
@@ -2828,7 +2951,7 @@ mod tests {
         let runtime = load_text(&home, &text).expect("the documented seal loads");
         let seal = runtime.seal("ministry").expect("the seal is bound");
         assert_eq!(
-            runtime.assurance_profile,
+            runtime.assurance_profile(None).unwrap(),
             Some(AssuranceProfile::Production)
         );
         assert!(
@@ -2884,13 +3007,42 @@ mod tests {
                 "/signing/seals/ministry/signer/type"
             )]
         );
+        let diagnostic = problem
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.severity == Severity::Error)
+            .unwrap();
         assert!(
-            problem.diagnostics[0]
-                .message
-                .contains("assuranceProfile: local"),
+            diagnostic.message.contains("assuranceProfile: local"),
             "{}",
-            problem.diagnostics[0].message
+            diagnostic.message
         );
+    }
+
+    #[test]
+    fn production_reports_both_local_assurance_and_transit_mismatch() {
+        let (_dir, home) = home();
+        let file = home.join("runtime.yaml");
+        std::fs::write(
+            &file,
+            signing_text_under(&home, Some("local"), TRANSIT_SEAL),
+        )
+        .unwrap();
+        let check = check_runtime(&file, false, None);
+        for code in [
+            "render.posture.local-assurance",
+            "render.runtime.signer-assurance-mismatch",
+        ] {
+            assert!(
+                check
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == code
+                        && diagnostic.severity == Severity::Error),
+                "{:?}",
+                check.diagnostics
+            );
+        }
     }
 
     #[test]
@@ -2972,7 +3124,11 @@ mod tests {
                 "/signing/seals/ministry/signer/privateKeyRef"
             )]
         );
-        let diagnostic = &problem.diagnostics[0];
+        let diagnostic = problem
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.severity == Severity::Error)
+            .unwrap();
         assert!(
             diagnostic.message.contains("secret:file/"),
             "{}",
@@ -3036,13 +3192,6 @@ mod tests {
         assert!(runtime.seal("ministry").is_none());
         let manifest = signing_manifest(&[("licence", Some("ministry"))]);
         assert!(runtime.seal_for(&manifest, "licence").is_none());
-        let warnings = validate_seal_bindings(&runtime, &manifest)
-            .expect("a package that names a seal still serves with sealing off");
-        assert_eq!(
-            warnings.len(),
-            1,
-            "it says the sealed type renders unsealed"
-        );
     }
 
     #[test]
@@ -3319,7 +3468,11 @@ mod tests {
         let (_dir, home) = home();
         let seal = SEAL.replace("[records-service]", "[records-service, 'batch-*']");
         let problem = refused(&home, &signing_text(&home, &seal));
-        let diagnostic = &problem.diagnostics[0];
+        let diagnostic = problem
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.severity == Severity::Error)
+            .unwrap();
         assert_eq!(diagnostic.code, "render.runtime.seal-client-wildcard");
         assert!(
             diagnostic.message.contains("must be named"),
@@ -3339,7 +3492,11 @@ mod tests {
             &signing_text(&home, &SEAL.replace("[records-service]", "unrestricted")),
         );
         assert!(
-            problem.diagnostics[0]
+            problem
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.severity == Severity::Error)
+                .unwrap()
                 .message
                 .contains("never unrestricted"),
             "{}",
@@ -3430,10 +3587,15 @@ mod tests {
             ("receipt", Some("regional")),
             ("notice", None),
         ]);
-        let check = check_runtime_with_bundle(&file, false, None, Some(&manifest));
+        let check =
+            check_runtime_with_bundle(&file, false, None, Some(&manifest), DEVELOPMENT_POSTURE);
         assert!(!check.unavailable);
-        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
-        let diagnostic = &check.diagnostics[0];
+        assert_eq!(check.diagnostics.len(), 2, "{:?}", check.diagnostics);
+        let diagnostic = check
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code != "render.posture.local-assurance")
+            .unwrap();
         assert_eq!(diagnostic.code, "render.runtime.seal-not-bound");
         assert_eq!(diagnostic.path, "/signing/seals");
         assert_eq!(diagnostic.severity, Severity::Error);
@@ -3456,7 +3618,7 @@ mod tests {
     }
 
     #[test]
-    fn a_package_serves_without_a_signing_block_even_when_it_names_seals() {
+    fn a_sealed_package_without_signing_requires_development() {
         let (_dir, home) = home();
         let file = home.join("runtime.yaml");
         std::fs::write(&file, minimal(&home)).unwrap();
@@ -3465,12 +3627,12 @@ mod tests {
             ("permit", Some("regional")),
             ("notice", None),
         ]);
-        let check = check_runtime_with_bundle(&file, false, None, Some(&manifest));
+        let check = check_runtime_with_bundle(&file, false, None, Some(&manifest), DEFAULT_POSTURE);
         assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
         let warning = &check.diagnostics[0];
-        assert_eq!(warning.code, "render.runtime.seals-not-served");
-        assert_eq!(warning.severity, Severity::Warning);
-        assert_eq!(warning.path, "");
+        assert_eq!(warning.code, "render.posture.seals-not-served");
+        assert_eq!(warning.severity, Severity::Error);
+        assert_eq!(warning.path, "/signing");
         assert!(
             warning.message.contains("licence, permit") && warning.message.contains("unsealed"),
             "{}",
@@ -3478,14 +3640,14 @@ mod tests {
         );
         assert!(warning.source.is_some(), "placed in the runtime file");
 
-        // serve starts and logs it: a development deployment needs no keys.
-        let runtime = load_text(&home, &minimal(&home)).unwrap();
-        let warnings = validate_seal_bindings(&runtime, &manifest).expect("a warning serves");
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].code, "render.runtime.seals-not-served");
+        let check =
+            check_runtime_with_bundle(&file, false, None, Some(&manifest), DEVELOPMENT_POSTURE);
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(check.diagnostics[0].severity, Severity::Warning);
+        assert_eq!(check.diagnostics[0].code, "render.posture.seals-not-served");
 
         let unsealed = signing_manifest(&[("notice", None)]);
-        let check = check_runtime_with_bundle(&file, false, None, Some(&unsealed));
+        let check = check_runtime_with_bundle(&file, false, None, Some(&unsealed), DEFAULT_POSTURE);
         assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
     }
 
@@ -3499,9 +3661,14 @@ mod tests {
         );
         std::fs::write(&file, &text).unwrap();
         let manifest = signing_manifest(&[("licence", Some("ministry")), ("notice", None)]);
-        let check = check_runtime_with_bundle(&file, false, None, Some(&manifest));
-        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
-        let warning = &check.diagnostics[0];
+        let check =
+            check_runtime_with_bundle(&file, false, None, Some(&manifest), DEVELOPMENT_POSTURE);
+        assert_eq!(check.diagnostics.len(), 2, "{:?}", check.diagnostics);
+        let warning = check
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code != "render.posture.local-assurance")
+            .unwrap();
         assert_eq!(warning.code, "render.runtime.seal-unused");
         assert_eq!(warning.severity, Severity::Warning);
         assert_eq!(warning.path, "/signing/seals/spare");

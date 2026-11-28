@@ -107,9 +107,10 @@ async fn a_rendered_document_reaches_a_named_recipient_and_outlives_its_share() 
     );
 
     let verifier = FakeVerifier::new("journey-binding", APPROVE);
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares");
+    let prepared =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares");
     let base = url::Url::parse(&format!("http://{}/v1/", prepared.local_addr().unwrap())).unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(prepared.serve_until(async {
@@ -260,9 +261,10 @@ async fn a_rendered_document_reaches_a_named_recipient_and_outlives_its_share() 
               WHERE grant_id = '{grant}'"
         ))
         .await;
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares again");
+    let prepared =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares again");
     let api = Api::new(&prepared);
     api.download(READER, &document, &version)
         .await

@@ -122,7 +122,7 @@ impl Casework {
                 "kind":"CaseworkRuntimeConfig",
                 "identity":{"databaseId":"native-staff-proof"},
                 "package":{"root":package},
-                "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback","networkExposure":"private-address"},
+                "listener":{"bind":address.to_string(),"tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
                 "secretProviders":{"file":{"root":root}},
                 "database":{"runtimeUrlRef":"secret:file/casework-database-url","migrationUrlRef":"secret:file/casework-database-url","testOnlyPlaintext":true},
                 "authentication":{"oidc":{

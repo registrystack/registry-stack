@@ -19,6 +19,7 @@ mod docker;
 mod gateway;
 mod private;
 
+use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use std::fs;
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
@@ -96,6 +97,12 @@ struct TokenArgs {
 /// 127.0.0.1 only, and removes both when it stops.
 #[derive(Debug, Args)]
 struct StartArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means development; production is refused."
+    )]
+    posture: Option<String>,
     /// The package directory to run, as `messagingctl init` writes it.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
@@ -183,7 +190,39 @@ pub(crate) fn run(
             let outcome = token(&token_args).unwrap_or_else(|failure| failure.outcome());
             finish(&outcome, "dev token", format, stdout, stderr)
         }
-        None => start(&args.start, format, stdout, stderr),
+        None => {
+            let declared = match registry_platform_config::declared(args.start.posture.as_deref()) {
+                Ok(declared) if declared.source == PostureSource::Default => DeclaredPosture {
+                    posture: Posture::Development,
+                    source: PostureSource::Default,
+                },
+                Ok(declared) if declared.posture == Posture::Development => declared,
+                Ok(_) => {
+                    return finish(
+                        &super::posture_refusal(
+                            "platform.posture.conflict",
+                            "messagingctl dev runs under the development posture, but production was declared",
+                            "Drop the production declaration, or run the runtime in production with messagingctl serve.",
+                        ),
+                        "dev", format, stdout, stderr,
+                    );
+                }
+                Err(error) => {
+                    return finish(
+                        &super::posture_refusal(
+                            error.code(),
+                            error.message(),
+                            error.suggested_action(),
+                        ),
+                        "dev",
+                        format,
+                        stdout,
+                        stderr,
+                    );
+                }
+            };
+            start(&args.start, declared, format, stdout, stderr)
+        }
     }
 }
 
@@ -551,6 +590,7 @@ fn fresh_session(project: &Path, docker: &docker::Docker) -> DevResult<(private:
 
 fn start(
     args: &StartArgs,
+    declared: DeclaredPosture,
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
@@ -602,6 +642,7 @@ fn start(
     };
     let served = run_session(
         args,
+        declared,
         &loaded,
         &docker,
         &mut session,
@@ -639,7 +680,7 @@ fn start(
         }),
         View::Dev,
     );
-    match print_report(&outcome, format, stdout, stderr) {
+    match print_report(&outcome, format, stdout, stderr, declared) {
         Ok(()) => ExitCode::SUCCESS,
         Err(_) => ExitCode::from(OPERATIONAL_FAILURE_EXIT),
     }
@@ -652,10 +693,15 @@ fn print_report(
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
+    declared: DeclaredPosture,
 ) -> io::Result<()> {
     match format {
         OutputFormat::Json => {
-            report::write_line(&completed(&outcome.report, "dev", outcome.exit), stdout)?;
+            report::write_line(
+                &completed(&outcome.report, "dev", outcome.exit),
+                stdout,
+                declared,
+            )?;
         }
         OutputFormat::Human => render_human(outcome, "dev", stdout, stderr)?,
     }
@@ -665,6 +711,7 @@ fn print_report(
 #[allow(clippy::too_many_arguments)]
 fn run_session(
     args: &StartArgs,
+    declared: DeclaredPosture,
     loaded: &LoadedPackage,
     docker: &docker::Docker,
     session: &mut Session,
@@ -777,7 +824,7 @@ fn run_session(
                 "the runtime configuration could not be written: {error}"
             ))
         })?;
-        let checked = RuntimeConfig::load(&runtime_config).map_err(|error| {
+        let checked = RuntimeConfig::load(&runtime_config, declared).map_err(|error| {
             failed(format!(
                 "the generated runtime configuration was refused: {error}"
             ))
@@ -785,7 +832,11 @@ fn run_session(
         apply_activation(&checked, &ApplyRequest::default())
             .await
             .map_err(|error| failed(format!("the package could not be applied: {error}")))?;
-        let mut serve = tokio::spawn(serve_from_path(runtime_config.clone(), Transports::new()));
+        let mut serve = tokio::spawn(serve_from_path(
+            runtime_config.clone(),
+            declared,
+            Transports::new(),
+        ));
         let origin = format!("http://127.0.0.1:{}", args.port);
         wait_ready(
             &client,
@@ -808,9 +859,10 @@ fn run_session(
             "runtimeConfig": runtime_config,
             "log": root.join("logs/messaging.log"),
             "sessionDirectory": root,
+            "next": ["To reuse the runtime file, start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development."],
         });
         session.write("ready", &ready)?;
-        print_report(&Outcome::new(ready, View::Dev), format, stdout, stderr)
+        print_report(&Outcome::new(ready, View::Dev), format, stdout, stderr, declared)
             .map_err(|error| failed(format!("the ready report could not be written: {error}")))?;
 
         loop {

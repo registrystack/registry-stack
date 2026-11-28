@@ -95,6 +95,57 @@ fn assert_refused(output: &std::process::Output, code: &str, pointer: &str) {
 }
 
 #[test]
+fn check_reports_the_declared_posture() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    for (flags, posture, source) in [
+        (&[][..], "production", "default"),
+        (&["--posture", "development"][..], "development", "flag"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+            .args(["--format", "json", "check", "--runtime-config"])
+            .arg(&runtime)
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["posture"],
+            serde_json::json!({"value": posture, "source": source})
+        );
+    }
+}
+
+#[test]
+fn print_sql_requires_declared_development_for_private_plaintext() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    let text = fs::read_to_string(&runtime).unwrap();
+    let text = text.replace(
+        "database:\n",
+        "database:\n  transport: private-network-plaintext\n",
+    );
+    fs::write(&runtime, text).unwrap();
+    let default = provision(&runtime, &["--print-sql"]);
+    assert_refused(
+        &default,
+        "platform.posture.database-private-plaintext",
+        "/database/transport",
+    );
+    let development = provision(&runtime, &["--print-sql", "--posture", "development"]);
+    assert!(
+        development.status.success(),
+        "{}",
+        String::from_utf8_lossy(&development.stderr)
+    );
+}
+
+#[test]
 fn print_sql_prints_the_plan_without_a_connection_or_a_password() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = runtime_file(directory.path());
@@ -349,4 +400,28 @@ fn a_runtime_file_the_service_would_refuse_is_refused_with_its_own_diagnostic() 
     assert!(stdout.is_empty(), "{stdout}");
     assert!(!stderr.is_empty());
     assert!(!stderr.contains("postgres://"));
+}
+
+#[test]
+fn provision_refuses_conflicting_global_and_local_posture_flags() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+        .args([
+            "--format",
+            "json",
+            "--posture",
+            "production",
+            "provision",
+            "--posture",
+            "development",
+            "--runtime-config=unused.yaml",
+            "--print-sql",
+        ])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(2), "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"], "platform.posture.conflict",
+        "{report}"
+    );
 }

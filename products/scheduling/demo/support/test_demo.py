@@ -150,7 +150,7 @@ class RuntimeConfigTest(unittest.TestCase):
             "root: /run/package",
             "databaseId: scheduling-demo",
             "bind: 127.0.0.1:8105",
-            "tlsTermination: development-loopback",
+            "tlsTermination: loopback-plaintext",
             "root: /run/secrets",
             "runtimeUrlRef: secret:file/db-url",
             "migrationUrlRef: secret:file/db-url",

@@ -32,7 +32,9 @@ use registry_platform_authcommon::{
     RefusalNote, RefusalRecorder, MIN_API_KEY_ENTROPY_BYTES,
 };
 use registry_platform_canonical_json::parse_json_preserving_integers;
-use registry_platform_httpsec::{request_body_limit, security_headers_without_posture, CspBuilder};
+use registry_platform_config::{DeclaredPosture, PostureReport};
+use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder};
+use registry_platform_httputil::{validate_response_headers, PeerPolicy};
 
 use crate::audit::{RenderAudit, RenderAuditEvent};
 use crate::auth::{RENDER_SCOPE, SCOPE_CLAIM, SEAL_SCOPE};
@@ -45,6 +47,7 @@ use crate::seal::{Seal, SealedDocument, Seals};
 use crate::worker::{self, WorkerRendered, WorkerRequest};
 
 pub struct Service {
+    posture: PostureReport,
     bundle: Bundle,
     audit: RenderAudit,
     api_key: Vec<u8>,
@@ -75,13 +78,13 @@ struct RenderHttpRequest {
     assets: Option<BTreeMap<String, String>>,
 }
 
-pub fn serve(runtime_path: &Path) -> Result<i32, RenderProblem> {
+pub fn serve(runtime_path: &Path, declared: DeclaredPosture) -> Result<i32, RenderProblem> {
     mark_not_dumpable()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|err| RenderProblem::new(ProblemKind::Internal, format!("runtime: {err}")))?;
-    runtime.block_on(serve_async(runtime_path))
+    runtime.block_on(serve_async(runtime_path, declared))
 }
 
 /// On Linux, marks the serving process non-dumpable before it reads any
@@ -112,8 +115,11 @@ pub(crate) fn mark_not_dumpable() -> Result<(), RenderProblem> {
 
 pub(crate) async fn load_service(
     runtime_path: &Path,
+    declared: DeclaredPosture,
 ) -> Result<(runtime::RenderRuntime, String, Arc<Service>), RenderProblem> {
-    let (runtime, config_id, positions) = runtime::load_with_positions(runtime_path)?;
+    let (mut loaded, positions) = runtime::load_with_positions(runtime_path, declared)?;
+    let runtime = loaded.config;
+    let config_id = loaded.effective_digest;
     let oidc = crate::auth::verifier(&runtime).await?;
     let api_key = if oidc.is_none() {
         normalize_api_key(runtime::resolve_secret(
@@ -161,6 +167,23 @@ pub(crate) async fn load_service(
     }
     let bundle = runtime::load_package(&runtime)?;
     crate::check::check_labels(&bundle)?;
+    let diagnostics = runtime::record_seal_binding_posture(
+        &runtime,
+        &bundle.manifest,
+        runtime_path,
+        &mut loaded.posture,
+    );
+    for diagnostic in diagnostics {
+        if diagnostic.severity == registry_platform_yaml::Severity::Error {
+            return Err(RenderProblem::new(
+                ProblemKind::RuntimeInvalid,
+                "the bundle and runtime combination was refused",
+            )
+            .with_diagnostics(vec![diagnostic]));
+        }
+        tracing::warn!(code = %diagnostic.code, pointer = %diagnostic.path, "{}", diagnostic.message);
+    }
+    loaded.posture.log_startup();
     for warning in runtime::validate_seal_bindings(&runtime, &bundle.manifest)? {
         tracing::warn!(
             code = %warning.code,
@@ -173,7 +196,7 @@ pub(crate) async fn load_service(
     // nothing half-made behind. A document type whose PDF standard cannot
     // hold its seal's reserved signature space is refused here, before any
     // render could write a nonconformant file.
-    let seals = crate::seal::load(&runtime)
+    let seals = crate::seal::load(&runtime, loaded.development.as_ref(), peer_policy(declared))
         .await
         .map_err(|problem| positions.place(problem))?;
     drop(positions);
@@ -183,13 +206,6 @@ pub(crate) async fn load_service(
     // `/ready`. Each names the seal id and a value-free reason only.
     let now = time::OffsetDateTime::now_utc();
     for (id, seal) in &seals {
-        if seal.is_test_only() {
-            tracing::warn!(
-                target: "registry_render::seal",
-                seal_id = %id,
-                "test-only seal: its documents are not official"
-            );
-        }
         if !seal.allows_document_signing_purpose() {
             tracing::warn!(
                 target: "registry_render::seal",
@@ -212,8 +228,9 @@ pub(crate) async fn load_service(
             Ok(()) => {}
         }
     }
-    let audit = RenderAudit::open(runtime.audit.destination()?).await?;
+    let audit = RenderAudit::open(runtime.audit.destination()?, declared.posture).await?;
     let service = Arc::new(Service {
+        posture: loaded.posture,
         caller_fingerprint: registry_platform_authcommon::fingerprint_api_key(
             &String::from_utf8_lossy(&api_key),
         ),
@@ -235,9 +252,9 @@ pub(crate) async fn load_service(
     Ok((runtime, config_id, service))
 }
 
-async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
+async fn serve_async(runtime_path: &Path, declared: DeclaredPosture) -> Result<i32, RenderProblem> {
     init_tracing();
-    let (runtime, config_id, service) = load_service(runtime_path).await?;
+    let (runtime, config_id, service) = load_service(runtime_path, declared).await?;
     let bind: SocketAddr = runtime.listener.bind.socket_addr();
     tracing::info!(
         renderer = crate::display_version(),
@@ -382,7 +399,12 @@ where
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("registry_render=info"));
+        .unwrap_or_else(|_| EnvFilter::new("registry_render=info"))
+        .add_directive(
+            "registry_platform_config::posture=info"
+                .parse()
+                .expect("posture log directive"),
+        );
     let _ = tracing_subscriber::fmt()
         .json()
         .with_env_filter(filter)
@@ -431,9 +453,10 @@ pub(crate) fn router(service: Arc<Service>) -> Router {
             ));
         app = app.merge(seal_api);
     }
+    let posture = service.posture.posture();
     app.fallback(not_found)
         .with_state(service)
-        .layer(security_headers_without_posture(CspBuilder::restrictive()))
+        .layer(security_headers(CspBuilder::restrictive(), posture))
 }
 
 /// The public application: the router under the request log, the refusal
@@ -730,10 +753,11 @@ struct MetricsState {
 /// The operator-private router the metrics listener serves: the series, with
 /// the seal certificate lifetimes read at each scrape.
 pub fn metrics_router(service: Arc<Service>, metrics: Arc<Metrics>) -> Router {
+    let posture = service.posture.posture();
     Router::new()
         .route(METRICS_PATH, get(serve_metrics))
         .with_state(MetricsState { metrics, service })
-        .layer(security_headers_without_posture(CspBuilder::restrictive()))
+        .layer(security_headers(CspBuilder::restrictive(), posture))
 }
 
 async fn serve_metrics(State(state): State<MetricsState>) -> Response {
@@ -876,6 +900,8 @@ async fn health(State(service): State<Arc<Service>>) -> Response {
 /// the status code, so plain rendering stays ready while a seal cannot sign.
 #[derive(Serialize)]
 struct Readiness<'a> {
+    #[serde(flatten)]
+    posture: serde_json::Map<String, serde_json::Value>,
     status: &'static str,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     signing: BTreeMap<&'a str, SealReadiness>,
@@ -931,8 +957,12 @@ async fn ready(State(service): State<Arc<Service>>) -> Response {
             (id.as_str(), readiness)
         })
         .collect();
-    let body = serde_json::to_string(&Readiness { status, signing })
-        .expect("the readiness body serializes");
+    let body = serde_json::to_string(&Readiness {
+        status,
+        signing,
+        posture: service.posture.ready_member(),
+    })
+    .expect("the readiness body serializes");
     (
         code,
         [(
@@ -1824,42 +1854,72 @@ fn insert_header(map: &mut header::HeaderMap, name: &str, value: &str) {
     }
 }
 
+fn peer_policy(declared: DeclaredPosture) -> PeerPolicy {
+    match declared.posture {
+        registry_platform_config::Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+        registry_platform_config::Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+    }
+}
+
 /// `registry-render healthcheck`: one plain HTTP GET against /health.
-pub fn healthcheck(runtime_path: &Path) -> Result<i32, RenderProblem> {
-    let (runtime, _) = runtime::load(runtime_path)?;
-    let address = runtime.listener.bind.socket_addr().to_string();
-    let stream = std::net::TcpStream::connect(&address).map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!("cannot connect to {address}: {err}"),
+pub fn healthcheck(runtime_path: &Path, declared: DeclaredPosture) -> Result<i32, RenderProblem> {
+    let (loaded, _) = runtime::load_with_positions(runtime_path, declared)?;
+    let address = loaded.config.listener.bind.socket_addr();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| RenderProblem::new(ProblemKind::Internal, format!("runtime: {error}")))?;
+    runtime.block_on(async {
+        let timeout = Duration::from_secs(5);
+        let client = registry_platform_httputil::client::build_client(
+            registry_platform_httputil::client::OutboundOptions {
+                request_timeout: timeout,
+                connect_timeout: timeout,
+                user_agent: Some("registry-render"),
+                trusted_root_certificates: None,
+            },
         )
-    })?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    let mut stream = stream;
-    use std::io::Write as _;
-    write!(
-        &mut stream,
-        "GET /health HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
-    )
-    .map_err(|err| {
-        RenderProblem::new(ProblemKind::RuntimeInvalid, format!("healthcheck: {err}"))
-    })?;
-    let mut response = String::new();
-    std::io::Read::read_to_string(&mut stream, &mut response).ok();
-    if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
+        .map_err(|reason| RenderProblem::new(ProblemKind::Internal, reason))?;
+        let response = client
+            .get(healthcheck_url(address))
+            .send()
+            .await
+            .map_err(|_| {
+                RenderProblem::new(
+                    ProblemKind::RuntimeInvalid,
+                    format!("cannot reach the health endpoint at {address}"),
+                )
+            })?;
+        validate_response_headers(response.headers(), peer_policy(declared))
+            .map_err(|error| RenderProblem::new(ProblemKind::RuntimeInvalid, error.to_string()))?;
+        if response.status() != StatusCode::OK {
+            return Err(RenderProblem::new(
+                ProblemKind::RuntimeInvalid,
+                format!("health endpoint at {address} did not answer 200"),
+            ));
+        }
         println!("healthy at {address}");
         Ok(0)
-    } else {
-        Err(RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!("health endpoint at {address} did not answer 200"),
-        ))
-    }
+    })
+}
+
+fn healthcheck_url(address: std::net::SocketAddr) -> String {
+    let address = std::net::SocketAddr::new(address.ip(), address.port());
+    format!("http://{address}/health")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn healthcheck_url_omits_the_numeric_ipv6_scope() {
+        let bind: registry_platform_config::ListenerBind = "[fe80::1%2]:8080".parse().unwrap();
+        assert_eq!(
+            healthcheck_url(bind.socket_addr()),
+            "http://[fe80::1]:8080/health"
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -2024,9 +2084,11 @@ mod tests {
             Bundle::load_package(&bundle_path, &verified).expect("packaged receipt bundle");
         Arc::new(Service {
             bundle,
-            audit: RenderAudit::new(AuditWriter::from_line_sink_without_posture(Box::new(
-                lines.clone(),
-            ))),
+            posture: PostureReport::new(runtime::DEFAULT_POSTURE),
+            audit: RenderAudit::new(AuditWriter::from_line_sink(
+                Box::new(lines.clone()),
+                registry_platform_config::Posture::Production,
+            )),
             api_key: TEST_API_KEY.as_bytes().to_vec(),
             oidc: None,
             caller_fingerprint: "caller-fingerprint".to_owned(),

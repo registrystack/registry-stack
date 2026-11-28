@@ -238,9 +238,12 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
     let isolated = isolated_schema().await;
     let config = database(&isolated.reference);
     let secrets = secrets();
-    let first = PostgresStore::connect_migration(&config, &secrets).expect("a migration store");
-    let second = PostgresStore::connect_migration(&config, &secrets).expect("a migration store");
-    let third = PostgresStore::connect_migration(&config, &secrets).expect("a migration store");
+    let first =
+        PostgresStore::connect_migration(&config, &secrets, None).expect("a migration store");
+    let second =
+        PostgresStore::connect_migration(&config, &secrets, None).expect("a migration store");
+    let third =
+        PostgresStore::connect_migration(&config, &secrets, None).expect("a migration store");
     let (a, b, c) = tokio::join!(first.migrate(), second.migrate(), third.migrate());
     a.expect("the first concurrent migration");
     b.expect("the second concurrent migration");
@@ -253,7 +256,7 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
         .expect("a repeated migration applies nothing");
     assert_eq!(applied_versions(&isolated).await, [100, 101, 102]);
 
-    let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("a runtime store");
+    let runtime = PostgresStore::connect_runtime(&config, &secrets, None).expect("a runtime store");
     runtime.ready().await.expect("a migrated store is ready");
 }
 
@@ -261,7 +264,8 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
 async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
     let isolated = isolated_schema().await;
     let config = database(&isolated.reference);
-    let store = PostgresStore::connect_migration(&config, &secrets()).expect("a migration store");
+    let store =
+        PostgresStore::connect_migration(&config, &secrets(), None).expect("a migration store");
     isolated
         .admin
         .batch_execute(&format!(
@@ -335,7 +339,8 @@ async fn a_version_100_database_migrates_forward_keeps_its_queue_and_refuses_a_l
 ) {
     let isolated = isolated_schema().await;
     let config = database(&isolated.reference);
-    let store = PostgresStore::connect_migration(&config, &secrets()).expect("a migration store");
+    let store =
+        PostgresStore::connect_migration(&config, &secrets(), None).expect("a migration store");
     isolated
         .admin
         .batch_execute(&format!(
@@ -388,7 +393,7 @@ async fn a_version_100_database_migrates_forward_keeps_its_queue_and_refuses_a_l
     );
     assert_eq!(refused.constraint(), Some("messaging_dispatch_jobs_shape"));
 
-    PostgresStore::connect_runtime(&config, &secrets())
+    PostgresStore::connect_runtime(&config, &secrets(), None)
         .expect("a runtime store")
         .ready()
         .await
@@ -427,8 +432,11 @@ async fn apply_migrates_a_version_100_database_forward_and_keeps_its_queue() {
         metrics,
         file_audit(root.path()),
     );
-    let config =
-        RuntimeConfig::load(root.path().join("runtime.yaml")).expect("the runtime configuration");
+    let config = RuntimeConfig::load(
+        root.path().join("runtime.yaml"),
+        registry_messaging::config::DEFAULT_POSTURE,
+    )
+    .expect("the runtime configuration");
 
     let applied = apply_activation(&config, &ApplyRequest::default())
         .await
@@ -471,7 +479,7 @@ async fn apply_migrates_a_version_100_database_forward_and_keeps_its_queue() {
         .expect("a repeated apply");
     assert!(again.schema_versions_applied.is_empty());
     assert!(!again.recorded);
-    PostgresStore::connect_runtime(&config.database, &secrets())
+    PostgresStore::connect_runtime(&config.database, &secrets(), config.development_witness())
         .expect("a runtime store")
         .ready()
         .await
@@ -486,7 +494,7 @@ async fn apply_migrates_a_version_100_database_forward_and_keeps_its_queue() {
 #[tokio::test]
 async fn the_migrated_job_table_is_exactly_the_dispatch_core_shape() {
     let isolated = isolated_schema().await;
-    PostgresStore::connect_migration(&database(&isolated.reference), &secrets())
+    PostgresStore::connect_migration(&database(&isolated.reference), &secrets(), None)
         .expect("a migration store")
         .migrate()
         .await
@@ -576,7 +584,7 @@ async fn job_table_catalog(admin: &tokio_postgres::Client, schema: &str) -> JobT
 #[tokio::test]
 async fn a_fresh_schema_uses_only_the_shared_package_activation_ledger() {
     let isolated = isolated_schema().await;
-    let store = PostgresStore::connect_migration(&database(&isolated.reference), &secrets())
+    let store = PostgresStore::connect_migration(&database(&isolated.reference), &secrets(), None)
         .expect("a migration store");
     store.migrate().await.expect("the fresh schema migrations");
 
@@ -605,7 +613,7 @@ async fn a_fresh_schema_uses_only_the_shared_package_activation_ledger() {
 #[tokio::test]
 async fn a_store_nobody_migrated_is_not_ready() {
     let isolated = isolated_schema().await;
-    let runtime = PostgresStore::connect_runtime(&database(&isolated.reference), &secrets())
+    let runtime = PostgresStore::connect_runtime(&database(&isolated.reference), &secrets(), None)
         .expect("a runtime store");
     assert!(runtime.ready().await.is_err());
 }
@@ -614,7 +622,8 @@ async fn a_store_nobody_migrated_is_not_ready() {
 async fn a_store_carrying_an_unknown_version_is_not_ready() {
     let isolated = isolated_schema().await;
     let config = database(&isolated.reference);
-    let store = PostgresStore::connect_migration(&config, &secrets()).expect("a migration store");
+    let store =
+        PostgresStore::connect_migration(&config, &secrets(), None).expect("a migration store");
     store.migrate().await.expect("the migrations");
     isolated
         .admin
@@ -774,12 +783,15 @@ async fn serve_on_ports(
             file_audit(root.path()),
         );
         let runtime_config = root.path().join("runtime.yaml");
-        let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
+        let config =
+            RuntimeConfig::load(&runtime_config, registry_messaging::config::DEFAULT_POSTURE)
+                .expect("the runtime configuration");
         apply_activation(&config, &ApplyRequest::default())
             .await
             .expect("messagingctl apply");
         let task = tokio::spawn(serve_from_path(
             runtime_config,
+            registry_messaging::config::DEFAULT_POSTURE,
             registry_messaging::dispatch::Transports::new(),
         ));
 
@@ -837,7 +849,9 @@ async fn run_binary_on_free_ports(isolated: &Isolated) -> BinaryRun {
             json!({"destination": "stdout"}),
         );
         let runtime_config = root.path().join("runtime.yaml");
-        let config = RuntimeConfig::load(&runtime_config).expect("the runtime configuration");
+        let config =
+            RuntimeConfig::load(&runtime_config, registry_messaging::config::DEFAULT_POSTURE)
+                .expect("the runtime configuration");
         apply_activation(&config, &ApplyRequest::default())
             .await
             .expect("messagingctl apply");
@@ -1003,7 +1017,7 @@ async fn the_runtime_scopes_spent_keys_to_the_verified_caller() {
 #[tokio::test]
 async fn the_dispatch_job_shape_refuses_a_lease_without_an_expiry() {
     let isolated = isolated_schema().await;
-    let store = PostgresStore::connect_migration(&database(&isolated.reference), &secrets())
+    let store = PostgresStore::connect_migration(&database(&isolated.reference), &secrets(), None)
         .expect("a migration store");
     store.migrate().await.expect("the fresh schema migrations");
     // A copy with the job table's checks and without its foreign key, so one

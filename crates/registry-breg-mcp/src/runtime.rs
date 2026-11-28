@@ -11,11 +11,13 @@ use std::{future::Future, sync::Arc, time::Duration};
 use axum::Router;
 use registry_mcp_edge::{
     router, token_verifier, AuditOptions, GatewayCore, GatewayInfo, ProviderBinding,
-    RateLimitOptions, ResourceServer, ResourceServerError, ResourceServerOptions, ServerOptions,
-    TokenBucketOptions, ToolAuditLog,
+    RateLimitOptions, ResourceServer, ResourceServerError, ServerOptions, TokenBucketOptions,
+    ToolAuditLog,
 };
 use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
-use registry_platform_config::{JwksSource, ProtectedSecret, SecretResolver};
+use registry_platform_config::{
+    DevelopmentWitness, JwksSource, PostureReport, ProtectedSecret, SecretResolver,
+};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_oidc::{
     fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy, JwksFetcher,
@@ -113,7 +115,11 @@ fn text(secret: &ProtectedSecret, field: &'static str) -> Result<Zeroizing<Strin
         .map_err(|_| StartupError::Key(field))
 }
 
-async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
+async fn assemble(
+    config: &RuntimeConfig,
+    posture: &PostureReport,
+    development: Option<&DevelopmentWitness>,
+) -> Result<Parts, StartupError> {
     let secrets = resolver(config)?;
     let hash_key = resolve(
         &secrets,
@@ -125,12 +131,13 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
     ))
     .map_err(|_| StartupError::Key("audit.hashKeyRef"))?;
     let server = &config.resource_server;
-    if let Some(diagnostic) = server.insecure_http_startup_diagnostic() {
-        tracing::warn!("{diagnostic}");
-    }
     let network = IssuerNetworkPolicy::new(server.issuer.as_str(), server.allow_insecure_http)
         .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
-    let fetcher = match &server.jwks_source {
+    let jwks_source = server
+        .jwks_source
+        .get(development)
+        .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
+    let fetcher = match jwks_source {
         JwksSource::Uri { uri } => JwksFetcher::new_with_fetch_url_policy(
             uri.to_string(),
             JwksFetcherConfig::defaults(),
@@ -163,28 +170,15 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
             static_key_fetcher(document.expose_secret())?
         }
     };
-    let resource_options = ResourceServerOptions {
-        resource: server.resource.as_str().to_owned(),
-        issuer: server.issuer.as_str().to_owned(),
-        algorithms: server.algorithms.iter().copied().collect(),
-        allowed_clients: server
-            .allowed_clients
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        required_scopes: server
-            .required_scopes
-            .iter()
-            .map(|scope| scope.as_str().to_owned())
-            .collect(),
-        scope_claim: server.scope_claim.to_string(),
-        maximum_token_lifetime: Duration::from_secs(server.maximum_token_lifetime_seconds.get()),
-        allow_insecure_http: server.allow_insecure_http,
-        resource_name: config.service.name.as_str().to_owned(),
-        principal_audit_namespace: PRINCIPAL_CLASS.to_owned(),
-        client_audit_namespace: CLIENT_CLASS.to_owned(),
-    };
-    let resource_server = ResourceServer::new(
+    let resource_options = server
+        .options(
+            development,
+            config.service.name.as_str(),
+            PRINCIPAL_CLASS,
+            CLIENT_CLASS,
+        )
+        .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
+    let resource_server = ResourceServer::new_with_posture(
         &resource_options,
         token_verifier(&resource_options, Arc::new(fetcher)),
         profile.key_hasher(),
@@ -198,6 +192,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
                 burst: config.rate_limits.per_client.burst.get(),
             },
         },
+        posture.posture(),
     )
     .map_err(resource_server_failure)?;
     let private_key = resolve(
@@ -211,7 +206,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
         &config.registry,
         &config.exchange,
         &config.service,
-        server.resource.as_str(),
+        &resource_options.resource,
         key,
         profile.key_hasher(),
         BREG_TOOL_NAMES.into_iter().map(str::to_owned),
@@ -228,14 +223,41 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
 
 /// Build the gateway's HTTP application.
 pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
-    let parts = assemble(config).await?;
+    let declared = crate::config::default_posture();
+    build_with_posture(config, &PostureReport::new(declared), None).await
+}
+
+pub async fn build_with_posture(
+    config: &RuntimeConfig,
+    posture: &PostureReport,
+    development: Option<&DevelopmentWitness>,
+) -> Result<Router, StartupError> {
+    let development =
+        development.filter(|_| posture.posture() == registry_platform_config::Posture::Development);
+    let resource = config
+        .resource_server
+        .resource_url(development)
+        .map_err(|error| StartupError::ResourceServer(error.to_string()))?
+        .to_url();
+    let mut checked = posture.clone();
+    config
+        .service
+        .record_review_origin(&mut checked, "/service/reviewBaseUrl".to_owned());
+    config.resource_server.record_posture(&mut checked);
+    if checked.posture() == registry_platform_config::Posture::Production
+        && (!checked.settings().is_empty() || config.resource_server.allow_insecure_http)
+    {
+        return Err(StartupError::ResourceServer(
+            "production refuses development settings; run breg-mcp check".to_owned(),
+        ));
+    }
+    let parts = assemble(config, posture, development).await?;
     // The loader already refused a destination the audit writer cannot use.
     let destination = config
         .audit
         .destination()
         .map_err(|error| StartupError::Audit(error.to_string()))?;
-    let audit = ToolAuditLog::new(AuditWriter::open_without_posture(destination).await?);
-    let resource = config.resource_server.resource.to_url();
+    let audit = ToolAuditLog::new(AuditWriter::open(destination, posture.posture()).await?);
     let info = GatewayInfo::new(
         "breg-mcp",
         config.service.name.as_str(),
@@ -257,17 +279,24 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         &ServerOptions {
             resource,
             maximum_request_bytes: config.limits.request_bytes(),
-            hsts: !config.development_loopback(),
+            hsts: posture.posture() != registry_platform_config::Posture::Development
+                || !config.loopback_listener(),
+            posture: posture.clone(),
         },
     ))
 }
 
 /// Bind the configured listener and serve until `shutdown` resolves.
-pub async fn serve<F>(config: &RuntimeConfig, shutdown: F) -> Result<(), StartupError>
+pub async fn serve<F>(
+    config: &RuntimeConfig,
+    posture: &PostureReport,
+    development: Option<&DevelopmentWitness>,
+    shutdown: F,
+) -> Result<(), StartupError>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let app = build(config).await?;
+    let app = build_with_posture(config, posture, development).await?;
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(StartupError::Bind)?;

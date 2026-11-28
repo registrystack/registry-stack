@@ -37,12 +37,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use registry_documents::config::check_runtime_file;
+use registry_documents::config::check_runtime_file_with_posture;
 use registry_documents::package::{package_limits, PACKAGE_COMMAND};
 use registry_documents::verification::MAXIMUM_DEAD_LETTER_LISTING;
 use registry_documents_core::{
     DocumentsProject, DOCUMENTS_PROJECT_KIND, DOCUMENTS_RUNTIME_KIND, PROJECT_FILE,
 };
+use registry_platform_config::{declared, DeclaredPosture, PostureSource};
 use registry_platform_config::{plan_package, write_package, PackageErrorKind};
 use registry_platform_yaml::{Diagnostic, Report, Source};
 use serde_json::{json, Value};
@@ -162,6 +163,15 @@ struct CheckArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
+    #[arg(long)]
+    /// Check under the production posture.
+    production: bool,
 
     /// Substitute `${VAR}` references in the runtime configuration from the
     /// environment instead of checking them as stand-ins.
@@ -194,6 +204,12 @@ struct ActivationArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -514,42 +530,101 @@ where
         }
     };
     let command = command_path(&cli.command);
-    let outcome = match &cli.command {
-        Command::Provision(args) => return provision(args, cli.format),
+    let (posture_flag, production) = match &cli.command {
+        Command::Check(args) => (args.posture.as_deref(), args.production),
+        Command::Provision(args) => (args.posture.as_deref(), false),
+        Command::Plan(args)
+        | Command::Status(args)
+        | Command::Erasure(ErasureCommand::Status(args)) => (args.posture.as_deref(), false),
+        Command::Apply(args) => (args.activation.posture.as_deref(), false),
+        Command::Verification(VerificationCommand::List(args))
+        | Command::Erasure(ErasureCommand::List(args)) => {
+            (args.activation.posture.as_deref(), false)
+        }
+        Command::Verification(VerificationCommand::Replay(args))
+        | Command::Erasure(ErasureCommand::Replay(args)) => {
+            (args.activation.posture.as_deref(), false)
+        }
+        Command::Init(_) | Command::Package(_) => (None, false),
+    };
+    let mut refusal = |code, message, action| {
+        let mut outcome = Outcome::refused(USAGE_EXIT, code, "arguments", message);
+        outcome.report["diagnostics"][0]["suggestedAction"] = json!(action);
+        finish(&outcome, command, cli.format, stdout, stderr)
+    };
+    if production && posture_flag == Some("development") {
+        return refusal(
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other".to_owned(),
+            "Use one of them.",
+        );
+    }
+    let posture_flag = if production {
+        posture_flag.or(Some("production"))
+    } else {
+        posture_flag
+    };
+    let declared = match declared(posture_flag) {
+        Ok(declared) => declared,
+        Err(error) => {
+            return refusal(
+                error.code(),
+                error.message().to_owned(),
+                error.suggested_action(),
+            )
+        }
+    };
+    let mut outcome = match &cli.command {
+        Command::Provision(args) => return provision(args, cli.format, declared),
         Command::Init(args) => init(&args.directory),
-        Command::Check(args) => check(args),
+        Command::Check(args) => check(args, declared),
         Command::Package(args) => package(args),
-        Command::Plan(args) => operate::plan(&args.runtime_config),
+        Command::Plan(args) => operate::plan(&args.runtime_config, declared),
         Command::Apply(args) => operate::apply(
             &args.activation.runtime_config,
+            declared,
             args.operator_reference.as_deref(),
             &args.backups,
         ),
-        Command::Status(args) => operate::status(&args.runtime_config),
+        Command::Status(args) => operate::status(&args.runtime_config, declared),
         Command::Verification(VerificationCommand::List(args)) => operate::dead_letters(
             Job::Verification,
             &args.activation.runtime_config,
+            declared,
             args.limit,
         ),
         Command::Verification(VerificationCommand::Replay(args)) => operate::replay(
             Job::Verification,
             &args.activation.runtime_config,
+            declared,
             args.version_id,
             args.expected_generation,
         ),
         Command::Erasure(ErasureCommand::Status(args)) => {
-            operate::erasure_status(&args.runtime_config)
+            operate::erasure_status(&args.runtime_config, declared)
         }
-        Command::Erasure(ErasureCommand::List(args)) => {
-            operate::dead_letters(Job::Erasure, &args.activation.runtime_config, args.limit)
-        }
+        Command::Erasure(ErasureCommand::List(args)) => operate::dead_letters(
+            Job::Erasure,
+            &args.activation.runtime_config,
+            declared,
+            args.limit,
+        ),
         Command::Erasure(ErasureCommand::Replay(args)) => operate::replay(
             Job::Erasure,
             &args.activation.runtime_config,
+            declared,
             args.version_id,
             args.expected_generation,
         ),
     };
+    outcome.report["posture"] = json!({
+        "value": declared.posture.as_str(),
+        "source": match declared.source {
+            PostureSource::Flag => "flag",
+            PostureSource::Environment => "environment",
+            PostureSource::Default => "default",
+        },
+    });
     finish(&outcome, command, cli.format, stdout, stderr)
 }
 
@@ -574,7 +649,11 @@ fn command_path(command: &Command) -> &'static str {
 /// Runs the shared `provision` command, which writes its own report and sets
 /// its own exit code. The global `--format` selects its report as it selects
 /// every other command's.
-fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFormat) -> ExitCode {
+fn provision(
+    args: &registry_platform_provision::ProvisionArgs,
+    format: OutputFormat,
+    declared: DeclaredPosture,
+) -> ExitCode {
     let shared = match format {
         OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
         OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
@@ -584,7 +663,7 @@ fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFo
         registry_platform_buildinfo::DISPLAY_VERSION,
         args,
         shared,
-        provision::load,
+        |path| provision::load(path, declared),
     )
 }
 
@@ -699,7 +778,7 @@ fn package(args: &PackageArgs) -> Outcome {
     }
 }
 
-fn check(args: &CheckArgs) -> Outcome {
+fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
     let mut combined = Report::new(Vec::new());
     combined.set_files_checked(0);
     let mut unavailable = false;
@@ -726,7 +805,12 @@ fn check(args: &CheckArgs) -> Outcome {
         };
         // With a project beside it, the runtime document is also checked
         // against the project it serves.
-        let runtime = check_runtime_file(&absolute, args.environment, project.as_ref());
+        let runtime = check_runtime_file_with_posture(
+            &absolute,
+            args.environment,
+            project.as_ref(),
+            declared,
+        );
         unavailable |= runtime.unavailable;
         combined.extend(runtime.report);
         report["runtimeConfig"] = json!(path);

@@ -135,7 +135,8 @@ async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
         .map_err(|_| ())?,
     )
     .map_err(|_| ())?;
-    let runtime = RuntimeConfig::load(&runtime_path).map_err(|_| ())?;
+    let runtime = RuntimeConfig::load(&runtime_path, registry_scheduling::config::DEFAULT_POSTURE)
+        .map_err(|_| ())?;
     let secrets = registry_scheduling::runtime::secret_resolver(&runtime).map_err(|_| ())?;
     let (verifier, keys) = runtime.oidc_verifier(&secrets).await.map_err(|_| ())?;
     let authenticator = SchedulingAuthenticator::new(&runtime.authentication.oidc, verifier, keys);

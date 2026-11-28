@@ -4,8 +4,9 @@
 use crate::{CoordinatorError, Result};
 use registry_breg_client::BRegRecordOptions;
 use registry_platform_config::{
-    DatabaseConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck,
-    SecretProvider, SecretProvidersConfig, SecretReference,
+    DatabaseConfig, DeclaredPosture, DevelopmentWitness, Posture, PostureReport, PostureSource,
+    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider,
+    SecretProvidersConfig, SecretReference,
 };
 use registry_platform_httputil::{
     valid_resource_uri, valid_scope_token, validate_requested_scopes, ServiceBaseUrl,
@@ -18,6 +19,11 @@ use zeroize::Zeroizing;
 
 pub const API_VERSION: &str = "id.registrystack.org/formats/coordinator/runtime/v1alpha1";
 pub const KIND: &str = "CoordinatorRuntimeConfig";
+
+pub const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
 
 const EVENT_KEY_REPLACEMENT: &str = "Move the key under eventSources.<alias>.triggers.<workflow>.<trigger>.hmacSha256KeyRef, one distinct key per trigger.";
 const REMOVED_KEYS: &[RemovedKey] = &[
@@ -562,6 +568,12 @@ pub struct RuntimeConfig {
     pub connections: BTreeMap<String, ConnectionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<crate::deployment::DeploymentConfig>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub posture: Option<PostureReport>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub development: Option<DevelopmentWitness>,
 }
 
 fn minimum_observation_interval() -> registry_platform_yaml::BoundedU32<30, 86_400> {
@@ -571,10 +583,17 @@ fn minimum_observation_interval() -> registry_platform_yaml::BoundedU32<30, 86_4
 /// The shared reader checks the envelope before directly decoding RuntimeConfig.
 impl RuntimeConfig {
     pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-            api_version: API_VERSION,
-            kind: KIND,
-        })
+        Self::loader_with_posture(DEFAULT_POSTURE)
+    }
+
+    pub const fn loader_with_posture(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(
+            RuntimeEnvelope {
+                api_version: API_VERSION,
+                kind: KIND,
+            },
+            declared,
+        )
         .removed_keys(REMOVED_KEYS)
         .require_trusted_ownership()
     }
@@ -590,7 +609,17 @@ impl RuntimeConfig {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let checked = Self::check_file(path, true);
+        Self::load_with_posture(path, DEFAULT_POSTURE)
+    }
+
+    pub fn posture(&self) -> Posture {
+        self.posture
+            .as_ref()
+            .map_or(Posture::Production, PostureReport::posture)
+    }
+
+    pub fn load_with_posture(path: &Path, declared: DeclaredPosture) -> Result<Self> {
+        let checked = Self::check_file_with(path, true, declared, |_, _| Vec::new());
         if checked
             .diagnostics
             .iter()
@@ -598,15 +627,22 @@ impl RuntimeConfig {
         {
             return Err(CoordinatorError::from_diagnostics(&checked.diagnostics));
         }
-        checked
+        let loaded = checked
             .loaded
-            .map(|loaded| loaded.config)
-            .ok_or_else(|| config_error("", "correct the runtime document"))
+            .ok_or_else(|| config_error("", "correct the runtime document"))?;
+        loaded
+            .posture
+            .decide(path)
+            .map_err(|error| CoordinatorError::from_diagnostics(error.diagnostics()))?;
+        let mut config = loaded.config;
+        config.posture = Some(loaded.posture);
+        config.development = loaded.development;
+        Ok(config)
     }
 
     /// Check syntax, references and offline values without reading secret material.
     pub fn check_file(path: &Path, substitute: bool) -> RuntimeFileCheck<Self> {
-        Self::check_file_with(path, substitute, |_, _| Vec::new())
+        Self::check_file_with(path, substitute, DEFAULT_POSTURE, |_, _| Vec::new())
     }
 
     /// Check one runtime file and include product diagnostics that depend on
@@ -615,12 +651,14 @@ impl RuntimeConfig {
     pub(crate) fn check_file_with(
         path: &Path,
         substitute: bool,
+        declared: DeclaredPosture,
         additional: impl FnOnce(
             &RuntimeFileCheck<Self>,
             &Self,
         ) -> Vec<registry_platform_yaml::Diagnostic>,
     ) -> RuntimeFileCheck<Self> {
-        let mut checked = Self::loader().check_offline::<Self>(path, substitute, stand_in);
+        let mut checked =
+            Self::loader_with_posture(declared).check_offline::<Self>(path, substitute, stand_in);
         let mut diagnostics = checked.loaded.as_ref().map_or_else(Vec::new, |loaded| {
             runtime_id_collision_diagnostics(&checked, &loaded.config)
         });
@@ -678,6 +716,20 @@ impl RuntimeConfig {
         }
     }
 
+    pub(crate) fn database_transport_error(
+        &self,
+        error: registry_platform_config::DatabaseTransportError,
+    ) -> CoordinatorError {
+        let field = if self.database.test_only_plaintext {
+            "database.testOnlyPlaintext"
+        } else {
+            "database.transport"
+        };
+        CoordinatorError::new(error.code(), error.to_string())
+            .at("runtime.yaml", field)
+            .suggest(error.suggested_action())
+    }
+
     fn findings(&self) -> Vec<CoordinatorError> {
         let mut errors =
             crate::event_trigger::source_findings(&self.event_sources, &self.secret_providers);
@@ -696,8 +748,8 @@ impl RuntimeConfig {
                 })
                 .unwrap_or_else(|error| errors.push(error));
         }
-        if self.database.test_only_plaintext {
-            errors.push(config_error("database.testOnlyPlaintext", "remove testOnlyPlaintext; only explicit development-loopback deployment permits local plaintext database transport"));
+        if let Err(error) = self.database.check(cfg!(feature = "postgres-test")) {
+            errors.push(self.database_transport_error(error));
         }
         if !self.namespace.starts_with("coordinator_")
             || self.namespace.len() > 60
@@ -1484,6 +1536,9 @@ fn serialize_database<S: serde::Serializer>(
     if let Some(reference) = &database.ca_bundle_ref {
         map.serialize_entry("caBundleRef", reference)?;
     }
+    if let Some(transport) = &database.transport {
+        map.serialize_entry("transport", transport)?;
+    }
     if database.test_only_plaintext {
         map.serialize_entry("testOnlyPlaintext", &true)?;
     }
@@ -1493,6 +1548,96 @@ fn serialize_database<S: serde::Serializer>(
 #[cfg(test)]
 mod loopback_tests {
     use super::*;
+
+    #[test]
+    fn development_loopback_listener_refuses_a_non_loopback_http_issuer() {
+        let example =
+            include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml");
+        let document = example
+            .replace(
+                "tlsTermination: operator-controlled-upstream",
+                "tlsTermination: development-loopback",
+            )
+            .replace(
+                "    issuer: https://issuer.example.org",
+                "    issuer: http://10.0.0.5",
+            );
+        for posture in [Posture::Production, Posture::Development] {
+            let declared = DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            };
+            let config = RuntimeConfig::loader_with_posture(declared)
+                .parse_str::<RuntimeConfig>(&document, |_| None)
+                .unwrap()
+                .config;
+            let error = config.validate().unwrap_err();
+            assert_eq!(
+                error.field.as_deref(),
+                Some("/deployment/authentication/issuer")
+            );
+        }
+    }
+
+    #[test]
+    fn test_only_plaintext_is_rejected_in_an_operator_build() {
+        let example =
+            include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml");
+        let document = example.replace("database:\n", "database:\n  testOnlyPlaintext: true\n");
+        let config = RuntimeConfig::loader()
+            .parse_str::<RuntimeConfig>(&document, |_| None)
+            .unwrap()
+            .config;
+        if cfg!(feature = "postgres-test") {
+            config.validate().unwrap();
+        } else {
+            assert_eq!(
+                config.validate().unwrap_err().code,
+                "platform.database.test-only-plaintext"
+            );
+        }
+    }
+
+    #[test]
+    fn production_accepts_a_loopback_http_issuer_with_a_development_loopback_listener() {
+        let example =
+            include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml");
+        let document = example
+            .replace(
+                "tlsTermination: operator-controlled-upstream",
+                "tlsTermination: development-loopback",
+            )
+            .replace(
+                "    issuer: https://issuer.example.org",
+                "    issuer: http://127.0.0.1:8080",
+            );
+        let config = RuntimeConfig::loader()
+            .parse_str::<RuntimeConfig>(&document, |_| None)
+            .unwrap()
+            .config;
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn production_accepts_a_loopback_payments_connection() {
+        let example =
+            include_str!("../../../products/coordinator/examples/payment-collections/runtime.yaml");
+        let config = RuntimeConfig::loader()
+            .parse_str::<RuntimeConfig>(example, |_| None)
+            .unwrap()
+            .config;
+        let connection = config
+            .connections
+            .values()
+            .find_map(|connection| match connection {
+                ConnectionConfig::Payments(payments) => Some(payments),
+                _ => None,
+            })
+            .expect("the example binds payments");
+        assert_eq!(connection.base_url.scheme(), "http");
+        assert!(is_loopback(&connection.base_url));
+        config.validate().unwrap();
+    }
 
     #[test]
     fn loopback_endpoints_are_the_shared_numeric_literals_and_never_names() {

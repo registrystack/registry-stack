@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use registry_platform_config::SecretResolver;
+use registry_platform_config::{DeclaredPosture, SecretResolver};
 use registry_platform_provision::cli::{
     run_provision, OutputFormat, ProvisionArgs, ProvisionInput,
 };
@@ -29,14 +29,18 @@ const RUNTIME_ROLE_MISMATCH: &str = "coordinator.runtime-config.runtime-role-mis
 
 /// Runs the verb. The shared runner owns a runtime of its own, so it runs off
 /// the service's executor threads.
-pub(crate) async fn run(args: ProvisionArgs, format: OutputFormat) -> ExitCode {
+pub(crate) async fn run(
+    args: ProvisionArgs,
+    format: OutputFormat,
+    declared: DeclaredPosture,
+) -> ExitCode {
     match tokio::task::spawn_blocking(move || {
         run_provision(
             "coordinatorctl",
             registry_platform_buildinfo::DISPLAY_VERSION,
             &args,
             format,
-            load,
+            |path| load(path, declared),
         )
     })
     .await
@@ -49,9 +53,10 @@ pub(crate) async fn run(args: ProvisionArgs, format: OutputFormat) -> ExitCode {
     }
 }
 
-fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
+fn load(path: &Path, declared: DeclaredPosture) -> Result<ProvisionInput, Box<Diagnostic>> {
     let path = crate::cli::absolute_runtime_path(path).map_err(|error| first_diagnostic(&error))?;
-    let runtime = RuntimeConfig::load(&path).map_err(|error| first_diagnostic(&error))?;
+    let runtime = RuntimeConfig::load_with_posture(&path, declared)
+        .map_err(|error| first_diagnostic(&error))?;
     let resolver = runtime.secret_providers.resolver().map_err(|_| {
         refusal(
             "/secretProviders",

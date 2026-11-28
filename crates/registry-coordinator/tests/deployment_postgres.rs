@@ -416,7 +416,7 @@ async fn assert_bounded_readiness(
     assert_eq!(ready.status(), 200);
     assert_eq!(
         ready.json::<serde_json::Value>().await.unwrap(),
-        serde_json::json!({"ready": true, "status": "ready"})
+        serde_json::json!({"ready": true, "status": "ready", "posture": "production", "developmentSettings": []})
     );
     let (mut locker, connection) = tokio_postgres::connect(database, tokio_postgres::NoTls)
         .await
@@ -761,11 +761,12 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .as_object_mut()
         .unwrap()
         .remove("caBundleRef");
+    doc["database"]["transport"] = json!("loopback-plaintext");
     let d = &mut doc["deployment"];
     d["databaseId"] = json!("router-test");
     d["runtimeRole"] = json!(role);
     d["packages"] = json!([{"root":package_path,"expectedDigest":digest}]);
-    d["listener"] = json!({"bind":"127.0.0.1:0","tlsTermination":"development-loopback"});
+    d["listener"] = json!({"bind":"127.0.0.1:0","tlsTermination":"loopback-plaintext"});
     d["auditFile"] = json!(root_path.join("audit.jsonl"));
     d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
     d["admissionKeyRef"] = json!("secret:file/admission-key");
@@ -807,8 +808,94 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     );
     for entry in apply_entries {
         assert_eq!(entry["schema"], "registry-coordinator/audit/v1");
+        assert_eq!(entry["posture"], "production");
     }
     drop(migration);
+    for (activation_file, recorded, opposite) in [
+        (path.clone(), "production", "development"),
+        (
+            root_path.join("development-runtime.yaml"),
+            "development",
+            "production",
+        ),
+    ] {
+        let development_namespace = format!("{namespace}_dev");
+        if recorded == "development" {
+            let mut development_doc = doc.clone();
+            development_doc["namespace"] = json!(&development_namespace);
+            development_doc["deployment"]["auditFile"] =
+                json!(root_path.join("development-audit.jsonl"));
+            fs::write(
+                &activation_file,
+                serde_norway::to_string(&development_doc).unwrap(),
+            )
+            .unwrap();
+            let applied = local_cli_args(&activation_file, &["apply", "--posture", recorded], true);
+            assert_eq!(applied["activation"]["posture"], recorded);
+            let declared = registry_platform_config::declared_from(Some(recorded), None).unwrap();
+            let config = RuntimeConfig::load_with_posture(&activation_file, declared).unwrap();
+            let audit_store = deployment::open_ctl(&config, true).await.unwrap();
+            let audit_file = audit_store.audit_writer().path().unwrap().to_owned();
+            drop(audit_store);
+            let journal = fs::read_to_string(audit_file).unwrap();
+            assert!(!journal.is_empty());
+            for line in journal.lines() {
+                let line: Value = serde_json::from_str(line).unwrap();
+                assert_eq!(line["posture"], "development");
+            }
+        }
+        for verb in ["plan", "apply", "deployment-status"] {
+            let status = verb == "deployment-status";
+            let report = local_cli_args(&activation_file, &[verb, "--posture", opposite], status);
+            assert_eq!(
+                report["diagnostics"][0]["code"], "platform.activation.posture-mismatch",
+                "{report}"
+            );
+            if status {
+                assert_eq!(report["active"]["posture"], recorded);
+                assert_eq!(report["diagnostics"][0]["path"], "/database/runtimeUrlRef");
+            }
+        }
+        let declared = registry_platform_config::declared_from(Some(opposite), None).unwrap();
+        let config = RuntimeConfig::load_with_posture(&activation_file, declared).unwrap();
+        let store = deployment::open(&config, false).await.unwrap();
+        let error = deployment::check(&store, &config, &workflows_digest)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "platform.activation.posture-mismatch");
+        drop(store);
+        if recorded == "development" {
+            admin
+                .batch_execute(&format!("DROP SCHEMA {development_namespace} CASCADE"))
+                .await
+                .unwrap();
+        }
+    }
+    let mut missing_tls = runtime.as_ref().clone();
+    missing_tls.database.transport = None;
+    let error = deployment::open(&missing_tls, false)
+        .await
+        .err()
+        .expect("TLS is required");
+    assert_eq!(error.code, "database-tls-required");
+    assert_eq!(error.suggested_action.as_deref(), Some("Add sslmode=require for a TLS database, or set database.transport: loopback-plaintext for PostgreSQL on this host."));
+
+    let mut remote_url = runtime_url.clone();
+    remote_url.set_host(Some("10.0.0.5")).unwrap();
+    private(
+        &root_path.join("runtime-url"),
+        remote_url.as_str().as_bytes(),
+    );
+    let error = deployment::open(&runtime, false)
+        .await
+        .err()
+        .expect("loopback transport refuses remote hosts");
+    assert_eq!(error.code, "platform.database.transport-host-mismatch");
+    assert_eq!(error.field.as_deref(), Some("database.transport"));
+    private(
+        &root_path.join("runtime-url"),
+        runtime_url.as_str().as_bytes(),
+    );
     let store = deployment::open(&runtime, false).await.unwrap();
     deployment::check(&store, &runtime, &workflows_digest)
         .await
@@ -1080,7 +1167,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     let d = deployment::config(&runtime).unwrap();
     let authenticator = Arc::new(
         d.authentication
-            .authenticator(&runtime.secret_providers, true)
+            .authenticator(&runtime.secret_providers)
             .await
             .unwrap(),
     );
@@ -1384,9 +1471,10 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                     database_id: "router-test".into(),
                     keys: StateKeys::new(1, BTreeMap::from([(1, state_key)]), admission_key)
                         .unwrap(),
-                    audit: AuditWriter::from_line_sink_without_posture(Box::new(
-                        RefuseAcceptedResponse(attempts.clone(), "admit"),
-                    )),
+                    audit: AuditWriter::from_line_sink(
+                        Box::new(RefuseAcceptedResponse(attempts.clone(), "admit")),
+                        registry_platform_config::Posture::Production,
+                    ),
                     audit_profile: AuditProfile::production_from_secret_bytes(
                         zeroize::Zeroizing::new(fs::read(root_path.join("audit-key")).unwrap()),
                     )
@@ -1473,9 +1561,10 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
                     database_id: "router-test".into(),
                     keys: StateKeys::new(1, BTreeMap::from([(1, state_key)]), admission_key)
                         .unwrap(),
-                    audit: AuditWriter::from_line_sink_without_posture(Box::new(
-                        RefuseAcceptedResponse(status_attempts.clone(), "status"),
-                    )),
+                    audit: AuditWriter::from_line_sink(
+                        Box::new(RefuseAcceptedResponse(status_attempts.clone(), "status")),
+                        registry_platform_config::Posture::Production,
+                    ),
                     audit_profile: AuditProfile::production_from_secret_bytes(
                         zeroize::Zeroizing::new(fs::read(root_path.join("audit-key")).unwrap()),
                     )
@@ -1612,7 +1701,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
             .as_ref()
             .unwrap()
             .authentication
-            .authenticator(&denied_flow_runtime.secret_providers, true)
+            .authenticator(&denied_flow_runtime.secret_providers)
             .await
             .unwrap(),
     );
@@ -2753,10 +2842,11 @@ impl TwoFlowFixture {
             .as_object_mut()
             .unwrap()
             .remove("caBundleRef");
+        doc["database"]["transport"] = json!("loopback-plaintext");
         let d = &mut doc["deployment"];
         d["databaseId"] = json!("two-flow-test");
         d["runtimeRole"] = json!(role);
-        d["listener"] = json!({"bind":"127.0.0.1:0","tlsTermination":"development-loopback"});
+        d["listener"] = json!({"bind":"127.0.0.1:0","tlsTermination":"loopback-plaintext"});
         d["auditFile"] = json!(root_path.join("audit.jsonl"));
         d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
         d["admissionKeyRef"] = json!("secret:file/admission-key");
@@ -3108,7 +3198,7 @@ async fn store_http_state(
         deployment::config(runtime)
             .unwrap()
             .authentication
-            .authenticator(&runtime.secret_providers, true)
+            .authenticator(&runtime.secret_providers)
             .await
             .unwrap(),
     );
@@ -3596,7 +3686,7 @@ async fn two_flows_upgrade_roll_back_and_remove_without_touching_each_other() {
     let d = deployment::config(&runtime).unwrap();
     let authenticator = Arc::new(
         d.authentication
-            .authenticator(&runtime.secret_providers, true)
+            .authenticator(&runtime.secret_providers)
             .await
             .unwrap(),
     );
@@ -4080,7 +4170,7 @@ async fn deployment_operators_act_on_every_flow_without_a_flow_list() {
     let d = deployment::config(&runtime).unwrap();
     let authenticator = Arc::new(
         d.authentication
-            .authenticator(&runtime.secret_providers, true)
+            .authenticator(&runtime.secret_providers)
             .await
             .unwrap(),
     );
@@ -4109,6 +4199,39 @@ async fn deployment_operators_act_on_every_flow_without_a_flow_list() {
     .await;
     let response = doctor(&origin).await.unwrap();
     assert_eq!(response.status(), 200);
+    assert!(response.headers().contains_key("strict-transport-security"));
+    let baseline: Value = response.json().await.unwrap();
+    assert_eq!(baseline["activationReady"], true);
+
+    let mismatch = registry_platform_config::declared_from(Some("development"), None).unwrap();
+    let mut opposite_runtime = runtime.as_ref().clone();
+    opposite_runtime.posture = Some(registry_platform_config::PostureReport::new(mismatch));
+    let (opposite_origin, opposite_server) = serve_fixture(HttpState {
+        recovery_only: false,
+        store: store.clone(),
+        runtime: Arc::new(opposite_runtime),
+        workflows: workflows.clone(),
+        authenticator: authenticator.clone(),
+        adapters: adapters.clone(),
+    })
+    .await;
+    let response = doctor(&opposite_origin).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(!response.headers().contains_key("strict-transport-security"));
+    let mut mismatch: Value = response.json().await.unwrap();
+    assert_eq!(mismatch["activationReady"], false);
+    let findings = mismatch["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["code"], "platform.activation.posture-mismatch");
+    let message = findings[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("production") && message.contains("development"),
+        "{message}"
+    );
+    mismatch["activationReady"] = json!(true);
+    mismatch["findings"] = json!([]);
+    assert_eq!(mismatch, baseline);
+    opposite_server.abort();
     let (status, body) = start_run(
         &http,
         &origin,

@@ -543,8 +543,9 @@ mod tests {
     use std::{collections::BTreeMap, fs, path::Path};
 
     /// Error codes this crate raises only while starting the service, in the
-    /// worker, or in `coordinatorctl`. None of them reaches an HTTP answer.
+    /// worker, or in `coordinatorctl`. None of them becomes an HTTP problem.
     const UNSERVED: &[&str] = &[
+        "platform.activation.posture-mismatch",
         "access.configuration",
         "adapter.configuration",
         "coordinator.access.configuration",
@@ -578,6 +579,7 @@ mod tests {
         "schema-version",
         "service-invalid",
         "service-required",
+        "service-refused",
         "service-unavailable",
         "signal-unavailable",
         "state-keys-invalid",

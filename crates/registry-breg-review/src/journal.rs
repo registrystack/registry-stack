@@ -219,7 +219,10 @@ mod tests {
     }
 
     fn journal(lines: &Lines) -> (Journal, AuditWriter) {
-        let writer = AuditWriter::from_line_sink_without_posture(Box::new(lines.clone()));
+        let writer = AuditWriter::from_line_sink(
+            Box::new(lines.clone()),
+            registry_platform_config::Posture::Production,
+        );
         let journal = Journal::new(
             writer.clone(),
             AuditProfile::unkeyed_dev_only().key_hasher(),
