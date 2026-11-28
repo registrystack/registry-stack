@@ -124,7 +124,7 @@ impl PostgresNativeSource {
             .execute(
                 &format!(
                     "INSERT INTO {schema}.submissions (external_id, label, target) \
-                     VALUES ('a', '045', $1)"
+                     VALUES ('a', '0457193', $1)"
                 ),
                 &[&target],
             )
