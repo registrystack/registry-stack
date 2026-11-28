@@ -1,6 +1,7 @@
 # Base Registry Engine changelog
 
 ## Unreleased
+- BREAKING: HTTP 401 answers for bearer authentication now carry `WWW-Authenticate: Bearer`, and the `authentication.refused` problem `detail` changed from `"The bearer credential is missing or refused."` to `"The bearer token or delivery signature was not accepted."`. Clients that matched the old `detail` text must match the HTTP 401 status and the `authentication.refused` `code` instead.
 - `bregctl provision` no longer requires `package.root` to exist on disk, so operators can provision the database before building the package.
 - BReg examples recover exact pending requests after a kept development run restarts on a new loopback port.
 - Run-backed `bregctl examples` and `bregctl prepare-source` refuse an explicit production posture before reading run state.
@@ -77,18 +78,14 @@
   says how to give the second one its own key. A previous key equal to its own
   current key gets its own refusal with the rotation order.
 
-- `bregctl dev` writes a separate delivery key for each compiled destination.
-  Its inbox records a delivery once per destination and `webhook-id`, so a
-  retry adds no row. A development session from before per-destination keys is
-  refused before the receiver starts, with the advice to run
-  `bregctl dev stop --remove` and start again.
+- `rstack dev` writes a separate delivery key for each compiled hook destination.
 
 - BREAKING: `bregctl check` without a declared posture reports development
   settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
 - BREAKING: `bregctl package --local` is removed. Migration: Use bregctl package --posture development.
 - BREAKING: `bregctl apply` and `plan` refuse a database activated in the
   other posture, and `status` and `doctor` report it. Recreate development
-  databases and apply the package with development declared. For a retained session, run `bregctl dev stop --remove`, then `bregctl dev start`.
+  databases and apply the package with development declared. For a managed development run, run `rstack dev stop RUN_ID --clean`, then `rstack dev start PROJECT`.
 - `bregctl check`, `test`, `plan`, `apply`, `status`, `doctor`, `verify`,
   and the migration commands accept `--posture`. Their JSON reports include
   the resolved posture and its source. `provision` accepts the declaration
@@ -112,9 +109,6 @@
   `platform.activation.posture-mismatch` at `/database` when they detect a mismatch.
 - `bregctl generate odrl` refuses an incompatible `--runtime-config` selector
   with `generate.arguments` before writing output.
-- `bregctl dev` declares development for its child processes and marks the
-  audit hash key it creates as `development-generated`. It refuses an
-  explicit production declaration.
 - `bregctl data import`, `data runs list`, `data runs cancel`,
   `statistics publish`, and `statistics withdraw` now accept `--posture`.
   These commands and `data export` accept development peers in development.
@@ -260,8 +254,9 @@
   answers the generic `412`. A refusal on the `scope` check also names the
   claim that carries scopes, the scope the operation needs and the access
   profile, each as the configuration or package declares it. The line never
-  names a scope the token held. Refusal statuses, headers and bodies are
-  unchanged.
+  names a scope the token held. Counting and logging do not change refusal
+  statuses, headers or production bodies. Development refusal bodies add
+  `failedCheck`.
 
 - BReg MCP and BReg Review accept BReg responses marked `Registry-Posture: development` when they run in development. Production refuses marked responses.
 - BREAKING: the BReg MCP gateway (`breg-mcp`) and the review page

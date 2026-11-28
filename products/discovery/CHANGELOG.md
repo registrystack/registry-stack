@@ -2,15 +2,13 @@
 
 ## Unreleased
 
-- BREAKING (Node): Discovery accepts development peers by default. Replace `allowDevelopmentPeer` with `refuseDevelopmentPeer: true` to reject them. Python offers `refuse_development_peer=True`.
+- The Node and Python Discovery clients accept development-marked catalog responses by default. Pass `refuseDevelopmentPeer: true` in Node or `refuse_development_peer=True` in Python to reject them.
 
 - `discoveryctl serve` passes the resolved posture explicitly to the runtime.
 
 - BREAKING: Rust client configurations take a peer policy in `DiscoveryClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
 
 - Offline check and startup report a package root lookup failure as `discovery.runtime.package-refused` at `/package/root`.
-
-- BREAKING: The Node.js Discovery client refuses development-marked catalog responses by default. Migration: Pass `allowDevelopmentPeer: true` in the options object when connecting to a development catalog.
 
 - Start a local development run from the starter with `rstack dev start`.
 - `discoveryctl check --runtime-config` reports a package-root lookup error as an operational failure at `/package/root`.

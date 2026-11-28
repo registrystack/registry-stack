@@ -20,10 +20,9 @@
 
 - Signed deliveries have the same form in both postures.
 
-- Typed remote mutations require an unauthenticated doctor response with HTTP 401 or 200 and a valid posture header if present. Probe refusals point to `--url`, with `coordinator.command.probe-posture-invalid` for malformed or repeated headers.
+- Typed remote `coordinatorctl` mutations probe the Coordinator API through an unauthenticated `GET /v1/doctor` before sending the mutation. The probe requires HTTP 401 or 200 and a valid `Registry-Posture` header if present. Production commands refuse a development Coordinator, and probe refusals point to `--url`, with `coordinator.command.probe-posture-invalid` for malformed or repeated posture headers.
 
 - Start a local development run from the starter with `rstack dev start`.
-- Typed remote mutations probe the Coordinator API through an unauthenticated `GET /v1/doctor`. Production commands refuse a development or malformed posture mark before sending the mutation.
 - BREAKING: Configure OIDC issuer entries under `deployment.authentication.issuers` and keep the client policies under `deployment.authentication.policies`.
   Migration: Move `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`, `assertionIssuers`, and `scopeClaim` to a named entry and set its `allowedClients` to `from-policies` or list the clients explicitly.
 - BREAKING: An issuer entry reads scopes from `scope` by default.
@@ -62,8 +61,7 @@
 - BREAKING: Audit lines carry `posture`.
   Migration: Audit readers with a closed line parser accept the posture member.
 
-- Mutating typed `coordinatorctl` commands probe `/health` without credentials before sending the mutation. A production command refuses a development Coordinator at the probe.
-- Development responses carry `Registry-Posture: development`. The Coordinator Rust client refuses that mark, and every typed `coordinatorctl` command refuses it when it runs as production. The refusal code is `coordinator.command.development-peer`. `coordinatorctl api` passes the response through unchecked.
+- Development responses carry `Registry-Posture: development`. The Coordinator Rust client enforces its configured `PeerPolicy`, and every typed `coordinatorctl` command refuses a development peer when it runs as production. The refusal code is `coordinator.command.development-peer`. `coordinatorctl api` passes the response through unchecked.
 
 - `/v1/doctor` carries a required `findings` member. It holds the `platform.activation.posture-mismatch` entry when the activation ledger records the other posture.
 
@@ -86,7 +84,7 @@
   logged too. A scope refusal's line also names the scope claim the
   deployment configured and the scope the caller's policy requires, as
   `scope_claim` and `required_scope`, and nothing from the token. Refusal
-  statuses and bodies are unchanged, and
+  statuses and production bodies are unchanged, and
   `coordinator_authentication_refusals_total{reason}` stays.
 - Wherever Coordinator and `coordinatorctl` allow plaintext to a loopback
   host, an IPv4-mapped loopback literal such as `[::ffff:127.0.0.1]` counts as
@@ -130,8 +128,8 @@
   other `coordinatorctl` command.
 
 - `GET /health` and `GET /ready` carry the `status` member the other
-  services answer: `{"live":true,"status":"ok"}` and
-  `{"ready":true,"status":"ready"}`. The `live` and `ready` members stay, and
+  services answer (`"ok"` on `/health`, `"ready"` alongside `posture` and
+  `developmentSettings` on `/ready`). The `live` and `ready` members stay, and
   the 503 body is unchanged.
 
 - Add native Adapter payment collection operations: request a collection from

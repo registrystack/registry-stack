@@ -15,7 +15,6 @@
 - Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
 - Under `database.transport: loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
 
-- When both the flag and the environment declare production, `messagingctl dev` names both settings to remove.
 - `messagingctl provision` reports all diagnostics returned by its runtime configuration loader.
 
 - BREAKING: An undeclared posture is production. Runtime files with development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
@@ -45,7 +44,7 @@
   authentication, message, rate limit and callback refusals, each under the
   check its producer names, and a key endpoint outage under
   `key-source-unavailable`. `messaging_authentication_refusals_total{reason}`
-  is unchanged. Refusal statuses, headers and bodies are unchanged.
+  is unchanged. Refusal statuses, headers and production bodies are unchanged.
 - A scope refusal line also names the scope claim the deployment reads, the
   scope the access profile requires and the profile's id. The values come from
   the configuration and the reviewed package, never from the token. No other
@@ -64,16 +63,16 @@
   `127.0.0.0/8`. The name `localhost` is accepted for a provider base URL as
   before, and a name such as `relay.localhost` stays refused for SMTP.
 
-- `authentication.oidc.allowedClients` accepts the keyword `from-package`,
+- Each issuer entry's `allowedClients` accepts the keyword `from-package`,
   which admits the requester clients of the package's access profiles, so the
   clients are written once, in the package. The member stays required, and an
   omitted member, an empty list and `unrestricted` are still refused. A list
-  must still include every client a profile names. `messagingctl dev` writes
-  `from-package`.
+  must still include every client a profile names.
 
 - `registry-messaging-client` accepts an empty body or a JSON object of at
   most 4096 bytes from `/health` and `/ready`, and refuses a larger one. The
-  runtime still answers an empty `200`.
+  runtime still answers an empty `200` on `/health`, and returns JSON on
+  `/ready`.
 
 ## 0.47.0 - 2026-11-21
 

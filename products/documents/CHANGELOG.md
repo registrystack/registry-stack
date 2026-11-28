@@ -132,7 +132,7 @@
 - BREAKING: Audit lines carry `posture`.
   Migration: Audit readers with a closed line parser accept the posture member.
 
-- Development responses carry `Registry-Posture: development`. The Document Store Rust client refuses that mark.
+- Development responses carry `Registry-Posture: development`. The Document Store Rust client enforces its configured `PeerPolicy`.
 
 - BREAKING: `contentVerification: {type: disabled}` requires development.
   Migration: Declare development to keep contentVerification: disabled, or configure a verifier.
@@ -158,7 +158,7 @@
   scope the access profile requires and the profile's id, as `scope_claim`,
   `required_scope` and `access_profile`, and carries a fixed remedy that names
   `scopeClaim` on the issuer entry. No value from the token is written.
-  Refusal statuses, headers and bodies are unchanged.
+  Refusal statuses, headers and production bodies are unchanged.
 - A static key set with a private key member or a repeated member name is
   refused at startup, and the error names the rule it broke, and the key's
   position for a rule about one key, never a key value.

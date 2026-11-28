@@ -76,7 +76,7 @@
   Both `development-loopback` and `loopback-plaintext` relax the hook-listener port rule in either posture for loopback placement.
 - BREAKING: issuer `allowInsecureHttp: true` is development only.
   Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
-- BREAKING: production refuses `oidc.jwksSource.type: test-issuer`.
+- BREAKING: production refuses `oidc.issuers.<id>.jwksSource.type: test-issuer`.
   Migration: Configure a production issuer or declare development for test runs.
 - Development deployments can reach a database container using `transport: private-network-plaintext`.
 - A payment reservation whose integrity check fails leaves the idempotency key available.
@@ -126,7 +126,7 @@
   claim name, the scope the operation requires and the access profile or
   payment connection it applies to on its `request refused` line. The values
   come from the deployment's configuration and never from the caller's token.
-  No answer changes.
+  Production answers are unchanged.
 - A static key set that the facade refuses at startup states the rule it
   broke, so the operator can correct the document without reading the source.
 - BREAKING: an Adapter job whose runtime document names a plain `http://`
@@ -142,7 +142,8 @@
   sources still take address literals only).
 - The payment routes count and log every refused caller under the check that
   refused it, in the same `adapter_request_refusals_total{check}` counter and
-  `request refused` line as the facade. No answer changes. The simulator
+  `request refused` line as the facade. Counting and logging do not change
+  refusal answers. The simulator
   provider connection and a payment provider base URL accept the same
   loopback address literals as the rest of the Adapter (the rest of
   `127.0.0.0/8`, `::1` and the IPv4-mapped forms) and still refuse the name
@@ -151,17 +152,18 @@
   refused it. `adapter_request_refusals_total{check}` rises by one and the log
   carries one `request refused` line with the fixed `failed_check` label, at
   most five lines per check per minute, replacing the per-stage
-  authentication log line. No answer changes. Loopback is one definition
+  authentication log line. Counting and logging do not change refusal answers.
+  Loopback is one definition
   everywhere the Adapter decides it: the rest of `127.0.0.0/8`, `::1` and the
   IPv4-mapped forms count beside `127.0.0.1`, the name `localhost` is pinned to
-  loopback addresses, and `a.localhost` and `localhost.` stay named hosts. A
-  plain `http://` origin named by host name now fails the runtime check with
-  `adapter.runtime.insecure-origin` when `allowedPrivateCidrs` is empty.
+  loopback addresses, and `a.localhost` and `localhost.` stay named hosts. Any
+  plain `http://` origin beyond loopback fails the runtime check with
+  `adapter.runtime.insecure-origin`, whatever `allowedPrivateCidrs` lists.
 - BREAKING: the facade listener answers `GET /health` and `GET /ready` without
-  authentication. `/health` answers `{"status":"ok"}`. `/ready` answers
-  `{"status":"ready"}` when the journal migrations match the binary and the
-  runtime role holds its journal privileges, and a constant 503
-  `{"status":"not-ready"}` otherwise. The bodies never vary with the
+  authentication. `/health` answers `{"status":"ok"}`. `/ready` answers `200`
+  with `status: "ready"`, `posture` and `developmentSettings` when the journal
+  migrations match the binary and the runtime role holds its journal
+  privileges, and a constant 503 `{"status":"not-ready"}` otherwise. The bodies never vary with the
   project. A project operation whose facade path is `/health` or `/ready` is
   unserved under `adapter.operation.reserved-facade-path`. To migrate, rename
   the record type or change the operation path so no binding's concrete path

@@ -102,8 +102,8 @@
   REGISTRY_STACK_POSTURE, when checking a laptop file.
 - BREAKING: `caseworkctl provider add` accepts `--posture` and validates
   runtime examples under the resolved posture. Migration: Use `--posture development`
-  to generate the development example. A production check of an existing
-  example requires an explicit client list.
+  when an existing runtime example keeps development-only settings, or list explicit
+  clients for a production check.
 - Provider-add JSON reports include the resolved `posture` and its `source`.
   Runtime configuration refusals exit 1 and include diagnostic codes and pointers.
   This includes `casework.posture.unrestricted-clients` for production and
@@ -160,13 +160,13 @@
   `stage` field. The count covers review, directory, clock and task-grant
   refusals, each under the check its producer names. An absence that conceals
   nothing, such as the task grant key set route when task grants are not
-  configured, is not counted. Refusal statuses, headers and bodies are
-  unchanged.
+  configured, is not counted. Refusal statuses, headers and production bodies
+  are unchanged.
 - A refusal on the `scope` check also names, in its `request refused` line,
   the claim that carries scopes, the scope the operation needs and the access
   profile, each as the configuration or package declares it. The line never
-  names a scope the token held. Refusal statuses, headers and bodies are
-  unchanged.
+  names a scope the token held. Refusal statuses, headers and production bodies
+  are unchanged.
 - A static key set with a private key member is refused at startup under
   `casework.runtime.unreadable-jwks-secret`, with the rule it broke and the
   key's position. Earlier releases loaded such a set, so remove private
@@ -187,9 +187,10 @@
   and running it again restores that grant. It loads the whole runtime file
   and verifies the package first.
 
-- `GET /health` answers `{"status":"ok"}` and `GET /ready` answers
-  `{"status":"ready"}` as `application/json`, in place of an empty 200. Both
-  still need no token, and a service that is not ready still answers 503.
+- `GET /health` answers `{"status":"ok"}` and `GET /ready` answers JSON with
+  `status: "ready"`, `posture` and `developmentSettings`, in place of an empty
+  200. Both still need no token, and a service that is not ready still answers
+  503.
 
 ## 0.47.0 - 2026-11-21
 
