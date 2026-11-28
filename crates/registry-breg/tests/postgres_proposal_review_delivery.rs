@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Native Proposal review delivery uses durable, authority-bound PostgreSQL work.
 #![cfg(feature = "postgres-test")]
+#[path = "support/proposal_review_asks.rs"]
+mod asks;
 #[path = "support/client_http.rs"]
 #[allow(dead_code)]
 mod client_http;

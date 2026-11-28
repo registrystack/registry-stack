@@ -6,6 +6,8 @@
 //! A claimed job is committed before I/O and every response is written through
 //! an exact proposal and submission-digest comparison.
 
+pub(crate) mod asks;
+
 use chrono::{DateTime, Utc};
 use registry_platform_authcommon::FailedCheck;
 use registry_platform_crypto::delivery_signature::{
@@ -1583,6 +1585,23 @@ pub(crate) async fn load_accepted_binding(
 
 pub(crate) const REVIEW_TABLES: &[(&str, &[&str])] = &[
     (
+        "registry_proposal_review_asks",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    (
+        "registry_proposal_review_ask_answers",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    ("registry_proposal_review_ask_files", &["INSERT", "SELECT"]),
+    (
+        "registry_proposal_review_ask_feed_events",
+        &["INSERT", "SELECT"],
+    ),
+    (
+        "registry_proposal_review_ask_feed_checkpoints",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    (
         "registry_proposal_review_submissions",
         &["INSERT", "SELECT", "UPDATE"],
     ),
@@ -1758,6 +1777,7 @@ pub(crate) async fn install(
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    asks::install(client).await?;
     let revoke_grantees = crate::postgres::RuntimeRevoke::detect(client, runtime_role)
         .await
         .map_err(|_| MutationError::Unavailable)?
