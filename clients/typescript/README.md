@@ -92,23 +92,30 @@ writes under the same profile share a queue.
 
 ### Proposal forms
 
-Import `Proposal`, `ProposalStatus`, `ProposalSlot` and `ProposalListRow` from
-the generated service file. Start with the Action's input and attach files
-using the slot names on that Action.
+Import the generated Proposal type for your register member, such as
+`FacilityProposal` for `facility`. It covers Proposals returned by both `get()`
+and `list()`. Start with the Action's input and attach files using its slot names.
 
 ```ts
 const draft = await registry.facility.proposals.start('correct-address', { city: 'Springfield' })
 const updated = await registry.facility.proposals.attach(draft, 'supporting-document', file)
 ```
 
-When you read a Proposal, use its `actionId` and `can.attach` to decide
-whether to offer an attachment. Pass the narrowed Proposal to `attach` so
-TypeScript can check the slot against that Action.
+Use `can.attach` and `can.resubmit` to decide which controls to offer.
+When the register has one Proposal Action, Proposals from `get()` and
+`list()` already carry that Action's type. If the register has several
+Proposal Actions, check `actionId` before passing an Action-specific slot to
+`attach` or `resubmit`.
 
 ```ts
-const proposal = await registry.facility.proposals.get(proposalId)
+import type { FacilityProposal } from './service.ts'
+
+const proposal: FacilityProposal = await registry.facility.proposals.get(proposalId)
 if (proposal.actionId === 'correct-address' && proposal.can.attach.available) {
   await registry.facility.proposals.attach(proposal, 'supporting-document', file)
+}
+if (proposal.actionId === 'correct-address' && proposal.can.resubmit.available) {
+  await registry.facility.proposals.resubmit(proposal, { files: { 'supporting-document': file } })
 }
 ```
 
@@ -173,6 +180,13 @@ It uses the package installed in your application and the BReg CLI resolved by `
 
 Run the generator from your application directory with `bregctl` on `PATH`.
 You can also set `RSTACK_BREGCTL_BIN` to the executable path.
+Install `bregctl` from the same Registry Stack release as your client package.
+Before 1.0, the generator refuses a compiler from another minor release.
+For example, client 0.49.0 with `bregctl` 0.47.0 prints:
+
+```text
+bregctl version 0.47.0 is incompatible with client version 0.49.0. Use bregctl from a compatible Registry Stack release.
+```
 
 ```sh
 npx --no-install registry-generate \
@@ -210,6 +224,44 @@ If resolution fails, install the package in your application.
 The runtime checks the recorded client version when you construct a client.
 If either check fails, regenerate with the command from your installed package.
 You can also install the matching package version named in the error.
+
+### Serve a page without a bundler
+
+Compile the generated TypeScript once with the TypeScript compiler installed
+in your application. This emits `public/service.js` and its sibling register
+modules.
+
+```sh
+npx --no-install tsc --strict --target ES2023 --module ESNext \
+  --moduleResolution Bundler --outDir public src/service.ts
+```
+
+Copy the installed package's `dist/` contents into
+`public/vendor/registry-client/`, keeping the directory structure. If your
+server serves `public/` at the site root, put this import map before the page's
+first module script. The entries cover a service generated above with
+Proposals, Documents, Casework and Evidence. For other generated services,
+map each imported `@registrystack/client/products/<name>` to
+`/vendor/registry-client/generated/<name>.js`.
+
+```html
+<script type="importmap">
+{
+  "imports": {
+    "@registrystack/client/core": "/vendor/registry-client/core.js",
+    "@registrystack/client/schema": "/vendor/registry-client/schema.js",
+    "@registrystack/client/tasks": "/vendor/registry-client/tasks/index.js",
+    "@registrystack/client/products/documents": "/vendor/registry-client/generated/documents.js",
+    "@registrystack/client/products/casework": "/vendor/registry-client/generated/casework.js",
+    "@registrystack/client/products/evidence": "/vendor/registry-client/generated/evidence.js"
+  }
+}
+</script>
+<script type="module">
+  import { createRegistryClient } from '/service.js'
+  const registry = createRegistryClient({ baseUrl: '/registry' })
+</script>
+```
 
 Successful calls return an object
 with `data`, HTTP `status` and `headers`, and the request's `idempotencyKey`

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { clientSentences, pages, type Page } from '../core.ts'
 import {
-  createRegistryClient as facility, type Proposal, type ProposalListRow, type ProposalSlot, type ProposalStatus,
+  createRegistryClient as facility, type FacilityProposal, type ProposalListRow, type ProposalSlot, type ProposalStatus,
 } from '../generated/services/breg-facility-documents-casework-evidence.ts'
 import { createRegistryClient as minimal, createRegistryServerClient } from '../generated/services/breg-minimal-casework.ts'
 import * as minimalContract from '../generated/breg-minimal.ts'
@@ -122,7 +122,7 @@ test('page mode resolves paths on its origin and a server without an origin requ
 
 type IsAny<T> = 0 extends (1 & T) ? true : false
 
-export async function strictPageTypes(licence: Licence, proposal: Proposal, listRow: ProposalListRow, slot: ProposalSlot) {
+export async function strictPageTypes(licence: Licence, proposal: FacilityProposal, listRow: ProposalListRow, slot: ProposalSlot) {
   const client = minimal({ baseUrl })
   const { available, reason, missingInputs } = await client.directory.available('update-contact-email', { contactId })
   const missing: ('contactId' | 'email')[] | undefined = missingInputs

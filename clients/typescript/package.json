@@ -37,6 +37,7 @@
   },
   "files": [
     "dist",
+    "registry-generate.js",
     "LICENSE"
   ],
   "scripts": {
@@ -55,6 +56,6 @@
     "node": ">=24"
   },
   "bin": {
-    "registry-generate": "./dist/generate-project.js"
+    "registry-generate": "./registry-generate.js"
   }
 }

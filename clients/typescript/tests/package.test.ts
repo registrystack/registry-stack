@@ -14,5 +14,7 @@ test('the browser package is publishable at the unified client release version',
   assert.equal(manifest.exports['.'].types, './dist/browser.d.ts')
   assert.equal(manifest.exports['.'].default, './dist/browser.js')
   assert.equal(manifest.license, 'Apache-2.0')
-  assert.deepEqual(manifest.files, ['dist', 'LICENSE'])
+  assert.deepEqual(manifest.bin, { 'registry-generate': './registry-generate.js' })
+  assert.deepEqual(lock.packages[''].bin, { 'registry-generate': 'registry-generate.js' })
+  assert.deepEqual(manifest.files, ['dist', 'registry-generate.js', 'LICENSE'])
 })

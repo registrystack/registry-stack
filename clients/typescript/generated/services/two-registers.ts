@@ -9,11 +9,13 @@ import { Client as DocumentsClient } from "../documents.ts"
 import { Client as EvidenceClient } from "../evidence.ts"
 import { proposalCommands, type TypedProposalCommands, documentCommands } from '../../tasks/index.ts'
 
-export type { Proposal, ProposalStatus, AttachmentView } from '../../tasks/index.ts'
+export type { ProposalStatus, AttachmentView } from '../../tasks/index.ts'
 export interface RegisterProposalActions {
   facility: Actions0
   directory: Actions1
 }
+export type FacilityProposal = Awaited<ReturnType<TypedProposalCommands<Actions0>["get"]>>
+export type DirectoryProposal = Awaited<ReturnType<TypedProposalCommands<Actions1>["get"]>>
 
 type RegisterOptions<Profile> = { routePrefix?: string; profile?: Profile }
 type ServiceClientOptions = Omit<ClientOptions, "token" | "profile"> & {

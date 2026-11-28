@@ -1050,6 +1050,7 @@ export const clientFallbackSentence = 'The request could not be completed from t
  */
 export const clientSentences: Readonly<Record<string, string>> = {
   ...availabilityMessages,
+  'client.page-access-refused': 'You are signed in, but this page is not available to your account.',
   available: availableSentence,
   'availability.available': availableSentence,
   unavailable: 'This is not available right now.',
@@ -1155,7 +1156,10 @@ export function describeError(error: unknown, options: DescribeOptions = {}): st
     return guardLabel(error.problem?.guardReason, options) ?? sentence('availability.guard-not-satisfied', options)
   }
   switch (error.reason) {
-    case 'configuration': return 'This service is not available from this page right now, so try again later.'
+    case 'configuration':
+      return error.status === 401 && error.code === 'authentication.refused'
+        ? sentence('client.page-access-refused', options)
+        : 'This service is not available from this page right now, so try again later.'
     case 'sign-in-expired': return 'Your sign-in has ended, so sign in again.'
     case 'stale': return 'The item changed since it was loaded, so reload it and try again.'
     case 'token': return 'Your credentials could not be obtained, so sign in again.'

@@ -12,12 +12,13 @@ import { Client as MessagingClient } from "../messaging.ts"
 import { Client as SchedulingClient } from "../scheduling.ts"
 import { proposalCommands, type TypedProposalCommands, documentCommands } from '../../tasks/index.ts'
 
-export type { Proposal, ProposalStatus, AttachmentView } from '../../tasks/index.ts'
+export type { ProposalStatus, AttachmentView } from '../../tasks/index.ts'
 export interface RegisterProposalActions {
   facility: Actions0
 }
+export type FacilityProposal = Awaited<ReturnType<TypedProposalCommands<Actions0>["get"]>>
 export type ProposalActions = Actions0
-export type ProposalListRow = Awaited<ReturnType<TypedProposalCommands<ProposalActions>["list"]>>["items"][number]
+export type ProposalListRow = FacilityProposal
 export type ProposalSlot<Action extends keyof ProposalActions = keyof ProposalActions> = ProposalActions[Action]["slot"]
 
 type RegisterOptions<Profile> = { routePrefix?: string; profile?: Profile }

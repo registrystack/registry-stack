@@ -97,6 +97,12 @@ export function generateService(description: ServiceDescription, settings: Servi
     return { name, entry, index, setting, ...registerDetails(name, entry, source) }
   })
   const typed = members.filter(member => member.hasTypedProposals)
+  const typedNames = new Set(typed.map(({ name }) => name))
+  const proposalTypeName = (name: string) => {
+    const capitalized = name.charAt(0).toUpperCase() + name.slice(1)
+    // Keep case-distinct register members distinct in the generated exports.
+    return (typedNames.has(capitalized) ? name : capitalized) + 'Proposal'
+  }
   const hasAuthors = members.some(member => member.authors.length > 0)
   const core = settings.coreImport ?? packageName + '/core'
   const modules = settings.modulesImport ?? packageName + '/products/'
@@ -149,13 +155,16 @@ export function generateService(description: ServiceDescription, settings: Servi
     ...(helpers.length ? ["import { " + helpers.join(', ') + " } from '" + tasks + "'"] : []),
     '',
     ...(typed.length ? [
-      "export type { Proposal, ProposalStatus, AttachmentView } from '" + tasks + "'",
+      "export type { ProposalStatus, AttachmentView } from '" + tasks + "'",
       'export interface RegisterProposalActions {',
       ...typed.map(({ name, index }) => '  ' + name + ': Actions' + index),
       '}',
+      ...typed.map(({ name, index }) =>
+        'export type ' + proposalTypeName(name) + ' = Awaited<ReturnType<TypedProposalCommands<Actions'
+          + index + '>["get"]>>'),
       ...(members.length === 1 ? [
         'export type ProposalActions = Actions0',
-        'export type ProposalListRow = Awaited<ReturnType<TypedProposalCommands<ProposalActions>["list"]>>["items"][number]',
+        'export type ProposalListRow = ' + proposalTypeName(members[0]!.name),
         'export type ProposalSlot<Action extends keyof ProposalActions = keyof ProposalActions> = ProposalActions[Action]["slot"]',
       ] : []),
       '',

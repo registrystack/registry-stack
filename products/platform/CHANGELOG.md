@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- The TypeScript client README gives the matching `bregctl` release requirement and shows the incompatible-version diagnostic.
+
+- Generated TypeScript services export a Proposal type for each register member, such as `FacilityProposal`, with that member's Action types.
+
+- `rstack client generate --help` explains that a selected release sets `RSTACK_BREGCTL_BIN` to its installed `bregctl`.
+- `rstack client generate` reports `rstack.client.bregctl-missing` when it cannot resolve `bregctl`.
+
+- `rstack client generate` reads the generator entry in the installed `@registrystack/client` package, including pnpm installations, and refuses entries outside that package.
+
+- Running the service generator from an unbuilt checkout now tells you to run `npm run build`.
+
+- The service generator checks the selected bregctl version against the client version before compiling a project.
+
+- A page whose signed-in caller is refused by the registry displays an account-specific access message.
+
 - Generated service imports resolve in standard TypeScript Node16, NodeNext, and Bundler projects.
 - The service generator reports that it requires Node.js 24 or later when run with an older version.
 - The generator requires an application-local `@registrystack/client` installation and prints installation guidance when it cannot resolve the package.
