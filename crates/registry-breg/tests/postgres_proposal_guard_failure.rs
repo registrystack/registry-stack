@@ -483,3 +483,115 @@ async fn an_unreadable_guard_field_stays_a_generic_precondition_refusal() {
     assert_eq!(refusal.guard_reason(), None);
     fixture.finish().await;
 }
+
+/// Remove the per-request `traceId` from a JSON problem body and normalize its
+/// raw wire bytes so two refusals can be compared for byte-identity.
+fn strip_trace_bytes(raw: &[u8]) -> (Vec<u8>, Value) {
+    let body: Value = serde_json::from_slice(raw).expect("problem body is JSON");
+    let trace_id = body["traceId"]
+        .as_str()
+        .expect("problem body carries traceId");
+    let text = std::str::from_utf8(raw).expect("problem body is UTF-8");
+    let normalized_bytes = text.replacen(trace_id, "<trace>", 1).into_bytes();
+    let mut normalized_json = body;
+    if let Some(object) = normalized_json.as_object_mut() {
+        object.remove("traceId");
+    }
+    (normalized_bytes, normalized_json)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concealed_guard_in_development_posture_matches_an_unknown_target() {
+    let fixture =
+        client_http::ClientFixture::start(registry(&["name", "jurisdiction"]), claims()).await;
+    let dev_service =
+        std::sync::Arc::new((*fixture.service()).clone().with_declared_posture_for_test(
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        ));
+    let dev_http =
+        client_http::ClientHttp::start(registry_breg::api::router(dev_service), claims()).await;
+    let http = reqwest::Client::new();
+
+    // Control: development posture attaches `failedCheck` on ordinary refusals
+    // served through this router.
+    let control = http
+        .get(format!(
+            "{}/v1/proposals?accessProfile=no-such-profile",
+            dev_http.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    let control_status = control.status().as_u16();
+    let control_body: Value = control.json().await.unwrap();
+    assert_eq!(control_status, 404, "{control_body}");
+    assert!(
+        control_body.get("failedCheck").is_some(),
+        "development router must attach failedCheck to non-concealed refusals: {control_body}"
+    );
+
+    // Concealed guard: the profile cannot read `status`, so submit takes the
+    // concealed guard branch and must not attach `failedCheck`.
+    let (concealed_draft, _) = draft(&fixture, "retired", 10, "dev-guard-hidden").await;
+    let link = serde_json::to_value(&concealed_draft).unwrap()["links"]["submit"].clone();
+    let concealed_response = http
+        .post(format!(
+            "{}{}",
+            dev_http.base_url,
+            link["path"].as_str().unwrap()
+        ))
+        .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+        .header("idempotency-key", "dev-guard-hidden-submit")
+        .header("if-match", link["ifMatch"].as_str().unwrap_or("*"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    let concealed_status = concealed_response.status().as_u16();
+    let concealed_bytes = concealed_response.bytes().await.unwrap();
+
+    // Unknown target: starting the proposal action against a nonexistent target
+    // UUID answers generic precondition failure with no `failedCheck`.
+    let unknown_response = http
+        .post(format!(
+            "{}/v1/actions/correct-name/proposals?accessProfile=clerk",
+            dev_http.base_url
+        ))
+        .header("idempotency-key", "dev-guard-unknown-target")
+        .json(&json!({
+            "input": {
+                "target": "7f3c9a52-4f0e-4d8b-9a61-2b5e8c1d0f47",
+                "value": "After",
+                "minimum": 5,
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    let unknown_status = unknown_response.status().as_u16();
+    let unknown_bytes = unknown_response.bytes().await.unwrap();
+
+    assert_eq!(concealed_status, 412);
+    assert_eq!(unknown_status, 412);
+    let (concealed_norm_bytes, concealed_json) = strip_trace_bytes(&concealed_bytes);
+    let (unknown_norm_bytes, unknown_json) = strip_trace_bytes(&unknown_bytes);
+    assert_eq!(concealed_json["code"], "precondition.failed");
+    assert!(
+        concealed_json.get("failedCheck").is_none(),
+        "concealed guard 412 must carry no failedCheck in development posture: {concealed_json}"
+    );
+    assert_eq!(
+        concealed_json, unknown_json,
+        "concealed guard and unknown target must answer with identical problem bodies"
+    );
+    assert_eq!(
+        concealed_norm_bytes, unknown_norm_bytes,
+        "concealed guard and unknown target must be byte-identical ignoring traceId"
+    );
+
+    drop(dev_http);
+    fixture.finish().await;
+}
