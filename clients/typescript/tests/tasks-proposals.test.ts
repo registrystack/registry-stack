@@ -734,16 +734,17 @@ async function holding(bytes: Uint8Array): Promise<ServedProposal> {
   return doc
 }
 
-test('download today throws the core media error because the register answers with the stored type', async () => {
-  // Pins today's behaviour. It flips when the register's OpenAPI declares the slot types: the
-  // call then returns bytes typed application/pdf and this test must expect a Blob instead.
-  const doc = await holding(new Uint8Array(4))
+test('download returns a Blob with the stored type when the register answers with a safe media type', async () => {
+  const bytes = new Uint8Array(4)
+  const doc = await holding(bytes)
   const { seen, commands } = register({
     [`GET ${P}`]: () => ok(doc),
-    [`GET ${P}/attachments/supporting-document`]: () => new Response(new Uint8Array(4), { headers: { 'Content-Type': 'application/pdf' } }),
+    [`GET ${P}/attachments/supporting-document`]: () => new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } }),
   })
   const p = await commands.get('prop-1')
-  await assert.rejects(commands.download(p, 'supporting-document'), { kind: 'unexpected', reason: 'media' })
+  const blob = await commands.download(p, 'supporting-document')
+  assert.equal(blob.type, 'application/pdf')
+  assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), bytes)
   const get = seen.find(s => s.path.endsWith('/attachments/supporting-document'))!
   assert.equal(get.query.get('submissionVersion'), '1')
   assert.equal(get.query.get('accessProfile'), accessProfile)
