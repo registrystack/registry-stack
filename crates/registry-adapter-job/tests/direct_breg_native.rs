@@ -466,7 +466,7 @@ fn assert_cli_output_redacted(output: &std::process::Output, stage: &str) {
     for forbidden in [
         "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw",
         "f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys",
-        "045",
+        "0457193",
     ] {
         assert!(
             !rendered.contains(forbidden),
@@ -584,7 +584,7 @@ async fn a_lost_native_proposal_answer_recovers_the_same_proposal_through_the_jo
         vec![(
             200,
             json!({
-                "data": [{"id": "a", "answers": {"age": "045"}}],
+                "data": [{"id": "a", "answers": {"age": "0457193"}}],
                 "nextCursor": "p2"
             }),
         )],
@@ -683,7 +683,7 @@ async fn a_pending_native_proposal_is_not_retried_under_another_client_assertion
         vec![(
             200,
             json!({
-                "data": [{"id": "a", "answers": {"age": "045"}}],
+                "data": [{"id": "a", "answers": {"age": "0457193"}}],
                 "nextCursor": "p2"
             }),
         )],
@@ -818,7 +818,7 @@ async fn configured_cli_pass_recovers_the_same_native_proposal_without_payload_s
         vec![(
             200,
             json!({
-                "data": [{"id": "a", "answers": {"age": "045", "target": target}}],
+                "data": [{"id": "a", "answers": {"age": "0457193", "target": target}}],
                 "nextCursor": "p2"
             }),
         )],
@@ -928,7 +928,7 @@ async fn configured_cli_child_crash_reloads_credential_reference_and_recovers_th
         vec![(
             200,
             json!({
-                "data": [{"id": "a", "answers": {"age": "045", "target": target}}],
+                "data": [{"id": "a", "answers": {"age": "0457193", "target": target}}],
                 "nextCursor": "p2"
             }),
         )],
@@ -1172,10 +1172,10 @@ async fn postgres_source_reaches_native_breg_and_holds_a_revised_row() {
             observed_mapping_calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(
                 item.projected,
-                json!({"id": "a", "label": "045", "target": expected_target})
+                json!({"id": "a", "label": "0457193", "target": expected_target})
             );
             Ok::<_, DirectBregMappingRefused>(DirectBregOperation::Proposal {
-                start_input: json!({"input": {"targetId": expected_target, "label": "045"}}),
+                start_input: json!({"input": {"targetId": expected_target, "label": "0457193"}}),
                 submit_body: json!({}),
             })
         },

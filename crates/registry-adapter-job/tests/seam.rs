@@ -213,7 +213,7 @@ async fn a_refused_answer_maps_onto_the_seam_refusal() {
     }])
     .await;
     let destination = FixtureDestination::new(&receiver.url).expect("a loopback receiver");
-    let projected = json!({"id": "a", "answers.age": "045"});
+    let projected = json!({"id": "a", "answers.age": "0457193"});
     let outcome = destination
         .deliver(&job_identity(), &deliverable(projected.clone()))
         .await;
@@ -272,7 +272,7 @@ async fn stop_held_and_acknowledged_answers_map_onto_the_seam() {
     ])
     .await;
     let destination = FixtureDestination::new(&receiver.url).expect("a loopback receiver");
-    let projected = json!({"id": "a", "answers.age": "045"});
+    let projected = json!({"id": "a", "answers.age": "0457193"});
     let stopped = destination
         .deliver(&job_identity(), &deliverable(projected.clone()))
         .await;
@@ -333,7 +333,7 @@ async fn a_redelivery_sends_identical_bytes() {
     ])
     .await;
     let destination = FixtureDestination::new(&receiver.url).expect("a loopback receiver");
-    let item = deliverable(json!({"id": "a", "answers.age": "045"}));
+    let item = deliverable(json!({"id": "a", "answers.age": "0457193"}));
     destination.deliver(&job_identity(), &item).await;
     destination.deliver(&job_identity(), &item).await;
     let requests = receiver.requests();
@@ -351,7 +351,7 @@ async fn a_redelivery_sends_identical_bytes() {
 async fn no_credential_crosses_the_seam() {
     let receiver = FixtureReceiver::start(vec![Scripted::Acknowledge { run_id: None }]).await;
     let destination = FixtureDestination::new(&receiver.url).expect("a loopback receiver");
-    let projected = json!({"id": "a", "answers.age": "045"});
+    let projected = json!({"id": "a", "answers.age": "0457193"});
     destination
         .deliver(&job_identity(), &deliverable(projected))
         .await;
@@ -437,7 +437,7 @@ async fn the_projection_rides_the_compiled_engine_path() {
         serde_json::json!({"id": "a", "answers": {"age": "046", "secret": "x"}});
     let changed = projection::item_digest(declaration, &changed_projected);
     let changed_undeclared =
-        serde_json::json!({"id": "a", "answers": {"age": "045", "secret": "x"}});
+        serde_json::json!({"id": "a", "answers": {"age": "0457193", "secret": "x"}});
     assert_ne!(digests[0], changed, "a projected change re-flags the item");
     assert_eq!(
         projection::item_digest(declaration, &changed_undeclared),
