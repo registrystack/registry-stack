@@ -1789,6 +1789,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -5682,6 +5691,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--package <ABSOLUTE_DIRECTORY>",
               "description": "Absolute target package directory; a package that needs PostGIS adds the PostGIS steps. A symbolic link at any component of this path is refused.",
               "always_required": false,
@@ -6436,7 +6454,7 @@
               "name": "draft",
               "invocation": "bregctl migration draft",
               "about": "Write the reviewed migration directory for a successor whose changes need no SQL",
-              "long_about": "Write the reviewed migration directory for a successor whose changes need no SQL. Covers every access or disclosure change against the baseline package, measures the candidate on the disposable database the runtime configuration names, and writes descriptor.json and rehearsal.json under <OUTPUT>/modules/<MODULE>/migrations/<ID>. Pass <OUTPUT> as --reviewed-migrations to test and package. Never overwrites an existing migration.",
+              "long_about": "Write the reviewed migration directory for a successor whose changes need no SQL. Covers every access or disclosure change against the baseline package. Compatible-additive changes, such as an optional field, may sit beside them and stay uncovered: the registry applies those through its own additive plan. Any other change is refused. Measures the candidate on the disposable database the runtime configuration names, and writes descriptor.json and rehearsal.json under <OUTPUT>/modules/<MODULE>/migrations/<ID>. Pass <OUTPUT> as --reviewed-migrations to test and package. Never overwrites an existing migration.",
               "usage": "bregctl migration draft [OPTIONS] --baseline-package <ABSOLUTE_DIRECTORY> --runtime-config <ABSOLUTE_FILE> --output <ABSOLUTE_DIRECTORY> --module <LOCAL_ID> --id <LOCAL_ID> <PROJECT>",
               "arguments": [
                 {
@@ -10534,6 +10552,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
@@ -12726,6 +12753,15 @@
             {
               "display": "--print-sql",
               "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -15396,6 +15432,15 @@
             {
               "display": "--print-sql",
               "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -22407,6 +22452,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -27431,6 +27485,15 @@
             {
               "display": "--print-sql",
               "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

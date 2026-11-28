@@ -182,6 +182,11 @@ class NightlyWorkflowTest(unittest.TestCase):
         self.assertEqual("boolean", inputs["arm64_images"]["type"])
         self.assertIs(False, inputs["arm64_images"]["default"])
         self.assertIs(False, inputs["arm64_images"]["required"])
+        # The input says when it does nothing, since the planner skips a commit
+        # a nightly already published and refuses any ref but protected main.
+        description = inputs["arm64_images"]["description"]
+        self.assertIn("no nightly has published this commit", description)
+        self.assertIn("protected main", description)
         # Only the opt-in job selects a non-default image platform. The image
         # job the scheduled run uses keeps the amd64 default.
         selecting = {

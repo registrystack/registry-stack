@@ -2008,7 +2008,7 @@ fn an_unusable_key_file_names_its_reason_and_fix() {
         stderr.contains("the referenced secret file is unsafe"),
         "{stderr}"
     );
-    assert!(stderr.contains("mode 0600"), "{stderr}");
+    assert!(stderr.contains("mode 0400 or 0600"), "{stderr}");
     assert!(
         stderr.contains(&seal_member_position(&fixture, "privateKeyRef:")),
         "{stderr}"
@@ -2025,7 +2025,7 @@ fn an_unusable_key_file_names_its_reason_and_fix() {
         stderr.contains("the referenced secret is unavailable"),
         "{stderr}"
     );
-    assert!(!stderr.contains("mode 0600"), "{stderr}");
+    assert!(!stderr.contains("0400 or 0600"), "{stderr}");
     assert!(
         stderr.contains("Provide the seal's private key"),
         "{stderr}"

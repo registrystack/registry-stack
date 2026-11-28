@@ -383,6 +383,34 @@ async fn proposal_apply_reevaluates_the_configured_current_date_month_offset() {
     fixture.finish().await;
 }
 
+/// The refusal a transition answers on the wire: its status and problem body.
+/// The client error type keeps only the problem code and reason, so the
+/// authored label is read from the raw response.
+async fn raw_transition(
+    fixture: &client_http::ClientFixture,
+    proposal: &BRegProposal,
+    operation: &str,
+    body: Value,
+    key: &str,
+) -> (u16, Value) {
+    let link = serde_json::to_value(proposal).unwrap()["links"][operation].clone();
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}{}",
+            fixture.http.base_url,
+            link["path"].as_str().unwrap()
+        ))
+        .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+        .header("idempotency-key", key)
+        .header("if-match", link["ifMatch"].as_str().unwrap_or("*"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    (status, response.json().await.unwrap())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_and_apply_carry_the_guard_label_only_where_the_reason_rides() {
     let fixture = client_http::ClientFixture::start(
@@ -391,20 +419,31 @@ async fn submit_and_apply_carry_the_guard_label_only_where_the_reason_rides() {
     )
     .await;
     let (retired, _) = draft(&fixture, "retired", 10, "label-submit").await;
-    let refusal = submit(&fixture, &retired, "label-submit-key")
-        .await
-        .unwrap_err();
-    assert_eq!(refusal.guard_reason(), Some("target-not-open"));
+    let (status, problem) =
+        raw_transition(&fixture, &retired, "submit", json!({}), "label-submit-key").await;
+    assert_eq!(status, 412, "{problem}");
+    assert_eq!(problem["code"], "action.guard_failed");
+    assert_eq!(problem["guardReason"], "target-not-open");
+    assert_eq!(problem["detail"], TARGET_NOT_OPEN_LABEL);
 
     // Apply holds its guards without labels, so a reworded label never
     // strands a frozen Proposal, and the refusal names the current label.
     let (open, open_id) = draft(&fixture, "open", 10, "label-apply").await;
     let submitted = submit(&fixture, &open, "label-apply-submit").await.unwrap();
     set_status(&fixture, &open_id, "retired").await;
-    let refusal = apply(&fixture, &submitted, "label-apply-key")
-        .await
-        .unwrap_err();
-    assert_eq!(refusal.guard_reason(), Some("target-not-open"));
+    let (status, problem) = raw_transition(
+        &fixture,
+        &submitted,
+        "apply",
+        json!({"submissionVersion":submitted.submission_version(),
+            "effectDigest":submitted.effect_digest().unwrap()}),
+        "label-apply-key",
+    )
+    .await;
+    assert_eq!(status, 412, "{problem}");
+    assert_eq!(problem["code"], "action.guard_failed");
+    assert_eq!(problem["guardReason"], "target-not-open");
+    assert_eq!(problem["detail"], TARGET_NOT_OPEN_LABEL);
     fixture.finish().await;
 }
 

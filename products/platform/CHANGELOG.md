@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `registry-platform-config` re-exports `declared`, `declared_from`,
+  `PostureError`, `POSTURE_ENV` and `DEVELOPMENT`, so a product resolves its
+  declared posture without its own dependency on `registry-platform-posture`.
+  The shared `provision` arguments take an optional `--posture` for the
+  product to pass to `declared` before it reads its runtime file.
+
 - Every new audit journal line carries the writer's declared `posture`,
   either `development` or `production`. `AuditWriter::open` and
   `AuditWriter::from_line_sink` take the declaration. Their

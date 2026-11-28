@@ -35,14 +35,18 @@
 
 - `bregctl migration draft` writes `descriptor.json` and `rehearsal.json`
   under `<output>/modules/<module>/migrations/<id>` for a successor whose
-  changes are all access or disclosure changes that alter no table, column
-  or index. It measures the schema fingerprint and PostgreSQL major on the
+  changes are access or disclosure changes that alter no table, column or
+  index, beside any compatible-additive changes (such as an optional field)
+  that BReg applies through its own additive plan and a reviewed migration
+  never covers. It measures the schema fingerprint and PostgreSQL major on the
   disposable database and binds them to the verified baseline package. It
   refuses, before reading the runtime configuration, when nothing needs
   review (`migration.draft.nothing-to-review`), a change needs SQL
   (`migration.draft.sql-required`), the module is unknown
-  (`migration.draft.module-unknown`), or the directory exists
-  (`migration.draft.output-exists`). It never overwrites.
+  (`migration.draft.module-unknown`), the directory exists
+  (`migration.draft.output-exists`), the identifier is not a local id
+  (`migration.draft.id-invalid`), or `--output` is not a safe absolute path
+  (`migration.draft.output-invalid`). It never overwrites.
 
 - Migration note: registry revisions change on upgrade because the
   availability response schema gained `guardLabel`. A package built before

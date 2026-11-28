@@ -1295,9 +1295,15 @@ pub(crate) mod tests {
         else {
             panic!("a refused key set is not an issuer outage");
         };
-        assert!(message.contains(r#"private-key member "d""#), "{message}");
+        assert!(
+            message.contains(r#"private-key member "d""#),
+            "the refusal names the private-key member rule"
+        );
         assert!(message.contains("authentication.oidc.jwksSource.documentRef"));
-        assert!(!message.contains(secret), "{message}");
+        assert!(
+            !message.contains(secret),
+            "the refusal holds the private member's value"
+        );
     }
 
     #[test]

@@ -64,6 +64,9 @@ pub struct ProvisionArgs {
     /// Print the SQL script and connect to nothing
     #[arg(long)]
     pub print_sql: bool,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    pub posture: Option<String>,
 }
 
 /// What a product's loader hands the runner. A loader refuses with one
@@ -1171,6 +1174,17 @@ mod tests {
     // ---- flags ----
 
     #[test]
+    fn posture_is_an_optional_unvalidated_flag() {
+        let unset = parse(&["--runtime-config", "r", "--print-sql"]).expect("arguments parse");
+        assert_eq!(unset.posture, None);
+        for value in ["development", "production", "Production"] {
+            let args = parse(&["--runtime-config", "r", "--print-sql", "--posture", value])
+                .expect("the shared posture crate validates the value, not clap");
+            assert_eq!(args.posture.as_deref(), Some(value));
+        }
+    }
+
+    #[test]
     fn print_sql_conflicts_with_both_admin_flags() {
         for admin in [["--admin-url-file", "a"], ["--admin-url-env", "A"]] {
             let error = parse(&["--runtime-config", "r", "--print-sql", admin[0], admin[1]])
@@ -1271,13 +1285,13 @@ mod tests {
         assert!(run.stdout.contains("\\password \"app_migration\""));
         assert!(run.stdout.contains("\\password \"app_runtime\""));
         assert!(run.stdout.contains("\\connect \"app\""));
-        for secret in [
-            MIGRATION_PASSWORD,
-            RUNTIME_PASSWORD,
-            "SCRAM-SHA-256$",
-            "postgres://",
+        for (label, secret) in [
+            ("the migration password", MIGRATION_PASSWORD),
+            ("the runtime password", RUNTIME_PASSWORD),
+            ("a SCRAM verifier", "SCRAM-SHA-256$"),
+            ("a connection URL", "postgres://"),
         ] {
-            assert!(!run.stdout.contains(secret), "script holds {secret}");
+            assert!(!run.stdout.contains(secret), "the script holds {label}");
         }
         assert!(!run.stdout.contains("PASSWORD '"));
     }
@@ -2428,14 +2442,14 @@ mod tests {
         for format in [["--format", "human"], ["--format", "json"]] {
             let run = execute_run(&format, Some(&admin), Ok(split_input()), &backend);
             let output = run.all_output();
-            for secret in [
-                MIGRATION_PASSWORD,
-                RUNTIME_PASSWORD,
-                ADMIN_PASSWORD,
-                "SCRAM-SHA-256$",
-                "postgres://",
+            for (label, secret) in [
+                ("the migration password", MIGRATION_PASSWORD),
+                ("the runtime password", RUNTIME_PASSWORD),
+                ("the administrator password", ADMIN_PASSWORD),
+                ("a SCRAM verifier", "SCRAM-SHA-256$"),
+                ("a connection URL", "postgres://"),
             ] {
-                assert!(!output.contains(secret), "{format:?} leaked {secret}");
+                assert!(!output.contains(secret), "{format:?} output holds {label}");
             }
         }
     }

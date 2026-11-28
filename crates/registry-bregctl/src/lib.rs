@@ -1597,9 +1597,12 @@ enum MigrationCommand {
 
     /// Write the reviewed migration directory for a successor whose changes need no SQL.
     ///
-    /// Covers every access or disclosure change against the baseline package,
-    /// measures the candidate on the disposable database the runtime
-    /// configuration names, and writes descriptor.json and rehearsal.json
+    /// Covers every access or disclosure change against the baseline package.
+    /// Compatible-additive changes, such as an optional field, may sit beside
+    /// them and stay uncovered: the registry applies those through its own
+    /// additive plan. Any other change is refused. Measures the candidate on
+    /// the disposable database the runtime configuration names, and writes
+    /// descriptor.json and rehearsal.json
     /// under <OUTPUT>/modules/<MODULE>/migrations/<ID>. Pass <OUTPUT> as
     /// --reviewed-migrations to test and package. Never overwrites an existing
     /// migration.

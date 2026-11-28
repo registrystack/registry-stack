@@ -539,9 +539,18 @@ mod tests {
             panic!("a private member is refused");
         };
         let error = error.to_string();
-        assert!(error.contains("not a usable JWKS document"), "{error}");
-        assert!(error.contains("private-key member \"d\""), "{error}");
-        assert!(!error.contains("CANARY-PRIVATE"), "{error}");
+        assert!(
+            error.contains("not a usable JWKS document"),
+            "the refusal says the key set is unusable"
+        );
+        assert!(
+            error.contains("private-key member \"d\""),
+            "the refusal names the private-key member rule"
+        );
+        assert!(
+            !error.contains("CANARY-PRIVATE"),
+            "the refusal holds the private member's value"
+        );
     }
 
     #[test]
