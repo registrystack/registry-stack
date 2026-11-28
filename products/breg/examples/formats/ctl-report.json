@@ -16,7 +16,7 @@
       "source": {
         "column": 15,
         "file": "products/breg/examples/facility/registry.yaml",
-        "line": 237
+        "line": 241
       },
       "suggestedAction": "Remove fields that these readers should not see from this read path's readableFields, or remove the read path; use a direct permission on the related record type when its own row boundaries should apply."
     }
@@ -1664,13 +1664,13 @@
         "protocol": "id.registrystack.org/protocols/review/v1"
       }
     ],
-    "revision": "sha256:dca3c6da48851de9878daa19e0f15b48f867abc87bfd90a0e5ef738a75dc79bd",
+    "revision": "sha256:e79873067041f4addc70ab7004fcef3bb0cf5993d5af8fec884c017b3150c257",
     "statisticalDatasets": []
   },
   "kind": "BRegCtlReport",
   "ok": true,
   "profile": "authoring",
-  "revision": "sha256:dca3c6da48851de9878daa19e0f15b48f867abc87bfd90a0e5ef738a75dc79bd",
+  "revision": "sha256:e79873067041f4addc70ab7004fcef3bb0cf5993d5af8fec884c017b3150c257",
   "status": "complete",
   "version": "0.49.0-dev"
 }

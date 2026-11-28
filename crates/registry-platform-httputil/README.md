@@ -13,6 +13,13 @@ Outbound HTTP utilities for registry services.
   `FetchUrlPolicy` for user-controlled destinations.
 - `read_bounded` for response bodies with content-length and streaming byte
   limits.
+- `validate_response_headers(headers, PeerPolicy)` for response header bounds
+  and the peer posture check: `PeerPolicy::RefuseDevelopmentPeer` returns
+  `ResponseHeaderError::DevelopmentPeer` for a response whose
+  `Registry-Posture` field is exactly `development`. Every client construction
+  site chooses the policy. `is_loopback_host` is the one loopback host rule
+  (a loopback address literal or the exact name `localhost`), valid in every
+  posture.
 - `ServiceBaseUrl`, bearer token providers, and `PrivateKeyJwt` for hardened
   credential-bearing clients without product semantics. The private-key-JWT
   provider uses a closed `client_credentials` request shape. Its `exchange`
@@ -133,13 +140,13 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
   `DestinationProfile::PrivateServiceHttp` refuse `localhost` and every
   `*.localhost` name when the binding is constructed, including trailing-dot
   absolute names and regardless of allowed private CIDRs. Local receivers
-  require `DestinationProfile::LoopbackDevelopmentHttp`.
+  require `DestinationProfile::LoopbackHttp`.
 - `FetchUrlPolicy::strict` allows HTTPS only and denies localhost, private
   ranges, link-local ranges, and cloud metadata endpoints.
 - Known metadata endpoints include link-local metadata services and public-IP
   metadata services such as `100.100.100.200`; IPv4-mapped IPv6 literals are
   normalized before classification.
-- `FetchUrlPolicy::dev` allows HTTP and HTTPS, but plain HTTP is allowed only
+- `FetchUrlPolicy::https_or_loopback` allows HTTP and HTTPS, but plain HTTP is allowed only
   for loopback hosts. Non-loopback private ranges stay denied.
 - `FetchUrlPolicy::validate` is deprecated compatibility. It resolves the host
   but discards DNS evidence, so it is not sufficient protection for a later
@@ -167,6 +174,8 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 ## Features
 
 - Default: `rustls`.
+- `test-support`: test-only profiles such as `DestinationProfile::PinnedLoopbackHttpsTest`
+  and `DestinationProfile::LocalPrivateDevelopmentHttp`.
 
 ## Testing
 

@@ -137,7 +137,7 @@ async fn verified_subject_owns_runs_and_exact_policy_restricts_flow_action() {
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         issuer.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let verifier = TokenVerifierConfig::access_token_profile(
         issuer.issuer(),
@@ -212,7 +212,7 @@ async fn a_policy_admits_only_the_subjects_it_lists() {
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         issuer.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let verifier = TokenVerifierConfig::access_token_profile(
         issuer.issuer(),
@@ -364,7 +364,7 @@ async fn a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not() {
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         issuer.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let verifier = TokenVerifierConfig::access_token_profile(
         issuer.issuer(),

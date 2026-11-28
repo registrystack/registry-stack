@@ -8,9 +8,22 @@ owns and validates the rest of its configuration contract.
 Secret consumers use `SecretResolver::resolve_reference` for bounded values
 without NUL bytes. Cryptographic consumers use `resolve_binary_reference` for
 opaque key files, which preserves every byte, including zero bytes. Both paths
-apply the same provider allowlist, owner-only regular-file checks, size bounds,
-redacted diagnostics, and zeroization. The consumer validates its key format and
+apply the same provider allowlist, regular-file checks, size bounds, redacted
+diagnostics, and zeroization. The consumer validates its key format and
 length; the resolver does not decode, trim, or reinterpret file contents.
+
+A secret file is read through one rule. The name may be a relative link that
+stays below `secretProviders.file.root` (downward steps only, at most 8 links,
+no `..`, no absolute target). The file it reaches must be a regular file with
+one hard link and no write access for others, and either owned by the runtime
+user with mode 0400 or 0600, or owned by root with no bit outside 0640 when the
+runtime is not root. A process that declared development loads a file whose
+read or mode bits are too loose and logs one warning per check. Every other
+refusal holds in both postures. A refusal is a `SecretError::UnsafeFile`
+carrying a `SecretFileCheck`, whose `code()` is `platform.secret-file.<check>`,
+and `SecretError::suggested_action()` gives the fix for any failure.
+`SecretResolver::inspect_reference` runs the same checks without reading the
+bytes.
 
 ## Loader
 

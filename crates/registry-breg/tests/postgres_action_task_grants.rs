@@ -107,7 +107,7 @@ async fn task_action_scope_subjects_replay_and_fresh_revocation_are_enforced() {
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into()))
             .with_contextual_claims(
@@ -471,7 +471,7 @@ async fn task_record_read_is_bound_to_the_grant_identity_by_the_profile_row_boun
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into()))
             .with_contextual_claims(

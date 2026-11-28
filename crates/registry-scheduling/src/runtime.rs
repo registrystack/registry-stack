@@ -274,7 +274,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let task_grant_status = match &config.task_grant_status {
         Some(TaskGrantStatus::UncheckedFinalFifteenMinutes) => None,
         Some(TaskGrantStatus::Authorities(authorities)) => Some(Arc::new(
-            TaskGrantStatusRegistry::activate(
+            TaskGrantStatusRegistry::activate_without_peer_policy(
                 &crate::config::task_grant_status_endpoints(authorities),
                 &config.authentication.oidc.provider.audience,
                 &secrets,
@@ -614,7 +614,7 @@ pub async fn open_audit(
             .for_process(process)
             .map_err(|error| RuntimeError::AuditDestination(error.to_string()))?;
     }
-    let writer = AuditWriter::open(destination)
+    let writer = AuditWriter::open_without_posture(destination)
         .await
         .map_err(|error| RuntimeError::AuditDestination(error.operator_description()))?;
     Ok((audit_profile.key_hasher(), SchedulingAudit::new(writer)))
@@ -708,7 +708,7 @@ pub fn reminder_transport(
     // the transport pins the same rule into the frozen policy.
     let profile = match scheme.as_str() {
         "https" => DestinationProfile::ProductionHttps,
-        "http" => DestinationProfile::LoopbackDevelopmentHttp,
+        "http" => DestinationProfile::LoopbackHttp,
         _ => return Err("the destination URL scheme is not http(s)".to_owned()),
     };
     let policy = FixedDestinationPolicy::new("scheduling-reminders", &origin, profile, &[])

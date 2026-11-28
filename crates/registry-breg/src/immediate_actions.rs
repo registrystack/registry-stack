@@ -24,6 +24,9 @@ use crate::model::{
 };
 use crate::plan::{MAX_PLAN_FIELD_MUTATIONS, MAX_PLAN_SNAPSHOT_BYTES, MAX_PLAN_TARGETS};
 
+/// The longest authored guard label, matching the longest Function refusal label.
+const MAXIMUM_GUARD_LABEL_BYTES: usize = 256;
+
 type CompiledEffectSet = (
     Vec<CompiledPlanEffect>,
     Vec<CompiledActionTargetUse>,
@@ -321,6 +324,15 @@ fn compile_action(
         }
     }
     let requires = compile_requirements(action, &input_map, entities, &target_uses, errors);
+    let concurrency = action.concurrency();
+    if concurrency == crate::contract::ActionConcurrency::CurrentRevision {
+        validate_current_revision(action, &requires, &effects, handler.is_some(), errors);
+        // The caller proves no revision: the guards run against the locked
+        // current row instead, so no target use asks for a condition.
+        for use_ in &mut target_uses {
+            use_.condition_required = false;
+        }
+    }
     let attachments = compile_action_attachments(action, &inputs, entities, timer_actions, errors);
     let writes_path = if handler.is_some() {
         "actions[].plan.writes"
@@ -378,6 +390,7 @@ fn compile_action(
         display: action.display.display(),
         grouping: action.display.grouping(),
         execution,
+        concurrency,
         definition_revision: String::new(),
         evidence: Vec::new(),
         commit_evidence,
@@ -1083,6 +1096,25 @@ fn compile_requirements(
         if let Some(reason) = &requirement.reason {
             validate_id(reason, "actions[].commitGuards.targets[].reason", errors);
         }
+        if let Some(label) = &requirement.label {
+            if requirement.reason.is_none() {
+                errors.push(Diagnostic::error(
+                    "breg.action.commit_guards.label-requires-reason",
+                    "actions[].commitGuards.targets[].label",
+                    "a guard label is the text of the refusal that names the guard's reason, so it requires a reason",
+                ));
+            }
+            if label.trim().is_empty()
+                || label.len() > MAXIMUM_GUARD_LABEL_BYTES
+                || label.chars().any(char::is_control)
+            {
+                errors.push(Diagnostic::error(
+                    "breg.action.commit_guards.label-invalid",
+                    "actions[].commitGuards.targets[].label",
+                    "a guard label must be non-empty display text of at most 256 bytes without control characters",
+                ));
+            }
+        }
         if !seen.insert((&requirement.input, &requirement.field)) {
             errors.push(Diagnostic::error(
                 "breg.action.commit_guards.targets-duplicate",
@@ -1127,6 +1159,7 @@ fn compile_requirements(
                 });
             if !revision_is_bound
                 || requirement.reason.is_some()
+                || requirement.label.is_some()
                 || !requirement.field.is_empty()
                 || requirement.equals.is_some()
                 || requirement.equals_input.is_some()
@@ -1135,6 +1168,7 @@ fn compile_requirements(
                 || requirement.at_most.is_some()
                 || requirement.current_date.is_some()
                 || requirement.current_date_offset_days != 0
+                || requirement.current_date_offset_months != 0
                 || requirement.at_least_from_input.is_some()
                 || requirement.at_most_from_input.is_some()
             {
@@ -1155,7 +1189,9 @@ fn compile_requirements(
                     at_least: None,
                     at_most: None,
                     current_date: None,
+                    label: None,
                     current_date_offset_days: 0,
+                    current_date_offset_months: 0,
                     at_least_input: None,
                     at_most_input: None,
                 });
@@ -1197,6 +1233,18 @@ fn compile_requirements(
                 "breg.action.commit_guards.current-date-offset-invalid",
                 "actions[].commitGuards.targets[].currentDateOffsetDays",
                 "currentDateOffsetDays requires currentDate and must be from -365000 through 365000 whole days",
+            ));
+            continue;
+        }
+        if requirement.current_date_offset_months != 0
+            && (requirement.current_date.is_none()
+                || requirement.current_date_offset_days != 0
+                || !(-12_000..=12_000).contains(&requirement.current_date_offset_months))
+        {
+            errors.push(Diagnostic::error(
+                "breg.action.commit_guards.current-date-offset-invalid",
+                "actions[].commitGuards.targets[].currentDateOffsetMonths",
+                "currentDateOffsetMonths requires currentDate, cannot be combined with currentDateOffsetDays, and must be from -12000 through 12000 whole months",
             ));
             continue;
         }
@@ -1276,13 +1324,103 @@ fn compile_requirements(
                     crate::model::CompiledCurrentDateRelation::OnOrBefore
                 }
             }),
+            label: requirement.label.clone(),
             current_date_offset_days: requirement.current_date_offset_days,
+            current_date_offset_months: requirement.current_date_offset_months,
             at_least_input: requirement.at_least_from_input.clone(),
             at_most_input: requirement.at_most_from_input.clone(),
         });
     }
     compiled.sort_by(|left, right| (&left.input, &left.field).cmp(&(&right.input, &right.field)));
     compiled
+}
+
+/// The rules that make a write without a caller condition safe. A guard is
+/// evaluated against the locked current row, so a second, stale write fails
+/// exactly when the first write falsified a guard. Every record the Action
+/// patches therefore needs a guard its own write makes false, and the write
+/// may carry no value the caller chose, because a caller value read from a
+/// stale view would silently overwrite a concurrent update.
+fn validate_current_revision(
+    action: &ActionSource,
+    requires: &[CompiledCommitGuard],
+    effects: &[CompiledPlanEffect],
+    function_plan: bool,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if requires.iter().any(|guard| guard.revision_unchanged) {
+        errors.push(Diagnostic::error(
+            "breg.action.concurrency-revision-guard",
+            "actions[].commitGuards.targets[].revision",
+            &format!(
+                "Action `{}` uses concurrency: current-revision, which sends no condition, so it cannot require revision: unchanged",
+                action.id
+            ),
+        ));
+    }
+    // Final value each patched record's fields take, keyed by reference input.
+    let mut patched = BTreeMap::<&str, BTreeMap<&str, Option<&serde_json::Value>>>::new();
+    for effect in effects {
+        let CompiledPlanTargetBinding::Existing { input } = &effect.target.binding else {
+            continue;
+        };
+        if function_plan {
+            errors.push(Diagnostic::error(
+                "breg.action.concurrency-caller-value",
+                "actions[].plan",
+                &format!(
+                    "Action `{}` uses concurrency: current-revision, and a function plan writes values computed from the caller's inputs into an existing record",
+                    action.id
+                ),
+            ));
+            continue;
+        }
+        let fields = patched.entry(input.as_str()).or_default();
+        for mutation in &effect.mutations {
+            match mutation {
+                CompiledPlanMutation::Set {
+                    field,
+                    value: CompiledPlanValue::Literal { value },
+                } => {
+                    fields.insert(field.as_str(), Some(value));
+                }
+                CompiledPlanMutation::Clear { field } => {
+                    fields.insert(field.as_str(), None);
+                }
+                CompiledPlanMutation::Set { field, .. } => errors.push(Diagnostic::error(
+                    "breg.action.concurrency-caller-value",
+                    "actions[].plan.effects[].set",
+                    &format!(
+                        "effect `{}` sets field `{field}` of an existing record from a caller value, which concurrency: current-revision does not allow. Set a constant with `value`, or use the default concurrency",
+                        effect.id
+                    ),
+                )),
+            }
+        }
+    }
+    for (input, fields) in patched {
+        let falsified = requires.iter().any(|guard| {
+            guard.input == input
+                && guard.equals_input.is_none()
+                && guard.equals.as_ref().is_some_and(|expected| {
+                    match fields.get(guard.field.as_str()) {
+                        Some(Some(value)) => *value != expected,
+                        Some(None) => !expected.is_null(),
+                        None => false,
+                    }
+                })
+        });
+        if !falsified {
+            errors.push(Diagnostic::error(
+                "breg.action.concurrency-guard-missing",
+                "actions[].commitGuards.targets",
+                &format!(
+                    "Action `{}` uses concurrency: current-revision and patches the record of input `{input}`, so it needs an `equals` or `isNull` guard on that input that its own write makes false",
+                    action.id
+                ),
+            ));
+        }
+    }
 }
 
 fn compile_inputs(
@@ -3338,6 +3476,9 @@ pub fn migration_review_revision(action: &CompiledAction) -> String {
             label.clear();
         }
     }
+    for guard in &mut action.requires {
+        guard.label = None;
+    }
     if let crate::model::CompiledActionExecution::Proposal { proposal } = &mut action.execution {
         proposal
             .permissions
@@ -3611,7 +3752,13 @@ pub(crate) fn definition_revision(
         Some((id,json!({"fields":fields,"constraints":target.constraints,"mutationMode":target.mutation_mode,"changeControl":target.change_control})))
     }).collect::<BTreeMap<_,_>>();
     let policy = match &action.execution {
-        crate::model::CompiledActionExecution::Immediate => json!({"mode":"immediate"}),
+        crate::model::CompiledActionExecution::Immediate => {
+            let mut policy = json!({"mode":"immediate"});
+            if !action.concurrency.is_condition_required() {
+                policy["concurrency"] = json!(action.concurrency);
+            }
+            policy
+        }
         crate::model::CompiledActionExecution::Proposal { proposal } => {
             let mut policy = json!({"mode":"proposal","review":proposal.review,"application":proposal.application,"retention":proposal.retention,"reviewContext":proposal.review_context,"attachments":proposal.attachments});
             // Promotions change what an approved Proposal writes, so they are
@@ -3638,7 +3785,10 @@ pub(crate) fn definition_revision(
         value["refusals"] = json!(function.refusals.keys().collect::<Vec<_>>());
         value
     });
-    let mut payload = json!({"id":action.id,"apiName":action.api_name,"inputs":inputs,"plan":{"effects":action.effects,"function":function},"commitGuards":{"targets":action.requires,"evidence":action.commit_evidence},"planEvidence":action.evidence,"targets":targets,"execution":policy,"consentIssuer":action.consent_issuer});
+    // Guard labels are presentation copy, so rewording one leaves the Action's
+    // identity, and every Proposal frozen against it, unchanged.
+    let requires = crate::model::without_labels(&action.requires);
+    let mut payload = json!({"id":action.id,"apiName":action.api_name,"inputs":inputs,"plan":{"effects":action.effects,"function":function},"commitGuards":{"targets":requires,"evidence":action.commit_evidence},"planEvidence":action.evidence,"targets":targets,"execution":policy,"consentIssuer":action.consent_issuer});
     // Request-file bindings decide which request part fills which record
     // slot, so they are part of the Action's identity. Omitting an empty map
     // keeps the revision of every Action without request files unchanged.

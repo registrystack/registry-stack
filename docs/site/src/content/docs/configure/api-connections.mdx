@@ -61,7 +61,8 @@ takes effect on the next invocation. An OAuth connection acquires its token auto
 A manually supplied token still needs renewal through its issuing system.
 
 Credential files must belong to the account running `rstack`, be regular files with a single
-hard link, and have permissions `0400` or `0600`. Setup checks the supplied file before saving
+hard link, and have permissions `0400` or `0600`. The rest of the rule is in
+[Secret files](../../security/hardening-checklist/#secret-files). Setup checks the supplied file before saving
 the connection. For a deployment with a private certificate authority, add
 `--ca-file /path/to/ca.pem` during setup.
 

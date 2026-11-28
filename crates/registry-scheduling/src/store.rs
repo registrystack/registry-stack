@@ -90,10 +90,12 @@ pub use resource_availability::{ResourceSupplyImpact, ResourceSupplyImpacts};
 pub use source_busy::{resource_interval_is_available, BusyStoreError};
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0200_scheduling.sql");
+const ACTIVATION_POSTURE_MIGRATION: &str =
+    include_str!("../migrations/0201_activation_posture.sql");
 /// Every schema version, in the order it is applied. The baseline is
 /// version [`BASELINE_SCHEMA_VERSION`], above every version an earlier
 /// release applied; each later migration takes the next number.
-const SCHEMA_VERSIONS: [i64; 1] = [200];
+const SCHEMA_VERSIONS: [i64; 2] = [200, 201];
 /// The baseline schema version. A ledger holding any version below it was
 /// left by an earlier pre-1.0 release, which this release refuses by name:
 /// version 100 is the v0.42.0 and v0.43.0 baseline, whose outbox and hook

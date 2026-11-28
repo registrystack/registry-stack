@@ -106,15 +106,30 @@
           "uniqueItems": true
         },
         "rowBoundaries": {
-          "description": "Every profile must include these exact field, verified-claim, and operator bindings. Omit to demand no row boundary.",
-          "items": {
-            "$ref": "#/$defs/RowBoundarySource"
-          },
-          "minItems": 1,
-          "type": "array"
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RowBoundarySource"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "$ref": "#/$defs/RowBoundarySetReference"
+            }
+          ],
+          "description": "Every profile must include these exact field, verified-claim, and operator bindings. Omit to demand no row boundary."
         }
       },
       "type": "object"
+    },
+    "ActionConcurrency": {
+      "description": "How an immediate Action guards its patches against a concurrent write.\n`condition-required` asks the caller to prove the revision it saw.\n`current-revision` evaluates the Action's commit guards against the locked\ncurrent row instead, so the caller sends no condition.",
+      "enum": [
+        "condition-required",
+        "current-revision"
+      ],
+      "type": "string"
     },
     "ActionEffectSource": {
       "additionalProperties": false,
@@ -212,6 +227,9 @@
         {
           "additionalProperties": false,
           "properties": {
+            "concurrency": {
+              "$ref": "#/$defs/ActionConcurrency"
+            },
             "mode": {
               "const": "immediate",
               "type": "string"
@@ -711,6 +729,13 @@
           "minimum": -365000,
           "type": "integer"
         },
+        "currentDateOffsetMonths": {
+          "description": "Whole calendar months added to the registry-local date before applying\n`currentDate`, clamping to the last day of a shorter month (January 31\nplus one month is February 28 or 29). Requires `currentDate`, is\nexclusive with `currentDateOffsetDays`, and zero preserves the\nunshifted comparison.",
+          "format": "int32",
+          "maximum": 12000,
+          "minimum": -12000,
+          "type": "integer"
+        },
         "equals": {
           "$ref": "#/$defs/ScalarLiteral"
         },
@@ -728,6 +753,10 @@
           "const": true,
           "description": "Requires the stored value to be unset. Only `true` is read.",
           "type": "boolean"
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "Authored refusal text, a constant of at most 256 bytes that requires\n`reason`. It is returned as the Problem `detail` and as the availability\n`guardLabel` exactly where `reason` is returned, so it is disclosed only\nwhen every guard and boundary fact is readable. It never replaces the\ngeneric precondition refusal."
         },
         "reason": {
           "$ref": "#/$defs/LocalId",
@@ -3695,9 +3724,27 @@
           },
           "minItems": 1,
           "type": "array"
+        },
+        {
+          "$ref": "#/$defs/RowBoundarySetReference",
+          "description": "Reach the rows every boundary of a named set binds to the caller's claims."
         }
       ],
-      "description": "The rows a permission reaches: the keyword `unrestricted`, or a list of at\nleast one row boundary."
+      "description": "The rows a permission reaches: the keyword `unrestricted`, a list of at\nleast one row boundary, or a reference to a named list of them."
+    },
+    "RowBoundarySetReference": {
+      "additionalProperties": false,
+      "description": "A reference to a named list of row boundaries the file declares under\n`rowBoundarySets`. The reader expands a reference into the set's boundaries\nbefore the typed model is decoded, so the compiler never holds one.",
+      "properties": {
+        "rowBoundarySet": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The identifier of a set declared under `rowBoundarySets` in the same file."
+        }
+      },
+      "required": [
+        "rowBoundarySet"
+      ],
+      "type": "object"
     },
     "RowBoundarySource": {
       "additionalProperties": false,
@@ -4997,6 +5044,21 @@
         "$ref": "#/$defs/LocalId"
       },
       "type": "object"
+    },
+    "rowBoundarySets": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/RowBoundarySource"
+        },
+        "minItems": 1,
+        "type": "array"
+      },
+      "description": "Named lists of row boundaries, declared once and referenced as\n`rowBoundaries: {rowBoundarySet: <id>}` wherever a row reach is written\nin this file. A reference expands to the set's boundaries when the file\nis read, so each grant still states its own reach. A set holds at least\none boundary and is never `unrestricted`.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object",
+      "writeOnly": true
     },
     "valueTypes": {
       "additionalProperties": {

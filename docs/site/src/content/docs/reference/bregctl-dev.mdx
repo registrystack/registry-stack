@@ -705,7 +705,7 @@ secretProviders:
   environment: {}
 ```
 
-A referenced file must be an ordinary file you own, with mode 0400 or 0600 and a single link.
+A referenced file must meet the [secret file rule](../../security/hardening-checklist/#secret-files), for example an ordinary file you own, with mode 0400 or 0600 and a single link.
 A referenced value must be non-empty, contain no NUL byte, and fit the member's limit.
 The session copies each value into its private state when it is prepared, so editing a referenced
 file later changes nothing until the session is replaced.

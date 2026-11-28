@@ -338,9 +338,11 @@ async fn a_record_is_deleted_record_days_after_a_terminal_state_with_everything_
     let mut other = email_submission();
     other["correlationId"] = serde_json::json!("another-body");
     let rotated = harness
-        .app_with_audit(rotated_test_audit(AuditWriter::from_line_sink(Box::new(
-            RefusingAuditSink::after(usize::MAX),
-        ))))
+        .app_with_audit(rotated_test_audit(
+            AuditWriter::from_line_sink_without_posture(Box::new(RefusingAuditSink::after(
+                usize::MAX,
+            ))),
+        ))
         .await;
     for app in [harness.app.clone(), rotated] {
         for body in [email_submission(), other.clone()] {
@@ -528,9 +530,11 @@ async fn a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spe
     let mut other = email_submission();
     other["correlationId"] = serde_json::json!("another-body");
     let rotated = harness
-        .app_with_audit(rotated_test_audit(AuditWriter::from_line_sink(Box::new(
-            RefusingAuditSink::after(usize::MAX),
-        ))))
+        .app_with_audit(rotated_test_audit(
+            AuditWriter::from_line_sink_without_posture(Box::new(RefusingAuditSink::after(
+                usize::MAX,
+            ))),
+        ))
         .await;
     for app in [harness.app.clone(), rotated] {
         for (body, status_code, code) in [
@@ -721,7 +725,9 @@ async fn an_audit_request_refusal_erases_nothing() {
     let id = harness.accepted(&email_submission()).await;
     settle_as(&harness, id, "delivered", 8).await;
     let sink = RefusingAuditSink::after(0);
-    let audit = test_audit(AuditWriter::from_line_sink(Box::new(sink.clone())));
+    let audit = test_audit(AuditWriter::from_line_sink_without_posture(Box::new(
+        sink.clone(),
+    )));
 
     let refused = erase_expired(
         &harness.store,
@@ -745,7 +751,9 @@ async fn a_post_commit_retention_audit_refusal_leaves_erasure_committed() {
     let id = harness.accepted(&email_submission()).await;
     settle_as(&harness, id, "delivered", 8).await;
     let sink = RefusingAuditSink::after(1);
-    let audit = test_audit(AuditWriter::from_line_sink(Box::new(sink.clone())));
+    let audit = test_audit(AuditWriter::from_line_sink_without_posture(Box::new(
+        sink.clone(),
+    )));
 
     let refused = erase_expired(
         &harness.store,

@@ -44,7 +44,12 @@ pub(crate) fn guard_matches(
             actual.as_i64().is_some_and(|actual| actual <= maximum)
         }
         (None, None, None, None, Some(relation), None, None) => {
-            let Some(today) = registry_today(registry, now, guard.current_date_offset_days) else {
+            let Some(today) = registry_today(
+                registry,
+                now,
+                guard.current_date_offset_days,
+                guard.current_date_offset_months,
+            ) else {
                 return false;
             };
             actual
@@ -68,24 +73,18 @@ pub(crate) fn guard_matches(
 }
 
 /// The registry's calendar date at `now`, the "today" a `currentDate` guard
-/// compares against. A date that cannot be resolved fails the guard closed.
+/// compares against, shifted by whole days or whole calendar months. A date
+/// that cannot be resolved fails the guard closed.
 fn registry_today(
     registry: &CompiledRegistry,
     now: time::OffsetDateTime,
     offset_days: i32,
+    offset_months: i32,
 ) -> Option<chrono::NaiveDate> {
-    // The same years 1 through 9999 the Rhai date helpers allow.
     let shifted = registry
         .local_date_at(now)
         .ok()
-        .and_then(|date| {
-            if offset_days >= 0 {
-                date.checked_add_days(chrono::Days::new(offset_days as u64))
-            } else {
-                date.checked_sub_days(chrono::Days::new(u64::from(offset_days.unsigned_abs())))
-            }
-        })
-        .filter(|date| (1..=9999).contains(&chrono::Datelike::year(date)));
+        .and_then(|date| shift_date(date, offset_days, offset_months));
     match shifted {
         Some(date) => Some(date),
         None => {
@@ -94,11 +93,32 @@ fn registry_today(
             #[cfg(feature = "runtime")]
             tracing::error!(
                 offset_days,
+                offset_months,
                 "a currentDate guard could not resolve the registry's offset date and fails closed"
             );
             None
         }
     }
+}
+
+/// Shift a date by whole days, or by whole calendar months that clamp to the
+/// last day of a shorter month, and keep it within the years 1 through 9999
+/// the Rhai date helpers allow. A compiled guard carries at most one nonzero
+/// offset.
+fn shift_date(date: chrono::NaiveDate, days: i32, months: i32) -> Option<chrono::NaiveDate> {
+    let shifted = if months >= 0 {
+        date.checked_add_months(chrono::Months::new(months.unsigned_abs()))
+    } else {
+        date.checked_sub_months(chrono::Months::new(months.unsigned_abs()))
+    }?;
+    let shifted = if days >= 0 {
+        shifted.checked_add_days(chrono::Days::new(u64::from(days.unsigned_abs())))
+    } else {
+        shifted.checked_sub_days(chrono::Days::new(u64::from(days.unsigned_abs())))
+    }?;
+    (1..=9999)
+        .contains(&chrono::Datelike::year(&shifted))
+        .then_some(shifted)
 }
 
 /// Order a stored value against a submitted one. The compiler only pairs a
@@ -202,7 +222,9 @@ mod tests {
             at_least: None,
             at_most: None,
             current_date: None,
+            label: None,
             current_date_offset_days: 0,
+            current_date_offset_months: 0,
             at_least_input: None,
             at_most_input: None,
         }
@@ -211,7 +233,7 @@ mod tests {
     #[test]
     fn the_offset_date_stays_within_years_1_to_9999() {
         let registry = registry(Some("UTC"));
-        let date = |now, offset| registry_today(&registry, now, offset);
+        let date = |now, offset| registry_today(&registry, now, offset, 0);
         assert_eq!(
             date(datetime!(9999-12-30 12:00 UTC), 1),
             chrono::NaiveDate::from_ymd_opt(9999, 12, 31)
@@ -222,6 +244,82 @@ mod tests {
             chrono::NaiveDate::from_ymd_opt(1, 1, 1)
         );
         assert_eq!(date(datetime!(0001-01-01 12:00 UTC), -1), None);
+    }
+
+    #[test]
+    fn a_month_offset_clamps_to_the_last_day_of_a_shorter_month() {
+        let registry = registry(Some("UTC"));
+        let date = |now, months| registry_today(&registry, now, 0, months);
+        let ymd = |year, month, day| chrono::NaiveDate::from_ymd_opt(year, month, day);
+        // January 31 plus one month is February 28, or 29 in a leap year.
+        assert_eq!(date(datetime!(2026-01-31 12:00 UTC), 1), ymd(2026, 2, 28));
+        assert_eq!(date(datetime!(2028-01-31 12:00 UTC), 1), ymd(2028, 2, 29));
+        // March 31 minus one month is the last day of February.
+        assert_eq!(date(datetime!(2026-03-31 12:00 UTC), -1), ymd(2026, 2, 28));
+        assert_eq!(date(datetime!(2028-03-31 12:00 UTC), -1), ymd(2028, 2, 29));
+        // A shift across a year boundary changes the year.
+        assert_eq!(date(datetime!(2026-12-15 12:00 UTC), 1), ymd(2027, 1, 15));
+        assert_eq!(date(datetime!(2026-01-15 12:00 UTC), -1), ymd(2025, 12, 15));
+        assert_eq!(date(datetime!(2026-10-14 12:00 UTC), 0), ymd(2026, 10, 14));
+        // A shift past year 9999 or before year 1 fails closed.
+        assert_eq!(date(datetime!(9999-12-15 12:00 UTC), 1), None);
+        assert_eq!(date(datetime!(9999-11-15 12:00 UTC), 1), ymd(9999, 12, 15));
+        assert_eq!(date(datetime!(0001-01-15 12:00 UTC), -1), None);
+    }
+
+    #[test]
+    fn the_guard_and_the_planner_helper_agree_on_month_arithmetic() {
+        let starts = [
+            (2026, 1, 31),
+            (2028, 1, 31),
+            (2026, 3, 31),
+            (2028, 2, 29),
+            (2026, 12, 15),
+            (2026, 1, 1),
+            (2024, 2, 29),
+            (2026, 5, 31),
+            (2026, 10, 14),
+            (1, 1, 31),
+            (9999, 12, 31),
+        ];
+        let months = [
+            -25, -13, -12, -2, -1, 0, 1, 2, 12, 13, 24, 100, -100, 12_000, -12_000,
+        ];
+        for (year, month, day) in starts {
+            let start = chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap();
+            for offset in months {
+                let guard = shift_date(start, 0, offset).map(|date| date.to_string());
+                let planner =
+                    crate::rhai_planner::add_months(start.to_string().into(), offset.into())
+                        .ok()
+                        .map(|date| date.to_string());
+                assert_eq!(guard, planner, "{start} plus {offset} months");
+            }
+        }
+    }
+
+    #[test]
+    fn a_current_date_guard_applies_its_signed_month_offset() {
+        let inputs = Map::new();
+        let mut guard = guard();
+        guard.current_date = Some(CompiledCurrentDateRelation::OnOrAfter);
+        guard.current_date_offset_months = 1;
+        let at = |stored: &str, now| {
+            guard_matches(
+                &guard,
+                &inputs,
+                json!({"value": stored}).as_object().unwrap(),
+                &registry(Some("UTC")),
+                now,
+                false,
+            )
+        };
+        assert!(at("2026-02-28", datetime!(2026-01-31 12:00 UTC)));
+        assert!(!at("2026-02-27", datetime!(2026-01-31 12:00 UTC)));
+        assert!(at("2026-11-14", noon()));
+        assert!(!at("2026-11-13", noon()));
+        // An offset past year 9999 fails closed.
+        assert!(!at("9999-12-31", datetime!(9999-12-15 12:00 UTC)));
     }
 
     #[test]

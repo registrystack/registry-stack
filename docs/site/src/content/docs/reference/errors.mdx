@@ -188,6 +188,28 @@ A session that failed because the wallet reported an error carries one `failureC
 closed set; a refusal for a spent budget or a full presentation store is `503` or `429` with
 `Retry-After`.
 
+## Secret file codes
+
+A secret file the runtime refuses carries one of these `platform.secret-file.*` codes. The text
+names the failed check and never a path, a reference, or a value. A product's own refusal keeps its
+product code and repeats the check's text and fix. A process that declares the development posture
+loads a file for `world-readable`, `group-access`, and `mode-bits`, and logs the code in the
+`error_code` field of one warning per check. The [secret file rule](../../security/hardening-checklist/#secret-files)
+states what each check accepts.
+
+| Code | Meaning | Fix |
+| --- | --- | --- |
+| `platform.secret-file.link-leaves-root` | The secret file is reached through a link that leaves `secretProviders.file.root`. | Put the file under `secretProviders.file.root`, or use a relative link without `..` that stays below it. |
+| `platform.secret-file.too-many-links` | The secret file is reached through more than 8 links. | Point the name at the file, or at a chain of at most 8 links below `secretProviders.file.root`. |
+| `platform.secret-file.cannot-open` | The runtime user cannot open the secret file. | Make the file readable by the runtime user: mode `0400` or `0600` owned by that user, or `0440` owned by root with the runtime user's group. On Kubernetes, set the secret volume's `defaultMode` to `0440` and the pod's `securityContext.fsGroup` to the runtime user's group. |
+| `platform.secret-file.not-regular` | The secret file is not a regular file. | Point the name at a regular file, not a directory, device, socket or pipe. |
+| `platform.secret-file.hard-linked` | The secret file has more than one hard link. | Replace it with a copy that has one link. |
+| `platform.secret-file.owner` | The secret file is owned by neither the runtime user nor root. | Give it to the runtime user with mode `0400` or `0600`, or to root with mode `0440` and the runtime user's group. |
+| `platform.secret-file.world-writable` | Users outside the file's owner and group can write the secret file. | Remove all access for others (`chmod o-rwx`). |
+| `platform.secret-file.world-readable` | Users outside the file's owner and group can read the secret file. | Remove access for others: mode `0400` or `0600` for a file the runtime user owns, `0440` for a root-owned file. On Kubernetes, set the secret volume's `defaultMode` to `0440` and the pod's `securityContext.fsGroup` to the runtime user's group. |
+| `platform.secret-file.group-access` | The secret file's group has access the rule does not allow. | Use mode `0400` or `0600` for a file the runtime user owns. Group read is accepted only on a root-owned file (`0440` or `0640`) read by a non-root runtime. |
+| `platform.secret-file.mode-bits` | The secret file has an execute, setuid, setgid or sticky bit, or its owner cannot read it. | Set mode `0400` or `0600`. |
+
 ## Retired Relay codes
 
 Registry Relay and its problem-code catalogue were retired in Registry Stack 0.39.0. Existing

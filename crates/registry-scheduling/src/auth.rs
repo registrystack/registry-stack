@@ -285,7 +285,7 @@ impl SchedulingAuthenticator {
             })?;
         if let Some(grant) = &grant {
             grant
-                .verify_context(&verified, &self.audience)
+                .verify_context_without_peer_policy(&verified, &self.audience)
                 .map_err(|_| AuthenticationError::Profile(FailedCheck::TaskGrantBinding))?;
         }
         let client = verified
@@ -968,7 +968,7 @@ mod tests {
             Arc::new(JwksFetcher::new_with_fetch_url_policy(
                 format!("{}/jwks.json", issuer_keys.uri()),
                 JwksFetcherConfig::defaults(),
-                FetchUrlPolicy::dev(),
+                FetchUrlPolicy::https_or_loopback(),
             )),
         );
         assert!(

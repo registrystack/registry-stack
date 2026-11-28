@@ -398,7 +398,10 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     assert!(report["activePackage"].is_null(), "{report}");
     assert_eq!(report["databaseIdCheck"], "initial");
     assert_eq!(report["schemaVersion"], 0);
-    assert_eq!(report["pendingSchemaVersions"], serde_json::json!([200]));
+    assert_eq!(
+        report["pendingSchemaVersions"],
+        serde_json::json!([200, 201])
+    );
     assert_eq!(report["policy"]["revisionAdvances"], true);
     assert_eq!(report["policy"]["revision"], 2);
     assert_eq!(report["retainedHookBindings"], "none-retained");
@@ -490,7 +493,10 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
         .as_str()
         .unwrap()
         .starts_with("single-role mode"));
-    assert_eq!(initial["schemaVersionsApplied"], serde_json::json!([200]));
+    assert_eq!(
+        initial["schemaVersionsApplied"],
+        serde_json::json!([200, 201])
+    );
     assert_eq!(initial["effects"]["schedulingIdAdopted"], true);
     assert_eq!(initial["effects"]["policyRevision"], 2);
     assert_eq!(initial["effects"]["policyRevisionAdvanced"], true);
@@ -586,7 +592,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(history[2]["planKind"], "successor");
     assert_eq!(history[0]["roleMode"], "single");
     assert!(history[0]["runtimeRole"].is_string(), "{report}");
-    assert_eq!(report["schemaVersion"], 200);
+    assert_eq!(report["schemaVersion"], 201);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
     deployment.drop().await;
@@ -633,7 +639,10 @@ async fn successor_activation_checks_retained_hook_bindings_on_the_version_100_b
     );
 
     let initial = apply(&initial_config).expect("the initial package activates");
-    assert_eq!(initial["schemaVersionsApplied"], serde_json::json!([200]));
+    assert_eq!(
+        initial["schemaVersionsApplied"],
+        serde_json::json!([200, 201])
+    );
     assert_eq!(initial["applyOrder"], 1);
 
     let config = RuntimeConfig::load(&initial_config).expect("the runtime configuration loads");
@@ -1616,10 +1625,10 @@ async fn denied(client: &tokio_postgres::Client, statement: &str) -> bool {
 }
 
 const LEDGER_INSERT: &str = "INSERT INTO scheduling_activations(activation_id, apply_order, \
-     package_digest, database_id, plan_kind, applied_at, role_mode, runtime_role) \
+     package_digest, database_id, plan_kind, applied_at, role_mode, runtime_role, posture) \
      VALUES(gen_random_uuid(), 99, \
      'sha256:0000000000000000000000000000000000000000000000000000000000000000', \
-     'scheduling-activation-test', 'initial', now(), 'split', 'intruder')";
+     'scheduling-activation-test', 'initial', now(), 'split', 'intruder', 'production')";
 
 #[tokio::test]
 async fn a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_apply_reissues_its_grants(

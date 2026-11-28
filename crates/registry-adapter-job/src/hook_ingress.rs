@@ -265,9 +265,7 @@ fn resolve_member(
                 "the environment variable is not set"
             }
             SecretError::Unavailable => "the secret file is missing",
-            SecretError::UnsafeFile => {
-                "the secret file must be a regular file with mode 0400 or 0600"
-            }
+            SecretError::UnsafeFile(check) => check.suggested_action(),
             SecretError::Read => "the secret file could not be read",
             SecretError::InvalidValue => "the secret is empty or contains a NUL byte",
             SecretError::ProviderDisabled => {

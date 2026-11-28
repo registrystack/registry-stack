@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A secret file Render refuses names the failed check and its fix.
+
 - A scope refusal writes the scope claim name and the scope the route
   requires on its `request refused` log line. The values are fixed by Render
   and never come from the caller's token. Responses are unchanged.

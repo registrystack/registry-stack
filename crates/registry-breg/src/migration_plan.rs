@@ -3249,8 +3249,10 @@ fn encryption_cover_matches_implicit_lookup_index(
             == cover.target.member_id.as_deref()
 }
 
+/// Whether every cover names a change that alters no table, column, or index,
+/// so a descriptor with no steps and no assertions can review it.
 #[cfg(feature = "tooling")]
-fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
+pub fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
     covers.iter().all(|cover| {
         matches!(
             cover.code,

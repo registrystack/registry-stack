@@ -66,6 +66,88 @@ fn authored_guard_copy_keys_are_bounded_and_only_apply_to_field_guards() {
 }
 
 #[test]
+fn a_guard_label_is_a_bounded_constant_that_requires_a_reason() {
+    let guard = |members: Value| {
+        let mut source = support::project();
+        let target = &mut source["actions"]["register-child"]["commitGuards"]["targets"][0];
+        for (key, value) in members.as_object().unwrap() {
+            target[key] = value.clone();
+        }
+        source
+    };
+    let refused = |members: Value, code: &str| {
+        let report = format!("{:?}", compile(guard(members)).unwrap_err());
+        assert!(report.contains(code), "{report}");
+    };
+
+    let registry = compile(guard(json!({
+        "reason": "parent-inactive", "label": "Only an active parent takes a child."
+    })))
+    .expect("a label beside its reason compiles");
+    let compiled = &registry.actions().actions[0].requires[0];
+    assert_eq!(compiled.reason.as_deref(), Some("parent-inactive"));
+    assert_eq!(
+        compiled.label.as_deref(),
+        Some("Only an active parent takes a child.")
+    );
+    compile(guard(
+        json!({"reason": "parent-inactive", "label": "é".repeat(128)}),
+    ))
+    .expect("256 bytes is the bound itself");
+
+    refused(
+        json!({"label": "A label without a reason."}),
+        "breg.action.commit_guards.label-requires-reason",
+    );
+    for label in [
+        "".to_owned(),
+        "   ".to_owned(),
+        "a".repeat(257),
+        "é".repeat(129),
+        "line\nbreak".to_owned(),
+    ] {
+        refused(
+            json!({"reason": "parent-inactive", "label": label}),
+            "breg.action.commit_guards.label-invalid",
+        );
+    }
+
+    let unlabelled = compile(guard(json!({"reason": "parent-inactive"}))).unwrap();
+    let compiled = serde_json::to_value(&unlabelled).unwrap();
+    assert!(
+        !compiled.to_string().contains("\"label\":\"Only"),
+        "an Action without a label serializes without the member"
+    );
+}
+
+#[test]
+fn rewording_a_guard_label_changes_neither_the_action_revision_nor_the_migration_review_revision() {
+    let guarded = |label: Option<&str>| {
+        let mut source = support::project();
+        let target = &mut source["actions"]["register-child"]["commitGuards"]["targets"][0];
+        target["reason"] = json!("parent-inactive");
+        if let Some(label) = label {
+            target["label"] = json!(label);
+        }
+        compile(source).unwrap().actions().actions[0].clone()
+    };
+    let none = guarded(None);
+    let first = guarded(Some("Only an active parent takes a child."));
+    let second = guarded(Some("The parent must be active."));
+    assert_ne!(first, second, "the compiled Actions differ by their label");
+    assert_eq!(first.definition_revision, second.definition_revision);
+    assert_eq!(first.definition_revision, none.definition_revision);
+    assert_eq!(
+        registry_breg::immediate_actions::migration_review_revision(&first),
+        registry_breg::immediate_actions::migration_review_revision(&second)
+    );
+    assert_eq!(
+        registry_breg::immediate_actions::migration_review_revision(&first),
+        registry_breg::immediate_actions::migration_review_revision(&none)
+    );
+}
+
+#[test]
 fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
     let mut source = support::project();
     source["actions"]["register-child"]["inputs"]
@@ -144,6 +226,67 @@ fn current_date_offsets_are_bounded_and_bound_to_current_date() {
         assert!(format!("{:?}", compile(source).unwrap_err())
             .contains("breg.action.commit_guards.current-date-offset-invalid"));
     }
+}
+
+#[test]
+fn current_date_month_offsets_are_bounded_bound_to_current_date_and_exclusive_with_days() {
+    let guard_project = |members: Value| {
+        let mut source = ordered_guard_project();
+        source["project"]["timezone"] = json!("UTC");
+        let mut guard = json!({"input": "parent", "field": "opened-on"});
+        for (key, value) in members.as_object().unwrap() {
+            guard[key] = value.clone();
+        }
+        source["actions"]["register-child"]["commitGuards"]["targets"] = json!([guard]);
+        source
+    };
+    let refused = |members: Value| {
+        let report = format!("{:?}", compile(guard_project(members)).unwrap_err());
+        assert!(
+            report.contains("breg.action.commit_guards.current-date-offset-invalid"),
+            "{report}"
+        );
+    };
+
+    let registry = compile(guard_project(
+        json!({"currentDate": "on-or-after", "currentDateOffsetMonths": -3}),
+    ))
+    .expect("a signed whole-month offset compiles");
+    let guard = &registry.actions().actions[0].requires[0];
+    assert_eq!(guard.current_date_offset_months, -3);
+    assert_eq!(guard.current_date_offset_days, 0);
+
+    let explicit_zero = compile(guard_project(
+        json!({"currentDate": "on-or-after", "currentDateOffsetMonths": 0}),
+    ))
+    .expect("zero keeps the existing comparison");
+    let absent = compile(guard_project(json!({"currentDate": "on-or-after"})))
+        .expect("an absent offset keeps the existing comparison");
+    assert_eq!(
+        explicit_zero.actions().actions[0].requires[0],
+        absent.actions().actions[0].requires[0]
+    );
+    let compiled = serde_json::to_value(&absent).unwrap();
+    assert!(
+        !compiled.to_string().contains("currentDateOffsetMonths"),
+        "a zero month offset leaves the compiled model, and every digest over it, unchanged"
+    );
+
+    for months in [12_000, -12_000] {
+        compile(guard_project(
+            json!({"currentDate": "on-or-after", "currentDateOffsetMonths": months}),
+        ))
+        .expect("the bound itself compiles");
+    }
+    for months in [12_001, -12_001] {
+        refused(json!({"currentDate": "on-or-after", "currentDateOffsetMonths": months}));
+    }
+    refused(json!({"currentDateOffsetMonths": 1}));
+    refused(json!({
+        "currentDate": "on-or-after",
+        "currentDateOffsetMonths": 1,
+        "currentDateOffsetDays": 1
+    }));
 }
 
 /// A project whose parent stores one ordered field of each kind and whose
@@ -506,4 +649,228 @@ fn equality_inputs_must_be_required_and_an_unset_value_is_stated_explicitly() {
         .remove("isNull");
     assert!(format!("{:?}", compile(source).unwrap_err())
         .contains("breg.action.commit_guards.targets-value-invalid"));
+}
+
+/// `support::project()` plus `deactivate-parent`, an immediate Action that
+/// patches an existing parent and guards the status the patch changes.
+fn deactivate_project(execution: Value) -> Value {
+    let mut source = support::project();
+    source["actions"]["deactivate-parent"] = json!({
+        "execution": execution,
+        "inputs": [
+            {"id": "parent", "apiName": "parentId", "type": "reference", "target": "parent", "required": true, "classification": "restricted"},
+            {"id": "zone", "type": "string", "maximumLength": 32, "required": true, "classification": "restricted"}
+        ],
+        "commitGuards": {"targets": [
+            {"input": "parent", "field": "status", "equals": "active", "reason": "not-active"}
+        ]},
+        "plan": {"type": "fixed", "effects": [
+            {"id": "deactivate", "target": {"fromInput": "parent"}, "operation": "patch",
+             "set": {"status": {"value": "inactive"}}}
+        ]}
+    });
+    source["accessProfiles"]["registrar"]["permissions"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"action": "deactivate-parent", "operations": ["invoke"], "targets": [
+            {"recordType": "parent", "rowBoundaries": [{"field": "zone", "claim": "zone", "operator": "equals"}]}
+        ]}));
+    source
+}
+
+fn current_revision() -> Value {
+    json!({"mode": "immediate", "concurrency": "current-revision"})
+}
+
+fn deactivate_parent(
+    registry: &registry_breg::CompiledRegistry,
+) -> &registry_breg::model::CompiledAction {
+    registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "deactivate-parent")
+        .expect("the project declares deactivate-parent")
+}
+
+fn refused_with(source: Value, code: &str) -> String {
+    let failure = compile(source).expect_err("the Action is refused");
+    let report = format!("{failure:?}");
+    assert!(
+        failure.diagnostics().iter().any(|d| d.code == code),
+        "expected {code}: {report}"
+    );
+    report
+}
+
+#[test]
+fn a_current_revision_action_needs_no_condition_from_the_caller() {
+    let conditioned = compile(deactivate_project(json!({"mode": "immediate"}))).unwrap();
+    let before = deactivate_parent(&conditioned);
+    assert!(before.condition_route.is_some());
+    assert!(before
+        .target_uses
+        .iter()
+        .any(|use_| use_.condition_required));
+
+    let registry = compile(deactivate_project(current_revision())).unwrap();
+    let action = deactivate_parent(&registry);
+    assert!(action.condition_route.is_none());
+    assert!(action
+        .target_uses
+        .iter()
+        .all(|use_| !use_.condition_required));
+    assert_eq!(
+        action.concurrency,
+        registry_breg::contract::ActionConcurrency::CurrentRevision
+    );
+    assert_ne!(
+        action.definition_revision, before.definition_revision,
+        "the concurrency mode is part of the Action's identity"
+    );
+    assert_ne!(
+        registry_breg::immediate_actions::migration_review_revision(action),
+        registry_breg::immediate_actions::migration_review_revision(before),
+        "turning it on is a reviewed change"
+    );
+}
+
+#[test]
+fn omitting_concurrency_leaves_the_compiled_action_unchanged() {
+    let omitted = compile(deactivate_project(json!({"mode": "immediate"}))).unwrap();
+    let named = compile(deactivate_project(
+        json!({"mode": "immediate", "concurrency": "condition-required"}),
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(deactivate_parent(&omitted)).unwrap(),
+        serde_json::to_value(deactivate_parent(&named)).unwrap()
+    );
+    assert!(!serde_json::to_string(deactivate_parent(&omitted))
+        .unwrap()
+        .contains("concurrency"));
+}
+
+#[test]
+fn concurrency_is_refused_under_a_proposal_execution() {
+    let mut source = deactivate_project(current_revision());
+    let proposal = json!({"mode": "proposal", "concurrency": "current-revision"});
+    source["actions"]["deactivate-parent"]["execution"] = proposal;
+    let error = parse_project_json(&serde_json::to_vec(&source).unwrap())
+        .expect_err("a proposal Action names no concurrency");
+    assert!(format!("{error:?}").contains("concurrency"), "{error:?}");
+}
+
+#[test]
+fn current_revision_refuses_a_revision_guard() {
+    let mut source = deactivate_project(current_revision());
+    source["actions"]["deactivate-parent"]["commitGuards"]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"input": "parent", "revision": "unchanged"}));
+    refused_with(source, "breg.action.concurrency-revision-guard");
+}
+
+#[test]
+fn current_revision_refuses_caller_values_written_into_an_existing_record() {
+    let mut from_input = deactivate_project(current_revision());
+    from_input["actions"]["deactivate-parent"]["plan"]["effects"][0]["set"] =
+        json!({"status": {"value": "inactive"}, "zone": {"fromInput": "zone"}});
+    let report = refused_with(from_input, "breg.action.concurrency-caller-value");
+    assert!(
+        report.contains("deactivate") && report.contains("zone"),
+        "{report}"
+    );
+
+    let mut from_effect = deactivate_project(current_revision());
+    from_effect["actions"]["deactivate-parent"] = json!({
+        "execution": current_revision(),
+        "inputs": [
+            {"id": "child", "apiName": "childId", "type": "reference", "target": "child", "required": true, "classification": "restricted"}
+        ],
+        "commitGuards": {"targets": [{"input": "child", "field": "label", "equals": "old"}]},
+        "plan": {"type": "fixed", "effects": [
+            {"id": "fresh", "target": {"recordType": "parent"}, "operation": "create",
+             "set": {"status": {"value": "active"}, "zone": {"value": "north"}}},
+            {"id": "reparent", "target": {"fromInput": "child"}, "operation": "patch",
+             "set": {"label": {"value": "new"}, "parent": {"fromEffect": "fresh"}}}
+        ]}
+    });
+    from_effect["accessProfiles"]["registrar"]["permissions"]["actions"][1]["targets"] = json!([
+        {"recordType": "parent", "rowBoundaries": "unrestricted"},
+        {"recordType": "child", "rowBoundaries": "unrestricted"}
+    ]);
+    refused_with(from_effect, "breg.action.concurrency-caller-value");
+}
+
+#[test]
+fn current_revision_allows_a_caller_value_into_a_created_record() {
+    let mut source = deactivate_project(current_revision());
+    source["actions"]["deactivate-parent"]["plan"]["effects"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id": "child", "target": {"recordType": "child"}, "operation": "create",
+            "set": {"parent": {"fromInput": "parent"}, "label": {"fromInput": "zone"}}}),
+        );
+    source["accessProfiles"]["registrar"]["permissions"]["actions"][1]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"recordType": "child", "rowBoundaries": "unrestricted"}));
+    compile(source).expect("a create takes a caller value under current-revision");
+}
+
+#[test]
+fn current_revision_allows_clearing_a_field() {
+    let mut source = support::project();
+    source["recordTypes"]["parent"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "note", "type": "string", "maximumLength": 32, "classification": "restricted"}));
+    let mut with_note = deactivate_project(current_revision());
+    with_note["recordTypes"] = source["recordTypes"].clone();
+    with_note["actions"]["deactivate-parent"]["plan"]["effects"][0]["clear"] = json!(["note"]);
+    compile(with_note).expect("a clear is a constant");
+}
+
+#[test]
+fn current_revision_needs_a_guard_the_write_falsifies() {
+    // No guard on the patched record.
+    let mut unguarded = deactivate_project(current_revision());
+    unguarded["actions"]["deactivate-parent"]["commitGuards"] = json!({"targets": []});
+    refused_with(unguarded, "breg.action.concurrency-guard-missing");
+
+    // A guard on a field the write does not change.
+    let mut elsewhere = deactivate_project(current_revision());
+    elsewhere["actions"]["deactivate-parent"]["commitGuards"]["targets"] =
+        json!([{"input": "parent", "field": "zone", "equals": "north"}]);
+    refused_with(elsewhere, "breg.action.concurrency-guard-missing");
+
+    // A guard the write leaves true: both want "inactive".
+    let mut same = deactivate_project(current_revision());
+    same["actions"]["deactivate-parent"]["commitGuards"]["targets"] =
+        json!([{"input": "parent", "field": "status", "equals": "inactive"}]);
+    refused_with(same, "breg.action.concurrency-guard-missing");
+
+    // A guard that depends on the caller cannot be falsified by the write.
+    let mut by_input = deactivate_project(current_revision());
+    by_input["actions"]["deactivate-parent"]["commitGuards"]["targets"] =
+        json!([{"input": "parent", "field": "zone", "equalsFromInput": "zone"}]);
+    refused_with(by_input, "breg.action.concurrency-guard-missing");
+}
+
+#[test]
+fn current_revision_accepts_a_null_guard_the_write_falsifies() {
+    let mut source = support::project();
+    source["recordTypes"]["parent"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "closed-on", "type": "string", "maximumLength": 32, "classification": "restricted"}));
+    let mut open = deactivate_project(current_revision());
+    open["recordTypes"] = source["recordTypes"].clone();
+    open["actions"]["deactivate-parent"]["commitGuards"]["targets"] =
+        json!([{"input": "parent", "field": "closed-on", "isNull": true}]);
+    open["actions"]["deactivate-parent"]["plan"]["effects"][0]["set"] =
+        json!({"closed-on": {"value": "2026-11-27"}});
+    compile(open).expect("setting a field the guard requires unset falsifies the guard");
 }

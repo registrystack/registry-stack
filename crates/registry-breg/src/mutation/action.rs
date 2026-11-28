@@ -2636,7 +2636,9 @@ impl MutationTransaction {
                 .await
                 .map_err(map_database_error)?;
             let current = load_action_row(transaction, entity, &target_effects[0].2, true).await?;
-            if timer_authority.is_none() {
+            // A `current-revision` Action sends no condition: its commit guards
+            // were evaluated against this same locked row.
+            if timer_authority.is_none() && action.concurrency.is_condition_required() {
                 for (input_id, effect, _) in &target_effects {
                     let token = action_condition_token(
                         self.audit.profile(),

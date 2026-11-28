@@ -885,7 +885,7 @@ mod capture {
         #[must_use]
         pub fn capture() -> (Self, AuditCapture) {
             let capture = AuditCapture::default();
-            let writer = AuditWriter::from_line_sink(Box::new(capture.clone()));
+            let writer = AuditWriter::from_line_sink_without_posture(Box::new(capture.clone()));
             let audit = Self::new(writer.clone(), AuditKeyHasher::unkeyed_dev_only());
             {
                 let mut state = capture.0.lock().expect("audit capture");

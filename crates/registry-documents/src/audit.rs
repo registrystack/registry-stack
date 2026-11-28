@@ -164,7 +164,7 @@ mod tests {
             AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
                 .unwrap();
         DocumentsAudit::new(
-            AuditWriter::from_line_sink(Box::new(std::io::sink())),
+            AuditWriter::from_line_sink_without_posture(Box::new(std::io::sink())),
             profile.key_hasher(),
         )
     }

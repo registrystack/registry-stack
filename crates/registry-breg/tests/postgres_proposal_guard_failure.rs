@@ -51,10 +51,33 @@ fn registry(readable: &[&str]) -> registry_breg::CompiledRegistry {
     registry_with_current_date_offset(readable, None)
 }
 
+/// `offset` names a `currentDate` guard member and its value: either
+/// `currentDateOffsetDays` or `currentDateOffsetMonths`.
 fn registry_with_current_date_offset(
     readable: &[&str],
-    offset_days: Option<i32>,
+    offset: Option<(&str, i32)>,
 ) -> registry_breg::CompiledRegistry {
+    compile_source(guard_project(readable, offset))
+}
+
+const TARGET_NOT_OPEN_LABEL: &str = "Only an open target can be corrected.";
+const BELOW_MINIMUM_LABEL: &str = "The target is below the requested capacity.";
+
+/// The guards of `registry` with an authored label on each.
+fn registry_with_guard_labels(readable: &[&str]) -> registry_breg::CompiledRegistry {
+    let mut source = guard_project(readable, None);
+    let guards = &mut source["actions"]["correct-name"]["commitGuards"]["targets"];
+    guards[1]["label"] = json!(TARGET_NOT_OPEN_LABEL);
+    guards[2]["label"] = json!(BELOW_MINIMUM_LABEL);
+    compile_source(source)
+}
+
+fn compile_source(source: Value) -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    compile_project(&project, &[], CompileProfile::Authoring).expect("guard project compiles")
+}
+
+fn guard_project(readable: &[&str], offset: Option<(&str, i32)>) -> Value {
     let mut source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"guard-failure-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://guard.example.test"},
         "datasets":{"directory": {}},
@@ -84,7 +107,7 @@ fn registry_with_current_date_offset(
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
                     "ownership":"caller","targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
-    if let Some(offset_days) = offset_days {
+    if let Some((member, offset)) = offset {
         source["project"]["timezone"] = json!("UTC");
         source["recordTypes"]["target"]["fields"]
             .as_array_mut()
@@ -97,11 +120,10 @@ fn registry_with_current_date_offset(
             .unwrap()
             .push(json!({
                 "input":"target", "field":"eligible-on", "currentDate":"on-or-after",
-                "currentDateOffsetDays":offset_days, "reason":"outside-date-window"
+                member:offset, "reason":"outside-date-window"
             }));
     }
-    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
-    compile_project(&project, &[], CompileProfile::Authoring).expect("guard project compiles")
+    source
 }
 
 /// A draft over a fresh target Record whose status is `status` and whose
@@ -297,7 +319,7 @@ async fn proposal_apply_reevaluates_the_configured_current_date_offset() {
     let fixture = client_http::ClientFixture::start(
         registry_with_current_date_offset(
             &["name", "status", "capacity", "eligible-on", "jurisdiction"],
-            Some(30),
+            Some(("currentDateOffsetDays", 30)),
         ),
         claims(),
     )
@@ -323,6 +345,66 @@ async fn proposal_apply_reevaluates_the_configured_current_date_offset() {
         Some(BRegProblemCode::ActionGuardFailed)
     );
     assert_eq!(refusal.guard_reason(), Some("outside-date-window"));
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_apply_reevaluates_the_configured_current_date_month_offset() {
+    let fixture = client_http::ClientFixture::start(
+        registry_with_current_date_offset(
+            &["name", "status", "capacity", "eligible-on", "jurisdiction"],
+            Some(("currentDateOffsetMonths", 1)),
+        ),
+        claims(),
+    )
+    .await;
+    let today = fixture
+        .registry
+        .local_date_at(time::OffsetDateTime::now_utc())
+        .unwrap();
+    let threshold = today.checked_add_months(chrono::Months::new(1)).unwrap();
+    let (draft, target_id) = draft(&fixture, "open", 10, "month-guard-apply").await;
+    set_eligible_on(&fixture, &target_id, threshold).await;
+    let submitted = submit(&fixture, &draft, "month-guard-submit")
+        .await
+        .unwrap();
+
+    // Change only the guarded date. Apply reads current state and enforces the
+    // same month offset again.
+    set_eligible_on(&fixture, &target_id, today).await;
+    let refusal = apply(&fixture, &submitted, "month-guard-apply-key")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal.problem_code(),
+        Some(BRegProblemCode::ActionGuardFailed)
+    );
+    assert_eq!(refusal.guard_reason(), Some("outside-date-window"));
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn submit_and_apply_carry_the_guard_label_only_where_the_reason_rides() {
+    let fixture = client_http::ClientFixture::start(
+        registry_with_guard_labels(&["name", "status", "capacity", "jurisdiction"]),
+        claims(),
+    )
+    .await;
+    let (retired, _) = draft(&fixture, "retired", 10, "label-submit").await;
+    let refusal = submit(&fixture, &retired, "label-submit-key")
+        .await
+        .unwrap_err();
+    assert_eq!(refusal.guard_reason(), Some("target-not-open"));
+
+    // Apply holds its guards without labels, so a reworded label never
+    // strands a frozen Proposal, and the refusal names the current label.
+    let (open, open_id) = draft(&fixture, "open", 10, "label-apply").await;
+    let submitted = submit(&fixture, &open, "label-apply-submit").await.unwrap();
+    set_status(&fixture, &open_id, "retired").await;
+    let refusal = apply(&fixture, &submitted, "label-apply-key")
+        .await
+        .unwrap_err();
+    assert_eq!(refusal.guard_reason(), Some("target-not-open"));
     fixture.finish().await;
 }
 

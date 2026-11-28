@@ -122,14 +122,14 @@ explicit nulls are refused at their position; omit a key to take its default.
 every later apply and start refuses a database that recorded another.
 
 Each `...Ref` key names a secret, never its value: `secret:file/<name>` resolves under
-`secretProviders.file.root`. Mount each secret as a file owned by the runtime user, mode `0400` or
-`0600`, with no symbolic or extra hard link. `operator-controlled-upstream` requires
+`secretProviders.file.root`. Each secret file must meet the
+[secret file rule](../../security/hardening-checklist/#secret-files). `operator-controlled-upstream` requires
 `allowedClients` to list its clients. Ship the audit journal to your archive;
 [Review retention and audit](../casework-retention/#keep-the-audit-file) covers its key and
 rotation.
 
 {/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig;
-    crates/registry-platform-config/src/secrets.rs, validate_file_metadata(). */}
+    crates/registry-platform-config/src/secrets.rs, judge_file(). */}
 
 ### Add a current-source provider
 

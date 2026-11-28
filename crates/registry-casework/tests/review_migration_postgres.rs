@@ -346,7 +346,7 @@ async fn plan_against_an_empty_database_writes_nothing() {
     assert_eq!(plan.database_id_check, DatabaseIdCheck::NotRecorded);
     assert_eq!(plan.plan_kind, PlanKind::Initial);
     assert_eq!(plan.schema_version, None);
-    assert_eq!(plan.pending_schema_versions.len(), 1);
+    assert_eq!(plan.pending_schema_versions.len(), 2);
     assert!(plan.changes_pending, "{:?}", plan.refusals);
     assert_eq!(
         fixture.relation_count().await,
@@ -370,7 +370,7 @@ async fn initial_apply_records_the_package_and_a_previous_package_reapplies_as_a
         .expect("initial apply");
     assert_eq!(applied.activation.plan_kind, PlanKind::Initial);
     assert_eq!(applied.activation.role_mode, RoleMode::Single);
-    assert_eq!(applied.schema_versions_applied, vec![200]);
+    assert_eq!(applied.schema_versions_applied, vec![200, 201]);
     fixture
         .apply(&candidate(&project, &second, &[]))
         .await
@@ -747,7 +747,7 @@ async fn split_role_runtime_cannot_write_the_ledgers_but_still_serves() {
     );
     let client = connect(&fixture.runtime_url).await;
     for statement in [
-        "INSERT INTO casework_activations(activation_id,apply_order,package_digest,database_id,plan_kind,role_mode) VALUES(gen_random_uuid(),99,'sha256:0000000000000000000000000000000000000000000000000000000000000000','x','initial','single')",
+        "INSERT INTO casework_activations(activation_id,apply_order,package_digest,database_id,plan_kind,role_mode,posture) VALUES(gen_random_uuid(),99,'sha256:0000000000000000000000000000000000000000000000000000000000000000','x','initial','single','production')",
         "UPDATE casework_activations SET database_id='x'",
         "DELETE FROM casework_activations",
         "TRUNCATE casework_activations",

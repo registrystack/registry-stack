@@ -244,7 +244,7 @@ mod capture {
         #[must_use]
         pub fn capture() -> (Self, AuditCapture) {
             let capture = AuditCapture::default();
-            let writer = AuditWriter::from_line_sink(Box::new(capture.clone()));
+            let writer = AuditWriter::from_line_sink_without_posture(Box::new(capture.clone()));
             capture.0.lock().expect("audit capture").writer = Some(writer.clone());
             (Self::new(writer), capture)
         }
@@ -369,7 +369,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_stalled_destination_is_not_ready_until_it_drains() {
         let sink = HeldSink::default();
-        let audit = SchedulingAudit::new(AuditWriter::from_line_sink(Box::new(sink.clone())));
+        let audit = SchedulingAudit::new(AuditWriter::from_line_sink_without_posture(Box::new(
+            sink.clone(),
+        )));
         assert!(audit.ready().await);
 
         // The destination stops taking lines. The request waiting on it is

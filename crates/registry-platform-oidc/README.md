@@ -163,6 +163,14 @@ response ceiling. Products decide when the check precedes their effects and
 how failures map to their own API; the primitive owns no mutation or durable
 lifecycle state.
 
+A runtime passes a `PeerPolicy` to the status client and to `GrantClaims::verify_context`.
+Under `RefuseDevelopmentPeer`, a status answer whose `Registry-Posture` field is `development`
+is refused as `TaskGrantError::DevelopmentPeer` (`platform.task-grant.development-peer`), and a
+task assertion carrying the claim `registry_posture: development` is refused as
+`GrantContextError::DevelopmentAssertion` (`platform.task-grant.development-assertion`).
+Under `AcceptDevelopmentPeer` both are accepted. Any other value of `registry_posture` is a
+malformed claim. The `*_without_peer_policy` forms behave as `RefuseDevelopmentPeer`.
+
 ## Testing
 
 ```sh

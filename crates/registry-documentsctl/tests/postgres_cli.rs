@@ -555,7 +555,7 @@ async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_op
     assert_eq!(plan["change"], "activate");
     assert_eq!(plan["planKind"], "initial");
     assert_eq!(plan["activeDigest"], Value::Null);
-    assert_eq!(plan["pendingSchemaVersions"], serde_json::json!([100]));
+    assert_eq!(plan["pendingSchemaVersions"], serde_json::json!([100, 101]));
     assert_eq!(plan["runtimeRoleMode"], Value::Null);
     assert_eq!(plan["refusals"], serde_json::json!([]));
     let output = Command::new(env!("CARGO_BIN_EXE_documentsctl"))

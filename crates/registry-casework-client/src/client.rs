@@ -25,7 +25,7 @@ use registry_platform_httputil::client::{
     send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers,
+    read_bounded, url::append_path_segments, validate_response_headers_without_peer_policy,
 };
 use registry_review_client::{
     ReviewAuth as ProducerReviewAuth, ReviewClient as ProducerReviewClient,
@@ -1750,7 +1750,7 @@ impl CaseworkClient {
             .map_err(|error| CaseworkClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers(response.headers()).map_err(|_| {
+        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
             protocol(
                 response.status(),
                 CaseworkProtocolFailure::HeaderBounds,

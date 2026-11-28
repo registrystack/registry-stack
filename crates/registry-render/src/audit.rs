@@ -192,12 +192,14 @@ impl RenderAudit {
     /// Open the configured destination. A file destination takes the
     /// single-writer lock and creates an owner-only parent directory.
     pub async fn open(destination: AuditDestination) -> Result<Self, RenderProblem> {
-        let writer = AuditWriter::open(destination).await.map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::AuditFailed,
-                format!("cannot open audit destination: {err}"),
-            )
-        })?;
+        let writer = AuditWriter::open_without_posture(destination)
+            .await
+            .map_err(|err| {
+                RenderProblem::new(
+                    ProblemKind::AuditFailed,
+                    format!("cannot open audit destination: {err}"),
+                )
+            })?;
         Ok(Self::new(writer))
     }
 

@@ -187,8 +187,9 @@ The maintained example uses mounted files.
 A secret reference is `secret:env/NAME` with an uppercase environment name, or `secret:file/name`
 with a lowercase file name, each of at most 128 bytes.
 A resolved value is non-empty text of at most 64 KiB without NUL bytes.
-A secret file must be a regular file owned by the runtime user, with mode 0400 or 0600 and exactly
-one hard link.
+A secret file must meet the [secret file rule](../../security/hardening-checklist/#secret-files),
+for example a regular file owned by the runtime user, with mode 0400 or 0600 and exactly one hard
+link.
 Generate the audit key with `openssl rand -hex 32`.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs secret_reference,

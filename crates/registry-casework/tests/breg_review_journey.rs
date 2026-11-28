@@ -740,7 +740,7 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            registry_platform_httputil::FetchUrlPolicy::dev(),
+            registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
     )
@@ -805,7 +805,7 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            registry_platform_httputil::FetchUrlPolicy::dev(),
+            registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
         )),
         HumanIdentityConfig::default(),
     );
@@ -1195,7 +1195,7 @@ async fn native_proposal_journey(producer_id: &'static str) {
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            registry_platform_httputil::FetchUrlPolicy::dev(),
+            registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
     )
@@ -1278,7 +1278,7 @@ async fn native_proposal_journey(producer_id: &'static str) {
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            registry_platform_httputil::FetchUrlPolicy::dev(),
+            registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
         )),
         HumanIdentityConfig::default(),
     );

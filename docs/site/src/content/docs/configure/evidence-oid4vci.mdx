@@ -121,8 +121,8 @@ client; a flow where people request their own credential must not be given offer
     crates/registry-evidence-oid4vci/src/offer.rs, SelectorValueOrigin::Request. */}
 
 `privateKeyRef` and `audit.hashKeyRef` follow the [secret reference grammar](../../reference/environment-variables/#secret-references).
-Both key files must be regular files owned by the service user, mode `0400` or `0600`, with a
-single link. The audit key produces stable pseudonyms for the authenticated offer client, subject,
+Both key files must meet the [secret file rule](../../security/hardening-checklist/#secret-files),
+for example regular files owned by the service user, mode `0400` or `0600`, with a single link. The audit key produces stable pseudonyms for the authenticated offer client, subject,
 or both without storing their raw identities. Preserve it for as long as those records must remain
 correlatable. A file destination is the durable journal; use `stdout` only when the deployment
 collector durably accepts and preserves every line. Every key has the bounds and default its
@@ -136,7 +136,7 @@ schema gives it, and `check` also enforces the rules a schema cannot hold:
 - A reference must name a provider the file enables, and `secretProviders.file.root` must be
   absolute.
 
-{/* Evidence: crates/registry-platform-config/src/secrets.rs, validate_file_metadata;
+{/* Evidence: crates/registry-platform-config/src/secrets.rs, judge_file;
     crates/registry-evidence-oid4vci/src/config.rs, evidence.oid4vci.nonce-lifetime,
     evidence.oid4vci.listener-port, evidence.oid4vci.metrics-address,
     evidence.oid4vci.metrics-shared-binding, evidence.oid4vci.secret-provider-disabled,

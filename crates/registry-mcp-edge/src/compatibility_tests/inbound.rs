@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     body::Body,
@@ -20,7 +16,7 @@ use registry_platform_oidc::{
     access_token_typ_set, is_access_token_typ_pair, Claims, JwksFetcher, JwksFetcherConfig,
     OidcError, VerifiedToken,
 };
-use registry_platform_testing::{TestAuthorizationServer, TestClient};
+use registry_platform_testing::{CapturedDiagnosticLogs, TestAuthorizationServer, TestClient};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use url::Url;
@@ -36,37 +32,6 @@ const RESOURCE: &str = "https://gateway.example.test/mcp";
 const CHAT_HOST: &str = "chat-host";
 const SCOPE: &str = "address-correction:self";
 const METADATA: &str = "https://gateway.example.test/.well-known/oauth-protected-resource/mcp";
-
-#[derive(Clone, Default)]
-struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
-
-impl Write for CapturedLogs {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .expect("log buffer lock")
-            .extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
-    type Writer = Self;
-
-    fn make_writer(&'writer self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-impl CapturedLogs {
-    fn text(&self) -> String {
-        String::from_utf8(self.0.lock().expect("log buffer lock").clone()).expect("UTF-8 logs")
-    }
-}
 
 fn now() -> i64 {
     i64::try_from(
@@ -117,7 +82,7 @@ fn resource_server_for(
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         authorization.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     Arc::new(
         ResourceServer::new(
@@ -190,7 +155,7 @@ async fn the_authored_resource_is_the_exact_audience_and_metadata_identifier() {
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         auth.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let verifier = token_verifier(&options, fetcher);
 
@@ -513,14 +478,9 @@ async fn every_refusal_is_a_problem_document() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn an_unreachable_key_set_is_the_operators_failure() {
-    let logs = CapturedLogs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .without_time()
-        .with_max_level(tracing::Level::TRACE)
-        .with_writer(logs.clone())
-        .finish();
-    let _capture = tracing::subscriber::set_default(subscriber);
+    let logs = CapturedDiagnosticLogs::default();
+    let _capture =
+        tracing::dispatcher::set_default(&logs.subscriber_with_max_level(tracing::Level::TRACE));
     let auth = authorization_server().await;
     let token = auth.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -540,7 +500,7 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
                 Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     closed,
                     JwksFetcherConfig::defaults(),
-                    FetchUrlPolicy::dev(),
+                    FetchUrlPolicy::https_or_loopback(),
                 )),
             ),
             hasher(),
@@ -560,17 +520,31 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
     let router = Router::new()
         .route("/mcp", post(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(server, require_caller));
-    // A test on another thread can register the refusal line's callsite
-    // while no scoped subscriber exists, which caches it as never enabled.
-    // Rebuild the cache so this thread's subscriber is asked again.
-    tracing::callsite::rebuild_interest_cache();
+    // Another test thread, with no subscriber of its own, may reach the
+    // refusal line first. A capture that is the only registered dispatcher
+    // then never sees that line, so this test reaches it first on purpose
+    // and relies on the shared capture to keep it enabled here.
+    let elsewhere = resource_server_for(&auth, 10, 10);
+    std::thread::spawn(move || {
+        assert_eq!(
+            elsewhere.refuse(Refusal::KeySource).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    })
+    .join()
+    .expect("a thread without a subscriber refuses");
     assert_eq!(
         call(&router, Some(&token)).await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
     let logs = logs.text();
+    let refusals: Vec<&str> = logs
+        .lines()
+        .filter(|line| line.contains("request refused"))
+        .collect();
+    assert_eq!(refusals.len(), 1, "{logs}");
     assert!(
-        logs.contains("\"failed_check\":\"key-source-unavailable\""),
+        refusals[0].contains("\"failed_check\":\"key-source-unavailable\""),
         "{logs}"
     );
     assert!(!logs.contains("citizen-a"), "{logs}");
@@ -650,7 +624,7 @@ async fn a_token_that_already_names_an_actor_is_refused() {
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         auth.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let server = ResourceServer::new(
         &options,

@@ -449,7 +449,7 @@ fn authenticated_app(
     let key_source = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let authenticator = Arc::new(
         RegistryAuthenticator::new(

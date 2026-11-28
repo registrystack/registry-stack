@@ -373,7 +373,7 @@ impl RegistryAuthenticator {
             })?;
         if let Some(grant) = &grant {
             grant
-                .verify_context(&verified, &self.audience)
+                .verify_context_without_peer_policy(&verified, &self.audience)
                 .map_err(|error| invalid_claims(grant_context_check(error)))?;
             task_grant_token_lifetime(verified.claims.iat, verified.claims.exp, now, self.leeway)
                 .map_err(invalid_claims)?;

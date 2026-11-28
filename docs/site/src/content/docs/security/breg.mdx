@@ -336,6 +336,39 @@ The link has these known limits:
     an_applied_proposal_stays_bounded_by_a_record_whose_revision_was_erased;
     products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-217. */}
 
+### One-call writes
+
+An immediate Action that patches an existing Record normally asks the caller for a condition:
+a token that proves which revision the caller saw.
+An Action that declares `concurrency: current-revision` sends no condition.
+BReg then evaluates the Action's commit guards against the Record it has locked for the write,
+and applies the patch to that same locked row.
+
+On such an Action the guard is the only protection against a stale write.
+The author owns choosing a guard that the Action's own write makes false, so a second, stale call
+finds the guard false and answers `412`.
+`bregctl check` refuses the Action unless every Record it patches has an `equals` or `isNull` guard
+that its write falsifies.
+It also refuses a `revision: unchanged` guard, a function plan that writes an existing Record, and
+any value from `fromInput` or `fromEffect` written into an existing Record, because a value the caller chose
+from a stale view would silently overwrite a concurrent update.
+A create effect may still take caller values.
+A Proposal cannot declare the setting.
+
+A missing Record and a Record outside the caller's row boundary answer with the same body, as they do for a conditioned Action.
+A caller who holds no read grant on the guarded field gets the generic `412 precondition.failed`.
+
+{/* Evidence: crates/registry-breg/src/immediate_actions.rs, validate_current_revision;
+    crates/registry-breg/src/mutation/action.rs, lock_action_patch_targets;
+    crates/registry-breg/tests/immediate_action_requirements.rs,
+    current_revision_refuses_a_revision_guard,
+    current_revision_refuses_caller_values_written_into_an_existing_record,
+    current_revision_needs_a_guard_the_write_falsifies;
+    crates/registry-breg/tests/postgres_immediate_actions.rs,
+    two_concurrent_current_revision_invocations_commit_exactly_once,
+    a_current_revision_action_does_not_tell_a_hidden_record_from_a_missing_one;
+    products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-224. */}
+
 ### Record files
 
 A Record type's file slot is written once.

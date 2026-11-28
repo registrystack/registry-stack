@@ -25,6 +25,7 @@ struct StateData {
     client_assertion_audience: String,
     requested: Arc<Mutex<Vec<(String, String)>>>,
     status_paths: Arc<Mutex<Vec<String>>>,
+    status_posture: Arc<Mutex<Option<&'static str>>>,
 }
 async fn token(
     State(state): State<StateData>,
@@ -57,7 +58,7 @@ async fn status(
     State(state): State<StateData>,
     uri: Uri,
     headers: HeaderMap,
-) -> Result<Json<Value>, axum::http::StatusCode> {
+) -> Result<(HeaderMap, Json<Value>), axum::http::StatusCode> {
     assert_eq!(
         headers.get("authorization").unwrap(),
         "Bearer synthetic-status-service"
@@ -75,7 +76,11 @@ async fn status(
     if code != axum::http::StatusCode::OK {
         return Err(code);
     }
-    Ok(Json(state.response.lock().unwrap().clone()))
+    let mut answer_headers = HeaderMap::new();
+    if let Some(posture) = *state.status_posture.lock().unwrap() {
+        answer_headers.insert("registry-posture", posture.parse().unwrap());
+    }
+    Ok((answer_headers, Json(state.response.lock().unwrap().clone())))
 }
 fn binding() -> TaskGrantStatusBinding {
     serde_json::from_value(serde_json::json!({"grantId":Uuid::new_v4().to_string(),"sourceIssuer":"https://authority.test","principal":"agent","client":"agent-client","resource":"urn:resource:test","purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get","patch"]}]},"subjects":{"subject_reference":"synthetic-subject","active":true},"expiresAt":chrono::Utc::now().timestamp()+900})).unwrap()
@@ -90,6 +95,7 @@ fn state(response: Value, client_assertion_audience: String) -> StateData {
         client_assertion_audience,
         requested: Arc::default(),
         status_paths: Arc::default(),
+        status_posture: Arc::default(),
     }
 }
 /// Writes an owner-only private JWK as `status-key` under `root`.
@@ -152,8 +158,12 @@ async fn status_client_requests_the_configured_scope_resource_and_status_path() 
     endpoint.status_path = "/authority/grants/{grantId}/state".into();
     endpoint.status_scope = ExternalId::new("grants:read-status").unwrap();
     endpoint.status_resource = ExternalId::new("urn:authority:status").unwrap();
-    let client =
-        TaskGrantStatusRegistry::activate(&[endpoint], "urn:resource:test", &secrets).unwrap();
+    let client = TaskGrantStatusRegistry::activate_without_peer_policy(
+        &[endpoint],
+        "urn:resource:test",
+        &secrets,
+    )
+    .unwrap();
     client.check(&binding).await.unwrap();
     assert_eq!(
         *state.requested.lock().unwrap(),
@@ -191,7 +201,12 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     let mut wrong = config.clone();
     wrong.client_assertion_audience =
         registry_platform_yaml::ExternalId::new(format!("http://{address}/token")).unwrap();
-    let wrong = TaskGrantStatusRegistry::activate(&[wrong], "urn:resource:test", &secrets).unwrap();
+    let wrong = TaskGrantStatusRegistry::activate_without_peer_policy(
+        &[wrong],
+        "urn:resource:test",
+        &secrets,
+    )
+    .unwrap();
     assert_eq!(
         wrong.check(&binding).await,
         Err(TaskGrantError::Unavailable)
@@ -199,8 +214,12 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     assert_eq!(state.rejected_token_calls.load(Ordering::SeqCst), 1);
     assert_eq!(state.status_calls.load(Ordering::SeqCst), 0);
 
-    let client =
-        TaskGrantStatusRegistry::activate(&[config], "urn:resource:test", &secrets).unwrap();
+    let client = TaskGrantStatusRegistry::activate_without_peer_policy(
+        &[config],
+        "urn:resource:test",
+        &secrets,
+    )
+    .unwrap();
     client.check(&binding).await.unwrap();
     *response.lock().unwrap() = serde_json::json!({"active":false});
     assert_eq!(client.check(&binding).await, Err(TaskGrantError::Refused));
@@ -302,9 +321,12 @@ async fn fixed_bounds_without_disclosed_claims_still_require_exact_fresh_status(
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let root = tempfile::tempdir().unwrap();
     let secrets = status_key_secrets(root.path());
-    let client =
-        TaskGrantStatusRegistry::activate(&[endpoint(&issuer)], "urn:resource:test", &secrets)
-            .unwrap();
+    let client = TaskGrantStatusRegistry::activate_without_peer_policy(
+        &[endpoint(&issuer)],
+        "urn:resource:test",
+        &secrets,
+    )
+    .unwrap();
     client.check(&binding).await.unwrap();
     let mut changed = serde_json::to_value(&binding).unwrap();
     changed["subjects"] = serde_json::json!({"unexpected":"claim"});
@@ -367,4 +389,94 @@ fn the_shared_status_block_maps_onto_one_endpoint_member_for_member() {
         mapped.ca_bundle_ref.as_ref().map(SecretReference::as_str),
         Some("secret:file/status-ca")
     );
+}
+
+/// Serves an active status answer that declares `posture`, and returns the
+/// registry activated under `peer` plus the server handle.
+async fn registry_against_peer_declaring(
+    posture: &'static str,
+    peer: PeerPolicy,
+    transitional: bool,
+) -> (
+    TaskGrantStatusBinding,
+    TaskGrantStatusRegistry,
+    tokio::task::JoinHandle<()>,
+) {
+    let binding = binding();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let state = state(
+        serde_json::json!({"active":true,"grant":binding}),
+        base.clone(),
+    );
+    *state.status_posture.lock().unwrap() = Some(posture);
+    let app = Router::new()
+        .route("/token", post(token))
+        .route("/v1/task-grants/{id}/status", get(status))
+        .with_state(state);
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let root = tempfile::tempdir().unwrap();
+    let secrets = status_key_secrets(root.path());
+    let registry = if transitional {
+        TaskGrantStatusRegistry::activate_without_peer_policy(
+            &[endpoint(&base)],
+            "urn:resource:test",
+            &secrets,
+        )
+    } else {
+        TaskGrantStatusRegistry::activate(&[endpoint(&base)], "urn:resource:test", &secrets, peer)
+    }
+    .unwrap();
+    (binding, registry, server)
+}
+
+#[tokio::test]
+async fn a_production_policy_refuses_a_status_answer_from_a_development_peer() {
+    let (binding, registry, server) =
+        registry_against_peer_declaring("development", PeerPolicy::RefuseDevelopmentPeer, false)
+            .await;
+    assert_eq!(
+        registry.check(&binding).await,
+        Err(TaskGrantError::DevelopmentPeer)
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_development_policy_accepts_a_status_answer_from_a_development_peer() {
+    let (binding, registry, server) =
+        registry_against_peer_declaring("development", PeerPolicy::AcceptDevelopmentPeer, false)
+            .await;
+    registry.check(&binding).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn the_transitional_activation_refuses_a_development_peer() {
+    let (binding, registry, server) =
+        registry_against_peer_declaring("development", PeerPolicy::AcceptDevelopmentPeer, true)
+            .await;
+    assert_eq!(
+        registry.check(&binding).await,
+        Err(TaskGrantError::DevelopmentPeer)
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_production_policy_accepts_a_status_answer_declaring_production() {
+    let (binding, registry, server) =
+        registry_against_peer_declaring("production", PeerPolicy::RefuseDevelopmentPeer, false)
+            .await;
+    registry.check(&binding).await.unwrap();
+    server.abort();
+}
+
+#[test]
+fn the_development_peer_refusal_has_its_own_code() {
+    assert_eq!(
+        TaskGrantError::DevelopmentPeer.code(),
+        Some("platform.task-grant.development-peer")
+    );
+    assert_eq!(TaskGrantError::Refused.code(), None);
 }

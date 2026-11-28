@@ -1245,7 +1245,7 @@ async fn guard_failure_response(
     ) {
         return mutation_problem(MutationError::PreconditionFailed);
     }
-    crate::correlation::action_guard_failure_response(guard.reason.clone())
+    crate::correlation::action_guard_failure_response(guard.reason.clone(), guard.label.clone())
 }
 
 /// Batch transport only: every item retains the scalar context read's current

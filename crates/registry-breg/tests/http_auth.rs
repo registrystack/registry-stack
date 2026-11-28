@@ -2427,7 +2427,7 @@ fn authenticator_with_verifier(
     let key_source = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     RegistryAuthenticator::new(registry, verifier, key_source, claims)
 }
@@ -2440,7 +2440,7 @@ fn key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
     Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ))
 }
 

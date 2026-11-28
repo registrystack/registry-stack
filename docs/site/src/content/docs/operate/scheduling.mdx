@@ -22,8 +22,9 @@ step runs `schedulingctl` or `scheduling` against one runtime file.
   connection and refuses one it cannot protect.
 - An OpenID Connect issuer whose access tokens carry the read scope and, for bookings, the
   [task grant](../../reference/glossary/#task-grant) another system issues.
-- A directory of secret files owned by the runtime user, each with mode 0400 or 0600 and
-  written without a trailing newline.
+- A directory of secret files that meet the
+  [secret file rule](../../security/hardening-checklist/#secret-files), each written without a
+  trailing newline.
 - A TLS edge in front of the listener. Scheduling serves plain HTTP on a private address and
   refuses a public one.
 

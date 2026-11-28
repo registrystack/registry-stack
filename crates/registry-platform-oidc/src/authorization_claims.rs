@@ -5,6 +5,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use registry_platform_httputil::PeerPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -26,6 +27,18 @@ const MAX_SCHEDULING_ACTIONS: usize = 32;
 /// may declare it as one of its own projected attributes. A token that was not
 /// obtained by token exchange does not carry it at all.
 pub const ASSERTION_ISSUER_CLAIM: &str = "registry_assertion_issuer";
+
+/// Optional claim by which an issuer in the development posture marks the
+/// assertions it signs. Its only meaningful value is `development`.
+///
+/// The issuer derives the value from its own posture, so a client cannot choose
+/// it, and no first-party signer may declare it as one of its projected
+/// attributes.
+pub const POSTURE_CLAIM: &str = "registry_posture";
+
+/// Machine-readable code for an assertion refused because it comes from a
+/// development issuer.
+pub const DEVELOPMENT_ASSERTION_CODE: &str = "platform.task-grant.development-assertion";
 
 const REGISTERED_OR_AUTHENTICATION_CLAIMS: &[&str] = &[
     "iss",
@@ -94,9 +107,9 @@ impl ClaimNames {
             || names
                 .iter()
                 .any(|name| REGISTERED_OR_AUTHENTICATION_CLAIMS.contains(&name.as_str()))
-            || names
-                .iter()
-                .any(|name| name.as_str() == ASSERTION_ISSUER_CLAIM)
+            || names.iter().any(|name| {
+                name.as_str() == ASSERTION_ISSUER_CLAIM || name.as_str() == POSTURE_CLAIM
+            })
             || names.iter().collect::<HashSet<_>>().len() != names.len()
         {
             return Err(ClaimError::InvalidNames);
@@ -333,6 +346,7 @@ pub struct GrantClaims {
     exp: u64,
     bounds: GrantBounds,
     approver: String,
+    development: bool,
 }
 
 impl GrantClaims {
@@ -381,12 +395,26 @@ impl GrantClaims {
         &self.approver
     }
 
+    /// Whether the issuer marked this assertion as coming from the development posture.
+    #[must_use]
+    pub const fn is_development(&self) -> bool {
+        self.development
+    }
+
     /// Bind immutable grant context to identities already selected by the verifier.
+    ///
+    /// Under [`PeerPolicy::RefuseDevelopmentPeer`] an assertion marked as coming from the
+    /// development posture is refused. Under [`PeerPolicy::AcceptDevelopmentPeer`] the mark
+    /// is not consulted.
     pub fn verify_context(
         &self,
         token: &VerifiedToken,
         verified_resource: &str,
+        peer: PeerPolicy,
     ) -> Result<(), GrantContextError> {
+        if self.development && peer == PeerPolicy::RefuseDevelopmentPeer {
+            return Err(GrantContextError::DevelopmentAssertion);
+        }
         let client = token
             .matched_client_id()
             .map_err(|_| GrantContextError::InvalidVerifiedClient)?
@@ -398,6 +426,16 @@ impl GrantClaims {
             return Err(GrantContextError::ResourceMismatch);
         }
         Ok(())
+    }
+
+    /// [`Self::verify_context`] under [`PeerPolicy::RefuseDevelopmentPeer`], for a caller
+    /// that has no runtime peer policy yet.
+    pub fn verify_context_without_peer_policy(
+        &self,
+        token: &VerifiedToken,
+        verified_resource: &str,
+    ) -> Result<(), GrantContextError> {
+        self.verify_context(token, verified_resource, PeerPolicy::RefuseDevelopmentPeer)
     }
 }
 
@@ -414,6 +452,7 @@ impl fmt::Debug for GrantClaims {
             .field("exp", &self.exp)
             .field("bounds", &self.bounds)
             .field("approver", &"<redacted>")
+            .field("development", &self.development)
             .finish()
     }
 }
@@ -432,6 +471,7 @@ pub enum ClaimMember {
     GrantExpiration,
     GrantBounds,
     Approver,
+    Posture,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -467,6 +507,22 @@ pub enum GrantContextError {
     ClientMismatch,
     #[error("task grant resource does not match the verified resource")]
     ResourceMismatch,
+    #[error("task grant was issued in the development posture")]
+    DevelopmentAssertion,
+}
+
+impl GrantContextError {
+    /// The machine-readable code of a refusal that has one.
+    #[must_use]
+    pub const fn code(self) -> Option<&'static str> {
+        match self {
+            Self::DevelopmentAssertion => Some(DEVELOPMENT_ASSERTION_CODE),
+            Self::MissingVerifiedClient
+            | Self::InvalidVerifiedClient
+            | Self::ClientMismatch
+            | Self::ResourceMismatch => None,
+        }
+    }
 }
 
 /// Extract the strict actor kind from a verified token.
@@ -548,6 +604,11 @@ pub fn grant_claims(
         .map_err(|_| ClaimError::Malformed(ClaimMember::GrantBounds))?;
     bounds.validate()?;
     let approver = required_extra_string(claims, &names.approver, ClaimMember::Approver)?;
+    let development = match claims.extra.get(POSTURE_CLAIM) {
+        None => false,
+        Some(Value::String(value)) if value == registry_platform_posture::DEVELOPMENT => true,
+        Some(_) => return Err(ClaimError::Malformed(ClaimMember::Posture)),
+    };
 
     Ok(Some(GrantClaims {
         principal,
@@ -559,6 +620,7 @@ pub fn grant_claims(
         exp: grant_exp,
         bounds,
         approver,
+        development,
     }))
 }
 
@@ -1261,9 +1323,12 @@ mod tests {
             matched_client: Some("azp:agent-client".to_owned()),
             scopes: Vec::new(),
         };
-        assert_eq!(grant.verify_context(&token, "urn:registry:breg"), Ok(()));
         assert_eq!(
-            grant.verify_context(&token, "urn:registry:other"),
+            grant.verify_context_without_peer_policy(&token, "urn:registry:breg"),
+            Ok(())
+        );
+        assert_eq!(
+            grant.verify_context_without_peer_policy(&token, "urn:registry:other"),
             Err(GrantContextError::ResourceMismatch)
         );
 
@@ -1273,7 +1338,7 @@ mod tests {
             scopes: Vec::new(),
         };
         assert_eq!(
-            grant.verify_context(&client_id_token, "urn:registry:breg"),
+            grant.verify_context_without_peer_policy(&client_id_token, "urn:registry:breg"),
             Ok(())
         );
 
@@ -1283,7 +1348,7 @@ mod tests {
             scopes: Vec::new(),
         };
         assert_eq!(
-            grant.verify_context(&missing, "urn:registry:breg"),
+            grant.verify_context_without_peer_policy(&missing, "urn:registry:breg"),
             Err(GrantContextError::MissingVerifiedClient)
         );
 
@@ -1293,9 +1358,99 @@ mod tests {
             scopes: Vec::new(),
         };
         assert_eq!(
-            grant.verify_context(&malformed, "urn:registry:breg"),
+            grant.verify_context_without_peer_policy(&malformed, "urn:registry:breg"),
             Err(GrantContextError::InvalidVerifiedClient)
         );
+    }
+
+    fn posture_grant_and_token(
+        posture: Option<Value>,
+    ) -> Result<(GrantClaims, VerifiedToken), ClaimError> {
+        let mut extra =
+            complete_grant(json!({"type":"evidence","requirement":"urn:requirement:one"}));
+        if let Some(posture) = posture {
+            extra[POSTURE_CLAIM] = posture;
+        }
+        let input = claims(extra);
+        let grant = grant_claims(&input, &ClaimNames::default(), 1_500)?.expect("present");
+        let token = VerifiedToken {
+            claims: input,
+            matched_client: Some("azp:agent-client".to_owned()),
+            scopes: Vec::new(),
+        };
+        Ok((grant, token))
+    }
+
+    #[test]
+    fn the_peer_policy_decides_whether_a_development_assertion_is_accepted() {
+        use registry_platform_httputil::PeerPolicy::{
+            AcceptDevelopmentPeer, RefuseDevelopmentPeer,
+        };
+        let resource = "urn:registry:breg";
+        let (ordinary, ordinary_token) = posture_grant_and_token(None).unwrap();
+        let (development, development_token) =
+            posture_grant_and_token(Some(json!("development"))).unwrap();
+        assert_eq!(
+            ordinary.verify_context(&ordinary_token, resource, RefuseDevelopmentPeer),
+            Ok(())
+        );
+        assert_eq!(
+            ordinary.verify_context(&ordinary_token, resource, AcceptDevelopmentPeer),
+            Ok(())
+        );
+        assert_eq!(
+            development.verify_context(&development_token, resource, RefuseDevelopmentPeer),
+            Err(GrantContextError::DevelopmentAssertion)
+        );
+        assert_eq!(
+            development.verify_context(&development_token, resource, AcceptDevelopmentPeer),
+            Ok(())
+        );
+        assert_eq!(
+            development.verify_context_without_peer_policy(&development_token, resource),
+            Err(GrantContextError::DevelopmentAssertion)
+        );
+        assert_eq!(
+            ordinary.verify_context_without_peer_policy(&ordinary_token, resource),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_posture_claim_other_than_development_is_malformed() {
+        for value in [
+            json!("production"),
+            json!("Development"),
+            json!(""),
+            json!(true),
+            json!(1),
+            json!(["development"]),
+            json!(null),
+        ] {
+            assert_eq!(
+                posture_grant_and_token(Some(value.clone())).map(|_| ()),
+                Err(ClaimError::Malformed(ClaimMember::Posture)),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_posture_claim_name_cannot_serve_another_role() {
+        let names = ClaimNames {
+            purpose: POSTURE_CLAIM.to_owned(),
+            ..ClaimNames::default()
+        };
+        assert_eq!(names.validate(), Err(ClaimError::InvalidNames));
+    }
+
+    #[test]
+    fn the_development_assertion_refusal_has_its_own_code() {
+        assert_eq!(
+            GrantContextError::DevelopmentAssertion.code(),
+            Some("platform.task-grant.development-assertion")
+        );
+        assert_eq!(GrantContextError::ClientMismatch.code(), None);
     }
 
     #[test]

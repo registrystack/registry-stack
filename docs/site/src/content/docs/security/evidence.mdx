@@ -434,9 +434,8 @@ The matrix describes what the `evidence` binary enforces.
 The [operator contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/OPERATOR-CONTRACT.md)
 holds the duties no service-side control can hold for you:
 
-- Keep every secret file below `secretProviders.file.root` a regular,
-  non-symlink file owned by the service identity with mode `0400` or `0600`.
-  The file provider refuses anything else.
+- Keep every secret file below `secretProviders.file.root` within the
+  [secret file rule](../hardening-checklist/#secret-files). The file provider refuses anything else.
 - Generate the audit and subject-binding masters independently, at least 32
   bytes each, under distinct references. The runtime refuses equal references
   or equal bytes.

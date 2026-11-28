@@ -1965,7 +1965,7 @@ mod tests {
     fn test_audit_with(sink: Box<dyn Write + Send>) -> Arc<DeliveryAudit> {
         Arc::new(
             DeliveryAudit::with_writer(
-                AuditWriter::from_line_sink(sink),
+                AuditWriter::from_line_sink_without_posture(sink),
                 b"0123456789abcdef0123456789abcdef".to_vec(),
             )
             .expect("the test audit profile is valid"),

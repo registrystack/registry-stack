@@ -435,7 +435,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         )
     })?;
     let audit = ToolAuditLog::new(
-        AuditWriter::open(destination)
+        AuditWriter::open_without_posture(destination)
             .await
             .map_err(audit_failure)?,
     );

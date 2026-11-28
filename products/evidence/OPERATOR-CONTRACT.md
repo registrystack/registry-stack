@@ -129,7 +129,9 @@ package report lists. The list is the deduplicated union of governed bundle
 references and generated runtime references, including a local signer's
 private-key reference; it never resolves or reports a value. Secret ownership
 and mode requirements remain unchanged: each referenced
-secret is a regular owner-only file accepted by the eventual service identity.
+secret is a regular file that meets the shared secret-file rule: one hard link, owned by the
+eventual service identity (mode 0400 or 0600) or by root (no bit outside 0640), and never
+accessible to others.
 The package and runtime must be non-writable to that identity. The
 runtime is target-specific and remains outside the immutable `bundle/`. Signed assertions continue to carry only a configuration
 revision as `configurationRevision`. That value is scoped to the one requirement
@@ -902,7 +904,7 @@ with the generic `503` until the process restarts.
 
 ## Audit destinations, rotation, and retention
 
-Every audit entry is one JSON line with exactly six members:
+The writer emits each audit entry as one JSON line with seven members.
 
 | Member | Meaning |
 |---|---|
@@ -910,6 +912,7 @@ Every audit entry is one JSON line with exactly six members:
 | `eventId` | A random UUID the writer mints for this entry. |
 | `time` | The writer's RFC 3339 UTC timestamp for the append. |
 | `phase` | `request` for an access attempt, written before the source read it authorizes; `response` for every terminal record: a release, a denial, or a failure. |
+| `posture` | The writer's posture, `development` or `production`. Retained entries may omit it. |
 | `correlation` | The server-minted operation identifier, equal to `record.operation`, shared by every entry of one operation. |
 | `record` | The closed, minimized Evidence record described above. |
 

@@ -3828,3 +3828,325 @@ fn history_registry() -> registry_breg::CompiledRegistry {
             .expect("history project parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("history project compiles")
 }
+
+/// The action project plus `close-household`, a `current-revision` Action
+/// whose guard (`status-note` unset) is the write it makes false, and
+/// `recode-household`, a condition-required Action that changes another
+/// field of the same record.
+fn current_revision_registry() -> registry_breg::CompiledRegistry {
+    let mut source: Value = serde_json::from_slice(ACTION_PROJECT).expect("action project is JSON");
+    let household_input = json!({
+        "id": "household", "apiName": "householdId", "type": "reference",
+        "target": "household", "required": true, "classification": "restricted"
+    });
+    source["actions"]["close-household"] = json!({
+        "inputs": [household_input.clone()],
+        "execution": {"mode": "immediate", "concurrency": "current-revision"},
+        "commitGuards": {"targets": [
+            {"input": "household", "field": "status-note", "isNull": true, "reason": "already-closed"}
+        ]},
+        "plan": {"type": "fixed", "effects": [
+            {"id": "close", "target": {"fromInput": "household"}, "operation": "patch",
+             "set": {"status-note": {"value": "closed"}}}
+        ]}
+    });
+    source["actions"]["recode-household"] = json!({
+        "inputs": [household_input, {
+            "id": "household-code", "apiName": "householdCode", "type": "string",
+            "maximumLength": 64, "required": true, "classification": "restricted"
+        }],
+        "execution": {"mode": "immediate"},
+        "plan": {"type": "fixed", "effects": [
+            {"id": "recode", "target": {"fromInput": "household"}, "operation": "patch",
+             "set": {"household-code": {"fromInput": "household-code"}}}
+        ]}
+    });
+    let boundary = json!([{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]);
+    let permissions = source["accessProfiles"]["contact-registrar"]["permissions"]["actions"]
+        .as_array_mut()
+        .expect("the registrar grants Actions");
+    for (action, result) in [("close-household", "close"), ("recode-household", "recode")] {
+        permissions.push(json!({
+            "action": action, "operations": ["invoke"],
+            "targets": [{"recordType": "household", "rowBoundaries": boundary.clone()}],
+            "results": [result]
+        }));
+    }
+    let project = parse_project_json(&serde_json::to_vec(&source).expect("project serializes"))
+        .expect("current-revision project parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("current-revision project compiles")
+}
+
+async fn invoke_close(
+    app: &axum::Router,
+    household: &str,
+    key: &str,
+    extra: Value,
+) -> ResponseParts {
+    let mut body = json!({"input": {"householdId": household}});
+    if let Value::Object(extra) = extra {
+        body.as_object_mut()
+            .expect("body is an object")
+            .extend(extra);
+    }
+    response_parts(
+        send(
+            app,
+            Method::POST,
+            "/v1/actions/close-household",
+            Some(action_claims()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", key),
+            ],
+            serde_json::to_vec(&body).expect("body serializes"),
+        )
+        .await,
+    )
+    .await
+}
+
+fn without_trace(mut body: Value) -> Value {
+    body.as_object_mut().map(|map| map.remove("traceId"));
+    body
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_current_revision_action_commits_over_plain_http_without_a_condition() {
+    let (database, registry, identity) = install_action_registry(current_revision_registry()).await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        HOUSEHOLD_ID,
+        "H-001",
+        "zone-a",
+    )
+    .await;
+    let app = action_router(&database, registry.clone(), identity);
+
+    // The contract names no condition route, so a caller has none to ask for.
+    let route = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/close-household/target-conditions",
+            Some(action_claims()),
+            &[("content-type", "application/json")],
+            serde_json::to_vec(&json!({"input": {"householdId": HOUSEHOLD_ID}})).unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(route.status, StatusCode::NOT_FOUND, "{}", route.body);
+
+    let closed = invoke_close(&app, HOUSEHOLD_ID, "close-1", json!({})).await;
+    assert_eq!(closed.status, StatusCode::OK, "{}", closed.body);
+    assert_eq!(
+        closed.body["results"]["close"]["revision"], 2,
+        "{}",
+        closed.body
+    );
+    let (code, note, revision) =
+        household_code_note_revision(&database, &registry, HOUSEHOLD_ID).await;
+    assert_eq!(
+        (code.as_str(), note.as_deref(), revision),
+        ("H-001", Some("closed"), 2)
+    );
+
+    // A second run finds the guard false on the current row.
+    let again = invoke_close(&app, HOUSEHOLD_ID, "close-2", json!({})).await;
+    assert_eq!(
+        again.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        again.body
+    );
+    // The caller holds no read grant on the guarded field, so the refusal
+    // is the generic one and names no guard.
+    assert_eq!(again.body["code"], "precondition.failed", "{}", again.body);
+    assert!(again.body.get("guardReason").is_none(), "{}", again.body);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_concurrent_current_revision_invocations_commit_exactly_once() {
+    let (database, registry, identity) = install_action_registry(current_revision_registry()).await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        HOUSEHOLD_ID,
+        "H-001",
+        "zone-a",
+    )
+    .await;
+    let app = action_router(&database, registry.clone(), identity);
+
+    let (first, second) = tokio::join!(
+        invoke_close(&app, HOUSEHOLD_ID, "race-a", json!({})),
+        invoke_close(&app, HOUSEHOLD_ID, "race-b", json!({})),
+    );
+    let mut statuses = [first.status, second.status];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::PRECONDITION_FAILED],
+        "{} / {}",
+        first.body,
+        second.body
+    );
+    let loser = if first.status == StatusCode::OK {
+        &second
+    } else {
+        &first
+    };
+    assert_eq!(loser.body["code"], "precondition.failed", "{}", loser.body);
+    let (_, note, revision) =
+        household_code_note_revision(&database, &registry, HOUSEHOLD_ID).await;
+    assert_eq!((note.as_deref(), revision), (Some("closed"), 2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn condition_required_still_demands_a_condition_and_current_revision_refuses_one() {
+    let (database, registry, identity) = install_action_registry(current_revision_registry()).await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        HOUSEHOLD_ID,
+        "H-001",
+        "zone-a",
+    )
+    .await;
+    let app = action_router(&database, registry.clone(), identity);
+
+    let recode = |preconditions: Option<Value>, key: &'static str| {
+        let app = app.clone();
+        async move {
+            let mut body =
+                json!({"input": {"householdId": HOUSEHOLD_ID, "householdCode": "H-NEW"}});
+            if let Some(preconditions) = preconditions {
+                body["preconditions"] = preconditions;
+            }
+            response_parts(
+                send(
+                    &app,
+                    Method::POST,
+                    "/v1/actions/recode-household",
+                    Some(action_claims()),
+                    &[
+                        ("content-type", "application/json"),
+                        ("idempotency-key", key),
+                    ],
+                    serde_json::to_vec(&body).unwrap(),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    let missing = recode(None, "recode-missing").await;
+    assert_eq!(missing.status, StatusCode::BAD_REQUEST, "{}", missing.body);
+    let (code, _, revision) =
+        household_code_note_revision(&database, &registry, HOUSEHOLD_ID).await;
+    assert_eq!((code.as_str(), revision), ("H-001", 1));
+
+    // A condition sent to an Action that asks for none is refused, and the
+    // row is untouched.
+    let stale = json!({"householdId": {"ifMatch": "W/\"anything\""}});
+    let unwanted = invoke_close(
+        &app,
+        HOUSEHOLD_ID,
+        "close-conditioned",
+        json!({"preconditions": stale}),
+    )
+    .await;
+    assert_eq!(
+        unwanted.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        unwanted.body
+    );
+    let (_, note, revision) =
+        household_code_note_revision(&database, &registry, HOUSEHOLD_ID).await;
+    assert_eq!((note, revision), (None, 1));
+
+    // The conditioned Action changes the code, then the current-revision
+    // Action patches the locked current row: the code keeps its new value.
+    let condition = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/recode-household/target-conditions",
+            Some(action_claims()),
+            &[("content-type", "application/json")],
+            serde_json::to_vec(&json!({"input": {"householdId": HOUSEHOLD_ID}})).unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(condition.status, StatusCode::OK, "{}", condition.body);
+    let recoded = recode(Some(condition.body["preconditions"].clone()), "recode-ok").await;
+    assert_eq!(recoded.status, StatusCode::OK, "{}", recoded.body);
+    let closed = invoke_close(&app, HOUSEHOLD_ID, "close-after-recode", json!({})).await;
+    assert_eq!(closed.status, StatusCode::OK, "{}", closed.body);
+    let (code, note, revision) =
+        household_code_note_revision(&database, &registry, HOUSEHOLD_ID).await;
+    assert_eq!(
+        (code.as_str(), note.as_deref(), revision),
+        ("H-NEW", Some("closed"), 3)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_current_revision_action_does_not_tell_a_hidden_record_from_a_missing_one() {
+    let (database, registry, identity) = install_action_registry(current_revision_registry()).await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        HOUSEHOLD_ID,
+        "H-001",
+        "zone-a",
+    )
+    .await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        OTHER_HOUSEHOLD_ID,
+        "H-002",
+        "zone-b",
+    )
+    .await;
+    let app = action_router(&database, registry.clone(), identity);
+
+    let missing = invoke_close(
+        &app,
+        "00000000-0000-4000-8000-0000000009ff",
+        "missing",
+        json!({}),
+    )
+    .await;
+    let outside = invoke_close(&app, OTHER_HOUSEHOLD_ID, "outside", json!({})).await;
+    assert_eq!(
+        missing.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        missing.body
+    );
+    assert_eq!(outside.status, missing.status);
+    assert_eq!(
+        without_trace(outside.body.clone()),
+        without_trace(missing.body.clone()),
+        "a record outside the caller's boundary answers as a missing record does"
+    );
+    let (_, note, revision) =
+        household_code_note_revision(&database, &registry, OTHER_HOUSEHOLD_ID).await;
+    assert_eq!(
+        (note, revision),
+        (None, 1),
+        "the hidden record is untouched"
+    );
+}

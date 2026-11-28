@@ -173,7 +173,7 @@ A caller recovering an unknown admission must send the exact original start key,
 
 Create every secret as the user that runs `coordinator` and `coordinatorctl`.
 A `secret:file/NAME` reference reads the file `NAME` directly under the file provider's `root`.
-That file must be a regular file owned by that user, with mode `0400` or `0600` and exactly one link.
+That file must meet the [secret file rule](../../security/hardening-checklist/#secret-files), for example a regular file owned by that user, with mode `0400` or `0600` and exactly one link.
 A `secret:env/NAME` reference reads an environment variable when `secretProviders` declares `environment: {}`.
 
 Coordinator uses three kinds of key, each exactly 32 raw random bytes in its own file:
@@ -560,7 +560,7 @@ Startup refuses when a runtime file change alters a live run's endpoint, client 
 Restore the original binding, or investigate with `coordinator --runtime-config FILE --recovery-only`, which admits and dispatches nothing.
 Recovery-only still verifies the active package, database, schema, role, and custody, and its readiness remains false.
 
-The service requires protected state schema version 6.
+The service requires protected state schema version 7.
 An earlier layout is refused: `apply` reports `coordinator.command.schema-version`, and runtime state access, including `deployment-status`, fails closed as `coordinator.command.store-unavailable`.
 Apply does not adopt or rewrite an earlier layout, and there is no in-place state migration.
 Settle the retained work with its matching binary, then create a fresh namespace and database identity for this version, and keep the original keys, packages, and audit history until retention permits erasure.

@@ -298,9 +298,11 @@ impl Harness {
         ))
         .expect("the audit profile");
         let audit = Arc::new(MessagingAudit::new(
-            AuditWriter::open(config.audit.destination().expect("audit destination"))
-                .await
-                .expect("the audit writer"),
+            AuditWriter::open_without_posture(
+                config.audit.destination().expect("audit destination"),
+            )
+            .await
+            .expect("the audit writer"),
             profile.key_hasher(),
         ));
         let loaded = config.load_package().expect("the package");

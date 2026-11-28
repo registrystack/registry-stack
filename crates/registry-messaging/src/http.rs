@@ -1580,7 +1580,7 @@ mod tests {
         let during_outage = authenticator_over(Arc::new(JwksFetcher::new_with_fetch_url_policy(
             format!("{}/jwks.json", issuer_keys.uri()),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )));
         let app = router(state_with(during_outage, true));
         let headers = expect_problem(
@@ -2929,7 +2929,7 @@ mod tests {
         let outage = authenticator_over(Arc::new(JwksFetcher::new_with_fetch_url_policy(
             format!("{}/jwks.json", issuer_keys.uri()),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )));
         let app = router(state_with(outage, true));
         snapshots.push(
@@ -3242,7 +3242,7 @@ mod tests {
         let outage = authenticator_over(Arc::new(JwksFetcher::new_with_fetch_url_policy(
             format!("{}/jwks.json", issuer_keys.uri()),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )));
         let state = state_with(outage, true);
         let metrics = Arc::clone(&state.metrics);

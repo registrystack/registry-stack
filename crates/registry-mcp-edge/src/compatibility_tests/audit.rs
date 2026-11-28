@@ -26,7 +26,7 @@ impl Write for Buffer {
 
 fn fixture() -> (ToolAuditLog, AuditWriter, Buffer, AuditOptions) {
     let buffer = Buffer::default();
-    let writer = AuditWriter::from_line_sink(Box::new(buffer.clone()));
+    let writer = AuditWriter::from_line_sink_without_posture(Box::new(buffer.clone()));
     (
         ToolAuditLog::new(writer.clone()),
         writer,

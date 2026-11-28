@@ -14,7 +14,8 @@ use registry_platform_httputil::client::{
     ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, retry_after_seconds, url::append_path_segments, validate_response_headers,
+    read_bounded, retry_after_seconds, url::append_path_segments,
+    validate_response_headers_without_peer_policy,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Response, StatusCode, Url};
@@ -382,7 +383,7 @@ impl PaymentClient {
             .map_err(|error| PaymentClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers(response.headers()).map_err(|_| {
+        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
             protocol(
                 response.status(),
                 PaymentProtocolFailure::HeaderBounds,

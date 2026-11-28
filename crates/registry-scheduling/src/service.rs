@@ -3099,7 +3099,9 @@ impl From<Result<(), TaskGrantError>> for GrantVerdict {
         match verdict {
             Ok(()) => Self::Current,
             Err(TaskGrantError::Refused) => Self::Refused,
-            Err(TaskGrantError::Unavailable) => Self::Unavailable,
+            // A development-posture status peer proves no grant state, so it is
+            // treated like an unreachable authority.
+            Err(TaskGrantError::Unavailable | TaskGrantError::DevelopmentPeer) => Self::Unavailable,
             Err(TaskGrantError::Configuration) => Self::Configuration,
         }
     }
@@ -4891,7 +4893,7 @@ mod tests {
             "statusResource": "urn:casework:test"
         }))
         .expect("the status authority configuration");
-        let registry = TaskGrantStatusRegistry::activate(
+        let registry = TaskGrantStatusRegistry::activate_without_peer_policy(
             &crate::config::task_grant_status_endpoints(&[status]),
             STATUS_RESOURCE,
             &secrets,

@@ -404,7 +404,7 @@ fn service_with_issuer(
         issuer,
         Arc::new(
             DeliveryAudit::with_writer(
-                AuditWriter::from_line_sink(Box::new(io::sink())),
+                AuditWriter::from_line_sink_without_posture(Box::new(io::sink())),
                 b"0123456789abcdef0123456789abcdef".to_vec(),
             )
             .expect("the test audit profile is valid"),
@@ -874,7 +874,7 @@ async fn post_claim_evidence_failures_are_terminal_and_never_restore_the_token()
         let audit_capture = AuditCapture::default();
         let audit = Arc::new(
             DeliveryAudit::with_writer(
-                AuditWriter::from_line_sink(Box::new(audit_capture.clone())),
+                AuditWriter::from_line_sink_without_posture(Box::new(audit_capture.clone())),
                 b"0123456789abcdef0123456789abcdef".to_vec(),
             )
             .expect("the test audit profile is valid"),
@@ -943,7 +943,7 @@ async fn a_post_claim_timeout_is_terminal_and_never_restores_the_token() {
     let audit_capture = AuditCapture::default();
     let audit = Arc::new(
         DeliveryAudit::with_writer(
-            AuditWriter::from_line_sink(Box::new(audit_capture.clone())),
+            AuditWriter::from_line_sink_without_posture(Box::new(audit_capture.clone())),
             b"0123456789abcdef0123456789abcdef".to_vec(),
         )
         .expect("the test audit profile is valid"),

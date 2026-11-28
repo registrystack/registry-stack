@@ -587,7 +587,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         HumanIdentityConfig::default(),
     );

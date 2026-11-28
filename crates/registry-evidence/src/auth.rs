@@ -631,7 +631,9 @@ impl Authenticator {
             } else {
                 match exactly_matched_resource(verified.claims.aud.as_ref(), &self.resources) {
                     Some(resource) => {
-                        if let Err(error) = grant.verify_context(&verified, resource) {
+                        if let Err(error) =
+                            grant.verify_context_without_peer_policy(&verified, resource)
+                        {
                             task_grant = Err(match error {
                                 GrantContextError::MissingVerifiedClient
                                 | GrantContextError::InvalidVerifiedClient

@@ -131,9 +131,13 @@ pub struct SecretProvidersConfig {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileSecretProviderConfig {
-    /// Absolute directory holding one file per secret. Each file must be a
-    /// regular file owned by the runtime user, mode 0400 or 0600, with exactly
-    /// one hard link.
+    /// Absolute directory holding one file per secret. A name may be a
+    /// relative link that stays below this directory, through at most 8 links.
+    /// The file it reaches must be a regular file with one hard link, owned by
+    /// the runtime user with mode 0400 or 0600, or owned by root with no
+    /// access beyond group read (0440 or 0640) when the runtime is not root.
+    /// A process that declared development loads a file with looser read or
+    /// mode bits and logs a warning.
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^/")))]
     pub root: PathBuf,
 }
@@ -230,11 +234,12 @@ pub fn describe_secret_failure(field: &str, _reference: &str, error: &SecretErro
         SecretError::Unavailable => {
             "no readable secret of that name exists under the configured provider".to_owned()
         }
-        SecretError::UnsafeFile => concat!(
-            "the secret file must be a regular file owned by the runtime user, ",
-            "with mode 0400 or 0600, and exactly one hard link"
-        )
-        .to_owned(),
+        SecretError::UnsafeFile(check) => format!(
+            "{} ({}). {}",
+            check.message(),
+            check.code(),
+            check.suggested_action()
+        ),
         SecretError::Read => "the secret could not be read".to_owned(),
         SecretError::InvalidValue => format!(
             "the secret value must be non-empty text of at most {MAX_SECRET_BYTES} bytes \

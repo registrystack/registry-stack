@@ -15,6 +15,7 @@ schema = ["dep:schemars"]
 
 [dependencies]
 hmac.workspace = true
+registry-platform-posture.workspace = true
 rustix.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true

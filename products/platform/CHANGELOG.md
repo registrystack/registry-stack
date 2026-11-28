@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- Every new audit journal line carries the writer's declared `posture`,
+  either `development` or `production`. `AuditWriter::open` and
+  `AuditWriter::from_line_sink` take the declaration. Their
+  `_without_posture` forms record production. Audit readers accept older
+  lines without the member and refuse malformed posture values.
+
+- `registry-platform-oidc` can refuse task authority that comes from a
+  development peer. `TaskGrantStatusClient::new` and
+  `TaskGrantStatusRegistry::activate` take a `PeerPolicy`. Under
+  `RefuseDevelopmentPeer`, a status answer carrying
+  `Registry-Posture: development` is refused as
+  `TaskGrantError::DevelopmentPeer` (`platform.task-grant.development-peer`).
+  `GrantClaims` reads the optional `registry_posture` claim, whose only valid
+  value is `development`; any other value is malformed.
+  `GrantClaims::verify_context` takes a `PeerPolicy` and, under
+  `RefuseDevelopmentPeer`, refuses a development assertion as
+  `GrantContextError::DevelopmentAssertion`
+  (`platform.task-grant.development-assertion`).
+  `TaskGrantStatusClient::new_without_peer_policy`,
+  `TaskGrantStatusRegistry::activate_without_peer_policy` and
+  `GrantClaims::verify_context_without_peer_policy` refuse development
+  peers, and every runtime uses them until it declares its posture.
+
+- The shared activation ledger records a posture with every activation.
+  `registry-platform-activation` adds `Activation.posture` and
+  `NewActivation.posture`, and `check_active_package` takes the declared
+  posture and answers `ActivePackageError::PostureMismatch { recorded,
+  declared }` when the active row records the other one. A row written
+  before the column existed reads as production.
+  `NewActivation::without_posture` and `check_active_package_without_posture`
+  record and check production, and every runtime uses them until it declares
+  its posture.
+
+- Every runtime reads a secret file under one rule. A relative link that
+  stays below `secretProviders.file.root` is followed, at most eight links
+  deep. A file owned by root with mode `0440` or `0640` loads when the
+  runtime does not run as root. A file the runtime user owns with group
+  access, a world-readable file, a file with an execute, setuid, setgid or
+  sticky bit, a hard-linked file and a link that leaves the root are refused.
+  Each refusal is a `SecretError::UnsafeFile` that names a
+  `platform.secret-file.*` check and its fix. A process that declares the
+  development posture loads a file whose read or mode bits are too loose and
+  warns once per check. `registry-platform-config` exports `SecretFileCheck`
+  and `MAX_SECRET_LINKS`, and `SecretResolver` gains `in_development` and
+  `inspect_reference`.
+
 - BREAKING: `registry-platform-oidc` no longer has the stage-labelled
   authentication log helpers: `AuthenticationStage`,
   `AuthenticationDiagnostics`, `OidcError::authentication_stage`,
@@ -154,6 +200,24 @@
   `*.localhost`, `localhost.` and a bracketed IPv4 literal such as
   `[127.0.0.1]` are never loopback. Sites that use it accept more literal
   spellings than before, for example `127.0.0.2` and `[::ffff:127.0.0.1]`.
+
+- BREAKING (Rust API): `registry-platform-httputil` can refuse a response
+  from a peer that declares the development posture.
+  `validate_response_headers` takes a `PeerPolicy`: under
+  `RefuseDevelopmentPeer` a response whose `Registry-Posture` field is exactly
+  `development` is refused with `ResponseHeaderError::DevelopmentPeer`, and
+  `AcceptDevelopmentPeer` checks only the header bounds.
+  `ResponseHeaderBoundError` is now `ResponseHeaderError`. `is_loopback_host`
+  is the one host rule for plain http: a loopback address literal or the
+  exact name `localhost`, valid in every posture.
+  `FetchUrlPolicy::dev` is now `FetchUrlPolicy::https_or_loopback`,
+  `DestinationProfile::LoopbackDevelopmentHttp` is now
+  `DestinationProfile::LoopbackHttp`, and
+  `DestinationProfile::LocalPrivateDevelopmentHttp` exists only in test builds
+  and under the `test-support` feature. Migration: a client with no runtime
+  policy yet calls `validate_response_headers_without_peer_policy`, which
+  behaves as production and refuses a development peer, and the two renamed
+  names change at their call sites.
 
 - `registry-thunderid-tooling` reads development identity files and task
   connections with the same loopback rule. A development issuer or local app

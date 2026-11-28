@@ -75,6 +75,7 @@ pub(crate) struct TestLifecycleOutcome {
 pub(crate) struct SchemaMeasurement {
     pub registry_revision: String,
     pub schema_fingerprint: String,
+    pub postgres_major: u16,
 }
 
 /// The receipt destination, held as its resolved parent descriptor plus the
@@ -341,11 +342,12 @@ pub(crate) fn measure(
         .enable_all()
         .build()
         .map_err(|_| TestLifecycleError::Runtime)?;
-    let schema_fingerprint = runtime.block_on(async {
-        startup::rehearse_schema_fingerprint(&config, candidate.registry())
+    let installed = runtime.block_on(async {
+        startup::measure_schema_install(&config, candidate.registry())
             .await
             .map_err(schema_preparation_error)
     })?;
+    let schema_fingerprint = installed.fingerprint;
     let prepared = candidate
         .prepare(schema_fingerprint.clone())
         .map_err(|error| TestLifecycleError::Candidate {
@@ -355,6 +357,7 @@ pub(crate) fn measure(
     Ok(SchemaMeasurement {
         registry_revision: prepared.registry().revision().to_owned(),
         schema_fingerprint,
+        postgres_major: installed.postgres_major,
     })
 }
 

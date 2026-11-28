@@ -8,7 +8,7 @@ use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers};
+use registry_platform_httputil::{read_bounded, validate_response_headers_without_peer_policy};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -500,7 +500,8 @@ impl RenderClient {
             .send()
             .await
             .map_err(|error| transport_error(send_failure_kind(&error)))?;
-        validate_response_headers(response.headers()).map_err(|_| error("protocol"))?;
+        validate_response_headers_without_peer_policy(response.headers())
+            .map_err(|_| error("protocol"))?;
         let trace = response_trace_id(response.headers())
             .map_err(|_| error("protocol"))?
             .to_owned();

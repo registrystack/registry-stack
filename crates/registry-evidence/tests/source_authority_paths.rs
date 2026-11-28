@@ -323,7 +323,7 @@ impl Write for RecordingSink {
 impl RecordingSink {
     fn audit(&self) -> EvidenceAuditLog {
         EvidenceAuditLog::with_writer(
-            AuditWriter::from_line_sink(Box::new(self.clone())),
+            AuditWriter::from_line_sink_without_posture(Box::new(self.clone())),
             b"source-authority-audit-key-32-bytes".to_vec(),
             1,
         )

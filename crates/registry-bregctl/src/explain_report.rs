@@ -167,12 +167,20 @@ pub(crate) fn actions(value: &Value, lines: &mut Lines) {
                 }
             }
             if let Some(comparison) = guard.get("currentDate") {
-                let offset = guard["currentDateOffsetDays"]
-                    .as_i64()
-                    .filter(|days| *days != 0);
+                let offset = [
+                    ("currentDateOffsetDays", "days"),
+                    ("currentDateOffsetMonths", "months"),
+                ]
+                .into_iter()
+                .find_map(|(key, unit)| {
+                    guard[key]
+                        .as_i64()
+                        .filter(|amount| *amount != 0)
+                        .map(|amount| (amount, unit))
+                });
                 terms.push(match (comparison.as_str(), offset) {
-                    (Some(comparison), Some(days)) => {
-                        format!("current date {comparison} ({days:+} days)")
+                    (Some(comparison), Some((amount, unit))) => {
+                        format!("current date {comparison} ({amount:+} {unit})")
                     }
                     _ => format!("current date {comparison}"),
                 });
@@ -635,6 +643,27 @@ mod tests {
         let text = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
             text.contains("current date on-or-after (+30 days)"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn action_summary_names_a_current_date_month_offset() {
+        let value = json!([{
+            "id":"renew", "execution":{"mode":"immediate"}, "inputs":[],
+            "plan":{"effects":[]},
+            "commitGuards":[{
+                "input":"licence", "field":"valid-through", "revisionUnchanged":false,
+                "currentDate":"on-or-before", "currentDateOffsetMonths":-3
+            }],
+            "permissions":[]
+        }]);
+        let mut lines = Lines::new();
+        actions(&value, &mut lines);
+        let rendered = lines.finish();
+        let text = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            text.contains("current date on-or-before (-3 months)"),
             "{rendered}"
         );
     }

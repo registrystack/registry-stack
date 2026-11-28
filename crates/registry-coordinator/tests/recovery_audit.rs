@@ -99,7 +99,7 @@ impl Harness {
             StoreSecurity {
                 database_id: self.namespace.clone(),
                 keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x22; 32]).unwrap(),
-                audit: AuditWriter::from_line_sink(Box::new(sink)),
+                audit: AuditWriter::from_line_sink_without_posture(Box::new(sink)),
                 audit_profile: profile(),
             },
             None,

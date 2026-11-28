@@ -961,7 +961,7 @@ fn a_secret_failure_names_the_member_and_never_the_reference() {
         SecretError::ProviderDisabled,
         SecretError::InvalidProviderConfiguration,
         SecretError::Unavailable,
-        SecretError::UnsafeFile,
+        SecretError::UnsafeFile(crate::SecretFileCheck::WorldReadable),
         SecretError::Read,
         SecretError::InvalidValue,
     ] {

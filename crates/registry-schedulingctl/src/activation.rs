@@ -254,7 +254,9 @@ fn refusing_audit() -> SchedulingAudit {
             Ok(())
         }
     }
-    SchedulingAudit::new(AuditWriter::from_line_sink(Box::new(RefusingSink)))
+    SchedulingAudit::new(AuditWriter::from_line_sink_without_posture(Box::new(
+        RefusingSink,
+    )))
 }
 
 pub fn plan(config_path: &Path) -> Result<Value> {
@@ -429,7 +431,7 @@ fn apply_audited(
         ))
         .context("opening the schedulingctl audit destination")?;
     let audit = match sink {
-        Some(sink) => SchedulingAudit::new(AuditWriter::from_line_sink(sink)),
+        Some(sink) => SchedulingAudit::new(AuditWriter::from_line_sink_without_posture(sink)),
         None => audit,
     };
     let activation_id = Uuid::new_v4();
