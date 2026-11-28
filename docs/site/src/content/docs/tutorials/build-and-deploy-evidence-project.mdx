@@ -33,7 +33,7 @@ dependencies before it opens a listener.
 For the local commands in this tutorial, declare development in your shell.
 `rstack dev` sets this value for the processes it starts.
 
-```bash
+```sh
 export REGISTRY_STACK_POSTURE=development
 ```
 
@@ -177,7 +177,7 @@ rstack evidence package adult-status --target deploy-target/target.yaml --output
 ```
 
 ```text test-expect
-warning[evidence.posture.local-assurance] deploy-target/target.yaml /assuranceProfile
+warning[evidence.posture.local-assurance] deploy-target/target.yaml:1:1 /assuranceProfile
   local assurance permits locally held signing keys; production refuses it
   next: Build a production or evidence-grade package with a Transit signer.
 0 errors, 1 warning in 1 file
