@@ -135,6 +135,19 @@ pub fn verify_hook_delivery<'a, H>(
 where
     H: IntoIterator<Item = (&'a str, &'a [u8])>,
 {
+    verify_hook_delivery_with_posture(delivery, freshness, false)
+}
+
+/// Verify exact signed bytes using the receiving runtime's declared posture.
+/// Set `allow_development` only when the receiving runtime declared development.
+pub fn verify_hook_delivery_with_posture<'a, H>(
+    delivery: HookDelivery<'a, H>,
+    freshness: DeliveryFreshness,
+    allow_development: bool,
+) -> Result<VerifiedHookDelivery<'a>, HookDeliveryError>
+where
+    H: IntoIterator<Item = (&'a str, &'a [u8])>,
+{
     let mut headers = [None; HOOK_DELIVERY_HEADERS.len()];
     for (name, value) in delivery.headers {
         if let Some(index) = HOOK_DELIVERY_HEADERS
@@ -170,13 +183,15 @@ where
             delivery_signature::verify_authenticity(delivery.keys, content)
         }
     }?;
-    let envelope = HookEnvelope::from_canonical_bytes(delivery.body, &EnvelopeLimits::default())
-        .map_err(|error| match error {
-            crate::envelope::HookEnvelopeError::DevelopmentPeer => {
-                HookDeliveryError::DevelopmentPeer
-            }
-            _ => HookDeliveryError::InvalidEnvelope,
-        })?;
+    let envelope = HookEnvelope::from_canonical_bytes_with_posture(
+        delivery.body,
+        &EnvelopeLimits::default(),
+        allow_development,
+    )
+    .map_err(|error| match error {
+        crate::envelope::HookEnvelopeError::DevelopmentPeer => HookDeliveryError::DevelopmentPeer,
+        _ => HookDeliveryError::InvalidEnvelope,
+    })?;
     if envelope.id != id {
         return Err(HookDeliveryError::IdMismatch);
     }
@@ -451,21 +466,23 @@ mod tests {
         let marked = original.replace(",\"source\":", ",\"posture\":\"development\",\"source\":");
         let keys = hook_keys();
         let signature = delivery_signature::sign(&keys, HOOK_ID, 1000, marked.as_bytes()).unwrap();
-        let error = verify_hook_delivery(
-            HookDelivery {
-                headers: [
-                    ("content-type", b"application/json".as_slice()),
-                    ("webhook-id", HOOK_ID.as_bytes()),
-                    ("webhook-timestamp", b"1000"),
-                    ("webhook-signature", signature.as_bytes()),
-                ],
-                body: marked.as_bytes(),
-                keys: &keys,
-            },
-            DeliveryFreshness::CallerEnforced,
-        )
-        .unwrap_err();
+        let delivery = || HookDelivery {
+            headers: [
+                ("content-type", b"application/json".as_slice()),
+                ("webhook-id", HOOK_ID.as_bytes()),
+                ("webhook-timestamp", b"1000"),
+                ("webhook-signature", signature.as_bytes()),
+            ],
+            body: marked.as_bytes(),
+            keys: &keys,
+        };
+        let error =
+            verify_hook_delivery(delivery(), DeliveryFreshness::CallerEnforced).unwrap_err();
         assert_eq!(error.code(), "development-peer");
+        let accepted =
+            verify_hook_delivery_with_posture(delivery(), DeliveryFreshness::CallerEnforced, true)
+                .unwrap();
+        assert_eq!(accepted.body, marked.as_bytes());
     }
 
     #[test]

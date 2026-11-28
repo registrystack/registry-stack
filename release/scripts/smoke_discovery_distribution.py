@@ -74,7 +74,8 @@ assert.throws(
 async function main() {
   const client = new DiscoveryClient({
     baseUrl,
-    requestTimeoutMilliseconds: 10000,
+    allowDevelopmentPeer: true,
+    attemptTimeoutMilliseconds: 10000,
     connectTimeoutMilliseconds: 3000,
     maximumResponseBytes: 1048576,
   });

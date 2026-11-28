@@ -23,7 +23,8 @@ use registry_platform_crypto::delivery_signature::{
 };
 use registry_platform_dispatch::idempotency_key;
 use registry_platform_hooks::receiver::{
-    verify_hook_delivery, DeliveryFreshness, HookDelivery, HookDeliveryError, VerifiedHookDelivery,
+    verify_hook_delivery_with_posture, DeliveryFreshness, HookDelivery, HookDeliveryError,
+    VerifiedHookDelivery,
 };
 use registry_platform_yaml::{ExternalId, LocalId};
 use serde::{Deserialize, Serialize};
@@ -429,8 +430,31 @@ pub fn verify_delivery(
     keys: &DeliveryKeys,
     now: SystemTime,
 ) -> Result<VerifiedEvent> {
+    verify_delivery_with_posture(
+        source,
+        trigger,
+        trigger_name,
+        headers,
+        body,
+        keys,
+        now,
+        registry_platform_config::Posture::Production,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_delivery_with_posture(
+    source: &EventSourceConfig,
+    trigger: &EventTrigger,
+    trigger_name: &str,
+    headers: &HeaderMap,
+    body: &[u8],
+    keys: &DeliveryKeys,
+    now: SystemTime,
+    posture: registry_platform_config::Posture,
+) -> Result<VerifiedEvent> {
     check_body(body)?;
-    let VerifiedHookDelivery { id, envelope, .. } = verify_hook_delivery(
+    let VerifiedHookDelivery { id, envelope, .. } = verify_hook_delivery_with_posture(
         HookDelivery {
             headers: headers
                 .iter()
@@ -439,9 +463,18 @@ pub fn verify_delivery(
             keys,
         },
         DeliveryFreshness::default_at(now),
+        posture == registry_platform_config::Posture::Development,
     )
     .map_err(|error| match error {
         HookDeliveryError::InvalidEnvelope => invalid_event(),
+        HookDeliveryError::DevelopmentPeer => {
+            let mut error = CoordinatorError::new(
+                "event-development-peer",
+                "a production Coordinator refuses development-marked events",
+            );
+            error.field = Some("/posture".into());
+            error
+        }
         HookDeliveryError::IdMismatch | HookDeliveryError::InvalidContentType => {
             unauthenticated(FailedCheck::DeliveryBinding)
         }
@@ -527,7 +560,7 @@ pub async fn receive(
             .adapters
             .event_keys(&workflow_name, &trigger_name)
             .ok_or_else(|| unauthenticated(FailedCheck::DeliveryBinding))?;
-        let verified = verify_delivery(
+        let verified = verify_delivery_with_posture(
             source,
             trigger,
             &trigger_name,
@@ -535,6 +568,7 @@ pub async fn receive(
             &body,
             keys,
             SystemTime::now(),
+            state.runtime.posture(),
         )?;
         crate::deployment::check(&state.store, &state.runtime, state.workflows.digest()).await?;
         let binding = state

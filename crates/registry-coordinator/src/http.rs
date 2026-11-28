@@ -278,7 +278,12 @@ pub(crate) fn problem(error: CoordinatorError) -> Response {
         );
     }
     let check = refusal_check(&error, problem);
-    let mut response = problem_response(problem);
+    let pointer = if problem == ProblemCode::EventDevelopmentPeer {
+        error.field.as_deref()
+    } else {
+        None
+    };
+    let mut response = problem_response_at(problem, pointer);
     if let Some(check) = check {
         response.extensions_mut().insert(RefusalNote::new(check));
         if let Some(declared) = error.declared {
@@ -361,6 +366,18 @@ mod problem_log_tests {
 /// Render one problem: the pinned code, title, status and detail from the
 /// closed vocabulary, under the answering request's trace.
 fn problem_response(problem: ProblemCode) -> Response {
+    problem_response_at(problem, None)
+}
+
+fn problem_response_at(problem: ProblemCode, pointer: Option<&str>) -> Response {
+    #[derive(serde::Serialize)]
+    struct ResponseBody<'a> {
+        #[serde(flatten)]
+        problem: ProblemBody,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pointer: Option<&'a str>,
+    }
+
     let trace = current_trace();
     let status = problem.http_status();
     let body = ProblemBody {
@@ -375,7 +392,10 @@ fn problem_response(problem: ProblemCode) -> Response {
     let mut response = (
         status,
         [(CONTENT_TYPE, "application/problem+json")],
-        Json(body),
+        Json(ResponseBody {
+            problem: body,
+            pointer,
+        }),
     )
         .into_response();
     trace.apply(response.headers_mut());
@@ -2097,7 +2117,7 @@ pub fn openapi() -> Value {
       "Doctor":{"type":"object","required":["activationReady","state","findings"],"properties":{"activationReady":{"type":"boolean"},"findings":{"type":"array","maxItems":1,"items":{"type":"object","required":["code","message","suggestedAction"],"properties":{"code":{"const":"platform.activation.posture-mismatch"},"message":{"type":"string"},"suggestedAction":{"type":"string"}}}},"state":{"type":"object","required":["databaseId","schemaVersion","restoreHold","auditReady","admissionsHold","restoreReviewRequired","states","uncertain","terminalPayloads","oldestTerminalPayloadAt","proposalWaitsByTurn","heldRunCount","heldRuns"],"properties":{"databaseId":{"type":"string"},"schemaVersion":{"type":"integer"},"restoreHold":{"type":"boolean"},"auditReady":{"type":"boolean"},"admissionsHold":{"type":"boolean"},"restoreReviewRequired":{"type":"integer","minimum":0},"states":{"type":"object","additionalProperties":{"type":"integer"}},"uncertain":{"type":"integer"},"oldestDueAt":{"type":["string","null"],"format":"date-time"},"terminalPayloads":{"type":"integer","minimum":0},"oldestTerminalPayloadAt":{"type":["string","null"],"format":"date-time"},"proposalWaitsByTurn":{"$ref":"#/components/schemas/ProposalWaitsByTurn"},"heldRunCount":{"type":"integer","minimum":0},"heldRuns":{"$ref":"#/components/schemas/HeldRuns"}}}}},
       "RetryScheduled":{"type":"object","required":["runId","status"],"properties":{"runId":{"type":"string","format":"uuid"},"status":{"const":"retry-scheduled"}}},
       "Hold":{"type":"object","required":["restoreHold"],"properties":{"restoreHold":{"type":"boolean"}}},"Erased":{"type":"object","required":["erased"],"properties":{"erased":{"type":"integer","minimum":0}}},
-      "Problem":{"type":"object","additionalProperties":false,"required":["type","title","status","detail","code","traceId"],"properties":{"type":{"type":"string","enum":problem_types},"title":{"type":"string"},"status":{"type":"integer"},"detail":{"type":"string"},"code":{"type":"string","enum":problem_codes},"traceId":{"type":"string"}}}
+      "Problem":{"type":"object","additionalProperties":false,"required":["type","title","status","detail","code","traceId"],"properties":{"type":{"type":"string","enum":problem_types},"title":{"type":"string"},"status":{"type":"integer"},"detail":{"type":"string"},"code":{"type":"string","enum":problem_codes},"traceId":{"type":"string"},"pointer":{"type":"string"}}}
     });
     let count = json!({"type":"integer","minimum":0});
     schemas["HeldRuns"] = json!({"type":"array","maxItems":100,"description":"The first live runs by run id held because this Coordinator version does not restore their retained definition; heldRunCount counts them all.","items":{"$ref":"#/components/schemas/HeldRun"}});

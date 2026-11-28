@@ -949,32 +949,33 @@ async fn typed_commands_refuse_a_development_peer_only_in_production() {
 
 #[tokio::test]
 async fn production_mutation_requires_a_valid_probe_on_the_api_routes() {
-    for (mark, gateway_health, transport_failure, mutations, diagnostic) in [
-        (Some("development"), false, false, 0, "development-peer"),
-        (Some("invalid"), false, false, 0, "service-unavailable"),
-        (None, false, true, 0, "service-unavailable"),
-        (Some("development"), true, false, 0, "development-peer"),
-        (None, false, false, 1, ""),
+    for (status, marks, mutations, diagnostic) in [
+        (Some(404), &[][..], 0, "service-unavailable"),
+        (Some(500), &[][..], 0, "service-unavailable"),
+        (Some(204), &[][..], 0, "service-unavailable"),
+        (
+            Some(401),
+            &["production", "production"][..],
+            0,
+            "probe-posture-invalid",
+        ),
+        (Some(401), &["invalid"][..], 0, "probe-posture-invalid"),
+        (Some(401), &["development"][..], 0, "development-peer"),
+        (Some(200), &[][..], 1, ""),
+        (Some(401), &[][..], 1, ""),
+        (None, &[][..], 0, "service-unavailable"),
     ] {
         let server = MockServer::start().await;
         let root = tempfile::tempdir().unwrap();
         let token = root.path().join("token");
         fs::write(&token, TOKEN).unwrap();
         let origin = server.uri();
-        if gateway_health {
-            Mock::given(method("GET"))
-                .and(path("/health"))
-                .respond_with(ResponseTemplate::new(200))
-                .expect(0)
-                .mount(&server)
-                .await;
-        }
-        let mut probe = ResponseTemplate::new(404);
-        if let Some(mark) = mark {
-            probe = probe.insert_header("Registry-Posture", mark);
-        }
-        if transport_failure {
+        let mut probe = ResponseTemplate::new(status.unwrap_or(401));
+        if status.is_none() {
             probe = probe.set_delay(std::time::Duration::from_secs(31));
+        }
+        for mark in marks {
+            probe = probe.append_header("Registry-Posture", *mark);
         }
         Mock::given(method("GET"))
             .and(path("/v1/doctor"))
@@ -1008,12 +1009,18 @@ async fn production_mutation_requires_a_valid_probe_on_the_api_routes() {
         .await
         .unwrap();
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        server.verify().await;
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1 + usize::try_from(mutations).unwrap());
+        assert_eq!(requests[0].url.path(), "/v1/doctor");
+        assert!(!requests[0].headers.contains_key("authorization"));
         assert_eq!(output.status.success(), mutations == 1, "{report}");
         if mutations == 0 {
             assert_eq!(
                 report["diagnostics"][0]["code"],
                 format!("coordinator.command.{diagnostic}")
             );
+            assert_eq!(report["diagnostics"][0]["path"], "/--url");
         }
     }
 }

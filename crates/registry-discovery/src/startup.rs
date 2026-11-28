@@ -43,6 +43,8 @@ pub fn prepare(
     declared: DeclaredPosture,
 ) -> Result<PreparedDiscovery, StartupError> {
     let (_, mut loaded) = load_runtime(runtime_path, declared)?;
+    crate::runtime_config::package_root_exists(&loaded.config.package.root)
+        .map_err(StartupError::PackageRootLookup)?;
     let (index, verified) = crate::package::load_runtime_package(&loaded.config.package)?;
     record_index_posture(&index, &mut loaded.posture, |host| {
         registry_platform_httpsec::loopback::loopback_host(host).is_some()

@@ -296,6 +296,20 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
+    let posture_environment = std::env::var_os(registry_platform_config::POSTURE_ENV);
+    main_entry_with_posture_environment(args, stdout, stderr, posture_environment.as_deref())
+}
+
+fn main_entry_with_posture_environment<I, T>(
+    args: I,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+    posture_environment: Option<&OsStr>,
+) -> ExitCode
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString>,
+{
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     let format_requested = args
         .iter()
@@ -393,8 +407,11 @@ where
                 "Use one of them.",
             ))
         } else {
-            registry_platform_config::declared(flag.or(production.then_some("production")))
-                .map_err(|error| refusal(error.code(), error.message(), error.suggested_action()))
+            registry_platform_config::declared_from(
+                flag.or(production.then_some("production")),
+                posture_environment,
+            )
+            .map_err(|error| refusal(error.code(), error.message(), error.suggested_action()))
         };
         match declaration {
             Ok(declared) => Some(declared),
@@ -1288,9 +1305,48 @@ mod tests {
     fn the_committed_report_example_is_check_output() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let relative = "products/scheduling/examples/standalone-exact-time";
-        let project = root.join(relative);
-        let (exit, mut report, _) = run_json(&["check", project.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::SUCCESS);
+        let temporary =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let source = root.join(relative);
+        let project = temporary.path();
+        std::fs::create_dir(project.join("fixtures")).unwrap();
+        for file in [
+            "dev-scenarios.yaml",
+            "dev.yaml",
+            "fixtures/counter-stations.yaml",
+            "fixtures/fold-day-rebooking.yaml",
+            "records.yaml",
+            "runtime.example.yaml",
+            "scheduling.yaml",
+        ] {
+            std::fs::write(
+                project.join(file),
+                std::fs::read(source.join(file)).unwrap(),
+            )
+            .unwrap();
+        }
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_with_posture_environment(
+            [
+                "schedulingctl",
+                "check",
+                project.to_str().unwrap(),
+                "--format=json",
+                "--posture=production",
+            ],
+            &mut stdout,
+            &mut stderr,
+            None,
+        );
+        assert_eq!(
+            exit,
+            ExitCode::SUCCESS,
+            "{}",
+            String::from_utf8_lossy(&stdout)
+        );
+        let mut report: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_envelope(&stdout, &report, exit);
         report["project"] = json!(relative);
         let mut written = Vec::new();
         report::write_with_posture(

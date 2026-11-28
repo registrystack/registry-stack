@@ -793,6 +793,45 @@ async fn delivery_refuses_a_posture_mismatch_without_sending() {
 }
 
 #[tokio::test]
+async fn production_restart_dead_letters_a_development_capture_without_sending() {
+    const HTTP_VERIFIER: &str = "contentVerification:\n  type: http\n  url: http://127.0.0.1:9/verify\n  authorizationRef: secret:file/verifier-token\n  policyId: documents-default\n";
+    let receiver = MockServer::start().await;
+    let mut deployment = Deployment::new(DATABASE_STORAGE, HTTP_VERIFIER).await;
+    deployment.secret("verifier-token", "synthetic-verifier-token");
+    deployment.bind_hooks(&format!("{}/document-events", receiver.uri()));
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    upload(&api, 7).await;
+    assert_eq!(prepared.verify_due().await, 1);
+    let events = captured(&deployment).await;
+    assert_eq!(events[0].2["posture"], "development");
+    drop(api);
+    drop(prepared);
+    // Move the test activation to production while retaining the captured row.
+    deployment
+        .execute("UPDATE documents_activations SET posture = 'production'")
+        .await;
+    let production = registry_platform_config::declared_from(Some("production"), None).unwrap();
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier, production)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::DeadLettered
+    );
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::Idle
+    );
+    assert!(receiver.received_requests().await.unwrap().is_empty());
+    let terminal: String = deployment.scalar(
+        "SELECT state || ':' || attempt || ':' || dead_letter_reason FROM registry_webhook_delivery_state",
+    ).await;
+    assert_eq!(terminal, "dead-lettered:1:payload-refused");
+}
+
+#[tokio::test]
 async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
     let receiver = MockServer::start().await;
     Mock::given(method("POST"))
@@ -821,6 +860,10 @@ async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
     let stored: Vec<u8> = deployment
         .scalar("SELECT payload FROM registry_outbox")
         .await;
+
+    drop(api);
+    drop(prepared);
+    let (prepared, api) = start(&deployment, &verifier).await;
 
     let outcome = prepared
         .deliver_hooks_once()

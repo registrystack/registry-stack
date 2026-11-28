@@ -25,6 +25,9 @@
   For Node services and tools, run `npm install @registrystack/client-node` and change imports to `@registrystack/client-node`.
   `@registrystack/client` is now the Fetch-based browser and edge client.
 - `rstack client generate` runs the application’s local `registry-generate` with the BReg CLI resolved by `rstack`.
+- The shared signed hook verifier accepts a development envelope when the receiver explicitly allows development. The default verifier checks the signature before refusing the mark with `development-peer`.
+
+- A production hook delivery worker dead-letters development-marked envelopes on their next attempt with `payload-refused`. A development worker can deliver the captured bytes unchanged.
 
 - Fetch-based TypeScript clients, generated from each registry's contract, are
   in `clients/typescript/`. They use Fetch and WebCrypto and have no runtime

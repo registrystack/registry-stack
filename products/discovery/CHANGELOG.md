@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Offline check and startup report a package root lookup failure as `discovery.runtime.package-refused` at `/package/root`.
+
+- BREAKING: The Node.js Discovery client refuses development-marked catalog responses by default. Migration: Pass `allowDevelopmentPeer: true` in the options object when connecting to a development catalog.
+
 - Start a local development run from the starter with `rstack dev start`.
 - `discoveryctl check --runtime-config` reports a package-root lookup error as an operational failure at `/package/root`.
 

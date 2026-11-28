@@ -256,7 +256,7 @@ fn read_runtime(
     let mut unavailable = check.unavailable;
     if let (Some(loaded), true) = (config.as_mut(), inspect_package && package_fields_resolved) {
         let root = &loaded.config.package.root;
-        let package = match root.try_exists() {
+        let package = match package_root_exists(root) {
             Ok(true) => crate::package::load_runtime_package(&loaded.config.package)
                 .map(Some)
                 .map_err(|error| {
@@ -268,7 +268,7 @@ fn read_runtime(
                     (error.to_string(), unreadable)
                 }),
             Ok(false) => Ok(None),
-            Err(error) => Err((format!("Could not look up the package root: {error}"), true)),
+            Err(error) => Err((error.message, true)),
         };
         match package {
             Ok(Some((index, _))) => {
@@ -282,10 +282,10 @@ fn read_runtime(
                 unavailable |= unreadable;
                 diagnostics.push(check.error_at(
                     RUNTIME_KIND,
-                    "discovery.runtime.package-refused",
-                    "/package/root",
+                    PACKAGE_REFUSED,
+                    PACKAGE_ROOT,
                     message,
-                    "Verify the deployed package and its expected digest, or rebuild it with discoveryctl package.",
+                    PACKAGE_ACTION,
                 ));
             }
         }
@@ -341,6 +341,24 @@ fn package_finding(error: &ConfigBlockError) -> (&'static str, &'static str) {
         ),
     }
 }
+
+// Offline check skips a missing package so a runtime can be checked before
+// building it. Startup still requires the package. Lookup errors refuse both.
+pub(crate) fn package_root_exists(root: &Path) -> Result<bool, Box<Diagnostic>> {
+    root.try_exists().map_err(|error| {
+        Box::new(Diagnostic::error(
+            PACKAGE_REFUSED,
+            PACKAGE_ROOT,
+            format!("Could not look up the package root: {error}"),
+            PACKAGE_ACTION,
+        ))
+    })
+}
+
+const PACKAGE_REFUSED: &str = "discovery.runtime.package-refused";
+const PACKAGE_ROOT: &str = "/package/root";
+const PACKAGE_ACTION: &str =
+    "Verify the deployed package and its expected digest, or rebuild it with discoveryctl package.";
 
 #[cfg(test)]
 mod tests {

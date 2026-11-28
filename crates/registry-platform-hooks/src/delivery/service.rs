@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use registry_platform_config::Posture;
 use registry_platform_dispatch::postgres::{
     DispatchConfig, DispatchOutcome, DispatchTransport, Dispatcher, Fence, JobKey, JobTable,
     LeasedJob, LeasedReadError, SelectSql,
@@ -143,6 +144,7 @@ pub struct DeliveryService<S: DeliverySeams> {
     dispatcher: Dispatcher<HookStore<S>>,
     schema: String,
     delivery_source: String,
+    posture: Posture,
     execution_deadline: Option<Instant>,
 }
 
@@ -152,6 +154,7 @@ impl<S: DeliverySeams> Clone for DeliveryService<S> {
             dispatcher: self.dispatcher.clone(),
             schema: self.schema.clone(),
             delivery_source: self.delivery_source.clone(),
+            posture: self.posture,
             execution_deadline: self.execution_deadline,
         }
     }
@@ -212,8 +215,16 @@ impl<S: DeliverySeams> DeliveryService<S> {
             dispatcher,
             schema,
             delivery_source: config.delivery_source,
+            posture: Posture::Production,
             execution_deadline: None,
         }
+    }
+
+    /// Use the worker runtime's declared posture to validate captured envelopes.
+    #[must_use]
+    pub fn with_posture(mut self, posture: Posture) -> Self {
+        self.posture = posture;
+        self
     }
 
     /// Create a worker that can claim only local work from the named package.
@@ -239,6 +250,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             },
             Some(revision.to_owned()),
         );
+        local.posture = self.posture;
         local.execution_deadline = Some(deadline);
         Ok(local)
     }
@@ -827,6 +839,11 @@ impl<S: DeliverySeams> DeliveryService<S> {
             Err(MaterialLoadError::PayloadRefused) => {
                 return Ok(DeliveryAuditOutcome::PayloadRefused.into())
             }
+            Err(MaterialLoadError::DevelopmentPeer) => {
+                let mut result = AttemptResult::from(DeliveryAuditOutcome::PayloadRefused);
+                result.permanent_payload_refusal = true;
+                return Ok(result);
+            }
             Err(MaterialLoadError::BindingRefused) => {
                 return Ok(material_binding_refusal(claim.handler_kind).into())
             }
@@ -1060,6 +1077,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 event_time: material.event_time,
                 maximum_payload_bytes: binding.maximum_payload_bytes,
                 payload_digest: &material.payload_digest,
+                posture: self.posture,
             },
         )?;
         Ok(material)
@@ -1146,6 +1164,7 @@ struct MaterialBinding {
 }
 
 enum MaterialLoadError {
+    DevelopmentPeer,
     Unavailable,
     BindingRefused,
     PayloadRefused,
@@ -1252,6 +1271,15 @@ impl<S: DeliverySeams> DispatchTransport for HookTransport<'_, S> {
             handler_kind: job.job.handler_kind,
         };
         let mut result = self.service.reload_and_send(&claim).await?;
+        if result.permanent_payload_refusal {
+            return Ok(Sent {
+                outcome: SendOutcome::Permanent {
+                    code: FailureCode::new(DeliveryFailureReason::PayloadRefused.as_str())
+                        .map_err(|_| DispatchError::Unavailable)?,
+                },
+                detail: result,
+            });
+        }
         // A proposal may have committed before an earlier worker lost its
         // lease or failed to finalize. If every later attempt fails before
         // accepting an answer, recover that receipt before the last attempt
@@ -1299,6 +1327,7 @@ impl<S: DeliverySeams> DispatchTransport for HookTransport<'_, S> {
 #[derive(Clone)]
 pub(super) struct AttemptResult {
     pub(super) outcome: DeliveryAuditOutcome,
+    permanent_payload_refusal: bool,
     pub(super) failure_reason: Option<DeliveryFailureReason>,
     pub(super) answer: Option<AcceptedAnswer>,
     /// The settled outcome of the proposal the answer carried, set once the
@@ -1311,6 +1340,7 @@ impl From<DeliveryAuditOutcome> for AttemptResult {
     fn from(outcome: DeliveryAuditOutcome) -> Self {
         Self {
             outcome,
+            permanent_payload_refusal: false,
             failure_reason: DeliveryFailureReason::from_audit_outcome(outcome),
             answer: None,
             proposal: None,
@@ -1322,6 +1352,7 @@ impl AttemptResult {
     const fn failure(outcome: DeliveryAuditOutcome, failure_reason: DeliveryFailureReason) -> Self {
         Self {
             outcome,
+            permanent_payload_refusal: false,
             failure_reason: Some(failure_reason),
             answer: None,
             proposal: None,
@@ -1357,6 +1388,7 @@ fn accepted_answer_result(body: &[u8]) -> AttemptResult {
     match accept_handler_answer(body) {
         Ok(answer) => AttemptResult {
             outcome: DeliveryAuditOutcome::Delivered,
+            permanent_payload_refusal: false,
             failure_reason: None,
             answer: Some(answer),
             proposal: None,
@@ -1472,6 +1504,7 @@ struct StoredEnvelope<'a> {
     event_time: SystemTime,
     maximum_payload_bytes: i64,
     payload_digest: &'a [u8],
+    posture: Posture,
 }
 
 /// Accept the stored envelope bytes the worker is about to deliver unchanged.
@@ -1486,9 +1519,15 @@ fn accept_stored_envelope(
 ) -> Result<(), MaterialLoadError> {
     let maximum = usize::try_from(expected.maximum_payload_bytes)
         .map_err(|_| MaterialLoadError::PayloadRefused)?;
-    let envelope =
-        HookEnvelope::from_stored_canonical_bytes(body, &EnvelopeLimits::tightened_to(maximum))
-            .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let envelope = HookEnvelope::from_canonical_bytes_with_posture(
+        body,
+        &EnvelopeLimits::tightened_to(maximum),
+        expected.posture == Posture::Development,
+    )
+    .map_err(|error| match error {
+        crate::envelope::HookEnvelopeError::DevelopmentPeer => MaterialLoadError::DevelopmentPeer,
+        _ => MaterialLoadError::PayloadRefused,
+    })?;
     if expected.payload_digest.len() != 32
         || expected.payload_digest != Sha256::digest(body).as_slice()
     {
@@ -2071,6 +2110,7 @@ mod tests {
             event_time: SystemTime::UNIX_EPOCH + Duration::from_millis(1_767_225_600_123),
             maximum_payload_bytes: i64::try_from(body.len()).expect("bound"),
             payload_digest: digest,
+            posture: Posture::Production,
         }
     }
 
@@ -2084,6 +2124,21 @@ mod tests {
             accept_stored_envelope(&body, &stored_binding(&body, &digest)).is_ok(),
             "the stored envelope matches the delivery row that governs it"
         );
+    }
+
+    #[test]
+    fn the_production_worker_refuses_a_development_envelope() {
+        let body = stored_envelope()
+            .to_development_canonical_bytes(&EnvelopeLimits::default())
+            .expect("development envelope bytes");
+        let digest = Sha256::digest(&body).to_vec();
+        let mut binding = stored_binding(&body, &digest);
+        assert!(matches!(
+            accept_stored_envelope(&body, &binding),
+            Err(MaterialLoadError::DevelopmentPeer)
+        ));
+        binding.posture = Posture::Development;
+        assert!(accept_stored_envelope(&body, &binding).is_ok());
     }
 
     #[test]
@@ -2840,7 +2895,7 @@ mod tests {
         }
 
         fn maximum_attempts(&self) -> u8 {
-            1
+            2
         }
 
         async fn run(
@@ -2952,7 +3007,7 @@ mod tests {
             destination_binding_digest: "digest".to_owned(),
             logical_destination_id: None,
             deployed_attempt_timeout_ms: 1000,
-            deployed_maximum_attempts: 1,
+            deployed_maximum_attempts: 2,
             data_schema: String::new(),
             event_time: SystemTime::now(),
         };
@@ -3037,9 +3092,18 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
     async fn the_real_hook_adapter_records_attempt_and_terminal_around_committed_delivery() {
+        assert_real_hook_delivery("hooks_dispatch_adapter_test", false).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn a_worker_restart_validates_a_retained_delivery_under_its_own_posture() {
+        assert_real_hook_delivery("hooks_posture_restart_test", true).await;
+    }
+
+    async fn assert_real_hook_delivery(schema: &str, development_capture: bool) {
         let url = std::env::var("HOOKS_TEST_DATABASE_URL")
             .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL test");
-        let schema = "hooks_dispatch_adapter_test";
         let mut client = connect_test_database(&url).await;
         client
             .batch_execute(&format!(
@@ -3058,7 +3122,13 @@ mod tests {
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let schema_fingerprint =
             "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-        let payload = stored_envelope_bytes();
+        let payload = if development_capture {
+            stored_envelope()
+                .to_development_canonical_bytes(&EnvelopeLimits::default())
+                .unwrap()
+        } else {
+            stored_envelope_bytes()
+        };
         client
             .execute(
                 &format!(
@@ -3100,35 +3170,76 @@ mod tests {
                 initial_backoff_ms: 1_000,
                 maximum_backoff_ms: 1_000,
                 exponential_backoff_multiplier: 2,
-                maximum_attempts: 1,
-                retry_delays_ms: &[],
+                maximum_attempts: 2,
+                retry_delays_ms: &[1_000],
                 maximum_payload_bytes: 65_536,
                 payload: &payload,
                 deployed_attempt_timeout_ms: 1_000,
-                deployed_maximum_attempts: 1,
+                deployed_maximum_attempts: 2,
                 dead_letter: "required",
-                operator_replay: false,
+                operator_replay: development_capture,
             },
         )
         .await
         .expect("insert the delivery row");
         transaction.commit().await.expect("commit the delivery");
         let audit = Arc::new(Mutex::new(Vec::new()));
-        let service = DeliveryService::new(
-            RealDbSeams {
-                budgets: Arc::default(),
-                url,
-                handler_digest: handler_digest.to_owned(),
-                audit: Arc::clone(&audit),
-                successes: Arc::default(),
-            },
-            DeliveryConfig {
-                schema: schema.to_owned(),
-                delivery_source: STORED_SOURCE.to_owned(),
-            },
-        );
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let service = || {
+            DeliveryService::new(
+                RealDbSeams {
+                    budgets: Arc::clone(&calls),
+                    url: url.clone(),
+                    handler_digest: handler_digest.to_owned(),
+                    audit: Arc::clone(&audit),
+                    successes: Arc::default(),
+                },
+                DeliveryConfig {
+                    schema: schema.to_owned(),
+                    delivery_source: STORED_SOURCE.to_owned(),
+                },
+            )
+        };
 
-        assert_eq!(service.deliver_once().await, Ok(DeliveryOutcome::Delivered));
+        let worker = if development_capture {
+            let production = service();
+            assert_eq!(
+                production.deliver_once().await,
+                Ok(DeliveryOutcome::DeadLettered)
+            );
+            assert_eq!(production.deliver_once().await, Ok(DeliveryOutcome::Idle));
+            assert!(
+                calls.lock().unwrap().is_empty(),
+                "the handler was not invoked"
+            );
+            let state = client
+                .query_one(
+                    &format!(
+                        "SELECT state, attempt, dead_letter_reason, generation
+                          FROM {schema}.registry_webhook_delivery_state"
+                    ),
+                    &[],
+                )
+                .await
+                .unwrap();
+            assert_eq!(state.get::<_, String>(0), "dead-lettered");
+            assert_eq!(state.get::<_, i16>(1), 1);
+            assert_eq!(
+                state.get::<_, Option<String>>(2).as_deref(),
+                Some("payload-refused")
+            );
+            let development = service().with_posture(Posture::Development);
+            development
+                .replay(event_id, compiled_delivery_id, state.get(3))
+                .await
+                .unwrap();
+            audit.lock().unwrap().clear();
+            development
+        } else {
+            service()
+        };
+        assert_eq!(worker.deliver_once().await, Ok(DeliveryOutcome::Delivered));
+        assert_eq!(calls.lock().unwrap().len(), 1);
         assert_eq!(
             *audit.lock().expect("audit lock"),
             vec![

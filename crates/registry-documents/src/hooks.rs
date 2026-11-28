@@ -694,6 +694,7 @@ impl ActivatedHooks {
         store: PostgresStore,
         audit: DocumentsAudit,
     ) -> HookDeliveryService {
+        let posture = store.posture;
         let seams = DocumentsDeliverySeams {
             store,
             audit,
@@ -707,7 +708,8 @@ impl ActivatedHooks {
                     schema: self.schema.clone(),
                     delivery_source: self.delivery_source.clone(),
                 },
-            ),
+            )
+            .with_posture(posture),
         }
     }
 }

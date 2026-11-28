@@ -204,3 +204,8 @@ them.
 This boundary keeps Discovery an index (see the
 [Discovery README](../../products/discovery/README.md)): it neither defines
 adopter trust policy nor proxies native Evidence invocation.
+
+Discovery clients refuse development-marked catalog responses by default.
+For a development catalog, construct the client with
+`new DiscoveryClient({ baseUrl, allowDevelopmentPeer: true })`.
+The string constructor always uses the default refusal policy.

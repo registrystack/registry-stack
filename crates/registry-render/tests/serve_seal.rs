@@ -1502,6 +1502,38 @@ fn production_startup_reports_runtime_and_package_posture_together() {
 }
 
 #[test]
+fn library_runtime_checks_verify_the_configured_bundle() {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    use registry_render::runtime::{check_runtime, check_runtime_only, check_runtime_with_bundle};
+
+    let fixture = deployment(None);
+    let production = DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    };
+    for check in [
+        check_runtime(&fixture.runtime_path, false, None),
+        check_runtime_with_bundle(&fixture.runtime_path, false, None, None, production),
+    ] {
+        assert!(
+            check.diagnostics.iter().any(|finding| {
+                finding.code == "render.posture.seals-not-served" && finding.path == "/signing"
+            }),
+            "{:?}",
+            check.diagnostics
+        );
+    }
+    let package_root = fixture.runtime_path.parent().unwrap().join("package");
+    std::fs::write(package_root.join("SHA256SUMS"), "invalid checksum manifest").unwrap();
+    let configured = check_runtime(&fixture.runtime_path, false, None);
+    assert!(configured.diagnostics.iter().any(|finding| {
+        finding.code == "render.runtime.package-refused" && finding.path == "/package/root"
+    }));
+    let check = check_runtime_only(&fixture.runtime_path, false, None, production);
+    assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
+}
+
+#[test]
 fn runtime_check_reports_the_configured_packages_seals_without_bundle_flag() {
     let fixture = deployment(None);
     let check = || {
@@ -1532,7 +1564,13 @@ fn runtime_check_reports_the_configured_packages_seals_without_bundle_flag() {
     assert_eq!(exit, Some(0), "{report}");
 
     std::fs::create_dir(&package).unwrap();
-    let runtime_only = registry_render::runtime::check_runtime(&fixture.runtime_path, false, None);
+    let production = registry_platform_config::declared_from(None, None).unwrap();
+    let runtime_only = registry_render::runtime::check_runtime_only(
+        &fixture.runtime_path,
+        false,
+        None,
+        production,
+    );
     assert!(
         runtime_only.diagnostics.is_empty(),
         "{:?}",
