@@ -1751,4 +1751,42 @@ taskTemplates:
         project::test(&project, false).unwrap();
         project_types::generate(&project, &temp.path().join("types")).unwrap();
     }
+
+    #[test]
+    fn init_scaffolds_pass_runtime_check_at_default_production_posture() {
+        for template in templates::TEMPLATE_NAMES {
+            let temp = canonical_tempdir();
+            let project = temp.path().join(template);
+            project::init(&project, template).unwrap();
+            let runtime = project.join("runtime.example.yaml");
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let exit = main_entry_with_posture_resolver(
+                [
+                    OsString::from("caseworkctl"),
+                    OsString::from("--format"),
+                    OsString::from("json"),
+                    OsString::from("check"),
+                    project.as_os_str().to_owned(),
+                    OsString::from("--runtime-config"),
+                    runtime.as_os_str().to_owned(),
+                ],
+                &mut out,
+                &mut err,
+                |flag| registry_platform_config::declared_from(flag, None),
+            );
+            assert!(
+                err.is_empty(),
+                "{template}: {}",
+                String::from_utf8_lossy(&err)
+            );
+            let report: Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(exit, ExitCode::SUCCESS, "{template}: {report}");
+            assert_eq!(report["ok"], true, "{template}: {report}");
+            assert_eq!(
+                report["posture"]["value"], "production",
+                "{template}: {report}"
+            );
+            assert_eq!(report["diagnostics"], json!([]), "{template}: {report}");
+        }
+    }
 }

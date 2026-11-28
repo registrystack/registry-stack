@@ -115,15 +115,15 @@ not that either service is reachable. Rebuild and recheck whenever the registry 
 For your own Proposal-mode Action, choose an approval pattern and a new Casework directory:
 
 ```sh test-skip="the reader supplies their own Action and BReg deployment package"
-caseworkctl provider add ./action-review --posture development \
+caseworkctl provider add ./action-review \
   --breg-project ./registry --action <action-id> \
   --pattern two-peer-approval --breg-package <deployment-package>
 ```
 
-The command generates a runtime example for development, and production requires an explicit list of admitted OAuth clients.
+The command generates a runtime example listing a placeholder OAuth client (`casework-client`). Replace it with the OAuth client IDs your deployment admits.
 
 {/* Evidence: crates/registry-caseworkctl/src/provider_add.rs, write_yaml;
-    crates/registry-casework/src/config.rs, UNRESTRICTED_CLIENTS. */}
+    crates/registry-caseworkctl/src/project.rs, init. */}
 
 When BReg needs changes, the command exits 1 with
 `casework.provider-add.breg-changes-needed`, prints the missing YAML, and creates no project.

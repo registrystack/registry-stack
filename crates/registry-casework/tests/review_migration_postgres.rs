@@ -2150,10 +2150,6 @@ async fn private_network_plaintext_connection_requires_a_development_witness() {
             .replace(
                 "database:\n",
                 "database:\n  transport: private-network-plaintext\n",
-            )
-            .replace(
-                "allowedClients: unrestricted",
-                "allowedClients: [test-client]",
             );
     std::fs::write(&runtime, contents).unwrap();
     let declare = |posture| DeclaredPosture {

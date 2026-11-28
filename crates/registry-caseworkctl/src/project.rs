@@ -229,7 +229,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
         "secretProviders":{"file":{"root":absolute.join("secrets")}},
         "database":{"runtimeUrlRef":"secret:file/runtime-database-url","migrationUrlRef":"secret:file/migration-database-url"},
-        "authentication":{"oidc":{"issuers":{"main":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted"}}}},
+        "authentication":{"oidc":{"issuers":{"main":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":["casework-client"]}}}},
         "audit":{"path":absolute.join("state/audit.ndjson"),"hashKeyRef":"secret:file/casework-audit-key"},"contextProviders":{}});
     let runtime_path = stage.path().join("runtime.example.yaml");
     write!(
@@ -289,7 +289,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     }
     fs::rename(stage.path(), project)?;
     Ok(
-        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport. Run rstack dev start with the generated dev.yaml. To use this runtime file directly, set REGISTRY_STACK_POSTURE=development or pass --posture development." } else { "Run caseworkctl check, test and types. Run rstack dev start with the generated dev.yaml. To use this runtime file directly, set REGISTRY_STACK_POSTURE=development or pass --posture development." }}),
+        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport. Run rstack dev start with the generated dev.yaml." } else { "Run caseworkctl check, test and types. Run rstack dev start with the generated dev.yaml." }}),
     )
 }
 

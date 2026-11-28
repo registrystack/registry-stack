@@ -314,6 +314,14 @@ fn production_check_refuses_unrestricted_clients() {
     let project = root.path().join("project");
     project::init(&project, "standalone-decision").unwrap();
     let runtime = project.join("runtime.example.yaml");
+    let source = std::fs::read_to_string(&runtime).unwrap();
+    let listed = "        allowedClients:\n        - casework-client\n";
+    assert!(source.contains(listed), "{source}");
+    std::fs::write(
+        &runtime,
+        source.replace(listed, "        allowedClients: unrestricted\n"),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -377,6 +385,15 @@ fn a_check_acceptance_cannot_hide_a_development_setting() {
     let root = canonical_tempdir();
     let project = root.path().join("project");
     project::init(&project, "standalone-decision").unwrap();
+    let runtime = project.join("runtime.example.yaml");
+    let source = std::fs::read_to_string(&runtime).unwrap();
+    let listed = "        allowedClients:\n        - casework-client\n";
+    assert!(source.contains(listed), "{source}");
+    std::fs::write(
+        &runtime,
+        source.replace(listed, "        allowedClients: unrestricted\n"),
+    )
+    .unwrap();
     std::fs::write(
         project.join("check-acceptances.yaml"),
         r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1

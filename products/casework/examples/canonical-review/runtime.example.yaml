@@ -1,5 +1,4 @@
 apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
-# Development example. Production requires an explicit list of admitted OAuth clients.
 kind: CaseworkRuntimeConfig
 identity:
   databaseId: casework-canonical-review
@@ -21,7 +20,7 @@ authentication:
       main:
         issuer: https://identity.example.test/realms/registry
         audience: urn:example:casework
-        allowedClients: unrestricted
+        allowedClients: [casework-client]
 audit:
   path: /var/lib/registry-casework/audit.ndjson
   hashKeyRef: secret:file/casework-audit-key

@@ -1458,7 +1458,7 @@ fn write_yaml(path: &Path, value: &Value) -> Result<()> {
     let header = if path.file_name().and_then(|name| name.to_str()) == Some("casework.yaml") {
         "# yaml-language-server: $schema=.casework/schemas/project.schema.json\n"
     } else if path.file_name().and_then(|name| name.to_str()) == Some("runtime.example.yaml") {
-        "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n# Development example. Production requires an explicit list of admitted OAuth clients.\n"
+        "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n"
     } else {
         ""
     };
@@ -2043,7 +2043,7 @@ pub(super) fn add(
             pairing,
             package,
             source_writes: false,
-            next: format!("{next} The runtime example is for development. For local use, start with rstack dev, set REGISTRY_STACK_POSTURE=development, or pass --posture development."),
+            next: next.into(),
         },
     )
 }
@@ -3471,33 +3471,6 @@ exit 1
             );
             (exit, serde_json::from_slice::<Value>(&stdout).unwrap())
         };
-        let assert_production_refuses = || {
-            let (exit, report) = run_with_posture("production");
-            assert_eq!(
-                exit,
-                std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT)
-            );
-            let diagnostics = report["diagnostics"].as_array().unwrap();
-            let refusal = diagnostics
-                .iter()
-                .find(|diagnostic| diagnostic["code"] == "casework.posture.unrestricted-clients")
-                .expect("production reports unrestricted clients");
-            assert_eq!(
-                refusal["path"],
-                "/authentication/oidc/issuers/main/allowedClients"
-            );
-            assert_eq!(
-                refusal["source"]["file"],
-                json!(project.join("runtime.example.yaml"))
-            );
-            assert!(refusal["suggestedAction"]
-                .as_str()
-                .unwrap()
-                .contains("--posture development"));
-        };
-        assert_production_refuses();
-        assert!(!project.exists());
-
         let created = add(
             &project,
             &breg_project,
@@ -3506,24 +3479,17 @@ exit 1
             None,
             None,
             &bregctl,
-            DEVELOPMENT_POSTURE,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
         )
         .unwrap();
         assert_eq!(created["ok"], true, "initial generation");
         assert_eq!(created["outcome"], "created");
-        let policy_path = project.join("casework.yaml");
-        let export_path = project.join("context-providers/correct-address-context.json");
-        let policy_before = fs::read(&policy_path).unwrap();
-        let export_before = fs::read(&export_path).unwrap();
-        assert_production_refuses();
-        assert_eq!(fs::read(&policy_path).unwrap(), policy_before);
-        assert_eq!(fs::read(&export_path).unwrap(), export_before);
-        let (exit, report) = run_with_posture("development");
-        assert_eq!(exit, std::process::ExitCode::SUCCESS);
-        assert_eq!(report["posture"]["value"], "development");
         assert_eq!(
             created["next"],
-            "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package. The runtime example is for development. For local use, start with rstack dev, set REGISTRY_STACK_POSTURE=development, or pass --posture development."
+            "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package."
         );
         assert!(created.get("state").is_none());
         assert_eq!(created["providerId"], "correct-address-context");
@@ -3534,6 +3500,10 @@ exit 1
         );
         assert!(project.join("casework.yaml").is_file());
         assert!(!project.join("fixtures").exists());
+        let policy_path = project.join("casework.yaml");
+        let export_path = project.join("context-providers/correct-address-context.json");
+        let policy_before = fs::read(&policy_path).unwrap();
+        let export_before = fs::read(&export_path).unwrap();
         let runtime_path = project.join("runtime.example.yaml");
         let runtime_bytes = fs::read(&runtime_path).unwrap();
         let runtime = Reader::new(runtime_path.display().to_string())
@@ -3541,6 +3511,10 @@ exit 1
             .unwrap()
             .unwrap()
             .to_json_value();
+        assert_eq!(
+            runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"],
+            json!(["casework-client"])
+        );
         assert_eq!(
             runtime["contextProviders"]["correct-address-context"]["scopes"],
             json!(["registry:facility:review-status"])
@@ -3551,6 +3525,38 @@ exit 1
                 .unwrap()
                 .join(".casework/package"))
         );
+
+        let mut unrestricted_runtime = runtime.clone();
+        unrestricted_runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!("unrestricted");
+        write_yaml(&runtime_path, &unrestricted_runtime).unwrap();
+        let (exit, report) = run_with_posture("production");
+        assert_eq!(
+            exit,
+            std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT)
+        );
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        let refusal = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "casework.posture.unrestricted-clients")
+            .expect("production reports unrestricted clients");
+        assert_eq!(
+            refusal["path"],
+            "/authentication/oidc/issuers/main/allowedClients"
+        );
+        assert_eq!(
+            refusal["source"]["file"],
+            json!(project.join("runtime.example.yaml"))
+        );
+        assert!(refusal["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("--posture development"));
+        assert_eq!(fs::read(&policy_path).unwrap(), policy_before);
+        assert_eq!(fs::read(&export_path).unwrap(), export_before);
+        let (exit, report) = run_with_posture("development");
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        assert_eq!(report["posture"]["value"], "development");
         let mut incomplete_runtime = runtime.clone();
         incomplete_runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
             json!("${CLIENTS}");

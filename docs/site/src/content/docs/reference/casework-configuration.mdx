@@ -124,10 +124,7 @@ or pass `--posture development`.
 {/* Evidence: crates/registry-casework/src/main.rs declared;
     crates/registry-casework/src/config.rs RuntimeConfigLoader */}
 
-Run `caseworkctl provider add --posture development` to generate a project with
-a development runtime example. For production, replace `allowedClients: unrestricted`
-with the OAuth client IDs your deployment admits. On a repeat run,
-`provider add` checks the existing runtime example under the declared posture.
+`caseworkctl provider add` generates a runtime example listing a placeholder OAuth client (`casework-client`) that passes the default production check. Replace it with the OAuth client IDs your deployment admits. On a repeat run, `provider add` checks the existing runtime example under the declared posture.
 
 {/* Evidence: crates/registry-caseworkctl/src/lib.rs, posture_flag;
     crates/registry-caseworkctl/src/provider_add.rs, fake_bregctl_creates_atomically_and_rerun_is_read_only. */}

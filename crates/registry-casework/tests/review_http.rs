@@ -1010,12 +1010,16 @@ async fn development_ready_lists_the_settings_and_marks_each_http_response() {
     let idp = MockIdp::start().await;
     let temp = tempfile::tempdir().unwrap();
     let runtime = temp.path().join("runtime.yaml");
-    std::fs::copy(
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../products/casework/examples/canonical-review/runtime.example.yaml"
-        ),
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../products/casework/examples/canonical-review/runtime.example.yaml"
+    ))
+    .unwrap();
+    let listed = "        allowedClients: [casework-client]\n";
+    assert!(source.contains(listed), "{source}");
+    std::fs::write(
         &runtime,
+        source.replace(listed, "        allowedClients: unrestricted\n"),
     )
     .unwrap();
     let loaded = registry_casework::RuntimeConfig::load_file(

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `caseworkctl init`, `caseworkctl provider add`, and `products/casework/examples/canonical-review/runtime.example.yaml` list an explicit OAuth client (`allowedClients: [casework-client]`) instead of `allowedClients: unrestricted`, so the scaffolded `runtime.example.yaml` passes `caseworkctl check --runtime-config` under the default production posture.
+
 - The Node and Python clients accept development peers by default and offer a configuration option to reject them.
 
 - The `casework` runtime accepts `--posture` before or after `serve` and refuses repeated declarations.
