@@ -15,7 +15,6 @@ import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -54,6 +53,23 @@ def strict_json(body):
         return result
 
     return json.loads(body, object_pairs_hook=members)
+
+
+def read_hook_key(path, member):
+    try:
+        key = Path(path).read_bytes()
+    except (OSError, TypeError, ValueError):
+        raise CompositionError(f"{member} must name a readable file containing the exact key bytes.") from None
+    if key.startswith(b"whsec_"):
+        reason = "starts with whsec_"
+    elif not 32 <= len(key) <= 64:
+        newline = " including a trailing newline" if key.endswith(b"\n") else ""
+        reason = f"contains {len(key)} bytes{newline}, outside the 32 to 64 byte range"
+    else:
+        return key
+    raise CompositionError(
+        f"{member} {reason}. Write the exact key bytes to its file without encoding them or adding a newline."
+    )
 
 
 def proposal_subject(verified):
@@ -143,9 +159,7 @@ class Inbox:
         finally:
             db.close()
 
-    def accept(
-        self, method, path, headers, body, *, key, source, event_type, schema, now=None
-    ):
+    def accept(self, headers, body, *, key, source, event_type, schema, previous_key=None):
         from registry_client.breg import (
             BaseRegistryClientError,
             verify_hook_delivery,
@@ -154,19 +168,9 @@ class Inbox:
         if not body or len(body) > MAXIMUM_BODY:
             raise WakeRefused("hook body was refused")
         try:
-            # The window below uses this receiver's own clock, which tests inject.
             verified = verify_hook_delivery(
-                method=method,
-                path=path,
-                headers=headers,
-                body=body,
-                key=key,
-                caller_enforced_freshness=True,
+                headers=headers, body=body, key=key, previous_key=previous_key,
             )
-            delivered = datetime.fromisoformat(verified["delivery_time"])
-            instant = datetime.now(UTC) if now is None else now
-            if abs((instant - delivered).total_seconds()) > 300:
-                raise WakeRefused("hook delivery time is outside the accepted window")
             if (verified["source"], verified["type"], verified["dataschema"]) != (
                 source,
                 event_type,
@@ -178,8 +182,7 @@ class Inbox:
                 "hook signature or expected envelope was refused"
             ) from None
         proposal_id, version, effect_digest = proposal_subject(verified)
-        # Replay generations change the transport idempotency key. The event
-        # identity and captured bytes remain stable across every generation.
+        # The authenticated webhook id and body stay the same on retries and replays.
         identity = json.dumps(
             [verified["source"], verified["id"]], separators=(",", ":")
         )
@@ -611,7 +614,7 @@ class Composition:
         return count
 
 
-def receiver(inbox, *, key, source, event_type, schema):
+def receiver(inbox, *, key, source, event_type, schema, previous_key=None):
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
             super().setup()
@@ -649,11 +652,10 @@ def receiver(inbox, *, key, source, event_type, schema):
                     raise WakeRefused("hook body exceeds its bound")
                 headers = list(self.headers.items())
                 inbox.accept(
-                    "POST",
-                    self.path,
                     headers,
                     self.rfile.read(length),
                     key=key,
+                    previous_key=previous_key,
                     source=source,
                     event_type=event_type,
                     schema=schema,
@@ -718,7 +720,18 @@ def main():
     config = strict_json(args.config.read_bytes())
     inbox = Inbox(Path(config["inbox"]))
     if args.command == "serve-wakes":
-        key = Path(config["hookKeyFile"]).read_bytes()
+        key = read_hook_key(config["hookKeyFile"], "hookKeyFile")
+        previous_key = (
+            read_hook_key(config["hookPreviousKeyFile"], "hookPreviousKeyFile")
+            if "hookPreviousKeyFile" in config
+            else None
+        )
+        if previous_key == key:
+            raise CompositionError(
+                "hookPreviousKeyFile holds the same bytes as hookKeyFile. To rotate, write "
+                "32 new random bytes to the secret hookKeyFile references and keep the old "
+                "bytes behind hookPreviousKeyFile."
+            )
         host, port = config.get("listen", "127.0.0.1:9300").rsplit(":", 1)
         if host != "127.0.0.1":
             raise CompositionError("put the example receiver behind a local TLS proxy")
@@ -727,6 +740,7 @@ def main():
             receiver(
                 inbox,
                 key=key,
+                previous_key=previous_key,
                 source=config["hookSource"],
                 event_type=config["hookType"],
                 schema=config["hookSchema"],

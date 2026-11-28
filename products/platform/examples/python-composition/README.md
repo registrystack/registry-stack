@@ -43,12 +43,12 @@ TLS edge; the edge owns network access limits. BReg owns the Casework completion
 for its Proposals. Configure a BReg signed event destination for this
 application's `/hooks/breg` route, with the same key bytes as `hookKeyFile`.
 Set `hookSource`, `hookType`, and `hookSchema` to the producer's exact envelope.
-The native `verify_hook_delivery` helper verifies the method, path, ordered
-header pairs, and raw bytes under the maintained BReg delivery contract. The
-ordered pairs preserve repeated names so the native verifier can refuse them.
-The receiver also
-checks the delivery time within five minutes and persists the event identity
-and body digest before returning an empty `204`. It validates the native Proposal
+The receiver routes `POST` requests to `/hooks/breg`. The native
+`verify_hook_delivery` helper authenticates the Standard Webhooks headers and
+exact body and checks the timestamp within five minutes. Ordered header pairs
+preserve duplicates for the verifier to refuse. The receiver persists the
+authenticated source, `webhook-id`, and body digest before returning an empty
+`204`. It validates the native Proposal
 payload against BReg's maintained generated lifecycle schema in the source archive, checks the
 envelope against signed metadata and its Proposal subject, and stores only the
 Proposal id, submission version, effect digest, event identity, and body digest.

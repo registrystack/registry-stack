@@ -609,8 +609,9 @@ fn the_document_keeps_the_breg_generated_shape() {
 
     assert_eq!(document["openapi"], breg["openapi"]);
     assert_eq!(
-        document["components"]["securitySchemes"], breg["components"]["securitySchemes"],
-        "the same bearer scheme BReg serves"
+        document["components"]["securitySchemes"],
+        json!({"bearerAuth": breg["components"]["securitySchemes"]["bearerAuth"]}),
+        "the facade publishes the bearer scheme BReg serves on record routes"
     );
     // BReg enumerates concrete record paths (`/v1/records/contacts`); the
     // adapter's paths are concrete the same way, with no `{type}`

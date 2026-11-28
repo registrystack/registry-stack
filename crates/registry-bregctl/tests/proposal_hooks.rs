@@ -72,10 +72,7 @@ fn native_observers_load_owned_assets_generate_schema_and_sample_the_real_transi
         "--event".into(),
         "local".into(),
     ]);
-    assert_eq!(
-        sample["request"]["headers"]["ce-type"],
-        "proposal.cancelled"
-    );
+    assert_eq!(sample["request"]["body"]["type"], "proposal.cancelled");
     assert_eq!(sample["request"]["body"]["data"]["transition"], "cancelled");
     assert_eq!(sample["request"]["body"]["data"]["state"], "cancelled");
     assert_eq!(

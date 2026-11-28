@@ -665,8 +665,7 @@ seed:
         );
         assert_eq!(receipt["destinationId"], destination);
         assert_eq!(receipt["status"], "received");
-        assert!(receipt["generation"].as_u64().unwrap() > 0);
-        assert_eq!(receipt["attempt"], 1);
+        assert_eq!(receipt["webhookId"], receipt["eventId"]);
     }
     let payloads = session.success(&[
         "dev",
@@ -772,11 +771,7 @@ seed:
                     && receipt["deliveryId"] == delivery["deliveryId"]
             })
             .expect("replay has an authenticated receipt for the same event");
-        assert_eq!(
-            receipt["generation"].as_u64().unwrap(),
-            delivery["generation"].as_u64().unwrap() + 1
-        );
-        assert_eq!(receipt["attempt"], 1);
+        assert_eq!(receipt["webhookId"], delivery["eventId"]);
         assert_eq!(receipt["status"], "received");
     }
     // The operator queue also omits leased attempts. Check the durable terminal
@@ -786,7 +781,7 @@ seed:
         report["deliveries"].as_array().unwrap().is_empty()
     });
     let receipts_before = fs::read(&inbox).unwrap();
-    let webhook_key = fs::read(dev.join("secrets/webhook-key")).unwrap();
+    let webhook_key = fs::read(dev.join("secrets/inbox-key-receiver-a")).unwrap();
     let assertion_key = fs::read(dev.join("credentials/operator/assertion-key.jwk")).unwrap();
     session.stop();
     assert!(std::net::TcpStream::connect(receiver_address).is_err());
@@ -798,7 +793,7 @@ seed:
         assert_eq!(retained[field], state[field]);
     }
     assert!(std::net::TcpStream::connect(receiver_address).is_ok());
-    assert!(fs::read(dev.join("secrets/webhook-key")).unwrap() == webhook_key);
+    assert!(fs::read(dev.join("secrets/inbox-key-receiver-a")).unwrap() == webhook_key);
     assert!(fs::read(dev.join("credentials/operator/assertion-key.jwk")).unwrap() == assertion_key);
     assert_eq!(fs::read(&inbox).unwrap(), receipts_before);
     assert_eq!(events(), recovered);
@@ -1819,7 +1814,11 @@ fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let temporary = tempfile::Builder::new()
         .prefix("breg-native-source-test-")
-        .tempdir_in(binary.parent().unwrap())
+        .tempdir_in(if cfg!(target_os = "linux") {
+            std::env::temp_dir()
+        } else {
+            binary.parent().unwrap().to_owned()
+        })
         .unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let parent = fs::canonicalize(temporary.keep()).unwrap();
@@ -1830,6 +1829,16 @@ fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
         docker: installed("docker"),
     };
     operator_project(&session);
+    let registry_path = project.join("registry.yaml");
+    let mut source: Value = serde_norway::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    source["recordTypes"]["record"]["hooks"] = json!([
+        {"phase":"after","id":"record-created", "trigger":"created", "projection":["status"],
+         "handler":{"type":"url","destinationId":"receiver"}}
+    ]);
+    write(
+        &registry_path,
+        serde_norway::to_string(&source).unwrap().as_bytes(),
+    );
     let client_file = project.join("dev-clients.yaml");
     let mut clients = fs::read(&client_file).unwrap();
     clients.extend_from_slice(
@@ -1949,6 +1958,19 @@ seed:
         assert_eq!(found["data"]["domainData"]["status"], "active");
     });
     session.stop();
+    let key = project.join(".breg/dev/secrets/inbox-key-receiver");
+    fs::remove_file(&key).unwrap();
+    let refusal = session.dev(&[]);
+    assert!(!refusal.status.success());
+    let report: Value = serde_json::from_slice(&refusal.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["message"], "This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
+    session.remove();
+
+    let fresh = session.start();
+    assert_eq!(fresh["outcome"], "ready");
+    assert_eq!(fresh["packageSequence"], 1);
+    assert!(key.is_file());
+    session.remove();
     std::mem::forget(session);
     fs::remove_dir_all(parent).unwrap();
 }

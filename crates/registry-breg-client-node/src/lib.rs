@@ -70,11 +70,10 @@ pub struct JsonOutcome {
 /// Exact BReg hook request supplied by a receiver.
 #[napi(object)]
 pub struct HookDeliveryInput {
-    pub method: String,
-    pub path: String,
     pub headers: BTreeMap<String, String>,
     pub body: Buffer,
     pub key: Buffer,
+    pub previous_key: Option<Buffer>,
     /// Window around the receiver clock, in whole seconds from 1 to 3600.
     /// With neither this nor `callerEnforcedFreshness`, the window is 300
     /// seconds.
@@ -88,14 +87,11 @@ pub struct HookDeliveryInput {
 #[napi(object)]
 pub struct VerifiedHookDelivery {
     pub id: String,
+    pub timestamp: String,
     pub source: String,
     pub r#type: String,
     pub time: String,
     pub dataschema: String,
-    pub generation: String,
-    pub attempt: String,
-    pub delivery_time: String,
-    pub idempotency_key: String,
     pub body: Buffer,
 }
 
@@ -121,7 +117,7 @@ fn hook_freshness(
     }
 }
 
-/// Verify a BReg Version 1 hook signature. The delivery time must fall within
+/// Verify a BReg Standard Webhooks delivery. The delivery time must fall within
 /// 300 seconds of the receiver clock unless `maxSkewSeconds` or
 /// `callerEnforcedFreshness` says otherwise. Deduplication stays with the
 /// caller.
@@ -130,24 +126,20 @@ pub fn verify_hook_delivery(input: HookDeliveryInput) -> Result<VerifiedHookDeli
     let freshness = hook_freshness(input.max_skew_seconds, input.caller_enforced_freshness)?;
     let headers = input.headers.into_iter().collect::<Vec<_>>();
     let verified = verify_core_hook_delivery(CoreHookDelivery {
-        method: &input.method,
-        path: &input.path,
         headers: &headers,
         body: input.body.as_ref(),
         key: input.key.as_ref(),
+        previous_key: input.previous_key.as_ref().map(AsRef::as_ref),
         freshness,
     })
     .map_err(hook_verification_error)?;
     Ok(VerifiedHookDelivery {
         id: verified.id,
+        timestamp: verified.timestamp.to_string(),
         source: verified.source,
         r#type: verified.event_type,
         time: verified.time,
         dataschema: verified.data_schema,
-        generation: verified.generation,
-        attempt: verified.attempt,
-        delivery_time: verified.delivery_time,
-        idempotency_key: verified.idempotency_key,
         body: verified.body.into(),
     })
 }

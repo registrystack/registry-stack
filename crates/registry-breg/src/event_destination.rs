@@ -11,7 +11,9 @@ use std::{
 use ipnet::IpNet;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{ProtectedSecret, SecretError, SecretReference, SecretResolver};
-use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
+use registry_platform_crypto::delivery_signature::{
+    distinct_delivery_keys, DeliveryKey, DeliveryKeyError, DeliveryKeys,
+};
 use registry_platform_hooks::delivery::{UrlDestination, UrlDestinationParts};
 use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationProfile, DestinationTlsMaterial, EventDestinationPolicy,
@@ -41,7 +43,7 @@ const MAX_EVENT_REQUEST_BYTES: usize = MAX_DESTINATION_TARGET_BYTES
 const _: () = assert!(MAX_HOOK_PAYLOAD_BYTES as usize == MAX_DESTINATION_REQUEST_BODY_BYTES);
 
 /// Value-free refusal while activating deployed event destinations.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum EventDestinationActivationError {
     #[error("event destination activation found an invalid deployment binding")]
     InvalidBinding,
@@ -51,10 +53,105 @@ pub enum EventDestinationActivationError {
     DeliveryCeilingWidening,
     #[error("event destination secret resolution failed")]
     Secret,
-    #[error("event destination signing material is invalid")]
-    InvalidSigningMaterial,
+    #[error("{path} could not be resolved: {reason}. {action}")]
+    SigningKeyUnavailable {
+        path: String,
+        reason: String,
+        action: &'static str,
+    },
+    #[error("{path} has {length} bytes (trailing newline: {trailing_newline}). {}", signing_key_action(.reason))]
+    InvalidSigningKey {
+        path: String,
+        length: usize,
+        trailing_newline: bool,
+        reason: DeliveryKeyError,
+    },
+    #[error("{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there.")]
+    RepeatedSigningKey { first: String, second: String },
+    #[error("{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}.")]
+    PreviousEqualsCurrent { current: String, previous: String },
     #[error("event destination TLS material is invalid")]
     InvalidTlsMaterial,
+}
+
+pub(crate) const CURRENT_KEY_MEMBER: &str = "hmacSha256KeyRef";
+pub(crate) const PREVIOUS_KEY_MEMBER: &str = "previousHmacSha256KeyRef";
+
+pub(crate) fn present_hook_key_reference<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<SecretReference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    SecretReference::deserialize(deserializer).map(Some)
+}
+
+pub(crate) fn signing_key_action(reason: &DeliveryKeyError) -> &'static str {
+    match reason {
+        DeliveryKeyError::TooShort { .. } | DeliveryKeyError::TooLong { .. } => {
+            "Supply 32 to 64 exact key bytes."
+        }
+        DeliveryKeyError::SecretText => "Supply the exact key bytes without the whsec_ encoding.",
+        DeliveryKeyError::PreviousEqualsCurrent => unreachable!("key equality has both paths"),
+    }
+}
+
+fn resolve_delivery_key(
+    secrets: &SecretResolver,
+    path: &str,
+    reference: &SecretReference,
+) -> Result<DeliveryKey> {
+    let secret = secrets
+        .resolve_binary_reference(reference)
+        .map_err(
+            |error| EventDestinationActivationError::SigningKeyUnavailable {
+                path: path.to_owned(),
+                reason: error.to_string(),
+                action: error.suggested_action(),
+            },
+        )?;
+    let bytes = secret.expose_secret();
+    let length = bytes.len();
+    let trailing_newline = bytes.ends_with(b"\n");
+    let key = DeliveryKey::new(bytes).map_err(|reason| {
+        EventDestinationActivationError::InvalidSigningKey {
+            path: path.to_owned(),
+            length,
+            trailing_newline,
+            reason,
+        }
+    })?;
+    Ok(key)
+}
+
+pub(crate) fn resolve_delivery_keys(
+    secrets: &SecretResolver,
+    block: &str,
+    current: &SecretReference,
+    previous: Option<&SecretReference>,
+) -> Result<DeliveryKeys> {
+    let current = resolve_delivery_key(secrets, &format!("{block}.{CURRENT_KEY_MEMBER}"), current)?;
+    let Some(previous) = previous else {
+        return Ok(DeliveryKeys::new(current, None).expect("one validated key"));
+    };
+    let path = format!("{block}.{PREVIOUS_KEY_MEMBER}");
+    let previous = resolve_delivery_key(secrets, &path, previous)?;
+    DeliveryKeys::new(current, Some(previous)).map_err(|_| {
+        EventDestinationActivationError::PreviousEqualsCurrent {
+            current: format!("{block}.{CURRENT_KEY_MEMBER}"),
+            previous: path,
+        }
+    })
+}
+
+pub(crate) fn labeled_delivery_keys<'a>(
+    block: &str,
+    keys: &'a DeliveryKeys,
+) -> impl Iterator<Item = (String, &'a DeliveryKey)> + use<'a> {
+    std::iter::once((format!("{block}.{CURRENT_KEY_MEMBER}"), keys.current())).chain(
+        keys.previous()
+            .map(|key| (format!("{block}.{PREVIOUS_KEY_MEMBER}"), key)),
+    )
 }
 
 impl From<SecretError> for EventDestinationActivationError {
@@ -115,6 +212,7 @@ impl ActivatedEventDestinationRegistry {
         compiled: &CompiledRegistry,
         configured: &EventDestinationConfigs,
         secrets: &SecretResolver,
+        other_keys: Vec<(String, &DeliveryKey)>,
     ) -> Result<Self> {
         let compiled_ids = compiled
             .event_deliveries()
@@ -126,6 +224,33 @@ impl ActivatedEventDestinationRegistry {
         if compiled_ids != configured_ids {
             return Err(EventDestinationActivationError::InventoryMismatch);
         }
+
+        let mut keys = configured
+            .bindings
+            .iter()
+            .map(|(id, config)| {
+                let block = format!("destinations.hooks.{id}");
+                resolve_delivery_keys(
+                    secrets,
+                    &block,
+                    &config.hmac_sha256_key_ref,
+                    config.previous_hmac_sha256_key_ref.as_ref(),
+                )
+                .map(|keys| (id, keys))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let labeled_keys = keys
+            .iter()
+            .flat_map(|(id, keys)| labeled_delivery_keys(&format!("destinations.hooks.{id}"), keys))
+            .chain(other_keys)
+            .collect::<Vec<_>>();
+        distinct_delivery_keys(labeled_keys.iter().map(|(path, key)| (path.as_str(), *key)))
+            .map_err(
+                |error| EventDestinationActivationError::RepeatedSigningKey {
+                    first: error.first().to_owned(),
+                    second: error.second().to_owned(),
+                },
+            )?;
 
         let mut bindings = BTreeMap::new();
         for (logical_id, config) in &configured.bindings {
@@ -150,7 +275,11 @@ impl ActivatedEventDestinationRegistry {
                 .map(|delivery| delivery.maximum_payload_bytes)
                 .max()
                 .ok_or(EventDestinationActivationError::InventoryMismatch)?;
-            let activated = config.activate(logical_id, maximum_payload_bytes, secrets)?;
+            let resolved_keys = keys
+                .remove(logical_id)
+                .expect("one resolved key set per destination");
+            let activated =
+                config.activate(logical_id, maximum_payload_bytes, secrets, resolved_keys)?;
             if bindings
                 .insert(logical_id.clone(), Arc::new(activated))
                 .is_some()
@@ -277,6 +406,7 @@ struct EventDestinationConfig {
     dns_family: EventDestinationDnsFamily,
     allowed_private_cidrs: Vec<IpNet>,
     hmac_sha256_key_ref: SecretReference,
+    previous_hmac_sha256_key_ref: Option<SecretReference>,
     classification_ceiling: Classification,
     tls: Option<EventDestinationTlsConfig>,
     delivery_ceilings: EventDestinationDeliveryCeilings,
@@ -298,6 +428,7 @@ impl EventDestinationConfig {
             dns_family: raw.dns_family,
             allowed_private_cidrs,
             hmac_sha256_key_ref,
+            previous_hmac_sha256_key_ref: raw.previous_hmac_sha256_key_ref,
             classification_ceiling: raw.classification_ceiling,
             tls,
             delivery_ceilings,
@@ -315,7 +446,7 @@ impl EventDestinationConfig {
             self.dns_family.platform(),
         )
         .map_err(|_| EventDestinationConfigError)?;
-        EventDestinationRequestTemplate::event_delivery(
+        EventDestinationRequestTemplate::signed_event_delivery(
             &self.path,
             MAX_DESTINATION_REQUEST_BODY_BYTES,
             MAX_EVENT_REQUEST_BYTES,
@@ -329,12 +460,8 @@ impl EventDestinationConfig {
         logical_id: &str,
         maximum_payload_bytes: u32,
         secrets: &SecretResolver,
+        keys: DeliveryKeys,
     ) -> Result<UrlDestination> {
-        let secret = secrets.resolve_binary_reference(&self.hmac_sha256_key_ref)?;
-        let key = DeliveryKey::new(secret.expose_secret())
-            .map_err(|_| EventDestinationActivationError::InvalidSigningMaterial)?;
-        let keys = DeliveryKeys::new(key, None).expect("one validated key");
-
         let mut policy = EventDestinationPolicy::new_with_dns_family(
             logical_id,
             &self.origin,
@@ -530,8 +657,16 @@ pub(crate) struct RawEventDestinationConfig {
     dns_family: EventDestinationDnsFamily,
     /// Explicitly allowed private network ranges in canonical CIDR notation.
     allowed_private_cidrs: Vec<String>,
-    /// Runtime secret reference for the receiver's shared HMAC-SHA-256 key.
+    /// Runtime secret reference for the receiver's 32 to 64 exact HMAC-SHA-256 key bytes.
     hmac_sha256_key_ref: SecretReference,
+    /// Optional previous signing key during rotation.
+    #[serde(
+        default,
+        deserialize_with = "present_hook_key_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    previous_hmac_sha256_key_ref: Option<SecretReference>,
     /// Highest permitted classification, including fields used only in event conditions.
     classification_ceiling: Classification,
     /// Optional private CA and client identity secret references for HTTPS.

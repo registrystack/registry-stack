@@ -474,6 +474,132 @@ async fn production_schema_test_setup_failures_identify_configuration_without_se
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deployed_and_rehearsed_delivery_bindings_refuse_shared_or_invalid_keys() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    use registry_breg::startup::{check_with_connection_config_for_test, StartupError};
+
+    let baseline = String::from_utf8(compiled_fixture().1).unwrap();
+    let project_source = baseline.replacen(
+        "    fields:\n",
+        r#"    hooks:
+      - id: widget-created
+        phase: after
+        trigger: created
+        projection: [label]
+        handler: {type: url, destinationId: receiver}
+    fields:
+"#,
+        1,
+    );
+    let project = parse_project_yaml(project_source.as_bytes()).unwrap();
+    let module = parse_module_yaml(MODULE_SOURCE).unwrap();
+    let compiled = compile_project(&project, &[module], CompileProfile::Production).unwrap();
+    let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
+    let package = package_fixture(project_source.as_bytes(), &schema_fingerprint);
+    let suite = validate_fixture_journeys(JOURNEY_SOURCE, &compiled).unwrap();
+    let idp = MockIdp::start().await;
+    let current = "reviewAuthorities.casework.completion.hmacSha256KeyRef";
+    let previous = "reviewAuthorities.casework.completion.previousHmacSha256KeyRef";
+    let hook = "destinations.hooks.receiver.hmacSha256KeyRef";
+    let repeated = format!("{hook} and {current} resolve to the same key bytes. Give {current} its own key by writing 32 new random bytes to another secret and referencing it there.");
+    for (key, rotation, expected) in [
+        (&[0x22; 32][..], "", repeated.clone()),
+        (&[0x13; 31][..], "", format!("{current} has 31 bytes (trailing newline: false). Supply 32 to 64 exact key bytes.")),
+        (&[0x13; 32][..], "      previousHmacSha256KeyRef: secret:file/old-key\n", format!("{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}.")),
+    ] {
+        let database = TestDatabase::create(8).await;
+        let path = package.write_runtime_config(&database, &idp);
+        let secrets = package.directory.join("secrets");
+        write_private(&secrets.join("completion-key"), key);
+        write_private(&secrets.join("old-key"), key);
+        write_private(&secrets.join("hook-key"), &[0x22; 32]);
+        write_private(&secrets.join("review-token"), b"synthetic-review-token");
+        let bindings = r#"destinations:
+  hooks:
+    receiver:
+      origin: https://receiver.example.test
+      path: /events
+      networkProfile: production-https
+      dnsFamily: ipv4-only
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/hook-key
+      classificationCeiling: public
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 1000
+        maximumAttempts: 1
+reviewAuthorities:
+  casework:
+    endpoint: https://review.example.test/
+    profile: producer
+    producerId: registry-producer
+    recoveryDays: 7
+    tokenRef: secret:file/review-token
+    completion:
+      recipientBinding: registry
+      hmacSha256KeyRef: secret:file/completion-key
+"#;
+        let append_bindings = |path: &Path| {
+            let mut source = fs::read_to_string(path).unwrap();
+            source.push_str(bindings);
+            source.push_str(rotation);
+            fs::write(path, source).unwrap();
+        };
+        append_bindings(&path);
+        let config = load_runtime_config(&path).unwrap();
+        let database_for_test = prepare_schema_test_database_with_connection_configs_for_test(
+            &config,
+            &package.prepared,
+            &database.migration_config,
+            &database.runtime_config,
+        )
+        .await
+        .unwrap();
+        if expected == repeated {
+            let serving = TestDatabase::create(8).await;
+            let (migration, task) = serving.connect_migration().await;
+            install_compiled_schema(&migration, &compiled, &serving.runtime_role)
+                .await
+                .unwrap();
+            initialize_compiled_registry_state_for_test(
+                &migration,
+                &serving.runtime_role,
+                &compiled,
+                RegistryStateTestIdentity {
+                    package_id: &package.package.manifest().package_id,
+                    database_id: DATABASE_ID,
+                    label: &package.revision,
+                },
+            )
+            .await
+            .unwrap();
+            drop(migration);
+            task.abort();
+            let serving_path = package.write_runtime_config(&serving, &idp);
+            append_bindings(&serving_path);
+            let serve = prepare_with_connection_config_for_test(&serving_path, serving.runtime_config.clone()).await.err().unwrap();
+            let doctor = check_with_connection_config_for_test(&serving_path, serving.runtime_config.clone()).await.unwrap_err();
+            for error in [serve, doctor] {
+                assert!(matches!(error, StartupError::EventDestinations(ref message) if message == &repeated), "{error:?}");
+            }
+            serving.cleanup().await;
+        }
+        let error = execute_schema_test(
+            database_for_test, &config, &package.prepared, &suite,
+            successful_credential_bindings(&suite, &idp),
+        )
+        .await
+        .unwrap_err();
+        let FixtureError::RuntimeSetup(cause) = error else {
+            panic!("expected the runtime setup refusal, got {error:?}");
+        };
+        let detail = cause.to_string();
+        assert_eq!(detail.strip_prefix("schema-test ").unwrap_or(&detail), expected);
+        database.cleanup().await;
+    }
+    idp.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn production_schema_test_executor_uses_only_prepared_database_and_private_credentials() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let (compiled, project_source) = compiled_fixture();

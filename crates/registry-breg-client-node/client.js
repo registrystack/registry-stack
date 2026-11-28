@@ -109,12 +109,13 @@ function verifyHookDelivery(value) {
   try {
     const input = plainDataObject(
       value,
-      ['method', 'path', 'headers', 'body', 'key'],
-      ['maxSkewSeconds', 'callerEnforcedFreshness'],
+      ['headers', 'body', 'key'],
+      ['previousKey', 'maxSkewSeconds', 'callerEnforcedFreshness'],
     );
-    if (typeof input.method !== 'string' || typeof input.path !== 'string'
-      || !Buffer.isBuffer(input.body) || !Buffer.isBuffer(input.key)
+    if (!Buffer.isBuffer(input.body) || !Buffer.isBuffer(input.key)
       || isSharedArrayBuffer(input.body.buffer) || isSharedArrayBuffer(input.key.buffer)
+      || (input.previousKey !== undefined && (!Buffer.isBuffer(input.previousKey)
+        || isSharedArrayBuffer(input.previousKey.buffer)))
       || (input.maxSkewSeconds !== undefined && !Number.isSafeInteger(input.maxSkewSeconds))
       || (input.callerEnforcedFreshness !== undefined
         && typeof input.callerEnforcedFreshness !== 'boolean')) {
@@ -123,6 +124,7 @@ function verifyHookDelivery(value) {
     input.headers = hookHeaders(input.headers);
     input.body = Buffer.from(input.body);
     input.key = Buffer.from(input.key);
+    if (input.previousKey !== undefined) input.previousKey = Buffer.from(input.previousKey);
     return native.verifyHookDelivery(input);
   } catch (error) {
     throw normalize(error, 'invalid-request');

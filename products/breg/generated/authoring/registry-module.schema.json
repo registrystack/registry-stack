@@ -2695,7 +2695,7 @@
         },
         "id": {
           "$ref": "#/$defs/LocalId",
-          "description": "Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change."
+          "description": "Stable hook contract identifier, sent as the envelope `type`. Use a new identifier for a breaking payload change."
         },
         "phase": {
           "$ref": "#/$defs/HookPhase",

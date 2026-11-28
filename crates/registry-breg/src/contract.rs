@@ -5558,7 +5558,7 @@ pub enum BoundaryOperator {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HookSource {
-    /// Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.
+    /// Stable hook contract identifier, sent as the envelope `type`. Use a new identifier for a breaking payload change.
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- BREAKING: review completion wakes use Standard Webhooks. Casework signs
+  `webhook-id`, `webhook-timestamp` and the exact JSON bytes with
+  HMAC-SHA-256. `webhook-id` is the `eventId` and stays the same on every
+  retry, and each attempt carries its own timestamp. A wake carries `accept`,
+  `content-type`, `registry-recipient-binding`, `webhook-id`,
+  `webhook-timestamp` and `webhook-signature`. `Idempotency-Key`,
+  `Authorization` and named secret headers are no longer sent. A receiver
+  checks a 300-second window in either direction.
+- BREAKING: in `reviewCompletionDestinations.<id>`, set `hmacSha256KeyRef` in
+  place of `bearerTokenRef` or `auth`. The file holds 32 to 64 exact bytes.
+  Startup refuses `bearerTokenRef` and `auth` with the replacement, and refuses
+  a key that is unavailable, too long, starts with `whsec_`, or is shared with
+  another destination. Each refusal names the full paths and never a key byte.
+- To rotate, set `previousHmacSha256KeyRef` in the destination. Casework signs
+  with both keys, current first. It reads the key files at startup, so restart
+  the service after a change. Startup refuses a previous key equal to the
+  current key.
+
 - A migration adds a posture to the activation ledger. Every activation
   records production until the runtime declares its posture, and the
   activation objects in `caseworkctl` reports carry it as `posture`.

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- BREAKING: Document Store hook deliveries use Standard Webhooks. Each POST
+  carries `accept`, `content-type`, `webhook-id`, `webhook-timestamp` and
+  `webhook-signature`. The signature covers `webhook-id`, the attempt
+  timestamp and the exact body bytes. `webhook-id` equals the envelope `id` and
+  stays the same on every retry. The Version 1 headers and `Idempotency-Key`
+  are no longer sent. A receiver verifies the signature, checks a 300-second
+  window, parses the body and compares the envelope `id` with `webhook-id`.
+  See [Receive signed deliveries](https://docs.registrystack.org/reference/delivery-signing/).
+- Each `destinations.hooks.<id>.hmacSha256KeyRef` must resolve to 32 to 64
+  exact bytes. Startup refuses a longer key, a key that starts with `whsec_`,
+  an unavailable key, and two destinations that share key bytes. The refusal
+  names the full `destinations.hooks.<id>.<member>` paths and never a key
+  byte. A trailing newline counts as a key byte, so write a key with
+  `openssl rand -hex 32 | tr -d '\n' > key`.
+- During rotation, set `destinations.hooks.<id>.previousHmacSha256KeyRef`. The
+  Document Store signs with both keys, current first, including retried
+  deliveries. The previous reference is outside the binding a pending delivery
+  pins. Startup refuses a previous key equal to the current key.
+
 - A migration adds a posture to the activation ledger. Every activation
   records production until the runtime declares its posture, and the
   activation objects in `documentsctl` reports carry it as `posture`.

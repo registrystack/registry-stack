@@ -39,30 +39,21 @@ not expose token, private-key, record, or Proposal payload values.
 
 ## Hook verification
 
-`verifyHookDelivery({ method, path, headers, body, key })` authenticates one
-exact Base Registry Engine Version 1 delivery with the shared Rust verifier.
-Header lookup is case-insensitive. The result carries the CloudEvents
-attributes, generation, attempt, delivery time, idempotency key, and exact body.
-Generation and attempt remain decimal strings so the Node number boundary
-cannot round a signed value.
+`verifyHookDelivery({ headers, body, key, previousKey })` authenticates one
+Base Registry Engine Standard Webhooks delivery with the shared Rust verifier.
+Header names are case-insensitive. Supply the body and keys as Buffers. The wrapper refuses shared backing stores and copies the buffers before verification.
+The optional previous key supports rotation. A key contains 32 to 64 exact bytes.
 
-Body and key buffers must not use a shared backing store. Accepted buffers are
-copied before native verification so another worker cannot change the bytes
-being authenticated.
+The result contains the authenticated `id`, `timestamp` (a decimal string of signed Unix seconds),
+`source`, `type`, `time`, `dataschema`, and exact `body`. Deduplicate on `source` and
+`id` before acting. Retries and operator replays preserve the id.
 
-The helper refuses a delivery time more than 300 seconds from the receiver clock
-(code `stale-delivery`). Pass `maxSkewSeconds` (a whole number from 1 to 3600) for
-another window, or `callerEnforcedFreshness: true` to check only that the time is
-well formed and bound `deliveryTime` yourself, but not both. The helper applies no
-deduplication policy. `idempotencyKey` collapses automatic
-retries within one delivery generation; an effect that must remain once-only
-across operator replay uses a durable apply-once operation keyed by authenticated
-`source` plus `id`, or by an application business key, before acting on `body`.
+The default window is 300 seconds in either direction. Choose `maxSkewSeconds`
+(1 to 3600 seconds) for a custom window or `callerEnforcedFreshness: true` to enforce freshness yourself.
 
-Refusal throws `BaseRegistryClientError` with kind `hook-verification` and a
-code from `missing-header`, `invalid-delivery-time`, `stale-delivery`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`.
-The message names the input to check and never includes a header value, body,
-or key.
+A refusal raises `BaseRegistryClientError` with kind `hook-verification` and one of
+`missing-header`, `duplicate-header`, `invalid-content-type`, `invalid-id`, `invalid-timestamp`, `stale-delivery`, `malformed-signature`, `unsupported-version`, `signature-mismatch`, `body-too-large`, `invalid-key`, `invalid-envelope`, or `id-mismatch`.
+The message names what to check without exposing header values, body, or keys.
 
 ## Exact values and application metadata
 

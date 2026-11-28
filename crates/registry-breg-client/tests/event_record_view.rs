@@ -1817,7 +1817,7 @@ async fn other_failures_and_invalid_documents_stay_visible() {
         401,
         "Unauthorized",
         "authentication.refused",
-        "The bearer credential is missing or refused.",
+        "The bearer token or delivery signature was not accepted.",
     );
     let fixture = test_client(vec![MockResponse::problem(
         StatusCode::UNAUTHORIZED,
