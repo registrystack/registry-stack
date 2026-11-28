@@ -3,9 +3,10 @@
 use std::os::unix::fs::PermissionsExt;
 
 use registry_platform_config::{
-    SecretProvider, MAX_HOOK_ATTEMPTS, MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
-    MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, MAX_HOOK_ATTEMPTS,
+    MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
+use registry_platform_httputil::select::DestinationSelectionError;
 
 use super::*;
 
@@ -382,10 +383,21 @@ fn activation_refuses_ids_and_budgets_outside_the_block() {
 #[test]
 fn activation_refuses_a_url_outside_the_fixed_policy() {
     let (_directory, secrets) = keyed_secrets();
-    for url in [
-        "http://events.example.test/hooks",
-        "https://events.example.test/hooks?token=canary",
-        "https://events.example.test/hooks#part",
+    for (url, expected) in [
+        (
+            "http://events.example.test/hooks",
+            UrlHookActivationError::DestinationRefused(
+                DestinationSelectionError::PrivateNetworkNotDeclared,
+            ),
+        ),
+        (
+            "https://events.example.test/hooks?token=canary",
+            UrlHookActivationError::InvalidDestination,
+        ),
+        (
+            "https://events.example.test/hooks#part",
+            UrlHookActivationError::InvalidDestination,
+        ),
     ] {
         let refused = activate_url_hook_destination(
             SCHEDULING_BINDING_SCHEMA,
@@ -396,8 +408,410 @@ fn activation_refuses_a_url_outside_the_fixed_policy() {
         )
         .map(drop)
         .expect_err("the URL is refused");
-        assert_eq!(refused, UrlHookActivationError::InvalidDestination, "{url}");
+        assert_eq!(refused, expected, "{url}");
+        assert!(!refused.to_string().contains("canary"), "{refused}");
     }
+}
+
+fn declared_destination(
+    url: &str,
+    transport: Option<&str>,
+    ranges: &[&str],
+) -> UrlHookDestinationConfig {
+    let mut value = json!({
+        "url": url,
+        "hmacSha256KeyRef": "secret:file/hook-key",
+        "allowedPrivateCidrs": ranges,
+    });
+    if let Some(transport) = transport {
+        value["transport"] = json!(transport);
+    }
+    serde_json::from_value(value).expect("the test hook destination reads")
+}
+
+fn activate(
+    secrets: &SecretResolver,
+    config: &UrlHookDestinationConfig,
+) -> Result<(UrlDestination, Value), UrlHookActivationError> {
+    activate_url_hook_destination(
+        SCHEDULING_BINDING_SCHEMA,
+        "events",
+        config,
+        secrets,
+        MAXIMUM_PAYLOAD_BYTES,
+    )
+}
+
+/// T8 through the shared block: a declared private plain-text destination
+/// activates under its ranges, and its binding digest covers both.
+#[test]
+fn a_private_plain_text_destination_activates_under_its_ranges() {
+    let (_directory, secrets) = keyed_secrets();
+    let (destination, digest_value) = activate(
+        &secrets,
+        &declared_destination(
+            "http://receiver:9000/hooks",
+            Some("private-network-plaintext"),
+            &["172.16.0.0/12"],
+        ),
+    )
+    .expect("a declared private plain-text destination activates");
+    let policy = format!("{:?}", destination.policy());
+    assert!(policy.contains("PrivateServiceHttp"), "{policy}");
+    assert!(policy.contains("private_cidr_count: 1"), "{policy}");
+    assert_eq!(destination.request_target(), "/hooks");
+    assert_eq!(digest_value["transport"], "private-network-plaintext");
+    assert_eq!(
+        digest_value["allowedPrivateCidrs"],
+        json!(["172.16.0.0/12"])
+    );
+}
+
+/// A retained delivery row is refused once its destination changed, so the
+/// ranges and a private plain-text transport enter the binding digest. A
+/// transport the URL already implies leaves the digest as it was.
+#[test]
+fn the_binding_digest_covers_the_ranges_and_private_plain_text_only() {
+    let (_directory, secrets) = keyed_secrets();
+    let digest = |config: &UrlHookDestinationConfig| {
+        activate(&secrets, config)
+            .expect("the destination activates")
+            .0
+            .binding_digest()
+            .to_owned()
+    };
+    let https = "https://events.example.test/scheduling";
+    let plain = digest(&declared_destination(https, None, &[]));
+    assert_eq!(digest(&destination(https, 5_000, 8)), plain);
+    assert_eq!(
+        digest(&declared_destination(https, Some("verified-tls"), &[])),
+        plain
+    );
+    assert_ne!(
+        digest(&declared_destination(https, None, &["10.0.0.0/8"])),
+        plain
+    );
+    let loopback = "http://127.0.0.1:8080/hooks";
+    assert_eq!(
+        digest(&declared_destination(
+            loopback,
+            Some("loopback-plaintext"),
+            &[]
+        )),
+        digest(&declared_destination(loopback, None, &[]))
+    );
+    let private = |ranges: &[&str]| {
+        digest(&declared_destination(
+            "http://receiver:9000/hooks",
+            Some("private-network-plaintext"),
+            ranges,
+        ))
+    };
+    assert_ne!(private(&["10.0.0.0/8"]), private(&["172.16.0.0/12"]));
+}
+
+const PRIVATE: Option<&str> = Some("private-network-plaintext");
+
+/// One refused row of the M8 table as the shared block carries it: the
+/// configuration, the selector's refusal, and the member the check names.
+struct RefusedRow {
+    row: &'static str,
+    url: &'static str,
+    transport: Option<&'static str>,
+    ranges: Vec<String>,
+    refusal: Option<DestinationSelectionError>,
+    code: &'static str,
+    member: &'static str,
+}
+
+fn refused_rows() -> Vec<RefusedRow> {
+    use DestinationSelectionError as E;
+    let listed = |ranges: &[&str]| ranges.iter().map(|range| (*range).to_owned()).collect();
+    let selector = |error: E| (Some(error), error.code());
+    let mut rows = Vec::new();
+    for (name, url, transport, ranges, (refusal, code), member) in [
+        (
+            "T6",
+            "http://receiver:9000/hooks",
+            None,
+            listed(&["10.0.0.0/8"]),
+            selector(E::PrivateNetworkNotDeclared),
+            "/hook/url",
+        ),
+        (
+            "T7",
+            "http://receiver:9000/hooks",
+            PRIVATE,
+            listed(&[]),
+            selector(E::PrivateNetworkRequiresRanges),
+            "/hook/transport",
+        ),
+        (
+            "T12",
+            "https://receiver/hooks",
+            None,
+            listed(&["169.254.0.0/16"]),
+            selector(E::RangeNotPrivate),
+            "/hook/allowedPrivateCidrs/0",
+        ),
+        (
+            "T13",
+            "https://receiver/hooks",
+            None,
+            listed(&["0.0.0.0/0"]),
+            selector(E::RangeNotPrivate),
+            "/hook/allowedPrivateCidrs/0",
+        ),
+        (
+            "T14",
+            "https://receiver/hooks",
+            None,
+            listed(&["10.0.0.1/8"]),
+            selector(E::RangeNotCanonical),
+            "/hook/allowedPrivateCidrs/0",
+        ),
+        (
+            "T15",
+            "http://receiver:9000/hooks",
+            PRIVATE,
+            (0..17).map(|n| format!("10.{n}.0.0/16")).collect(),
+            selector(E::TooManyRanges),
+            "/hook/allowedPrivateCidrs",
+        ),
+        (
+            "T16",
+            "https://receiver:8443/hooks",
+            PRIVATE,
+            listed(&["10.0.0.0/8"]),
+            selector(E::TransportSchemeMismatch),
+            "/hook/transport",
+        ),
+        (
+            "T17",
+            "http://receiver:9000/hooks",
+            Some("verified-tls"),
+            listed(&[]),
+            selector(E::TransportSchemeMismatch),
+            "/hook/transport",
+        ),
+        (
+            "T18",
+            "http://localhost:9000/hooks",
+            PRIVATE,
+            listed(&["10.0.0.0/8"]),
+            selector(E::TransportHostMismatch),
+            "/hook/transport",
+        ),
+        (
+            "T19",
+            "http://receiver:9000/hooks",
+            Some("loopback-plaintext"),
+            listed(&[]),
+            selector(E::TransportHostMismatch),
+            "/hook/transport",
+        ),
+        (
+            "T20",
+            "http://10.1.2.3:9000/hooks",
+            PRIVATE,
+            listed(&["172.16.0.0/12"]),
+            selector(E::LiteralOutsideRanges),
+            "/hook/url",
+        ),
+        (
+            "query",
+            "https://receiver/hooks?token=canary",
+            None,
+            listed(&[]),
+            (None, "config.invalid-value"),
+            "/hook/url",
+        ),
+        (
+            "fragment",
+            "https://receiver/hooks#canary",
+            None,
+            listed(&[]),
+            (None, "config.invalid-value"),
+            "/hook/url",
+        ),
+    ] {
+        rows.push(RefusedRow {
+            row: name,
+            url,
+            transport,
+            ranges,
+            refusal,
+            code,
+            member,
+        });
+    }
+    rows
+}
+
+fn row_config(row: &RefusedRow) -> UrlHookDestinationConfig {
+    let ranges: Vec<&str> = row.ranges.iter().map(String::as_str).collect();
+    declared_destination(row.url, row.transport, &ranges)
+}
+
+/// The load rows the shared block can carry, refused at activation even
+/// when the product skipped its check. A selector refusal keeps its code.
+#[test]
+fn activation_refuses_what_the_destination_selector_refuses() {
+    let (_directory, secrets) = keyed_secrets();
+    for row in refused_rows() {
+        let refused = activate(&secrets, &row_config(&row))
+            .map(drop)
+            .expect_err(row.row);
+        match row.refusal {
+            Some(error) => {
+                assert_eq!(
+                    refused,
+                    UrlHookActivationError::DestinationRefused(error),
+                    "{}",
+                    row.row
+                );
+                assert_eq!(refused.code(), Some(row.code), "{}", row.row);
+                let message = refused.to_string();
+                assert!(message.contains(error.fix()), "{message}");
+                // The fix names "the receiver's range" in fixed words, so the
+                // probe is the configured host as written.
+                for value in ["receiver:", "receiver/", "10.1.2.3", "169.254", "canary"] {
+                    assert!(!message.contains(value), "{}: {message}", row.row);
+                }
+            }
+            None => {
+                assert_eq!(
+                    refused,
+                    UrlHookActivationError::InvalidDestination,
+                    "{}",
+                    row.row
+                );
+                assert_eq!(refused.code(), None, "{}", row.row);
+            }
+        }
+    }
+}
+
+const HOOK: &str = "/hook";
+
+/// S5: the shared check reports what activation refuses, with the code and
+/// the member to change, so a product's check refuses it before startup.
+#[test]
+fn the_shared_check_reports_what_activation_refuses() {
+    let (_directory, secrets) = keyed_secrets();
+    for row in refused_rows() {
+        let found = check_url_hook_destination(&row_config(&row), HOOK);
+        let coded: Vec<(&str, &str)> = found
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(coded, [(row.code, row.member)], "{}", row.row);
+        for diagnostic in &found {
+            assert!(!diagnostic.suggested_action.is_empty(), "{}", row.row);
+            for value in ["receiver", "10.1.2.3", "169.254", "canary", "localhost"] {
+                assert!(
+                    !diagnostic.message.contains(value),
+                    "{}: {}",
+                    row.row,
+                    diagnostic.message
+                );
+            }
+        }
+    }
+    for (url, transport, ranges) in [
+        ("https://receiver/hooks", None, &[][..]),
+        (
+            "https://receiver/hooks",
+            Some("verified-tls"),
+            &["10.0.0.0/8"][..],
+        ),
+        ("http://localhost:9000/hooks", None, &[][..]),
+        (
+            "http://127.0.0.1:9000/hooks",
+            Some("loopback-plaintext"),
+            &[][..],
+        ),
+        (
+            "http://receiver:9000/hooks",
+            PRIVATE,
+            &["172.16.0.0/12"][..],
+        ),
+    ] {
+        let config = declared_destination(url, transport, ranges);
+        assert!(
+            check_url_hook_destination(&config, HOOK).is_empty(),
+            "{url}"
+        );
+        activate(&secrets, &config).unwrap_or_else(|error| panic!("{url}: {error}"));
+    }
+}
+
+const ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+    api_version: "registry.registrystack.org/example-runtime/v1alpha1",
+    kind: "ExampleRuntimeConfig",
+};
+
+#[derive(Debug, serde::Deserialize)]
+struct Example {
+    hook: UrlHookDestinationConfig,
+}
+
+fn check_offline(
+    body: &str,
+    stand_in_for: fn(&str) -> &'static str,
+) -> registry_platform_config::RuntimeFileCheck<Example> {
+    let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let path = directory.path().join("runtime.yaml");
+    std::fs::write(
+        &path,
+        format!(
+            "apiVersion: {}\nkind: {}\nhook:\n{body}",
+            ENVELOPE.api_version, ENVELOPE.kind
+        ),
+    )
+    .unwrap();
+    RuntimeConfigLoader::new_without_posture(ENVELOPE).check_offline::<Example>(
+        &path,
+        false,
+        stand_in_for,
+    )
+}
+
+/// The file twin positions each finding at its member, and skips a member
+/// that holds an expression the check did not fill.
+#[test]
+fn the_file_check_positions_findings_and_skips_deferred_members() {
+    let file = check_offline(
+        "  url: http://receiver:9000/hooks\n  transport: loopback-plaintext\n  hmacSha256KeyRef: secret:file/hook-key\n",
+        |_| registry_platform_config::DEFAULT_STAND_IN,
+    );
+    let config = &file.loaded.as_ref().expect("the file decodes").config.hook;
+    let found = check_url_hook_destination_file(config, HOOK, &file, "ExampleRuntimeConfig");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(
+        found[0].code,
+        "platform.destination.transport-host-mismatch"
+    );
+    assert_eq!(found[0].path, "/hook/transport");
+    assert_eq!(found[0].artifact.as_deref(), Some("ExampleRuntimeConfig"));
+    assert_eq!(found[0].source.as_ref().expect("positioned").line, Some(5));
+
+    // The stand-in would be refused, but the member holds an expression.
+    let file = check_offline(
+        "  url: \"${HOOK_URL}\"\n  hmacSha256KeyRef: secret:file/hook-key\n",
+        |_| "http://receiver:9000/hooks",
+    );
+    let config = &file.loaded.as_ref().expect("the file decodes").config.hook;
+    assert_eq!(
+        check_url_hook_destination(config, HOOK)
+            .into_iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        ["platform.destination.private-network-not-declared"],
+        "the stand-in alone is refused"
+    );
+    let found = check_url_hook_destination_file(config, HOOK, &file, "ExampleRuntimeConfig");
+    assert!(found.is_empty(), "{found:?}");
 }
 
 #[cfg(feature = "receiver")]

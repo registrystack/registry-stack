@@ -2,12 +2,13 @@
 
 //! Activation of the shared URL hook destination block.
 //!
-//! [`UrlHookDestinationConfig`] is the simple destination block: a URL, an
-//! HMAC-SHA256 key reference, and a delivery budget. Activation turns each
-//! configured destination into a [`UrlDestination`] under a fixed outbound
-//! policy (the URL's own origin, no private address ranges, no client
-//! certificate) and digests the non-secret binding, so a retained delivery
-//! row can be refused once its destination changed. The product names the
+//! [`UrlHookDestinationConfig`] is the simple destination block: a URL, how
+//! it is reached, an HMAC-SHA256 key reference, and a delivery budget.
+//! Activation turns each configured destination into a [`UrlDestination`]
+//! under a fixed outbound policy (the URL's own origin, the declared
+//! transport and private ranges, no client certificate) and digests the
+//! non-secret binding, so a retained delivery row can be refused once its
+//! destination changed. The product names the
 //! digest's schema version, so two products never share a digest domain.
 
 use std::collections::BTreeMap;
@@ -17,17 +18,21 @@ use std::time::Duration;
 
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{
-    SecretError, SecretReference, SecretResolver, UrlHookDestinationConfig,
+    PrivateRangeRefusal, RuntimeFileCheck, SecretError, SecretReference, SecretResolver,
+    UrlHookDestinationConfig,
 };
 use registry_platform_crypto::delivery_signature::{
     distinct_delivery_keys, DeliveryKey, DeliveryKeyError, DeliveryKeys,
 };
 use registry_platform_httputil::destination::EventDestinationPolicy;
-use registry_platform_yaml::LocalId;
+use registry_platform_httputil::select::{DestinationSelectionError, TransportClass};
+use registry_platform_yaml::{Diagnostic, LocalId};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::destination::{url_destination_address, UrlDestination, UrlDestinationParts};
+use super::destination::{
+    url_destination_address_selected, UrlDestination, UrlDestinationError, UrlDestinationParts,
+};
 
 const CURRENT_KEY_MEMBER: &str = "hmacSha256KeyRef";
 const PREVIOUS_KEY_MEMBER: &str = "previousHmacSha256KeyRef";
@@ -42,6 +47,10 @@ pub enum UrlHookActivationError {
     /// The URL or the policy built from it is refused.
     #[error("the URL hook destination is invalid")]
     InvalidDestination,
+    /// The shared destination selector refused the URL, its transport, or
+    /// its private ranges.
+    #[error("the URL hook destination is refused: {0}. {fix}", fix = .0.fix())]
+    DestinationRefused(DestinationSelectionError),
     /// The key reference could not be resolved.
     #[error("Destination {destination} could not resolve {member}: {reason}. {}", reason.suggested_action())]
     SigningKeyUnavailable {
@@ -64,6 +73,147 @@ pub enum UrlHookActivationError {
          32 new random bytes to another secret and referencing it there."
     )]
     RepeatedSigningKey { first: String, second: String },
+}
+
+impl UrlHookActivationError {
+    /// The selector's stable code for a [`Self::DestinationRefused`]
+    /// destination, or `None` for every other refusal.
+    #[must_use]
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::DestinationRefused(error) => Some(error.code()),
+            Self::DeliveryBudgetWidening
+            | Self::InvalidDestination
+            | Self::SigningKeyUnavailable { .. }
+            | Self::InvalidSigningKey { .. }
+            | Self::RepeatedSigningKey { .. } => None,
+        }
+    }
+}
+
+/// Every refusal activation would make from the destination's URL,
+/// transport and private ranges, as diagnostics under `pointer`, the
+/// pointer of the destination block (`/hooks/destinations/events`).
+///
+/// Each refused range is reported at its entry, as
+/// [`PrivateRanges::check`](registry_platform_config::PrivateRanges::check)
+/// reports it. Once the ranges are valid, a selector refusal is reported
+/// with its code at `{pointer}/transport` when the declared transport
+/// disagrees with the URL or lacks ranges, and at `{pointer}/url` otherwise.
+/// A URL with a query or a fragment is reported at `{pointer}/url` as
+/// `config.invalid-value`. No message repeats a configured value.
+#[must_use]
+pub fn check_url_hook_destination(
+    config: &UrlHookDestinationConfig,
+    pointer: &str,
+) -> Vec<Diagnostic> {
+    let mut found = config
+        .allowed_private_cidrs
+        .check(&format!("{pointer}/{RANGES_MEMBER}"));
+    if let Some(refusal) = destination_refusal(config, pointer) {
+        found.push(Diagnostic::error(
+            refusal.code,
+            refusal.member,
+            refusal.message,
+            refusal.suggested_action,
+        ));
+    }
+    found
+}
+
+/// [`check_url_hook_destination`] for an offline check of `file`, whose
+/// document kind is `artifact`. Each diagnostic is positioned at its member.
+/// The selector is not asked when the URL, the transport, or a range holds
+/// an expression the check did not fill, since the stand-in decides nothing.
+#[must_use]
+pub fn check_url_hook_destination_file<T>(
+    config: &UrlHookDestinationConfig,
+    pointer: &str,
+    file: &RuntimeFileCheck<T>,
+    artifact: &str,
+) -> Vec<Diagnostic> {
+    let ranges = format!("{pointer}/{RANGES_MEMBER}");
+    let mut found = config
+        .allowed_private_cidrs
+        .check_file(&ranges, file, artifact);
+    let deferred = file.defers(&format!("{pointer}/url"))
+        || file.defers(&format!("{pointer}/transport"))
+        || file.defers_within(&ranges);
+    if !deferred {
+        if let Some(refusal) = destination_refusal(config, pointer) {
+            found.push(file.error_at(
+                artifact,
+                refusal.code,
+                &refusal.member,
+                refusal.message,
+                refusal.suggested_action,
+            ));
+        }
+    }
+    found
+}
+
+const RANGES_MEMBER: &str = "allowedPrivateCidrs";
+
+/// What activation would refuse in a destination's URL and transport.
+struct DestinationRefusal {
+    code: &'static str,
+    member: String,
+    message: String,
+    suggested_action: &'static str,
+}
+
+/// The refusal activation would make from the URL and the transport, once
+/// every range is valid. A refused range is the range check's to report.
+fn destination_refusal(
+    config: &UrlHookDestinationConfig,
+    pointer: &str,
+) -> Option<DestinationRefusal> {
+    let ranges = config.allowed_private_cidrs.ranges().ok()?;
+    match url_destination_address_selected(config.url.as_str(), declared_transport(config), &ranges)
+    {
+        Ok(_) => None,
+        Err(UrlDestinationError::Refused(error)) => {
+            let member = match error {
+                DestinationSelectionError::TransportSchemeMismatch
+                | DestinationSelectionError::TransportHostMismatch
+                | DestinationSelectionError::PrivateNetworkRequiresRanges => "transport",
+                _ => "url",
+            };
+            Some(DestinationRefusal {
+                code: error.code(),
+                member: format!("{pointer}/{member}"),
+                message: error.to_string(),
+                suggested_action: error.fix(),
+            })
+        }
+        Err(UrlDestinationError::InvalidBinding) => Some(DestinationRefusal {
+            code: "config.invalid-value",
+            member: format!("{pointer}/url"),
+            message: "the hook URL carries a query or a fragment".to_owned(),
+            suggested_action: "Remove the query and the fragment from the hook URL.",
+        }),
+    }
+}
+
+fn declared_transport(config: &UrlHookDestinationConfig) -> Option<TransportClass> {
+    config
+        .transport
+        .as_ref()
+        .map(|transport| TransportClass::from(*transport.get()))
+}
+
+/// A refused range carries the selector's code, which is the code its
+/// configuration check reports.
+fn range_refusal(refusal: PrivateRangeRefusal) -> DestinationSelectionError {
+    match refusal {
+        PrivateRangeRefusal::Malformed => DestinationSelectionError::RangeMalformed,
+        PrivateRangeRefusal::NotPrivate | PrivateRangeRefusal::MetadataAddress => {
+            DestinationSelectionError::RangeNotPrivate
+        }
+        PrivateRangeRefusal::NotCanonical => DestinationSelectionError::RangeNotCanonical,
+        PrivateRangeRefusal::TooMany => DestinationSelectionError::TooManyRanges,
+    }
 }
 
 /// Every configured URL hook destination, activated, with the digest of the
@@ -146,9 +296,19 @@ pub fn activate_url_hook_destination(
     if LocalId::new(logical_id).is_err() || !config.within_delivery_budget() {
         return Err(UrlHookActivationError::DeliveryBudgetWidening);
     }
-    let address = url_destination_address(config.url.as_str())
-        .map_err(|_| UrlHookActivationError::InvalidDestination)?;
-    let policy = EventDestinationPolicy::new(logical_id, &address.origin, address.profile, &[])
+    let ranges = config
+        .allowed_private_cidrs
+        .ranges()
+        .map_err(|refusal| UrlHookActivationError::DestinationRefused(range_refusal(refusal)))?;
+    let address =
+        url_destination_address_selected(config.url.as_str(), declared_transport(config), &ranges)
+            .map_err(|error| match error {
+                UrlDestinationError::Refused(error) => {
+                    UrlHookActivationError::DestinationRefused(error)
+                }
+                UrlDestinationError::InvalidBinding => UrlHookActivationError::InvalidDestination,
+            })?;
+    let policy = EventDestinationPolicy::from_selected(logical_id, &address.selected)
         .map_err(|_| UrlHookActivationError::InvalidDestination)?;
     let (current, _, _) = resolve_delivery_key(
         secrets,
@@ -171,13 +331,22 @@ pub fn activate_url_hook_destination(
     } else {
         DeliveryKeys::new(current, None).expect("one validated key")
     };
-    let digest_value = json!({
+    let mut digest_value = json!({
         "logicalId": logical_id,
         "url": config.url.as_str(),
         "hmacSha256KeyRef": config.hmac_sha256_key_ref.as_str(),
         "attemptTimeoutMilliseconds": config.attempt_timeout_milliseconds,
         "maximumAttempts": config.maximum_attempts,
     });
+    // A transport the URL implies and an empty range list leave the digest
+    // of a destination that declares neither as it was.
+    if address.selected.is_private_plaintext() {
+        digest_value["transport"] = json!(config.transport);
+    }
+    if !ranges.is_empty() {
+        digest_value["allowedPrivateCidrs"] =
+            json!(ranges.iter().map(ToString::to_string).collect::<Vec<_>>());
+    }
     let binding_digest = canonical_digest(&json!({
         "schemaVersion": binding_schema,
         "destination": digest_value,

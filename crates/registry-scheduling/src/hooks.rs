@@ -575,7 +575,8 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
         UrlHookActivationError::DeliveryBudgetWidening => {
             HookActivationError::DeliveryBudgetWidening
         }
-        UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
+        UrlHookActivationError::InvalidDestination
+        | UrlHookActivationError::DestinationRefused(_) => HookActivationError::InvalidDestination,
         UrlHookActivationError::SigningKeyUnavailable {
             destination,
             member,
@@ -1346,6 +1347,8 @@ mod tests {
             .expect("the test secret resolver");
         let binding = |timeout: u32, attempts: u8| UrlHookDestinationConfig {
             url: Url::new("https://events.example.test/scheduling").expect("the test URL"),
+            transport: None,
+            allowed_private_cidrs: registry_platform_config::PrivateRanges::default(),
             hmac_sha256_key_ref: SecretReference::parse("secret:file/hook-key")
                 .expect("the test key reference"),
             previous_hmac_sha256_key_ref: None,

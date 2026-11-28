@@ -2511,6 +2511,10 @@ pub(crate) fn destination_refusal_name(fault: &DestinationSendError) -> &'static
         DestinationSendError::TransportFailedAfterConnect => "transport-failed-after-connect",
         DestinationSendError::TooManyResponseHeaders => "too-many-response-headers",
         DestinationSendError::ResponseHeaderBytesExceeded => "response-header-bytes-exceeded",
+        DestinationSendError::CredentialRequiresProtectedTransport => {
+            "credential-requires-protected-transport"
+        }
+        DestinationSendError::DestinationNameMismatch => "destination-name-mismatch",
     }
 }
 
@@ -3282,7 +3286,7 @@ mod tests {
     /// the partition's exhaustive match (a new variant lands in the
     /// refusal arm and is caught by this table) and the closed journal
     /// name mapping, whose non-exhaustive match refuses to compile.
-    const EVERY_SEND_FAULT: [DestinationSendError; 23] = [
+    const EVERY_SEND_FAULT: [DestinationSendError; 25] = [
         DestinationSendError::InvalidRemainingTimeout,
         DestinationSendError::InvalidFrozenPolicy,
         DestinationSendError::InvalidFrozenRequest,
@@ -3306,6 +3310,8 @@ mod tests {
         DestinationSendError::TransportFailedAfterConnect,
         DestinationSendError::TooManyResponseHeaders,
         DestinationSendError::ResponseHeaderBytesExceeded,
+        DestinationSendError::CredentialRequiresProtectedTransport,
+        DestinationSendError::DestinationNameMismatch,
     ];
 
     /// The one partition classifies every platform send fault on the
@@ -3329,7 +3335,7 @@ mod tests {
             &DestinationSendError,
             ErrorClass,
             DestinationDeliveryCertainty,
-        ); 23] = [
+        ); 25] = [
             (
                 &DestinationSendError::InvalidRemainingTimeout,
                 ErrorClass::EgressRefused,
@@ -3444,6 +3450,16 @@ mod tests {
                 &DestinationSendError::ResponseHeaderBytesExceeded,
                 ErrorClass::UpstreamTooLarge,
                 DestinationDeliveryCertainty::MaybeSent,
+            ),
+            (
+                &DestinationSendError::CredentialRequiresProtectedTransport,
+                ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
+            ),
+            (
+                &DestinationSendError::DestinationNameMismatch,
+                ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
         ];
         for (fault, class, certainty) in expected {
@@ -3563,6 +3579,16 @@ mod tests {
             (
                 destination_refusal_name(&DestinationSendError::ResponseHeaderBytesExceeded),
                 "response-header-bytes-exceeded",
+            ),
+            (
+                destination_refusal_name(
+                    &DestinationSendError::CredentialRequiresProtectedTransport,
+                ),
+                "credential-requires-protected-transport",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::DestinationNameMismatch),
+                "destination-name-mismatch",
             ),
         ];
         assert_eq!(

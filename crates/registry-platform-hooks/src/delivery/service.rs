@@ -1781,6 +1781,12 @@ impl DeliveryFailureReason {
             DestinationSendError::TransportFailedAfterConnect => Self::TransportFailedAfterConnect,
             DestinationSendError::TooManyResponseHeaders => Self::TooManyResponseHeaders,
             DestinationSendError::ResponseHeaderBytesExceeded => Self::ResponseHeaderBytesExceeded,
+            // An event delivery carries no credential, since its template
+            // forbids authorization, and is sent by the fixed family, never by
+            // a selected client, so neither refusal reaches a hook. Each keeps
+            // a word the stored dead-letter constraint already admits.
+            DestinationSendError::CredentialRequiresProtectedTransport
+            | DestinationSendError::DestinationNameMismatch => Self::InvalidFrozenRequest,
         }
     }
 
@@ -1874,7 +1880,9 @@ fn classify_send_error(
         }
         DestinationSendError::InvalidRemainingTimeout
         | DestinationSendError::InvalidFrozenPolicy
-        | DestinationSendError::InvalidFrozenRequest => {
+        | DestinationSendError::InvalidFrozenRequest
+        | DestinationSendError::CredentialRequiresProtectedTransport
+        | DestinationSendError::DestinationNameMismatch => {
             DeliveryAuditOutcome::DestinationPolicyRefused
         }
     }
@@ -2284,6 +2292,25 @@ mod tests {
             DeliveryFailureReason::from_send_error(DestinationSendError::ResolutionFailed),
             "operator metadata must not collapse distinct resolver refusals"
         );
+    }
+
+    /// A refusal an event delivery cannot raise keeps a word the stored
+    /// dead-letter constraint already admits, so no schema change follows a
+    /// new platform refusal.
+    #[test]
+    fn a_refusal_no_event_delivery_raises_keeps_an_admitted_word() {
+        for refusal in [
+            DestinationSendError::CredentialRequiresProtectedTransport,
+            DestinationSendError::DestinationNameMismatch,
+        ] {
+            let reason = DeliveryFailureReason::from_send_error(refusal);
+            assert_eq!(reason, DeliveryFailureReason::InvalidFrozenRequest);
+            assert!(DeliveryFailureReason::ALL.contains(&reason));
+            assert_eq!(
+                classify_send_error(refusal, false),
+                DeliveryAuditOutcome::DestinationPolicyRefused
+            );
+        }
     }
 
     #[test]

@@ -134,6 +134,42 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 }
 ```
 
+## Destination selection
+
+`select::select_destination(url, transport, ranges)` decides every outbound
+destination's transport in one place. https selects verified TLS, http to a
+loopback host selects loopback plain text, and http to any other host is
+refused until the configuration declares `private-network-plaintext` with its
+`allowedPrivateCidrs`. Each refusal has a `platform.destination.*` code and a
+fix that repeat no configured value. Three outbound families consume a
+selection:
+
+- `FixedDestinationPolicy::from_selected` freezes a fixed-destination policy
+  from it. The credential slot is refused over private plain text, and so is a
+  send in any slot that carries an authorization value, an AWS signature or a
+  script API key, before anything is resolved.
+- `OutboundClientBuilder::destination` confines a client's name resolution.
+  The client resolves only the selected host name. Every answer must be one
+  the selection admits: never a cloud metadata or always-denied address over
+  https, and loopback only for loopback plain text. Over https a private
+  answer needs no range, so the selection's ranges have no effect on a client.
+  An address literal is checked when the client is built, where an explicit
+  loopback literal is admitted over https. A literal host or `localhost` other
+  than the selected one is never resolved, so the caller sends only to the
+  selected origin and checks a joined or followed URL with
+  `SelectedDestination::admits_url`. A private plain-text selection never
+  builds a client, since a client carries whatever credential its caller adds.
+- `ServiceBaseUrl::selected` refuses a private plain-text selection for the
+  same reason.
+
+A destination that carries a credential selects with
+`select::select_credential_destination`, which refuses private plain text
+with `platform.destination.credential-requires-protected-transport`.
+`SelectedDestination::admits_credentials` is the one predicate behind every
+credential refusal. A credential-free fetch validates a selection with
+`select::validate_selected_fetch`, which resolves once, admits each answer as
+a selected client would, and pins the request to the admitted addresses.
+
 ## URL Policy
 
 - Data destinations using `DestinationProfile::ProductionHttps` or

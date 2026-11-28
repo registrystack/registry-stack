@@ -146,6 +146,39 @@ fn content_digest() -> String {
     hex::encode(Sha256::digest(CONTENT))
 }
 
+/// D4 (c): an https verifier never reaches the cloud metadata address or an
+/// always-denied address. A literal is refused when the verifier is
+/// activated, before anything is sent.
+#[test]
+fn a_metadata_or_always_denied_literal_over_https_is_refused_at_activation() {
+    let files = SecretFile::new();
+    for url in [
+        "https://169.254.169.254/verify",
+        "https://[fd00:ec2::254]/verify",
+        "https://0.0.0.0/verify",
+    ] {
+        let settings = settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+        assert_eq!(
+            settings.activate(NAMESPACE, &files.resolver()).unwrap_err(),
+            VerifierError::InvalidConfiguration,
+            "{url}"
+        );
+    }
+}
+
+/// D1: an explicit loopback literal over https is admitted when the
+/// verifier is activated.
+#[test]
+fn a_loopback_literal_over_https_is_admitted_at_activation() {
+    let files = SecretFile::new();
+    for url in ["https://127.0.0.1:9443/verify", "https://[::1]:9443/verify"] {
+        let settings = settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+        settings
+            .activate(NAMESPACE, &files.resolver())
+            .unwrap_or_else(|error| panic!("{url}: {error:?}"));
+    }
+}
+
 #[test]
 fn verifier_config_is_strict_and_redacted() {
     for url in [
@@ -159,11 +192,14 @@ fn verifier_config_is_strict_and_redacted() {
             "{url}"
         );
     }
+    // Loopback plain text is the selector's rule: a loopback literal, or the
+    // name localhost, which the client pins to loopback.
     for url in [
         "http://localhost/verify",
         "http://127.0.0.2/verify",
         "http://[::1]/verify",
         "http://[::ffff:127.0.0.1]/verify",
+        "http://localhost/verify",
     ] {
         settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
     }

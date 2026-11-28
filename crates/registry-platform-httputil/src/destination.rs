@@ -55,8 +55,9 @@ mod sensitive_json;
 pub const MAX_DESTINATION_ORIGIN_ID_BYTES: usize = 128;
 /// Maximum serialized fixed-origin URL length.
 pub const MAX_DESTINATION_ORIGIN_URL_BYTES: usize = 2_048;
-/// Maximum exact private CIDRs retained by one destination.
-pub const MAX_DESTINATION_PRIVATE_CIDRS: usize = 16;
+/// Maximum exact private CIDRs retained by one destination: the one bound
+/// every private range list shares.
+pub const MAX_DESTINATION_PRIVATE_CIDRS: usize = crate::loopback::MAX_PRIVATE_RANGES;
 /// Maximum complete A/AAAA answer set accepted from the resolver.
 pub const MAX_DESTINATION_RESOLVER_ANSWERS: usize = 32;
 /// Maximum operation path-and-query length.
@@ -445,6 +446,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
     /// must be wholly contained by RFC 1918, RFC 6598 CGNAT, or IPv6 ULA space.
     /// A [`DestinationProfile::PrivateServiceHttp`] destination needs at least
     /// one CIDR, since it sends only to addresses inside the listed ranges.
+    /// A credential destination admits only https and loopback http.
     pub fn new(
         origin_id: &str,
         origin: &str,
@@ -457,6 +459,25 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             profile,
             allowed_private_cidrs,
             DestinationDnsFamily::DualStackStrict,
+        )
+    }
+
+    /// Freeze a destination binding from a selection: its origin is the
+    /// selected URL's scheme, host and port, and its profile and ranges are
+    /// the selection's. Every check [`Self::new`] makes still applies.
+    pub fn from_selected(
+        origin_id: &str,
+        selected: &crate::select::SelectedDestination,
+    ) -> Result<Self, DestinationPolicyError> {
+        let mut origin = selected.url().clone();
+        origin.set_path("/");
+        origin.set_query(None);
+        origin.set_fragment(None);
+        Self::new(
+            origin_id,
+            origin.as_str(),
+            selected.profile(),
+            selected.allowed_private_cidrs(),
         )
     }
 
@@ -510,6 +531,11 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             return Err(DestinationPolicyError::OriginHasResourceComponents);
         }
 
+        // A credential exchange never runs over private plain text, whatever
+        // the deployment declares for its data path.
+        if S::CREDENTIAL_EXCHANGE && !profile_admits_credential_exchange(profile) {
+            return Err(DestinationPolicyError::CredentialRequiresProtectedTransport);
+        }
         match profile {
             DestinationProfile::ProductionHttps if origin.scheme() != "https" => {
                 return Err(DestinationPolicyError::ProductionRequiresHttps);
@@ -711,6 +737,12 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         resolver: &R,
         trust: TransportTrust,
     ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
+        // No credential travels over private plain text, whatever the
+        // deployment declared and whichever slot carries it. Checked before
+        // anything is resolved, so nothing is dialled.
+        if request.carries_credential && !profile_admits_credential_exchange(self.profile) {
+            return Err(DestinationSendError::CredentialRequiresProtectedTransport);
+        }
         validate_absolute_deadline(deadline, maximum_timeout)?;
         let host = self
             .origin
@@ -811,6 +843,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             authorization,
             aws_sigv4,
             body,
+            carries_credential: _,
             slot: _,
         } = request;
         let target = std::str::from_utf8(target.as_slice())
@@ -927,24 +960,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
     fn classify_address(&self, ip: IpAddr) -> Result<(), DestinationSendError> {
         match self.profile {
             DestinationProfile::PrivateServiceHttp => {
-                if is_cloud_metadata_ip(ip) {
-                    return Err(DestinationSendError::CloudMetadataDenied);
-                }
-                if is_always_denied_in_production(ip) {
-                    return Err(DestinationSendError::AlwaysDeniedAddress);
-                }
-                if !is_eligible_private_address(ip) {
-                    return Err(DestinationSendError::PrivateAddressNotAllowed);
-                }
-                if self
-                    .allowed_private_cidrs
-                    .iter()
-                    .any(|cidr| cidr.contains(&ip))
-                {
-                    Ok(())
-                } else {
-                    Err(DestinationSendError::PrivateAddressNotAllowed)
-                }
+                classify_private_service_address(ip, &self.allowed_private_cidrs)
             }
             DestinationProfile::LoopbackHttp => {
                 if is_loopback(ip) {
@@ -1063,7 +1079,7 @@ impl fmt::Debug for ProductionAddressPolicy {
     }
 }
 
-fn retain_private_cidrs(
+pub(crate) fn retain_private_cidrs(
     allowed_private_cidrs: &[IpNet],
 ) -> Result<Vec<IpNet>, DestinationPolicyError> {
     for cidr in allowed_private_cidrs {
@@ -1080,6 +1096,44 @@ fn retain_private_cidrs(
     retained.sort_unstable();
     retained.dedup();
     Ok(retained)
+}
+
+/// Whether a credential may use `profile`: https, or plain http to loopback.
+/// Plain http beyond loopback never carries a credential. The one predicate
+/// behind the credential slot, the data-path send, the client builder and the
+/// selector.
+pub(crate) fn profile_admits_credential_exchange(profile: DestinationProfile) -> bool {
+    match profile {
+        DestinationProfile::ProductionHttps | DestinationProfile::LoopbackHttp => true,
+        DestinationProfile::PrivateServiceHttp => false,
+        #[cfg(any(test, feature = "test-support"))]
+        DestinationProfile::PinnedLoopbackHttpsTest => true,
+        #[cfg(any(test, feature = "test-support"))]
+        DestinationProfile::LocalPrivateDevelopmentHttp => false,
+    }
+}
+
+/// Classify a normalized address under the private service profile, in this
+/// order: cloud metadata, always denied, eligible private, inside a listed
+/// range. The client family's resolver applies the same order.
+pub(crate) fn classify_private_service_address(
+    ip: IpAddr,
+    allowed_private_cidrs: &[IpNet],
+) -> Result<(), DestinationSendError> {
+    if is_cloud_metadata_ip(ip) {
+        return Err(DestinationSendError::CloudMetadataDenied);
+    }
+    if is_always_denied_in_production(ip) {
+        return Err(DestinationSendError::AlwaysDeniedAddress);
+    }
+    if !is_eligible_private_address(ip) {
+        return Err(DestinationSendError::PrivateAddressNotAllowed);
+    }
+    if allowed_private_cidrs.iter().any(|cidr| cidr.contains(&ip)) {
+        Ok(())
+    } else {
+        Err(DestinationSendError::PrivateAddressNotAllowed)
+    }
 }
 
 /// Classify a normalized address under the production profile.
@@ -1254,6 +1308,10 @@ pub enum DestinationPolicyError {
     PrivateServiceRequiresPrivateCidr,
     #[error("destination profile denies the localhost namespace")]
     LocalhostNamespaceDenied,
+    #[error(
+        "a credential destination requires https or loopback http; a credential never travels over private plain text"
+    )]
+    CredentialRequiresProtectedTransport,
     #[error("loopback development destination requires HTTP")]
     DevelopmentRequiresHttp,
     #[error("loopback development destination requires an explicit loopback host")]
@@ -2513,13 +2571,16 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
         if actual_bytes > self.max_request_bytes {
             return Err(DestinationRequestError::TemplateBoundsExceeded);
         }
-        BoundedDestinationRequest::new_sensitive(
+        let mut request = BoundedDestinationRequest::new_sensitive(
             self.method,
             target,
             headers,
             authorization.map(|value| DestinationAuthorization { value: value.value }),
             body,
-        )
+        )?;
+        // The match above admits a script API key only with its value.
+        request.carries_credential |= policy.api_key.is_some();
+        Ok(request)
     }
 }
 
@@ -2993,6 +3054,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             authorization,
             body,
         )?;
+        request.carries_credential |= aws_sigv4.is_some();
         request.aws_sigv4 = aws_sigv4;
         Ok(request)
     }
@@ -3396,6 +3458,10 @@ pub struct BoundedDestinationRequest<S: DestinationSlot> {
     authorization: Option<DestinationAuthorization>,
     aws_sigv4: Option<AwsSigV4RequestAuthorization>,
     body: Option<Zeroizing<Vec<u8>>>,
+    /// Whether the request carries a credential: an authorization value, an
+    /// AWS signature, or a script API key. The renderer sets it, since an
+    /// API key is an ordinary header or query member once rendered.
+    carries_credential: bool,
     slot: PhantomData<fn() -> S>,
 }
 
@@ -3420,6 +3486,7 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequest<S> {
             .field("authorization", &"[REDACTED]")
             .field("aws_sigv4", &"[REDACTED]")
             .field("body", &"[REDACTED]")
+            .field("carries_credential", &self.carries_credential)
             .finish()
     }
 }
@@ -3508,6 +3575,7 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
             .map(|(name, value)| SensitiveHeader { name, value })
             .collect();
 
+        let carries_credential = authorization.is_some();
         Ok(Self {
             method,
             target,
@@ -3515,6 +3583,7 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
             authorization,
             aws_sigv4: None,
             body,
+            carries_credential,
             slot: PhantomData,
         })
     }
@@ -3849,6 +3918,14 @@ pub enum DestinationSendError {
     TooManyResponseHeaders,
     #[error("upstream response header bytes exceed the platform bound")]
     ResponseHeaderBytesExceeded,
+    /// The request carries a credential and the destination is private
+    /// plain text. Refused before anything is resolved.
+    #[error("the request carries a credential and the destination is private plain text")]
+    CredentialRequiresProtectedTransport,
+    /// A client confined to one selected destination was asked to resolve
+    /// another name. Refused before the name is looked up.
+    #[error("the client was asked to resolve a name other than its selected destination")]
+    DestinationNameMismatch,
 }
 
 /// Whether a failed send may have reached the destination.
@@ -3901,7 +3978,9 @@ impl DestinationSendError {
             | Self::TlsMaterialUnavailable
             | Self::ClientBuildFailed
             | Self::DeadlineExceeded
-            | Self::TransportFailed => DestinationDeliveryCertainty::NotSent,
+            | Self::TransportFailed
+            | Self::CredentialRequiresProtectedTransport
+            | Self::DestinationNameMismatch => DestinationDeliveryCertainty::NotSent,
         }
     }
 }
@@ -4785,7 +4864,7 @@ fn origin_explicitly_denotes_loopback(origin: &Url) -> bool {
 /// RFC 6761 reserves `localhost.` and every name below it for loopback. A
 /// production or private-service binding cannot make one of those names
 /// reachable because their send-time address policies always deny loopback.
-fn origin_uses_localhost_namespace(origin: &Url) -> bool {
+pub(crate) fn origin_uses_localhost_namespace(origin: &Url) -> bool {
     match origin.host() {
         Some(::url::Host::Domain(host)) => {
             let host = host.strip_suffix('.').unwrap_or(host);
@@ -4822,7 +4901,7 @@ fn is_loopback(ip: IpAddr) -> bool {
     crate::loopback::loopback_address(ip)
 }
 
-fn is_always_denied_in_production(ip: IpAddr) -> bool {
+pub(crate) fn is_always_denied_in_production(ip: IpAddr) -> bool {
     match normalize_ipv4_mapped(ip) {
         IpAddr::V4(ip) => {
             let octets = ip.octets();
@@ -4840,32 +4919,16 @@ fn is_always_denied_in_production(ip: IpAddr) -> bool {
     }
 }
 
+/// The one definition lives in `registry-platform-loopback`, shared with
+/// configuration decoding.
 fn is_eligible_private_address(ip: IpAddr) -> bool {
-    match normalize_ipv4_mapped(ip) {
-        IpAddr::V4(ip) => ip.is_private() || is_ipv4_shared(ip),
-        IpAddr::V6(ip) => ip.is_unique_local(),
-    }
+    crate::loopback::private_address_eligible(ip)
 }
 
+/// The one definition lives in `registry-platform-loopback`, shared with
+/// configuration decoding.
 fn cidr_is_eligible_private(cidr: IpNet) -> bool {
-    match cidr {
-        IpNet::V4(cidr) => {
-            let address = cidr.network();
-            let prefix = cidr.prefix_len();
-            (prefix >= 8 && ipv4_in_prefix(address, Ipv4Addr::new(10, 0, 0, 0), 8))
-                || (prefix >= 12 && ipv4_in_prefix(address, Ipv4Addr::new(172, 16, 0, 0), 12))
-                || (prefix >= 16 && ipv4_in_prefix(address, Ipv4Addr::new(192, 168, 0, 0), 16))
-                || (prefix >= 10 && ipv4_in_prefix(address, Ipv4Addr::new(100, 64, 0, 0), 10))
-        }
-        IpNet::V6(cidr) => {
-            cidr.prefix_len() >= 7
-                && ipv6_in_prefix(
-                    cidr.network(),
-                    Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0),
-                    7,
-                )
-        }
-    }
+    crate::loopback::private_range_eligible(cidr.network(), cidr.prefix_len())
 }
 
 fn cidr_is_metadata_singleton(cidr: IpNet) -> bool {
@@ -4929,7 +4992,7 @@ fn is_ipv6_globally_routable(ip: Ipv6Addr) -> bool {
         && !is_ipv6_documentation(ip)
 }
 
-fn decode_well_known_nat64(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+pub(crate) fn decode_well_known_nat64(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     if !ipv6_in_prefix(ip, Ipv6Addr::new(0x0064, 0xff9b, 0, 0, 0, 0, 0, 0), 96) {
         return None;
     }
@@ -5506,6 +5569,354 @@ mod tests {
                 .map(|address| answer(address, policy.port())),
         )?;
         policy.classify_answers(answers).map(|_| ())
+    }
+
+    fn selection(
+        raw: &str,
+        declared: Option<crate::select::TransportClass>,
+        ranges: &[&str],
+    ) -> crate::select::SelectedDestination {
+        let ranges: Vec<crate::loopback::PrivateRange> = ranges
+            .iter()
+            .map(|raw| raw.parse().expect("test range parses"))
+            .collect();
+        crate::select::select_destination(&Url::parse(raw).expect("url"), declared, &ranges)
+            .expect("the destination selects")
+    }
+
+    /// The send rows of the shared destination table, through a fixed
+    /// destination frozen from each row's selection.
+    #[test]
+    fn every_send_row_of_the_selection_table_is_decided_by_the_frozen_policy() {
+        let mut rows = 0;
+        for case in crate::select::select_cases() {
+            let Some(expected) = case.send else { continue };
+            let selected = case.select().expect("a send row selects");
+            let policy = DataDestinationPolicy::from_selected("table-row", &selected)
+                .unwrap_or_else(|error| panic!("row {} freezes: {error}", case.row));
+            assert_eq!(
+                classify(&policy, case.answers),
+                expected,
+                "row {}",
+                case.row
+            );
+            rows += 1;
+        }
+        assert_eq!(rows, 10, "T1 to T5, T8 to T11 and T23");
+    }
+
+    #[test]
+    fn a_frozen_selection_keeps_the_origin_profile_and_ranges_only() {
+        let selected = selection(
+            "http://receiver:9000/hooks/events?ignored=1#fragment",
+            Some(crate::select::TransportClass::PrivateNetworkPlaintext),
+            &["172.16.0.0/12"],
+        );
+        let policy = EventDestinationPolicy::from_selected("receiver", &selected)
+            .expect("a selection freezes on its origin");
+        assert_eq!(policy.profile, DestinationProfile::PrivateServiceHttp);
+        assert_eq!(policy.origin.as_str(), "http://receiver:9000/");
+        assert_eq!(policy.allowed_private_cidrs, [cidr("172.16.0.0/12")]);
+        assert_eq!(policy.port(), 9000);
+
+        let loopback = selection("http://localhost:8080/", None, &[]);
+        let policy = DataDestinationPolicy::from_selected("loopback", &loopback)
+            .expect("a loopback selection freezes");
+        assert_eq!(policy.profile, DestinationProfile::LoopbackHttp);
+
+        assert_eq!(
+            DataDestinationPolicy::from_selected("Not Canonical", &loopback).unwrap_err(),
+            DestinationPolicyError::InvalidOriginId,
+            "every check of new still applies"
+        );
+        let with_userinfo = selection("https://user:secret@registry.example.test/", None, &[]);
+        assert_eq!(
+            DataDestinationPolicy::from_selected("registry", &with_userinfo).unwrap_err(),
+            DestinationPolicyError::OriginUserInfoDenied
+        );
+        let localhost_name = selection("https://receiver.localhost/", None, &[]);
+        assert_eq!(
+            DataDestinationPolicy::from_selected("registry", &localhost_name).unwrap_err(),
+            DestinationPolicyError::LocalhostNamespaceDenied
+        );
+    }
+
+    /// T22: a credential exchange never runs over private plain text, and
+    /// the refusal lives here, beside the slot, for every product.
+    #[test]
+    fn the_credential_slot_refuses_private_plain_text_and_admits_protected_transports() {
+        assert_eq!(
+            CredentialDestinationPolicy::new(
+                "token-endpoint",
+                "http://idp:8080/",
+                DestinationProfile::PrivateServiceHttp,
+                &[cidr("10.0.0.0/8")],
+            )
+            .unwrap_err(),
+            DestinationPolicyError::CredentialRequiresProtectedTransport
+        );
+        let selected = selection(
+            "http://idp:8080/token",
+            Some(crate::select::TransportClass::PrivateNetworkPlaintext),
+            &["10.0.0.0/8"],
+        );
+        assert_eq!(
+            CredentialDestinationPolicy::from_selected("token-endpoint", &selected).unwrap_err(),
+            DestinationPolicyError::CredentialRequiresProtectedTransport
+        );
+        assert_eq!(
+            CredentialDestinationPolicy::new(
+                "token-endpoint",
+                "http://10.0.0.5/",
+                DestinationProfile::LocalPrivateDevelopmentHttp,
+                &[cidr("10.0.0.5/32")],
+            )
+            .unwrap_err(),
+            DestinationPolicyError::CredentialRequiresProtectedTransport,
+            "the test-only private profile carries no credential either"
+        );
+        for (origin, profile) in [
+            (
+                "https://idp.example.test/",
+                DestinationProfile::ProductionHttps,
+            ),
+            ("http://127.0.0.1:8080/", DestinationProfile::LoopbackHttp),
+            ("http://localhost:8080/", DestinationProfile::LoopbackHttp),
+            (
+                "https://127.0.0.1:8443/",
+                DestinationProfile::PinnedLoopbackHttpsTest,
+            ),
+        ] {
+            CredentialDestinationPolicy::new("token-endpoint", origin, profile, &[])
+                .unwrap_or_else(|error| panic!("{origin}: {error}"));
+        }
+        let rendered = DestinationPolicyError::CredentialRequiresProtectedTransport.to_string();
+        assert!(rendered.contains("private plain text"), "{rendered}");
+
+        for profile_slot in [
+            DataDestinationPolicy::new(
+                "data",
+                "http://records:8080/",
+                DestinationProfile::PrivateServiceHttp,
+                &[cidr("10.0.0.0/8")],
+            )
+            .map(|_| ()),
+            EventDestinationPolicy::new(
+                "event",
+                "http://receiver:8080/",
+                DestinationProfile::PrivateServiceHttp,
+                &[cidr("10.0.0.0/8")],
+            )
+            .map(|_| ()),
+        ] {
+            profile_slot.expect("the data and event slots keep the private service profile");
+        }
+    }
+
+    /// Every credential a data request can carry: an authorization value of
+    /// each kind, an AWS signature, and a script API key in a header or the
+    /// query.
+    fn credential_bearing_requests() -> Vec<(&'static str, DataDestinationRequest)> {
+        let general = |authorization, value| {
+            DataDestinationRequestTemplate::new(
+                DestinationMethod::Get,
+                "/records",
+                &[],
+                &[],
+                authorization,
+                DestinationBodyTemplate::Forbidden,
+                4_096,
+            )
+            .expect("credential template compiles")
+            .render(&[], &[], Some(value), None)
+            .expect("credential request renders")
+        };
+        let script = |api_key_header, api_key_query| {
+            DataDestinationRequestTemplate::new_script_send(
+                SideEffectingSendMethod::Post,
+                "/messages",
+                &[],
+                DestinationAuthorizationTemplate::Forbidden,
+                api_key_header,
+                api_key_query,
+                16 * 1024,
+            )
+            .expect("API key template compiles")
+            .render_script(
+                "/messages",
+                &[],
+                None,
+                Some(Zeroizing::new(b"api-key-value".to_vec())),
+                Some(ScriptRequestBodyFormat::Json),
+                Some(Zeroizing::new(br#"{"text":"hello"}"#.to_vec())),
+            )
+            .expect("API key request renders")
+        };
+        let scheme = DestinationAuthorizationScheme::new("ApiToken").expect("scheme freezes");
+        vec![
+            (
+                "bearer",
+                general(
+                    DestinationAuthorizationTemplate::Bearer {
+                        max_value_bytes: 64,
+                    },
+                    DestinationAuthorizationValue::bearer(b"bearer-token".to_vec())
+                        .expect("bearer value"),
+                ),
+            ),
+            (
+                "basic",
+                general(
+                    DestinationAuthorizationTemplate::Basic {
+                        max_value_bytes: 64,
+                    },
+                    DestinationAuthorizationValue::basic(b"dXNlcjpwYXNz".to_vec())
+                        .expect("basic value"),
+                ),
+            ),
+            (
+                "scheme",
+                general(
+                    DestinationAuthorizationTemplate::Scheme {
+                        scheme,
+                        max_value_bytes: 64,
+                    },
+                    DestinationAuthorizationValue::scheme(scheme, b"scheme-payload".to_vec())
+                        .expect("scheme value"),
+                ),
+            ),
+            (
+                "aws-sigv4",
+                DataDestinationRequestTemplate::new_aws_json_send(
+                    "sms-voice",
+                    4_096,
+                    MAX_DESTINATION_REQUEST_HEADER_BYTES + 4_097,
+                )
+                .expect("AWS JSON template compiles")
+                .render_aws_json(
+                    "us-east-1",
+                    aws_fixture_credentials(Some(b"temporary-session-token")),
+                    AWS_FIXTURE_ACTION,
+                    Zeroizing::new(AWS_FIXTURE_BODY.to_vec()),
+                )
+                .expect("AWS JSON request renders"),
+            ),
+            ("api-key-header", script(Some(("x-api-key", 64)), None)),
+            ("api-key-query", script(None, Some(("api_key", 64)))),
+        ]
+    }
+
+    /// D2 (b) on the data path: a request that carries a credential is
+    /// refused over private plain text before anything is resolved, whatever
+    /// the deployment declared. Over https and loopback http the same request
+    /// passes the credential rule and reaches the address checks.
+    #[tokio::test]
+    async fn a_data_request_carrying_a_credential_never_travels_over_private_plain_text() {
+        let resolver_answering = |answer: &str| FakeResolver {
+            answers: vec![answer.parse().expect("test answer parses")],
+            calls: AtomicUsize::new(0),
+        };
+        let private = DataDestinationPolicy::new(
+            "records",
+            "http://records:8080/",
+            DestinationProfile::PrivateServiceHttp,
+            &[cidr("10.0.0.0/8")],
+        )
+        .expect("private service destination");
+        let tls = DataDestinationPolicy::new(
+            "records",
+            "https://records.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+        )
+        .expect("https destination");
+        let loopback = DataDestinationPolicy::new(
+            "records",
+            "http://localhost:8080/",
+            DestinationProfile::LoopbackHttp,
+            &[],
+        )
+        .expect("loopback destination");
+        let mut kinds = 0;
+        for (kind, request) in credential_bearing_requests() {
+            let resolver = resolver_answering("10.0.0.5:8080");
+            assert_eq!(
+                private
+                    .send_with_resolver(
+                        request,
+                        Duration::from_secs(2),
+                        &resolver,
+                        TransportTrust::System,
+                    )
+                    .await
+                    .map(|_| ())
+                    .unwrap_err(),
+                DestinationSendError::CredentialRequiresProtectedTransport,
+                "{kind}"
+            );
+            assert_eq!(resolver.calls.load(Ordering::SeqCst), 0, "{kind}");
+            kinds += 1;
+        }
+        assert_eq!(kinds, 6, "every credential kind is covered");
+
+        for (kind, request) in credential_bearing_requests() {
+            let resolver = resolver_answering("127.0.0.1:443");
+            assert_eq!(
+                tls.send_with_resolver(
+                    request,
+                    Duration::from_secs(2),
+                    &resolver,
+                    TransportTrust::System,
+                )
+                .await
+                .map(|_| ())
+                .unwrap_err(),
+                DestinationSendError::AlwaysDeniedAddress,
+                "{kind} passes the credential rule over https"
+            );
+            assert_eq!(resolver.calls.load(Ordering::SeqCst), 1, "{kind}");
+        }
+        for (kind, request) in credential_bearing_requests() {
+            let resolver = resolver_answering("10.0.0.5:8080");
+            assert_eq!(
+                loopback
+                    .send_with_resolver(
+                        request,
+                        Duration::from_secs(2),
+                        &resolver,
+                        TransportTrust::System,
+                    )
+                    .await
+                    .map(|_| ())
+                    .unwrap_err(),
+                DestinationSendError::DevelopmentAddressDenied,
+                "{kind} passes the credential rule over loopback http"
+            );
+        }
+
+        let resolver = resolver_answering("172.16.0.5:8080");
+        let credential_free =
+            DataDestinationRequest::new(DestinationMethod::Get, "/records", vec![], None, None)
+                .expect("credential-free request");
+        assert_eq!(
+            private
+                .send_with_resolver(
+                    credential_free,
+                    Duration::from_secs(2),
+                    &resolver,
+                    TransportTrust::System,
+                )
+                .await
+                .map(|_| ())
+                .unwrap_err(),
+            DestinationSendError::PrivateAddressNotAllowed,
+            "a credential-free request reaches the address checks"
+        );
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            DestinationSendError::CredentialRequiresProtectedTransport.delivery_certainty(),
+            DestinationDeliveryCertainty::NotSent
+        );
     }
 
     async fn spawn_tls_server(

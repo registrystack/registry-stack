@@ -50,8 +50,9 @@ mod url_binding;
 pub use audit::{hook_audit_entry, InvalidDeliveryAudit, MAX_AUDIT_COMPILED_DELIVERY_ID_BYTES};
 pub use connection::NoLocalHandler;
 pub use destination::{
-    url_destination_address, SharedUrlDestination, UrlDestination, UrlDestinationAddress,
-    UrlDestinationError, UrlDestinationParts, MIN_HMAC_SHA256_KEY_BYTES,
+    url_destination_address, url_destination_address_selected, SharedUrlDestination,
+    UrlDestination, UrlDestinationAddress, UrlDestinationError, UrlDestinationParts,
+    MIN_HMAC_SHA256_KEY_BYTES,
 };
 pub use identity::verify_active_package;
 pub use insert::{insert_delivery, DeliveryCapture};
@@ -70,6 +71,6 @@ pub use service::{
     DeliveryStatusKind, DeliveryWorker, RetainedBindingError, MAX_DELIVERY_STATUS_RESULTS,
 };
 pub use url_binding::{
-    activate_url_hook_destination, activate_url_hook_destinations, ActivatedUrlHookDestinations,
-    UrlHookActivationError,
+    activate_url_hook_destination, activate_url_hook_destinations, check_url_hook_destination,
+    check_url_hook_destination_file, ActivatedUrlHookDestinations, UrlHookActivationError,
 };

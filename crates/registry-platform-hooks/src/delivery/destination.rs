@@ -19,7 +19,10 @@ use registry_platform_httputil::destination::{
     EventDestinationPolicy, EventDestinationRequest, EventDestinationRequestTemplate,
     SignedEventHeaders, MAX_DESTINATION_REQUEST_HEADER_BYTES, MAX_DESTINATION_TARGET_BYTES,
 };
-use registry_platform_httputil::loopback::loopback_host;
+use registry_platform_httputil::loopback::PrivateRange;
+use registry_platform_httputil::select::{
+    select_destination, DestinationSelectionError, SelectedDestination, TransportClass,
+};
 use url::Url;
 
 use super::seams::{
@@ -38,6 +41,22 @@ pub enum UrlDestinationError {
     /// request template.
     #[error("the hook destination binding is invalid")]
     InvalidBinding,
+    /// The shared destination selector refused the URL, its transport, or
+    /// its private ranges.
+    #[error("the hook destination is refused: {0}")]
+    Refused(DestinationSelectionError),
+}
+
+impl UrlDestinationError {
+    /// The selector's stable code for a [`Self::Refused`] destination, or
+    /// `None` for a binding refused outside the selector.
+    #[must_use]
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidBinding => None,
+            Self::Refused(error) => Some(error.code()),
+        }
+    }
 }
 
 /// Everything one activated `url` destination is built from.
@@ -235,20 +254,47 @@ pub struct UrlDestinationAddress {
     pub origin: String,
     /// The path, `/` when the URL names none.
     pub request_target: String,
-    /// `https` is production; plain `http` is accepted only for a loopback
-    /// host, as local development.
+    /// `https` is production; plain `http` is accepted for a loopback host,
+    /// and for any other host only under a declared private plain-text
+    /// transport. A copy of `selected.profile()`.
     pub profile: DestinationProfile,
+    /// The selection the outbound policy is frozen from: the profile, the
+    /// transport, and the private ranges.
+    pub selected: SelectedDestination,
 }
 
 /// Split a configured hook URL. The URL must carry a host and no user
 /// information, query, or fragment; it must be `https`, or `http` to
 /// `127.0.0.1`, `localhost`, or `[::1]`.
 ///
+/// This is [`url_destination_address_selected`] with no declared transport
+/// and no private range.
+///
 /// # Errors
 ///
-/// [`UrlDestinationError::InvalidBinding`] for any refused URL.
+/// [`UrlDestinationError::Refused`] with the selector's refusal, or
+/// [`UrlDestinationError::InvalidBinding`] for a URL that does not parse or
+/// carries user information, a query, or a fragment.
 pub fn url_destination_address(
     configured: &str,
+) -> Result<UrlDestinationAddress, UrlDestinationError> {
+    url_destination_address_selected(configured, None, &[])
+}
+
+/// Split a configured hook URL under its declared transport and private
+/// ranges, through the shared destination selector. The URL must carry a
+/// host and no user information, query, or fragment.
+///
+/// # Errors
+///
+/// [`UrlDestinationError::Refused`] with the selector's refusal of the URL,
+/// transport, or range list, or [`UrlDestinationError::InvalidBinding`] for
+/// a URL that does not parse or carries user information, a query, or a
+/// fragment.
+pub fn url_destination_address_selected(
+    configured: &str,
+    declared: Option<TransportClass>,
+    allowed_private_cidrs: &[PrivateRange],
 ) -> Result<UrlDestinationAddress, UrlDestinationError> {
     let parsed = Url::parse(configured).map_err(|_| UrlDestinationError::InvalidBinding)?;
     if !parsed.username().is_empty()
@@ -259,13 +305,9 @@ pub fn url_destination_address(
     {
         return Err(UrlDestinationError::InvalidBinding);
     }
-    let profile = match parsed.scheme() {
-        "https" => DestinationProfile::ProductionHttps,
-        "http" if parsed.host_str().and_then(loopback_host).is_some() => {
-            DestinationProfile::LoopbackHttp
-        }
-        _ => return Err(UrlDestinationError::InvalidBinding),
-    };
+    let selected = select_destination(&parsed, declared, allowed_private_cidrs)
+        .map_err(UrlDestinationError::Refused)?;
+    let profile = selected.profile();
     let request_target = if parsed.path().is_empty() {
         "/".to_owned()
     } else {
@@ -279,6 +321,7 @@ pub fn url_destination_address(
         origin: origin.to_string(),
         request_target,
         profile,
+        selected,
     })
 }
 
@@ -392,19 +435,30 @@ mod tests {
         let address = url_destination_address("http://127.0.0.1:9000/in").expect("loopback");
         assert_eq!(address.request_target, "/in");
         assert_eq!(address.profile, DestinationProfile::LoopbackHttp);
-        for refused in [
-            "http://hooks.example/in",
-            "https://user@hooks.example/in",
-            "https://hooks.example/in?x=1",
-            "https://hooks.example/in#x",
-            "ftp://hooks.example/in",
-            "not a url",
+        for (refused, expected) in [
+            (
+                "http://hooks.example/in",
+                UrlDestinationError::Refused(DestinationSelectionError::PrivateNetworkNotDeclared),
+            ),
+            (
+                "ftp://hooks.example/in",
+                UrlDestinationError::Refused(DestinationSelectionError::UnsupportedScheme),
+            ),
+            (
+                "https://user@hooks.example/in",
+                UrlDestinationError::InvalidBinding,
+            ),
+            (
+                "https://hooks.example/in?x=1",
+                UrlDestinationError::InvalidBinding,
+            ),
+            (
+                "https://hooks.example/in#x",
+                UrlDestinationError::InvalidBinding,
+            ),
+            ("not a url", UrlDestinationError::InvalidBinding),
         ] {
-            assert_eq!(
-                url_destination_address(refused),
-                Err(UrlDestinationError::InvalidBinding),
-                "{refused}"
-            );
+            assert_eq!(url_destination_address(refused), Err(expected), "{refused}");
         }
     }
 
@@ -436,9 +490,250 @@ mod tests {
         ] {
             assert_eq!(
                 url_destination_address(refused),
-                Err(UrlDestinationError::InvalidBinding),
+                Err(UrlDestinationError::Refused(
+                    DestinationSelectionError::PrivateNetworkNotDeclared
+                )),
                 "{refused}"
             );
+        }
+    }
+
+    fn ranges(texts: &[&str]) -> Vec<PrivateRange> {
+        texts.iter().map(|text| text.parse().expect(text)).collect()
+    }
+
+    fn refused(
+        error: DestinationSelectionError,
+    ) -> Result<DestinationProfile, UrlDestinationError> {
+        Err(UrlDestinationError::Refused(error))
+    }
+
+    /// The load rows of the M8 test table, through the hook seam. A refusal
+    /// of the shared selector keeps its code.
+    #[test]
+    fn url_address_selects_the_declared_transport_and_ranges() {
+        const PRIVATE: Option<TransportClass> = Some(TransportClass::PrivateNetworkPlaintext);
+        const LOOPBACK: Option<TransportClass> = Some(TransportClass::LoopbackPlaintext);
+        const TLS: Option<TransportClass> = Some(TransportClass::VerifiedTls);
+        let seventeen: Vec<String> = (0..17).map(|n| format!("10.{n}.0.0/16")).collect();
+        let seventeen: Vec<&str> = seventeen.iter().map(String::as_str).collect();
+        for (row, url, declared, listed, expected) in [
+            (
+                "T1",
+                "https://hooks.example.org/x",
+                None,
+                &[][..],
+                Ok(DestinationProfile::ProductionHttps),
+            ),
+            (
+                "T2",
+                "https://registry.internal/",
+                None,
+                &["10.0.0.0/8"][..],
+                Ok(DestinationProfile::ProductionHttps),
+            ),
+            (
+                "T4",
+                "http://localhost:8080/",
+                None,
+                &[][..],
+                Ok(DestinationProfile::LoopbackHttp),
+            ),
+            (
+                "T5",
+                "http://127.0.0.1:8080/",
+                LOOPBACK,
+                &[][..],
+                Ok(DestinationProfile::LoopbackHttp),
+            ),
+            (
+                "T6",
+                "http://hooks:8080/",
+                None,
+                &["10.0.0.0/8"][..],
+                refused(DestinationSelectionError::PrivateNetworkNotDeclared),
+            ),
+            (
+                "T7",
+                "http://hooks:8080/",
+                PRIVATE,
+                &[][..],
+                refused(DestinationSelectionError::PrivateNetworkRequiresRanges),
+            ),
+            (
+                "T8",
+                "http://hooks:8080/",
+                PRIVATE,
+                &["172.16.0.0/12"][..],
+                Ok(DestinationProfile::PrivateServiceHttp),
+            ),
+            (
+                "T15",
+                "http://hooks:8080/",
+                PRIVATE,
+                &seventeen[..],
+                refused(DestinationSelectionError::TooManyRanges),
+            ),
+            (
+                "T16",
+                "https://hooks:8443/",
+                PRIVATE,
+                &["10.0.0.0/8"][..],
+                refused(DestinationSelectionError::TransportSchemeMismatch),
+            ),
+            (
+                "T17",
+                "http://hooks:8080/",
+                TLS,
+                &[][..],
+                refused(DestinationSelectionError::TransportSchemeMismatch),
+            ),
+            (
+                "T18",
+                "http://localhost:8080/",
+                PRIVATE,
+                &["10.0.0.0/8"][..],
+                refused(DestinationSelectionError::TransportHostMismatch),
+            ),
+            (
+                "T19",
+                "http://hooks:8080/",
+                LOOPBACK,
+                &[][..],
+                refused(DestinationSelectionError::TransportHostMismatch),
+            ),
+            (
+                "T20",
+                "http://10.1.2.3:8080/",
+                PRIVATE,
+                &["172.16.0.0/12"][..],
+                refused(DestinationSelectionError::LiteralOutsideRanges),
+            ),
+            (
+                "T25",
+                "ftp://hooks/",
+                None,
+                &[][..],
+                refused(DestinationSelectionError::UnsupportedScheme),
+            ),
+            (
+                "userinfo",
+                "http://user@hooks:8080/",
+                PRIVATE,
+                &["10.0.0.0/8"][..],
+                Err(UrlDestinationError::InvalidBinding),
+            ),
+            (
+                "query",
+                "http://hooks:8080/in?x=1",
+                PRIVATE,
+                &["10.0.0.0/8"][..],
+                Err(UrlDestinationError::InvalidBinding),
+            ),
+            (
+                "fragment",
+                "http://hooks:8080/in#x",
+                PRIVATE,
+                &["10.0.0.0/8"][..],
+                Err(UrlDestinationError::InvalidBinding),
+            ),
+        ] {
+            let selected = url_destination_address_selected(url, declared, &ranges(listed));
+            match expected {
+                Ok(profile) => {
+                    let address = selected.unwrap_or_else(|error| panic!("{row}: {error:?}"));
+                    assert_eq!(address.profile, profile, "{row}");
+                    assert_eq!(address.selected.profile(), profile, "{row}");
+                    assert_eq!(
+                        address.selected.allowed_private_cidrs().len(),
+                        listed.len(),
+                        "{row}"
+                    );
+                }
+                Err(refusal) => {
+                    assert_eq!(selected.map(drop), Err(refusal), "{row}");
+                    if let UrlDestinationError::Refused(error) = refusal {
+                        assert_eq!(refusal.code(), Some(error.code()), "{row}");
+                    } else {
+                        assert_eq!(refusal.code(), None, "{row}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_private_plain_text_address_keeps_its_origin_target_and_ranges() {
+        let address = url_destination_address_selected(
+            "http://receiver:9000/hooks/events",
+            Some(TransportClass::PrivateNetworkPlaintext),
+            &ranges(&["172.16.0.0/12", "10.42.0.0/16"]),
+        )
+        .expect("a declared private plain-text destination");
+        assert_eq!(address.origin, "http://receiver:9000/");
+        assert_eq!(address.request_target, "/hooks/events");
+        assert_eq!(address.profile, DestinationProfile::PrivateServiceHttp);
+        assert!(address.selected.is_private_plaintext());
+        let policy = EventDestinationPolicy::from_selected("receiver", &address.selected)
+            .expect("the selection freezes");
+        let printed = format!("{policy:?}");
+        assert!(printed.contains("PrivateServiceHttp"), "{printed}");
+        assert!(printed.contains("private_cidr_count: 2"), "{printed}");
+    }
+
+    /// The one-argument form declares no transport and no range: https,
+    /// or http to loopback, and nothing else.
+    #[test]
+    fn the_one_argument_address_admits_https_and_loopback_only() {
+        let not_declared =
+            UrlDestinationError::Refused(DestinationSelectionError::PrivateNetworkNotDeclared);
+        for (url, expected) in [
+            (
+                "https://hooks.example:8443",
+                Ok(DestinationProfile::ProductionHttps),
+            ),
+            (
+                "https://hooks.example/in",
+                Ok(DestinationProfile::ProductionHttps),
+            ),
+            (
+                "http://127.0.0.1:9000/in",
+                Ok(DestinationProfile::LoopbackHttp),
+            ),
+            (
+                "http://localhost:9000/in",
+                Ok(DestinationProfile::LoopbackHttp),
+            ),
+            ("http://[::1]:9000/in", Ok(DestinationProfile::LoopbackHttp)),
+            ("http://hooks.example/in", Err(not_declared)),
+            ("http://10.0.0.1:9000/in", Err(not_declared)),
+            ("http://hooks.localhost:9000/in", Err(not_declared)),
+            (
+                "ftp://hooks.example/in",
+                Err(UrlDestinationError::Refused(
+                    DestinationSelectionError::UnsupportedScheme,
+                )),
+            ),
+            (
+                "https://user@hooks.example/in",
+                Err(UrlDestinationError::InvalidBinding),
+            ),
+            (
+                "https://hooks.example/in?x=1",
+                Err(UrlDestinationError::InvalidBinding),
+            ),
+            ("not a url", Err(UrlDestinationError::InvalidBinding)),
+        ] {
+            let address = url_destination_address(url);
+            assert_eq!(
+                address.as_ref().map(|address| address.profile),
+                expected.as_ref().copied(),
+                "{url}"
+            );
+            if let Ok(address) = address {
+                assert_eq!(address.selected.profile(), address.profile, "{url}");
+                assert!(address.selected.allowed_private_cidrs().is_empty(), "{url}");
+            }
         }
     }
 }

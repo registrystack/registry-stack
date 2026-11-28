@@ -113,6 +113,13 @@ accepted reference through the explicitly enabled environment or file provider.
   and a reference to an undeclared provider is refused.
 - `DatabaseConfig`: `runtimeUrlRef`, `migrationUrlRef`, and an optional
   `caBundleRef`.
+- `DestinationTransport`: `verified-tls`, `loopback-plaintext` or
+  `private-network-plaintext`. Only the last is an explicit production setting.
+- `PrivateRanges`: the `allowedPrivateCidrs` list of `PrivateRange` values from
+  `registry-platform-loopback`, canonical, private, unrepeated, at most 16. A
+  repeated range is refused at decode. Every other refusal is a
+  `platform.destination.*` diagnostic from `check` or `check_file`, and
+  `ranges` returns the ranges only when none is refused.
 - `JwksSource`: `type: discovery` (the default) with no other member,
   `type: uri` with checked `Url` member `uri`, or `type: static` with `documentRef`.
 - `OidcIssuerConfig`: a checked `Url` issuer, audience, and `JwksSource`.
@@ -149,12 +156,15 @@ accepted reference through the explicitly enabled environment or file provider.
   has no default; a product that makes verification optional states its own
   disabled form beside it.
 - `UrlHookDestinationConfig`: one signed URL hook destination: a checked
-  `url`, `hmacSha256KeyRef`, optional `previousHmacSha256KeyRef` for rotation,
+  `url`, an optional `transport`, `allowedPrivateCidrs`, `hmacSha256KeyRef`,
+  optional `previousHmacSha256KeyRef` for rotation,
   `attemptTimeoutMilliseconds` (default 5000, from
   100 to 10000), and `maximumAttempts` (default 8, from 1 to 20). A product
   holds them as a map of at most 128 entries keyed by a local identifier
   through `url_hook_destinations`. `registry-platform-hooks` activates the
-  block under a fixed outbound policy: https, or http on a loopback host.
+  block through the shared destination selector: https, http on a loopback
+  host, or http inside the declared ranges under
+  `transport: private-network-plaintext`.
   Keep `hmacSha256KeyRef` stable during rotation because the binding digest
   includes it. The digest excludes `previousHmacSha256KeyRef`. Omit that
   member when there is no previous key. Activation resolves both references

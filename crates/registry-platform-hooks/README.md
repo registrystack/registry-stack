@@ -136,15 +136,20 @@ with a default window of 300 seconds in either direction. Callers using
 `webhook-id` per endpoint and own source trust and handler effects.
 
 The simple URL hook destination block, `UrlHookDestinationConfig`, defines
-`url`, `hmacSha256KeyRef`, optional `previousHmacSha256KeyRef`, and a delivery
-budget. It is defined in `registry-platform-config` and re-exported from
-`delivery`.
+`url`, an optional `transport`, `allowedPrivateCidrs`, `hmacSha256KeyRef`,
+optional `previousHmacSha256KeyRef`, and a delivery budget. It is defined in
+`registry-platform-config` and re-exported from `delivery`.
 `activate_url_hook_destinations` turns a map of them into signing destinations
-under a fixed outbound policy (https, or http on a loopback host, no private
-address range, no client certificate) and records the binding digest. Scheduling
-and Document Store share that block. The Base Registry Engine configures the
-full outbound policy instead, because its destinations may reach private address
-ranges and present a client certificate for mTLS.
+through the shared destination selector and records the binding digest. A
+destination is https, http on a loopback host, or http inside the declared
+ranges under `transport: private-network-plaintext`, always without a client
+certificate. A refused destination carries the selector's code in
+`UrlHookActivationError::DestinationRefused`. A product's `check` runs
+`check_url_hook_destination`, or `check_url_hook_destination_file` for an
+offline file check, to report the same refusals with their codes and pointers
+before startup. Scheduling and Document Store share that block. The Base
+Registry Engine configures the full outbound policy instead, because its
+destinations may present a client certificate for mTLS.
 
 Nothing above this section is behind the feature:
 the contract half has no database dependency, so a product that only declares and

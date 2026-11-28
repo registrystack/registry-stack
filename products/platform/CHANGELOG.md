@@ -189,6 +189,107 @@
   is a standard-library Go receiver, and CI runs its tests against the shared
   vectors.
 
+- Outbound destination types. No product reads these members yet.
+  `registry-platform-loopback` adds `TransportClass` (`VerifiedTls`,
+  `LoopbackPlaintext`, `PrivateNetworkPlaintext`), the checks
+  `private_address_eligible` and `private_range_eligible` (RFC 1918, RFC 6598
+  and `fc00::/7`), `PrivateRange` (parsed from `address/prefix`, with
+  `contains`) and `MAX_PRIVATE_RANGES` (16). Eligible does not mean admitted:
+  `100.100.100.200` and `fd00:ec2::254` are eligible, and a caller refuses a
+  cloud metadata address first. `registry-platform-config` adds
+  `DestinationTransport` (`verified-tls`, `loopback-plaintext`,
+  `private-network-plaintext`) and `PrivateRanges`, the `allowedPrivateCidrs`
+  list. Only `private-network-plaintext` is an explicit production setting
+  (`platform.posture.destination-private-plaintext`), reported without a
+  value and never refused. A range list holds canonical network addresses
+  once each, at most 16, each inside private space and never a cloud metadata
+  address on its own. A range that contains a metadata address is accepted. A
+  repeated range is refused at decode as `config.duplicate-item`. Every other
+  refusal carries its own code in the diagnostic, with a fix, from
+  `PrivateRanges::check` and `PrivateRanges::check_file`:
+  `platform.destination.range-malformed`,
+  `platform.destination.range-not-private`,
+  `platform.destination.range-not-canonical` or
+  `platform.destination.too-many-ranges`. `PrivateRanges::ranges` returns the
+  ranges only when none is refused.
+
+- `registry-platform-httputil` selects each outbound destination's transport
+  in one place. `select::select_destination(url, transport, ranges)` returns a
+  `SelectedDestination`, or a `DestinationSelectionError` whose `code()` and
+  `fix()` repeat no configured value. https selects verified TLS, http to a
+  loopback host selects loopback plain text, and http to any other host is
+  refused until the configuration declares `private-network-plaintext` with
+  its ranges. Every refusal has its own code:
+  `platform.destination.unsupported-scheme`,
+  `platform.destination.private-network-not-declared`,
+  `platform.destination.private-network-requires-ranges`,
+  `platform.destination.transport-scheme-mismatch`,
+  `platform.destination.transport-host-mismatch`,
+  `platform.destination.literal-outside-ranges`, the four range codes above, or
+  `platform.destination.credential-requires-protected-transport`.
+  `select::select_cases()` is the shared table of rows each product renders
+  into its own block. The outbound families consume a selection through
+  `FixedDestinationPolicy::from_selected`, `ServiceBaseUrl::selected` and
+  `OutboundClientBuilder::destination`, and a credential-free fetch through
+  `select::validate_selected_fetch`, which pins the request to the addresses
+  it admitted.
+
+- No credential travels over private plain text, on any path.
+  `select::select_credential_destination` refuses such a selection, and
+  `SelectedDestination::admits_credentials` is the one predicate.
+  `FixedDestinationPolicy::new` refuses the credential slot over private plain
+  text with `DestinationPolicyError::CredentialRequiresProtectedTransport`. A
+  send in any slot that carries an authorization value, an AWS signature or a
+  script API key over private plain text is refused before anything is
+  resolved. `OutboundClientBuilder::destination` never builds a client for a
+  private plain-text selection, and `ServiceBaseUrl::selected` refuses one.
+  `transport_protects_the_credential` is the credential selector with nothing
+  declared. BREAKING (Rust API): `DestinationSendError` adds
+  `CredentialRequiresProtectedTransport` and `DestinationNameMismatch`, so an
+  exhaustive match needs both arms. The non-exhaustive
+  `OutboundClientBuildError` adds `DestinationAddressDenied` and
+  `CredentialRequiresProtectedTransport`, and `FetchUrlError` adds
+  `DestinationAddressDenied`.
+
+- `OutboundClientBuilder::destination(&selected)` confines a client's name
+  resolution to its selection. The client resolves only the selected host
+  name and refuses any other name with `DestinationNameMismatch` before it is
+  looked up. Every answer must be one the selection admits: loopback for
+  loopback plain text, and never a cloud metadata or always-denied address
+  for https, judged after IPv4-mapped and NAT64 forms are decoded. Over https
+  a private answer needs no range, so a selection's ranges have no effect on
+  a client. An address literal is checked when the client is built, where an
+  explicit loopback literal is admitted over https while a name that answers
+  loopback is refused. A literal host or `localhost` other than the selected
+  one is never resolved, so the caller sends only to the selected origin and
+  checks a URL with `SelectedDestination::admits_url` first. `build()` panics
+  where `try_build()` fails, so a caller that sets a destination uses
+  `try_build()`.
+
+- `registry-platform-objectstore` selects the bucket URL and the verifier URL
+  with `select_credential_destination` and builds each client through
+  `.destination()`. `http://localhost` is now accepted beside the loopback
+  literals. A cloud metadata or always-denied literal over https is refused at
+  activation with `InvalidConfiguration`, and an explicit https loopback
+  literal is admitted. A virtual-hosted bucket under `http://localhost` is
+  refused, since `bucket.localhost` is not loopback.
+
+- The shared URL hook destination block takes `transport` and
+  `allowedPrivateCidrs`. `private-network-plaintext` reaches a receiver inside
+  the declared ranges and is reported as the explicit production setting
+  `platform.posture.destination-private-plaintext`. The binding digest covers
+  `transport` only for private plain text and the ranges only when listed, so
+  a destination that declares neither keeps its digest.
+  `registry-platform-hooks` adds `check_url_hook_destination` and
+  `check_url_hook_destination_file`, which report every refusal activation
+  would make: each refused range at its entry, the selector's code at
+  `transport` or `url`, and a query or fragment at `url`.
+  BREAKING (Rust API): `UrlDestinationAddress` adds `selected`,
+  `UrlDestinationError` adds `Refused`, and `UrlHookActivationError` adds
+  `DestinationRefused`, each carrying the selector's refusal with `code()`.
+  `url_destination_address_selected` is exported. The generated platform,
+  Scheduling and Documents runtime schemas carry both members.
+
 - `registry-platform-config` re-exports `declared`, `declared_from`,
   `PostureError`, `POSTURE_ENV` and `DEVELOPMENT`, so a product resolves its
   declared posture without its own dependency on `registry-platform-posture`.

@@ -1302,6 +1302,98 @@ fn url_hook_destination_refuses_unknown_keys_and_inline_signing_keys() {
     assert!(read_block::<UrlHookDestinationConfig>("url: https://events.example.test\n").is_err());
 }
 
+const PRIVATE_URL_HOOK_DESTINATION: &str = "url: http://receiver:9000/hook\n\
+transport: private-network-plaintext\n\
+allowedPrivateCidrs: [10.42.0.0/16]\n\
+hmacSha256KeyRef: secret:file/hook-key\n";
+
+#[test]
+fn a_url_hook_destination_declares_its_transport_and_private_ranges() {
+    let destination: UrlHookDestinationConfig =
+        read_block(PRIVATE_URL_HOOK_DESTINATION).expect("the block reads both members");
+    let serialized = serde_json::to_value(&destination).unwrap();
+    assert_eq!(serialized["transport"], "private-network-plaintext");
+    assert_eq!(
+        serialized["allowedPrivateCidrs"],
+        serde_json::json!(["10.42.0.0/16"])
+    );
+    let text = serde_json::to_string(&destination).unwrap();
+    assert_eq!(
+        read_block::<UrlHookDestinationConfig>(&text).unwrap(),
+        destination
+    );
+
+    // A refused range decodes, so the check can name it, and never
+    // serialises back as a range.
+    let refused: UrlHookDestinationConfig =
+        read_block(&PRIVATE_URL_HOOK_DESTINATION.replace("10.42.0.0/16", "169.254.0.0/16"))
+            .expect("a refused range is reported by the check, not at decode");
+    assert!(serde_json::to_string(&refused).is_err());
+}
+
+#[test]
+fn a_url_hook_destination_without_a_transport_serialises_as_before() {
+    let destination: UrlHookDestinationConfig = read_block(URL_HOOK_DESTINATION).unwrap();
+    let serialized = serde_json::to_value(&destination).unwrap();
+    assert!(serialized.get("transport").is_none(), "{serialized}");
+    assert!(
+        serialized.get("allowedPrivateCidrs").is_none(),
+        "{serialized}"
+    );
+}
+
+#[test]
+fn a_url_hook_destination_refuses_a_null_or_unknown_transport_and_a_null_range_list() {
+    for (member, value) in [("transport", "null"), ("allowedPrivateCidrs", "null")] {
+        let report = read_block::<UrlHookDestinationConfig>(&format!(
+            "{URL_HOOK_DESTINATION}{member}: {value}\n"
+        ))
+        .unwrap_err();
+        assert_eq!(codes(&report), ["config.null-value"], "{member}: {report}");
+    }
+    for value in ["private", "private-service-http", "any-private"] {
+        let report = read_block::<UrlHookDestinationConfig>(&format!(
+            "{URL_HOOK_DESTINATION}transport: {value}\n"
+        ))
+        .unwrap_err();
+        assert!(
+            !codes(&report).contains(&"config.unknown-key"),
+            "{value}: {report}"
+        );
+    }
+}
+
+#[test]
+fn a_hook_destination_records_private_plain_text_as_an_explicit_setting_at_its_pointer() {
+    let hooks = |transport: &str, url: &str| {
+        format!(
+            "hooks:\n  events:\n    url: {url}\n    transport: {transport}\n    \
+             allowedPrivateCidrs: [10.42.0.0/16]\n    hmacSha256KeyRef: secret:file/hook-key\n"
+        )
+    };
+    let (read, collected) = crate::collect_posture_settings(|| {
+        read_block::<HookDestinationsHost>(&hooks(
+            "private-network-plaintext",
+            "http://receiver:9000/hook",
+        ))
+    });
+    read.expect("an explicit setting never refuses");
+    assert_eq!(collected.explicit.len(), 1);
+    let found = &collected.explicit[0];
+    assert_eq!(
+        found.setting.code,
+        "platform.posture.destination-private-plaintext"
+    );
+    assert_eq!(found.pointer.as_deref(), Some("/hooks/events/transport"));
+    assert!(collected.development.is_empty());
+
+    let (read, collected) = crate::collect_posture_settings(|| {
+        read_block::<HookDestinationsHost>(&hooks("verified-tls", "https://receiver/hook"))
+    });
+    read.expect("verified TLS reads");
+    assert!(collected.explicit.is_empty());
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HookDestinationsHost {
