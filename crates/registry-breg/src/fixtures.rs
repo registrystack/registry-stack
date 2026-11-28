@@ -3704,9 +3704,15 @@ async fn execute_schema_test_with_issuers(
                     problem_detail,
                 }));
             }
-            accept_response(step, response, &mut observations, Some(&runtime.pool), false)
-                .await
-                .map_err(step_failure)?;
+            accept_response(
+                step,
+                response,
+                &mut observations,
+                Some(&runtime.pool),
+                false,
+            )
+            .await
+            .map_err(step_failure)?;
             bearer_index += 1;
         }
         observations.clear();

@@ -1252,7 +1252,10 @@ async fn guard_failure_response(
         return concealed_guard();
     }
     crate::correlation::note_refusal(
-        crate::correlation::action_guard_failure_response(guard.reason.clone(), guard.label.clone()),
+        crate::correlation::action_guard_failure_response(
+            guard.reason.clone(),
+            guard.label.clone(),
+        ),
         FailedCheck::ActionGuard,
     )
 }
