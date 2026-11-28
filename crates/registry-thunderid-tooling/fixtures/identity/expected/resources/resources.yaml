@@ -482,6 +482,22 @@ id: feebab5f-79a7-70a7-8cd2-e997414b202c
 name: Registry
 resource_type: organization_unit
 ---
+description: North district
+handle: north
+id: 20a98774-9cb3-7170-8198-4f873d48b795
+isRegistrationFlowEnabled: false
+name: North district
+parent: feebab5f-79a7-70a7-8cd2-e997414b202c
+resource_type: organization_unit
+---
+description: south
+handle: south
+id: e8586ed8-a08b-793b-83b9-59233318e06a
+isRegistrationFlowEnabled: false
+name: south
+parent: feebab5f-79a7-70a7-8cd2-e997414b202c
+resource_type: organization_unit
+---
 delimiter: ':'
 description: Explicit resource scope handles
 id: df390e74-6ac0-72ce-808b-21ed5be0fc48
@@ -738,7 +754,7 @@ attributes:
 credentials:
   password: '{{.OFFICER_ONE_PASSWORD}}'
 id: db481edb-45f9-78cb-89c6-e732049ba73f
-ouHandle: registry
+ouHandle: registry/north
 resource_type: user
 type: RegistryPerson
 ---

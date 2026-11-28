@@ -38,7 +38,7 @@ class CandidateFixtureTests(unittest.TestCase):
 
     def test_the_worker_client_is_an_allowed_client_without_an_identity(self):
         config = runtime_config(Path("/w"), {}, Path("/p"), "127.0.0.1:0")
-        self.assertIn("licensing-refresh", config["authentication"]["oidc"]["allowedClients"])
+        self.assertIn("licensing-refresh", config["authentication"]["oidc"]["issuers"]["primary"]["allowedClients"])
 
     def test_saved_native_project_is_staged_byte_for_byte_and_requires_all_three_files(self):
         with tempfile.TemporaryDirectory() as scratch:

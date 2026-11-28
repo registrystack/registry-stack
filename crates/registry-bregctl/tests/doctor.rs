@@ -171,7 +171,7 @@ identity:\n  environment: development\n  instanceId: generic-registry-1\n  datab
 secretProviders:\n  file:\n    root: {secrets}\n\
 database:\n  runtimeUrlRef: secret:file/runtime-database-url\n  migrationUrlRef: secret:file/migration-database-url\n  pool:\n    maximumConnections: 8\n  roles:\n    migration: registry_migration\n    runtime: registry_runtime\n\
 package:\n  root: {missing}\n\
-authentication:\n  oidc:\n    issuer: https://issuer.example.invalid\n    audience: generic-registry\n    allowedAlgorithm: ES256\n    accessTokenType: at+jwt\n    scopeClaim: scope\n    scopeSeparator: \" \"\n    allowedClients: [generic-registry-client]\n    maximumTokenLifetimeSeconds: 300\n    leewayMilliseconds: 30000\n    jwksSource:\n      type: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
+authentication:\n  oidc:\n    issuers:\n      primary:\n        issuer: https://issuer.example.invalid\n        audience: generic-registry\n        allowedAlgorithm: ES256\n        accessTokenType: at+jwt\n        scopeClaim: scope\n        scopeSeparator: \" \"\n        allowedClients: [generic-registry-client]\n        maximumTokenLifetimeSeconds: 300\n        leewayMilliseconds: 30000\n        jwksSource:\n          type: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
 audit:\n  hashKeyRef: secret:file/audit-key\n  path: {audit}\n\
 cursor:\n  secretRef: secret:file/cursor-key\n\
 destinations:\n  hooks: {{}}\n",

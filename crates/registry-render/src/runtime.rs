@@ -15,12 +15,13 @@ use registry_platform_audit::{
     MAX_AUDIT_RETAIN_DAYS, MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::{
+    Admitted, AllowedClients, CallerIssuerCore, CallerIssuerEntry, CallerIssuers, ClientRule,
     ConfigBlockError, ConfigBlockErrorKind, DeclaredPosture, DevelopmentClass, DevelopmentSetting,
-    DevelopmentWitness, ExplicitProductionSetting, FoundExplicitSetting, FoundSetting, Gated,
-    ListenerBind, ListenerNetworkExposure, LoadedRuntimeConfig, MetricsBindError,
-    MetricsListenerConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, Posture,
-    PostureReport, PostureSource, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
-    RuntimeFileCheck, SecretProvider, SecretProvidersConfig, SecretReference, SettingOrigin,
+    DevelopmentWitness, FoundExplicitSetting, FoundSetting, Gated, ListenerBind,
+    ListenerNetworkExposure, LoadedRuntimeConfig, MetricsBindError, MetricsListenerConfig,
+    OidcClientsConfig, PackageConfig, Posture, PostureReport, PostureSource, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvider, SecretProvidersConfig,
+    SecretReference, SettingOrigin,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, shape_union, BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId,
@@ -96,6 +97,30 @@ const RENDER_REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "audit.retainDays",
         replacement: "declare audit.retentionDays instead",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuer",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.audience",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksSource",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowInsecureHttp",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedClients",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.assertionIssuers",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
     },
 ];
 
@@ -336,17 +361,177 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
+/// The scope a render or document request requires when `renderScope` is absent.
+pub(crate) const DEFAULT_RENDER_SCOPE: &str = "render:render";
+/// The scope a seal request requires when `sealScope` is absent.
+pub(crate) const DEFAULT_SEAL_SCOPE: &str = "render:seal";
+
+/// A scope name: one token with no whitespace, as it reads in a `scope` claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeName(ExternalId);
+
+impl ScopeName {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    fn default_named(name: &str) -> Self {
+        Self(ExternalId::new(name).expect("a default scope name is an external identifier"))
+    }
+}
+
+impl<'de> Deserialize<'de> for ScopeName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let id = ExternalId::deserialize(deserializer)?;
+        if id.as_str().chars().any(char::is_whitespace) {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "a scope name with no whitespace",
+                "Write one scope name, as it appears in the token's scope claim.",
+            )
+            .into_error());
+        }
+        Ok(Self(id))
+    }
+}
+
+fn default_render_scope() -> ScopeName {
+    ScopeName::default_named(DEFAULT_RENDER_SCOPE)
+}
+
+fn default_seal_scope() -> ScopeName {
+    ScopeName::default_named(DEFAULT_SEAL_SCOPE)
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ScopeName {
+    fn inline_schema() -> bool {
+        false
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RenderScopeName".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = <ExternalId as schemars::JsonSchema>::json_schema(generator);
+        schema.insert(
+            "pattern".to_owned(),
+            serde_json::json!("^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$"),
+        );
+        schema.insert(
+            "description".to_owned(),
+            serde_json::json!(
+                "One scope name, with no whitespace, as it appears in a token's scope claim."
+            ),
+        );
+        schema
+    }
+}
+
+/// The schema of a scope member: a scope name that reads `default` when absent.
+#[cfg(feature = "schema")]
+fn scope_schema(
+    generator: &mut schemars::SchemaGenerator,
+    default: &'static str,
+) -> schemars::Schema {
+    let mut schema = generator.subschema_for::<ScopeName>();
+    schema.insert("default".to_owned(), serde_json::json!(default));
+    schema
+}
+
+#[cfg(feature = "schema")]
+fn render_scope_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    scope_schema(generator, DEFAULT_RENDER_SCOPE)
+}
+
+#[cfg(feature = "schema")]
+fn seal_scope_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    scope_schema(generator, DEFAULT_SEAL_SCOPE)
+}
+
 /// Serving-adapter OIDC configuration. The pure rendering library never reads it.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct OidcRuntime {
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub provider: OidcIssuerConfig,
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-clients"))]
+    pub issuers: CallerIssuers<IssuerRuntime>,
+    /// The scope a render or document request requires. Absent reads
+    /// `render:render`.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "render_scope_schema"))]
+    render_scope: Option<ScopeName>,
+    /// The scope a seal request requires. Absent reads `render:seal`. Neither
+    /// scope implies the other, so the two names differ: a runtime whose
+    /// resolved names are equal is refused.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "seal_scope_schema"))]
+    seal_scope: Option<ScopeName>,
+}
+
+impl OidcRuntime {
+    /// The scope the render and document routes require.
+    #[must_use]
+    pub fn render_scope(&self) -> ScopeName {
+        self.render_scope
+            .clone()
+            .unwrap_or_else(default_render_scope)
+    }
+
+    /// Whether `renderScope` is written in the file.
+    #[must_use]
+    pub fn render_scope_written(&self) -> bool {
+        self.render_scope.is_some()
+    }
+
+    /// Whether `sealScope` is written in the file.
+    #[must_use]
+    pub fn seal_scope_written(&self) -> bool {
+        self.seal_scope.is_some()
+    }
+
+    /// The scope the seal route requires.
+    #[must_use]
+    pub fn seal_scope(&self) -> ScopeName {
+        self.seal_scope.clone().unwrap_or_else(default_seal_scope)
+    }
+}
+
+/// One issuer Render accepts credentials from: the shared caller-issuer
+/// members, and the assertion authorities each client may exchange from.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct IssuerRuntime {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer-core"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub clients: OidcClientsConfig,
+    core: CallerIssuerCore<AllowedClients>,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// keyed by client identifier. Omitted, no assertion-issuer rule applies.
+    /// Written, it lists at least one client, each with at least one
+    /// authority. Once a client is listed, a token it exchanged is accepted
+    /// only for one of that client's declared authorities, and a client that
+    /// is not listed may exchange from no authority.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "registry_platform_config::non_empty_assertion_issuers"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_config::assertion_issuers_schema")
+    )]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+impl CallerIssuerEntry for IssuerRuntime {
+    type Clients = AllowedClients;
+
+    fn core(&self) -> &CallerIssuerCore<AllowedClients> {
+        &self.core
+    }
 }
 
 /// The longest render a runtime may allow.
@@ -507,7 +692,7 @@ pub struct SealRuntime {
     #[cfg_attr(feature = "schema", schemars(with = "WithoutTimestamp"))]
     pub without_timestamp: Option<WithoutTimestamp>,
     /// The OIDC clients allowed to seal with this seal: a list of at least
-    /// one client, each also admitted by `authentication.oidc.allowedClients`. There is
+    /// one client, each also admitted by an issuer under `authentication.oidc.issuers`. There is
     /// no `unrestricted` form and no wildcard: a seal issues documents in the
     /// institution's name, so every seal-capable client is named. Keep these
     /// clients separate from any citizen-facing client.
@@ -658,12 +843,6 @@ static RENDER_SEALS_NOT_SERVED: DevelopmentSetting = DevelopmentSetting {
     key: "signing",
     summary: "the bundle declares seals, but this runtime has no signing block and renders those document types unsealed",
     production: "Configure signing.seals for the bundle's seals, or deploy a bundle whose documents do not declare seals.",
-};
-
-static RENDER_UNRESTRICTED_CLIENTS: ExplicitProductionSetting = ExplicitProductionSetting {
-    code: "render.posture.unrestricted-oidc-clients",
-    key: "allowedClients",
-    summary: "OIDC admits every client the issuer verifies",
 };
 
 impl DevelopmentClass for AssuranceProfile {
@@ -992,26 +1171,8 @@ fn read_runtime(
     let mut unavailable = check.unavailable;
     let mut seal_capacities = BTreeMap::new();
     let mut explicit_production_settings = Vec::new();
-    let clients_pointer = "/authentication/oidc/allowedClients";
-    let clients_resolved = !check.defers(clients_pointer);
-    if let Some(loaded) = &mut check.loaded {
-        if clients_resolved
-            && loaded
-                .config
-                .authentication
-                .oidc
-                .as_ref()
-                .is_some_and(|oidc| oidc.clients.allowed_clients.is_empty())
-        {
-            let found = FoundExplicitSetting {
-                setting: &RENDER_UNRESTRICTED_CLIENTS,
-                pointer: Some(clients_pointer.to_owned()),
-                position: None,
-                origin: SettingOrigin::RuntimeFile,
-            };
-            loaded.posture.record_explicit(found.clone());
-            explicit_production_settings.push(found);
-        }
+    if let Some(loaded) = &check.loaded {
+        explicit_production_settings.extend(loaded.posture.explicit_settings().iter().cloned());
     }
     if let Some(loaded) = &check.loaded {
         let mut audit_refused = false;
@@ -1062,6 +1223,45 @@ fn read_runtime(
             CheckPackage::Configured => configured_bundle.as_ref().map(|bundle| &bundle.manifest),
             CheckPackage::Explicit(manifest) => manifest,
         };
+        if let Some(oidc) = &loaded.config.authentication.oidc {
+            diagnostics.extend(oidc.issuers.check_file(
+                "/authentication/oidc/issuers",
+                &check,
+                RUNTIME_KIND,
+            ));
+        }
+        if let Some(oidc) = &loaded.config.authentication.oidc {
+            if oidc.render_scope() == oidc.seal_scope() {
+                let (pointer, related) = if oidc.seal_scope_written() {
+                    (
+                        "/authentication/oidc/sealScope",
+                        "/authentication/oidc/renderScope",
+                    )
+                } else {
+                    (
+                        "/authentication/oidc/renderScope",
+                        "/authentication/oidc/sealScope",
+                    )
+                };
+                if !check.defers(pointer) {
+                    let mut diagnostic = check.error_at(
+                        RUNTIME_KIND,
+                        "render.runtime.seal-scope-is-render-scope",
+                        pointer,
+                        "the seal route requires the scope the render routes require, so every rendering client reaches the seal route",
+                        "Name a seal scope that no rendering client holds.",
+                    );
+                    if oidc.render_scope_written() && oidc.seal_scope_written() {
+                        check.add_related_at(
+                            &mut diagnostic,
+                            related,
+                            "the render scope is written here".to_owned(),
+                        );
+                    }
+                    diagnostics.push(diagnostic);
+                }
+            }
+        }
         if let Some(manifest) = manifest {
             let mut posture = PostureReport::new(declared);
             diagnostics.extend(record_seal_binding_posture(
@@ -1289,11 +1489,13 @@ fn findings(
             .map(block_finding),
     );
     let needs_secrets = runtime.authentication.oidc.as_ref().is_none_or(|oidc| {
-        matches!(
-            oidc.provider.jwks_source,
-            registry_platform_config::JwksSource::Static { .. }
-                | registry_platform_config::JwksSource::TestIssuer { .. }
-        )
+        oidc.issuers.iter().any(|(_, entry)| {
+            matches!(
+                entry.core().provider.jwks_source,
+                registry_platform_config::JwksSource::Static { .. }
+                    | registry_platform_config::JwksSource::TestIssuer { .. }
+            )
+        })
     });
     if needs_secrets
         || runtime.signing.is_some()
@@ -1306,9 +1508,29 @@ fn findings(
     }
     match (&runtime.authentication.oidc, &runtime.authentication.api_key_ref) {
         (Some(oidc), None) => {
-            findings.extend([oidc.provider.check("authentication.oidc"), oidc.clients.check("authentication.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
-            if let registry_platform_config::JwksSource::Static { document_ref } | registry_platform_config::JwksSource::TestIssuer { document_ref } = &oidc.provider.jwks_source {
-                if let Err(error) = runtime.secret_providers.check_reference("authentication.oidc.jwksSource.documentRef", document_ref) { findings.push(block_finding(&error)); }
+            for (id, entry) in oidc.issuers.iter() {
+                let field = format!("authentication.oidc.issuers.{}", id.as_str());
+                let assertions = OidcClientsConfig {
+                    allowed_clients: Vec::new(),
+                    assertion_issuers: entry.assertion_issuers.clone(),
+                };
+                findings.extend(
+                    [entry.core().provider.check(&field), assertions.check(&field)]
+                        .iter()
+                        .filter_map(|result| result.as_ref().err())
+                        .map(block_finding),
+                );
+                if let registry_platform_config::JwksSource::Static { document_ref }
+                | registry_platform_config::JwksSource::TestIssuer { document_ref } =
+                    &entry.core().provider.jwks_source
+                {
+                    if let Err(error) = runtime
+                        .secret_providers
+                        .check_reference(&format!("{field}.jwksSource.documentRef"), document_ref)
+                    {
+                        findings.push(block_finding(&error));
+                    }
+                }
             }
         }
         (None, Some(api_key_ref)) => {
@@ -1474,10 +1696,25 @@ fn signing_findings(
             "Declare at least one seal, or remove the signing block to leave sealing off.",
         ));
     }
+    // The clients some issuer lists. A single issuer that admits every client
+    // admits every seal client. With several issuers each seal client is
+    // listed by the one issuer that issues its tokens, so `unrestricted`
+    // entries admit none.
+    let several_issuers = runtime
+        .authentication
+        .oidc
+        .as_ref()
+        .is_some_and(|oidc| oidc.issuers.len() > 1);
     let admitted: Option<BTreeSet<&str>> = runtime.authentication.oidc.as_ref().and_then(|oidc| {
-        // An empty list is how the token verifier holds `unrestricted`.
-        let clients = &oidc.clients.allowed_clients;
-        (!clients.is_empty()).then(|| clients.iter().map(String::as_str).collect())
+        let mut union = BTreeSet::new();
+        for (_, entry) in oidc.issuers.iter() {
+            match entry.core().allowed_clients.admitted() {
+                Admitted::Listed(clients) => union.extend(clients.iter().map(String::as_str)),
+                _ if several_issuers => {}
+                _ => return None,
+            }
+        }
+        Some(union)
     });
     for (id, seal) in &signing.seals {
         let id = id.as_str();
@@ -1577,12 +1814,20 @@ fn signing_findings(
                 findings.push(finding(
                     "render.runtime.seal-client-not-admitted",
                     pointer,
-                    format!(
-                        "signing.seals.{id}.allowedClients names a client that \
-                         authentication.oidc.allowedClients does not admit, so its token never reaches the \
-                         seal"
-                    ),
-                    "Add the client to authentication.oidc.allowedClients, or remove it from the seal.",
+                    if several_issuers {
+                        format!(
+                            "signing.seals.{id}.allowedClients names a client that no issuer under \
+                             authentication.oidc.issuers lists, and with several issuers each seal \
+                             client is listed by the one issuer that issues its tokens"
+                        )
+                    } else {
+                        format!(
+                            "signing.seals.{id}.allowedClients names a client that \
+                             no issuer under authentication.oidc.issuers admits, so its token never reaches the \
+                             seal"
+                        )
+                    },
+                    "Add the client to an issuer's allowedClients under authentication.oidc.issuers, or remove it from the seal.",
                 ));
             }
         }
@@ -1988,6 +2233,25 @@ mod tests {
         format!(
             "{HEAD}listener:\n  bind: 127.0.0.1:8080\npackage:\n  root: /srv/render/package\nsecretProviders:\n  file:\n    root: {secrets}\nauthentication:\n  apiKeyRef: secret:file/api.key\naudit:\n  path: /var/lib/render/audit/render.jsonl\n",
             secrets = home.join("secrets").display(),
+        )
+    }
+
+    /// The `oidc` authentication block with one issuer entry listing `portal`.
+    const OIDC_ONE_ISSUER: &str = "oidc:\n    issuers:\n      main:\n        issuer: https://issuer.example.test\n        audience: https://render.example.test\n        allowedClients: [portal]";
+    /// The `oidc` authentication block with one issuer entry listing two clients.
+    const OIDC_TWO_CLIENTS: &str = "oidc:\n    issuers:\n      main:\n        issuer: https://issuer.example.test\n        audience: https://render.example.test\n        allowedClients: [portal, records-service]";
+
+    /// An entry of the `issuers` map, for `issuer_entries`.
+    fn issuer_entry(id: &str, issuer: &str, clients: &str, extra: &str) -> String {
+        format!("      {id}:\n        issuer: {issuer}\n        audience: https://render.example.test\n        allowedClients: {clients}\n{extra}")
+    }
+
+    /// The runtime of `minimal` with `oidc` authentication over `entries`, and
+    /// `siblings` written beside `issuers`.
+    fn with_issuers(home: &Path, entries: &str, siblings: &str) -> String {
+        minimal(home).replace(
+            "apiKeyRef: secret:file/api.key",
+            &format!("oidc:\n{siblings}    issuers:\n{entries}"),
         )
     }
 
@@ -2498,7 +2762,7 @@ mod tests {
     #[test]
     fn oidc_is_an_explicit_alternative_to_the_legacy_key() {
         let (_dir, home) = home();
-        let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal]";
+        let oidc = OIDC_ONE_ISSUER;
         let text = minimal(&home).replace("apiKeyRef: secret:file/api.key", oidc);
         assert!(
             load_text(&home, &text).is_ok(),
@@ -2520,9 +2784,420 @@ mod tests {
     }
 
     #[test]
+    fn an_issuer_set_holds_one_entry_per_issuer_id() {
+        let (_dir, home) = home();
+        let entries = format!(
+            "{}{}",
+            issuer_entry(
+                "staff",
+                "https://id.example.test/realms/staff",
+                "[portal]",
+                ""
+            ),
+            issuer_entry(
+                "partners",
+                "https://login.partner.example/v2.0",
+                "[batch]",
+                ""
+            ),
+        );
+        let runtime =
+            load_text(&home, &with_issuers(&home, &entries, "")).expect("two issuers load");
+        let oidc = runtime.authentication.oidc.expect("oidc authentication");
+        let ids: Vec<&str> = oidc.issuers.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["partners", "staff"]);
+    }
+
+    #[test]
+    fn the_members_of_the_old_issuer_block_are_refused_with_their_replacement() {
+        let (_dir, home) = home();
+        let old = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowInsecureHttp: false\n    jwksSource:\n      type: discovery\n    allowedClients: [portal]\n    assertionIssuers:\n      portal: [https://assertion.example.test]";
+        let text = minimal(&home).replace("apiKeyRef: secret:file/api.key", old);
+        let problem = refused(&home, &text);
+        let mut removed: Vec<&str> = problem
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.removed-key")
+            .map(|diagnostic| {
+                assert!(
+                    diagnostic
+                        .suggested_action
+                        .contains("authentication.oidc.issuers.ISSUER_ID"),
+                    "{}: {}",
+                    diagnostic.path,
+                    diagnostic.suggested_action
+                );
+                diagnostic.path.as_str()
+            })
+            .collect();
+        removed.sort_unstable();
+        assert_eq!(
+            removed,
+            [
+                "/authentication/oidc/allowInsecureHttp",
+                "/authentication/oidc/allowedClients",
+                "/authentication/oidc/assertionIssuers",
+                "/authentication/oidc/audience",
+                "/authentication/oidc/issuer",
+                "/authentication/oidc/jwksSource",
+            ]
+        );
+    }
+
+    /// Each refusal as its code and pointer.
+    type Refusals = Vec<(String, String)>;
+
+    /// The refusals of `text` as `load` and as `check` report them, both under
+    /// the development posture.
+    fn refusals_of_load_and_check(home: &Path, text: &str) -> (Refusals, Refusals) {
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, text).expect("runtime file");
+        let pairs = |diagnostics: &[Diagnostic]| {
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == Severity::Error)
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+                .collect::<Vec<_>>()
+        };
+        let loaded = match load_with_positions(&file, DEVELOPMENT_POSTURE) {
+            Ok(_) => Vec::new(),
+            Err(problem) => pairs(&problem.diagnostics),
+        };
+        let checked = check_runtime_with_bundle(&file, false, None, None, DEVELOPMENT_POSTURE);
+        (loaded, pairs(&checked.diagnostics))
+    }
+
+    /// How many other locations the scope refusal of `text` lists.
+    fn refusal_relations(home: &Path, text: &str) -> usize {
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, text).expect("runtime file");
+        check_runtime_with_bundle(&file, false, None, None, DEVELOPMENT_POSTURE)
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "render.runtime.seal-scope-is-render-scope")
+            .map(|diagnostic| diagnostic.related.len())
+            .expect("the scope refusal is reported")
+    }
+
+    #[test]
+    fn assertion_issuers_are_read_through_the_shared_rule() {
+        let (_dir, home) = home();
+        let pointer = "/authentication/oidc/issuers/main/assertionIssuers";
+        let too_many = (0..65)
+            .map(|index| format!("        client{index}: [https://assertion.example.test]\n"))
+            .collect::<String>();
+        for (name, writes) in [
+            ("an empty map", "        assertionIssuers: {}\n".to_owned()),
+            (
+                "a client with no authority",
+                "        assertionIssuers:\n          portal: []\n".to_owned(),
+            ),
+            (
+                "more clients than the bound",
+                format!("        assertionIssuers:\n{too_many}"),
+            ),
+        ] {
+            let text = with_issuers(
+                &home,
+                &issuer_entry("main", "https://issuer.example.test", "[portal]", &writes),
+                "",
+            );
+            let problem = refused(&home, &text);
+            assert!(
+                codes(&problem)
+                    .iter()
+                    .any(|(_, path)| path.starts_with(pointer)),
+                "{name}: {:?}",
+                codes(&problem)
+            );
+        }
+        let listed = with_issuers(
+            &home,
+            &issuer_entry(
+                "main",
+                "https://issuer.example.test",
+                "[portal]",
+                "        assertionIssuers:\n          portal: [https://assertion.example.test]\n",
+            ),
+            "",
+        );
+        let runtime = load_text(&home, &listed).expect("a listed authority loads");
+        let oidc = runtime.authentication.oidc.expect("oidc");
+        let (_, entry) = oidc.issuers.iter().next().expect("one entry");
+        assert_eq!(
+            entry.assertion_issuers["portal"],
+            ["https://assertion.example.test"]
+        );
+    }
+
+    #[test]
+    fn with_several_issuers_every_seal_client_is_listed_by_an_issuer() {
+        let (_dir, home) = home();
+        let unrestricted = |id: &str, issuer: &str| issuer_entry(id, issuer, "unrestricted", "");
+        let two = format!(
+            "{}{}",
+            unrestricted("ministry", "https://id.example.test"),
+            unrestricted("partner", "https://login.partner.example")
+        );
+        // The seal block goes after `audit`, as `signing_text` writes it.
+        let with_seal = |entries: &str| {
+            format!(
+                "{}assuranceProfile: local\nsigning:\n  seals:\n{SEAL}",
+                with_issuers(&home, entries, "")
+            )
+        };
+        let (loaded, checked) = refusals_of_load_and_check(&home, &with_seal(&two));
+        let expected = (
+            "render.runtime.seal-client-not-admitted".to_owned(),
+            "/signing/seals/ministry/allowedClients/0".to_owned(),
+        );
+        assert!(loaded.contains(&expected), "{loaded:?}");
+        assert!(checked.contains(&expected), "{checked:?}");
+        // One issuer that admits every client keeps admitting the seal client.
+        let one = unrestricted("ministry", "https://id.example.test");
+        let (loaded, checked) = refusals_of_load_and_check(&home, &with_seal(&one));
+        assert!(loaded.is_empty(), "{loaded:?}");
+        assert!(checked.is_empty(), "{checked:?}");
+        // Listing the client under one of the two issuers admits it.
+        let listed = format!(
+            "{}{}",
+            issuer_entry(
+                "ministry",
+                "https://id.example.test",
+                "[records-service]",
+                ""
+            ),
+            unrestricted("partner", "https://login.partner.example")
+        );
+        let (loaded, checked) = refusals_of_load_and_check(&home, &with_seal(&listed));
+        assert!(loaded.is_empty(), "{loaded:?}");
+        assert!(checked.is_empty(), "{checked:?}");
+    }
+
+    #[test]
+    fn equal_route_scopes_are_refused_at_the_member_that_makes_them_equal() {
+        let (_dir, home) = home();
+        let entry = issuer_entry("main", "https://issuer.example.test", "[portal]", "");
+        for (siblings, pointer) in [
+            (
+                "    renderScope: documents:use\n    sealScope: documents:use\n",
+                "/authentication/oidc/sealScope",
+            ),
+            (
+                "    renderScope: render:seal\n",
+                "/authentication/oidc/renderScope",
+            ),
+            (
+                "    sealScope: render:render\n",
+                "/authentication/oidc/sealScope",
+            ),
+        ] {
+            let text = with_issuers(&home, &entry, siblings);
+            let (loaded, checked) = refusals_of_load_and_check(&home, &text);
+            let related = refusal_relations(&home, &text);
+            // The other member is listed when both are written.
+            assert_eq!(
+                related,
+                usize::from(siblings.contains("renderScope") && siblings.contains("sealScope")),
+                "{siblings}"
+            );
+            let expected = (
+                "render.runtime.seal-scope-is-render-scope".to_owned(),
+                pointer.to_owned(),
+            );
+            assert!(loaded.contains(&expected), "{siblings}: {loaded:?}");
+            assert!(checked.contains(&expected), "{siblings}: {checked:?}");
+        }
+        let distinct = with_issuers(
+            &home,
+            &entry,
+            "    renderScope: documents:render\n    sealScope: documents:seal\n",
+        );
+        let (loaded, checked) = refusals_of_load_and_check(&home, &distinct);
+        assert!(loaded.is_empty(), "{loaded:?}");
+        assert!(checked.is_empty(), "{checked:?}");
+    }
+
+    #[test]
+    fn development_only_issuer_members_are_refused_in_production_at_the_entry_path() {
+        let (_dir, home) = home();
+        for (extra, code, member) in [
+            (
+                "        allowInsecureHttp: true\n",
+                "platform.posture.insecure-issuer-http",
+                "allowInsecureHttp",
+            ),
+            (
+                "        jwksSource:\n          type: test-issuer\n          documentRef: secret:file/jwks.json\n",
+                "platform.posture.test-issuer",
+                "jwksSource",
+            ),
+        ] {
+            let text = with_issuers(
+                &home,
+                &issuer_entry("main", "https://issuer.example.test", "[portal]", extra),
+                "",
+            );
+            let file = home.join("runtime.yaml");
+            std::fs::write(&file, &text).expect("runtime file");
+            let problem = load_with_positions(&file, DEFAULT_POSTURE)
+                .map(|_| ())
+                .expect_err("production refuses the development member");
+            assert!(
+                problem.diagnostics.iter().any(|diagnostic| diagnostic.code == code
+                    && diagnostic.path == format!("/authentication/oidc/issuers/main/{member}")),
+                "{member}: {:?}",
+                codes(&problem)
+            );
+        }
+    }
+
+    #[test]
+    fn unrestricted_clients_are_an_explicit_production_setting_found_by_the_loader_and_the_check() {
+        let (_dir, home) = home();
+        let listed = with_issuers(
+            &home,
+            &issuer_entry("staff", "https://id.example.test", "[portal]", ""),
+            "",
+        );
+        let unrestricted = with_issuers(
+            &home,
+            &issuer_entry("staff", "https://id.example.test", "unrestricted", ""),
+            "",
+        );
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, &listed).expect("runtime file");
+        let (loaded, _) = load_with_positions(&file, DEFAULT_POSTURE).expect("a listed set loads");
+        assert!(loaded.posture.explicit_settings().is_empty());
+        std::fs::write(&file, &unrestricted).expect("runtime file");
+        let (loaded, _) =
+            load_with_positions(&file, DEFAULT_POSTURE).expect("an unrestricted set loads");
+        let found: Vec<_> = loaded
+            .posture
+            .explicit_settings()
+            .iter()
+            .map(|found| (found.setting.code, found.pointer.as_deref()))
+            .collect();
+        assert_eq!(
+            found,
+            [(
+                "platform.posture.unrestricted-clients",
+                Some("/authentication/oidc/issuers/staff/allowedClients")
+            )]
+        );
+        let check = check_runtime(&file, true, None);
+        let listed_by_check: Vec<_> = check
+            .explicit_production_settings
+            .iter()
+            .map(|found| (found.setting.code, found.pointer.as_deref()))
+            .collect();
+        assert_eq!(listed_by_check, found);
+    }
+
+    #[test]
+    fn two_issuers_with_the_same_iss_refuse_at_startup() {
+        let (_dir, home) = home();
+        let entries = format!(
+            "{}{}",
+            issuer_entry("alpha", "https://id.example.test", "[portal]", ""),
+            issuer_entry("beta", "https://id.example.test", "[batch]", ""),
+        );
+        let text = with_issuers(&home, &entries, "");
+        let problem = refused(&home, &text);
+        let duplicate = problem
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "platform.oidc.duplicate-issuer")
+            .unwrap_or_else(|| panic!("{:?}", problem.diagnostics));
+        assert_eq!(duplicate.path, "/authentication/oidc/issuers/beta/issuer");
+        assert!(duplicate.source.is_some(), "the finding is positioned");
+        assert_eq!(duplicate.related.len(), 1, "the first entry is related");
+    }
+
+    #[test]
+    fn a_client_listed_by_two_issuers_is_refused_at_the_second_listing() {
+        let (_dir, home) = home();
+        let entries = format!(
+            "{}{}",
+            issuer_entry("alpha", "https://id.example.test", "[portal]", ""),
+            issuer_entry("beta", "https://login.partner.example", "[portal]", ""),
+        );
+        let problem = refused(&home, &with_issuers(&home, &entries, ""));
+        assert!(
+            codes(&problem).contains(&(
+                "platform.oidc.client-in-two-issuers",
+                "/authentication/oidc/issuers/beta/allowedClients/0"
+            )),
+            "{:?}",
+            codes(&problem)
+        );
+    }
+
+    #[test]
+    fn an_entry_states_the_token_type_and_the_scope_claim_it_admits() {
+        let (_dir, home) = home();
+        let extra = "        accessTokenType: JWT\n        scopeClaim: scp\n";
+        let text = with_issuers(
+            &home,
+            &issuer_entry("staff", "https://id.example.test", "[portal]", extra),
+            "",
+        );
+        let file = home.join("runtime.yaml");
+        std::fs::write(&file, &text).expect("runtime file");
+        let (loaded, _) = load_with_positions(&file, DEFAULT_POSTURE).expect("loads");
+        let codes: Vec<&str> = loaded
+            .posture
+            .explicit_settings()
+            .iter()
+            .map(|found| found.setting.code)
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                "platform.posture.jwt-access-token",
+                "platform.posture.scope-claim"
+            ]
+        );
+    }
+
+    #[test]
+    fn absent_scope_settings_read_the_two_defaults() {
+        let (_dir, home) = home();
+        let runtime = load_text(&home, &with_issuers(&home, MAIN_ENTRY, "")).expect("loads");
+        let oidc = runtime.authentication.oidc.expect("oidc authentication");
+        assert_eq!(oidc.render_scope().as_str(), "render:render");
+        assert_eq!(oidc.seal_scope().as_str(), "render:seal");
+    }
+
+    #[test]
+    fn configured_scope_names_are_read_beside_the_issuers() {
+        let (_dir, home) = home();
+        let siblings = "    renderScope: documents:render\n    sealScope: documents:seal\n";
+        let runtime = load_text(&home, &with_issuers(&home, MAIN_ENTRY, siblings)).expect("loads");
+        let oidc = runtime.authentication.oidc.expect("oidc authentication");
+        assert_eq!(oidc.render_scope().as_str(), "documents:render");
+        assert_eq!(oidc.seal_scope().as_str(), "documents:seal");
+    }
+
+    #[test]
+    fn a_scope_name_is_one_token_with_no_whitespace() {
+        let (_dir, home) = home();
+        for siblings in [
+            "    renderScope: render documents\n",
+            "    sealScope: \"\"\n",
+            "    sealScope: \"seal\\tdocuments\"\n",
+        ] {
+            let text = with_issuers(&home, MAIN_ENTRY, siblings);
+            assert!(load_text(&home, &text).is_err(), "{siblings}");
+        }
+    }
+
+    const MAIN_ENTRY: &str = "      main:\n        issuer: https://issuer.example.test\n        audience: https://render.example.test\n        allowedClients: [portal]\n";
+
+    #[test]
     fn oidc_optional_auth_members_refuse_explicit_null_and_validate_declared_providers() {
         let (_dir, home) = home();
-        let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal]";
+        let oidc = OIDC_ONE_ISSUER;
         let text = minimal(&home).replace("apiKeyRef: secret:file/api.key", oidc);
         assert!(load_text(&home, &text).is_ok());
         for extra in ["  apiKeyRef: null\n", "  oidc: null\n"] {
@@ -2960,7 +3635,7 @@ mod tests {
     /// As [`signing_text`], under the named `assuranceProfile` (none, when
     /// `None`).
     fn signing_text_under(home: &Path, profile: Option<&str>, seals: &str) -> String {
-        let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal, records-service]";
+        let oidc = OIDC_TWO_CLIENTS;
         let profile = profile
             .map(|profile| format!("assuranceProfile: {profile}\n"))
             .unwrap_or_default();
@@ -3054,10 +3729,20 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("```"))
             .map(|(block, _)| block)
             .expect("the section has a yaml block");
+        // The block's own authentication member is the docs' to keep current:
+        // this test proves the seal part loads beside an issuer that lists the
+        // seal's client.
+        let (_, seal_part) = block
+            .split_once("assuranceProfile:")
+            .expect("the block declares assuranceProfile");
         let (_dir, home) = home();
-        let text = minimal(&home)
-            .replace("authentication:\n  apiKeyRef: secret:file/api.key\n", "")
-            + block;
+        let issuers = issuer_entry(
+            "main",
+            "https://issuer.example.test",
+            "[portal, records-service]",
+            "",
+        );
+        let text = with_issuers(&home, &issuers, "") + "assuranceProfile:" + seal_part;
         let runtime = load_text(&home, &text).expect("the documented seal loads");
         let seal = runtime.seal("ministry").expect("the seal is bound");
         assert_eq!(
@@ -3648,7 +4333,7 @@ mod tests {
     #[test]
     fn a_signing_block_with_no_seal_or_a_null_is_refused() {
         let (_dir, home) = home();
-        let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal]";
+        let oidc = OIDC_ONE_ISSUER;
         let base = minimal(&home).replace("apiKeyRef: secret:file/api.key", oidc);
         let problem = refused(&home, &format!("{base}signing:\n  seals: {{}}\n"));
         assert!(codes(&problem).contains(&("render.runtime.no-seals", "/signing/seals")));

@@ -199,23 +199,25 @@ package:
   root: {package_root}
 authentication:
   oidc:
-    issuer: https://issuer.example
-    audience: urn:breg:test
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [registry-client]
-    revokedKeyIds: [denied-kid]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 900
+    issuers:
+      primary:
+        issuer: https://issuer.example
+        audience: urn:breg:test
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [registry-client]
+        revokedKeyIds: [denied-kid]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -283,11 +285,7 @@ fn access_token_algorithm_accepts_exactly_the_asymmetric_roster() {
         let loaded = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .unwrap_or_else(|error| panic!("{spelling} loads: {error}"));
         assert_eq!(
-            loaded
-                .authentication()
-                .oidc()
-                .token_verifier_config()
-                .allowed_algorithms,
+            primary(&loaded).token_verifier_config().allowed_algorithms,
             vec![algorithm],
             "{spelling}"
         );
@@ -308,11 +306,241 @@ fn access_token_algorithm_accepts_exactly_the_asymmetric_roster() {
             reader_refusal(&error),
             (
                 "config.unknown-variant",
-                "/authentication/oidc/allowedAlgorithm"
+                "/authentication/oidc/issuers/primary/allowedAlgorithm"
             ),
             "{refused}"
         );
     }
+}
+
+/// The one issuer entry `valid_runtime` declares.
+fn primary(
+    config: &registry_breg::runtime_config::RuntimeConfig,
+) -> &registry_breg::runtime_config::OidcVerifierConfig {
+    config
+        .authentication()
+        .oidc()
+        .issuer("primary")
+        .expect("the primary issuer entry loads")
+}
+
+/// The key source of the one issuer entry `valid_runtime` declares.
+async fn primary_key_source(
+    config: &registry_breg::runtime_config::RuntimeConfig,
+) -> Result<std::sync::Arc<registry_platform_oidc::JwksFetcher>, RuntimeConfigError> {
+    let issuers = config.authenticator_issuers().await?;
+    let [issuer] = issuers.as_slice() else {
+        panic!("valid_runtime declares one issuer entry");
+    };
+    Ok(std::sync::Arc::clone(issuer.key_source()))
+}
+
+/// A second issuer entry with rules of its own, written before
+/// `authorityClaims`.
+const PARTNER_ENTRY: &str = "      partners:
+        issuer: https://login.partner.example/v2.0
+        audience: api://registry
+        allowedAlgorithm: ES256
+        scopeClaim: scp
+        scopeSeparator: \",\"
+        allowedClients: [partner-batch]
+        maximumTokenLifetimeSeconds: 600
+        leewayMilliseconds: 0
+";
+
+fn with_partner_entry(base: &str, entry: &str) -> String {
+    let runtime = base.replacen(
+        "  authorityClaims:\n",
+        &format!("{entry}  authorityClaims:\n"),
+        1,
+    );
+    assert_ne!(runtime, base, "the partner entry is written");
+    runtime
+}
+
+#[test]
+fn an_issuer_entry_without_access_token_type_or_scope_claim_loads_as_at_jwt_and_scope() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("        accessTokenType: JWT\n", "")
+        .replace("        scopeClaim: scope\n", "");
+    assert!(!raw.contains("accessTokenType") && !raw.contains("scopeClaim"));
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect("an entry without accessTokenType or scopeClaim loads");
+    let verifier = primary(&config).token_verifier_config();
+    assert_eq!(
+        verifier.allowed_typ,
+        registry_platform_oidc::access_token_typ_set("at+jwt")
+    );
+    assert_eq!(verifier.scope_claim, "scope");
+    // The defaults are not explicit production settings.
+    assert!(
+        config.posture_report().explicit_settings().is_empty(),
+        "{:?}",
+        config.posture_report().explicit_settings()
+    );
+}
+
+#[test]
+fn each_issuer_entry_keeps_its_own_verification_rules() {
+    let fixture = RuntimeFixture::new();
+    let raw = with_partner_entry(
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
+        PARTNER_ENTRY,
+    );
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect("two issuer entries load");
+    let oidc = config.authentication().oidc();
+    assert_eq!(
+        oidc.issuers().map(|entry| entry.id()).collect::<Vec<_>>(),
+        ["partners", "primary"],
+        "entries are read in issuer id order"
+    );
+
+    let partners = oidc.issuer("partners").expect("the partner entry loads");
+    assert_eq!(partners.issuer(), "https://login.partner.example/v2.0");
+    let verifier = partners.token_verifier_config();
+    assert_eq!(verifier.issuer, "https://login.partner.example/v2.0");
+    assert_eq!(verifier.audiences, vec!["api://registry"]);
+    assert_eq!(
+        verifier.allowed_algorithms,
+        vec![jsonwebtoken::Algorithm::ES256]
+    );
+    assert_eq!(
+        verifier.allowed_typ,
+        registry_platform_oidc::access_token_typ_set("at+jwt")
+    );
+    assert_eq!(verifier.scope_claim, "scp");
+    assert_eq!(verifier.scope_separator, ',');
+    assert_eq!(verifier.allowed_clients, vec!["partner-batch"]);
+    assert!(verifier.denied_kids.is_empty());
+    assert_eq!(verifier.max_token_lifetime, Some(Duration::from_secs(600)));
+    assert_eq!(verifier.leeway, Duration::ZERO);
+
+    let verifier = primary(&config).token_verifier_config();
+    assert_eq!(verifier.issuer, "https://issuer.example");
+    assert_eq!(verifier.audiences, vec!["urn:breg:test"]);
+    assert_eq!(
+        verifier.allowed_algorithms,
+        vec![jsonwebtoken::Algorithm::EdDSA]
+    );
+    assert_eq!(verifier.allowed_typ, vec!["JWT"]);
+    assert_eq!(verifier.scope_claim, "scope");
+    assert_eq!(verifier.scope_separator, ' ');
+    assert_eq!(verifier.allowed_clients, vec!["registry-client"]);
+    assert!(verifier.denied_kids.contains("denied-kid"));
+    assert_eq!(verifier.max_token_lifetime, Some(Duration::from_secs(300)));
+    assert_eq!(verifier.leeway, Duration::from_secs(60));
+}
+
+#[test]
+fn two_issuers_with_the_same_iss_refuse_at_startup() {
+    let fixture = RuntimeFixture::new();
+    let raw = with_partner_entry(
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
+        &PARTNER_ENTRY.replace(
+            "https://login.partner.example/v2.0",
+            "https://issuer.example",
+        ),
+    );
+    let path = Path::new("runtime.yaml");
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect_err("two entries naming one issuer refuse at startup");
+    let diagnostics = error.diagnostics(None);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>(),
+        [(
+            "platform.oidc.duplicate-issuer",
+            "/authentication/oidc/issuers/primary/issuer"
+        )],
+        "the second entry in issuer id order is the one refused"
+    );
+    let rendered = error.render_human(Some(path));
+    assert!(rendered.contains("partners"), "{rendered}");
+    assert!(!rendered.contains("issuer.example"), "{rendered}");
+}
+
+/// `valid_runtime` written in the shape that held one issuer's members
+/// directly under `authentication.oidc`, with the members the base leaves
+/// out added.
+fn single_issuer_shape(base: &str) -> String {
+    let flattened = base
+        .replacen("    issuers:\n      primary:\n", "", 1)
+        .replace("\n        ", "\n    ")
+        .replacen(
+            "    jwksCache:\n",
+            "    allowInsecureHttp: false\n    jwksSource:\n      type: discovery\n    assertionIssuers:\n      registry-client: [https://issuer-a.example]\n    jwksCache:\n",
+            1,
+        );
+    assert!(flattened.contains("\n  oidc:\n    issuer: https://issuer.example\n"));
+    flattened
+}
+
+#[test]
+fn each_member_that_moved_into_the_issuer_entry_is_refused_naming_its_place() {
+    let fixture = RuntimeFixture::new();
+    let raw = single_issuer_shape(&valid_runtime(&fixture.secret_root, &fixture.package_root));
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect_err("the single-issuer shape is refused");
+    let diagnostics = error.diagnostics(None);
+    for key in [
+        "issuer",
+        "audience",
+        "jwksSource",
+        "allowInsecureHttp",
+        "allowedAlgorithm",
+        "accessTokenType",
+        "scopeClaim",
+        "scopeSeparator",
+        "allowedClients",
+        "revokedKeyIds",
+        "assertionIssuers",
+        "maximumTokenLifetimeSeconds",
+        "leewayMilliseconds",
+        "jwksCache",
+    ] {
+        let pointer = format!("/authentication/oidc/{key}");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == pointer)
+            .unwrap_or_else(|| panic!("{key} is refused: {diagnostics:?}"));
+        assert_eq!(diagnostic.code, "config.removed-key", "{key}");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains(&format!("authentication.oidc.issuers.ISSUER_ID.{key}")),
+            "{key}: {}",
+            diagnostic.suggested_action
+        );
+    }
+}
+
+#[test]
+fn a_jwt_entry_is_listed_as_an_explicit_setting_and_ready_does_not_show_it() {
+    let fixture = RuntimeFixture::new();
+    let config = parse_runtime_config_with_env(
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("an entry stating accessTokenType: JWT loads in production");
+    let explicit = config.posture_report().explicit_settings();
+    assert_eq!(
+        explicit
+            .iter()
+            .map(|found| (found.setting.code, found.pointer.as_deref()))
+            .collect::<Vec<_>>(),
+        [(
+            "platform.posture.jwt-access-token",
+            Some("/authentication/oidc/issuers/primary/accessTokenType")
+        )]
+    );
+    let ready = serde_json::Value::Object(config.posture_report().ready_member()).to_string();
+    assert!(!ready.contains("jwt-access-token"), "{ready}");
+    assert!(!ready.contains("accessTokenType"), "{ready}");
 }
 
 #[test]
@@ -347,8 +575,8 @@ fn runtime_with_event_destinations(fixture: &RuntimeFixture, bindings: &str) -> 
 fn runtime_reads_the_explicit_http_issuer_opt_in() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        "    issuer: https://issuer.example",
-        "    issuer: http://issuer.example\n    allowInsecureHttp: true",
+        "        issuer: https://issuer.example",
+        "        issuer: http://issuer.example\n        allowInsecureHttp: true",
     );
     let error = parse_runtime_config_with_env(&raw, |_| None, PRODUCTION_POSTURE)
         .expect_err("production refuses the HTTP issuer opt-in");
@@ -362,16 +590,13 @@ fn runtime_reads_the_explicit_http_issuer_opt_in() {
         },
     )
     .expect("development accepts the HTTP issuer opt-in");
-    assert_eq!(
-        config.authentication().oidc().issuer(),
-        "http://issuer.example"
-    );
+    assert_eq!(primary(&config).issuer(), "http://issuer.example");
     assert_eq!(
         config
             .authentication()
             .oidc()
             .insecure_http_startup_diagnostic(),
-        Some("authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
+        Some("an authentication.oidc.issuers entry sets allowInsecureHttp, which permits plain HTTP to its issuer and to a JWKS URI declared in configuration")
     );
 }
 
@@ -433,8 +658,8 @@ fn undeclared_laptop_configuration_lists_every_development_setting() {
     let fixture = RuntimeFixture::new();
     let base = runtime_with_database_members(&fixture, "  transport: private-network-plaintext\n")
         .replace(
-            "    issuer: https://issuer.example",
-            "    issuer: http://issuer.example\n    allowInsecureHttp: true",
+            "        issuer: https://issuer.example",
+            "        issuer: http://issuer.example\n        allowInsecureHttp: true",
         );
     let raw = format!(
         "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/data-key\n"
@@ -448,7 +673,7 @@ fn undeclared_laptop_configuration_lists_every_development_setting() {
         ),
         (
             "platform.posture.insecure-issuer-http",
-            "/authentication/oidc/allowInsecureHttp",
+            "/authentication/oidc/issuers/primary/allowInsecureHttp",
         ),
         (
             "breg.posture.local-key-custody",
@@ -481,7 +706,11 @@ fn non_loopback_http_issuer_refusal_names_the_opt_in() {
         .expect_err("plain HTTP beyond loopback needs an explicit opt-in");
     assert_eq!(error, RuntimeConfigError::InvalidOidc);
     let rendered = error.render_human(Some(Path::new("runtime.yaml")));
-    assert!(rendered.contains("authentication.oidc.allowInsecureHttp: true"));
+    assert!(
+        rendered.contains("authentication.oidc.issuers entry"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("allowInsecureHttp: true"), "{rendered}");
     assert!(!rendered.contains("issuer.example"));
 }
 
@@ -883,7 +1112,7 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
         registry_platform_config::Posture::Production
     );
 
-    let verifier = config.authentication().oidc().token_verifier_config();
+    let verifier = primary(&config).token_verifier_config();
     assert_eq!(verifier.issuer, "https://issuer.example");
     assert_eq!(verifier.audiences, vec!["urn:breg:test"]);
     assert_eq!(
@@ -894,14 +1123,10 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     assert!(verifier.denied_kids.contains("denied-kid"));
     assert!(verifier.assertion_issuers.is_empty());
 
-    let discovery = config.authentication().oidc().discovery_config();
+    let discovery = primary(&config).discovery_config();
     assert!(discovery.jwks_uri_override.is_none());
     assert_eq!(
-        config
-            .authentication()
-            .oidc()
-            .jwks_fetcher_config()
-            .request_timeout,
+        primary(&config).jwks_fetcher_config().request_timeout,
         Duration::from_secs(5)
     );
     let _claims = config.authentication().authority_claim_config();
@@ -1395,7 +1620,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
         "",
     )
     .replace(
-        "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maximumDocumentBytes: 65536\n      attemptTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
+        "        jwksCache:\n          cacheTtlSeconds: 600\n          negativeCacheTtlSeconds: 60\n          refreshCooldownSeconds: 30\n          maximumDocumentBytes: 65536\n          attemptTimeoutMilliseconds: 5000\n          outageToleranceSeconds: 900\n",
         "",
     )
     .replace("  maximumAgeSeconds: 300\n", "")
@@ -1420,7 +1645,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
         config.database().pool_bounds().recycle_timeout,
         Duration::from_secs(2)
     );
-    let jwks = config.authentication().oidc().jwks_fetcher_config();
+    let jwks = primary(&config).jwks_fetcher_config();
     assert_eq!(jwks.cache_ttl, Duration::from_secs(600));
     assert_eq!(jwks.negative_cache_ttl, Duration::from_secs(60));
     assert_eq!(jwks.refresh_cooldown, Duration::from_secs(30));
@@ -1455,8 +1680,8 @@ fn operational_defaults_materialize_without_defaulting_authority() {
 
     let partial_raw = base
         .replace(
-            "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maximumDocumentBytes: 65536\n      attemptTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
-            "    jwksCache:\n      attemptTimeoutMilliseconds: 5000\n",
+            "        jwksCache:\n          cacheTtlSeconds: 600\n          negativeCacheTtlSeconds: 60\n          refreshCooldownSeconds: 30\n          maximumDocumentBytes: 65536\n          attemptTimeoutMilliseconds: 5000\n          outageToleranceSeconds: 900\n",
+            "        jwksCache:\n          attemptTimeoutMilliseconds: 5000\n",
         )
         .replace(
             "operationalTimeouts:\n  httpRequestMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\n  recordLockMilliseconds: 5000\n  migrationLockMilliseconds: 30000\n  migrationStatementMilliseconds: 60000\n",
@@ -1464,7 +1689,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
         );
     let partial = parse_runtime_config_with_env(&partial_raw, env_lookup, PRODUCTION_POSTURE)
         .expect("partial operational sections receive safe field defaults");
-    let jwks = partial.authentication().oidc().jwks_fetcher_config();
+    let jwks = primary(&partial).jwks_fetcher_config();
     assert_eq!(jwks.cache_ttl, Duration::from_secs(600));
     assert_eq!(jwks.negative_cache_ttl, Duration::from_secs(60));
     assert_eq!(jwks.refresh_cooldown, Duration::from_secs(30));
@@ -1505,7 +1730,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
             READER,
         ),
         ("  roles:\n", READER),
-        ("    issuer: https://issuer.example\n", READER),
+        ("        issuer: https://issuer.example\n", READER),
         ("  hashKeyRef: secret:file/audit-key\n", READER),
         ("  secretRef: secret:file/cursor-key\n", READER),
     ] {
@@ -1586,7 +1811,7 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
         (
             RuntimeConfigError::InvalidOidc,
             "breg.runtime.invalid-oidc",
-            "/authentication/oidc",
+            "/authentication/oidc/issuers",
         ),
         (
             RuntimeConfigError::InvalidEventDestination,
@@ -1622,9 +1847,11 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
             "/secretProviders/file/root",
         ),
         (
-            RuntimeConfigError::InvalidOidcLeeway,
+            RuntimeConfigError::InvalidOidcLeeway {
+                pointer: "/authentication/oidc/issuers/primary/leewayMilliseconds".to_owned(),
+            },
             "breg.runtime.invalid-oidc-leeway",
-            "/authentication/oidc/leewayMilliseconds",
+            "/authentication/oidc/issuers/primary/leewayMilliseconds",
         ),
     ];
 
@@ -1701,10 +1928,7 @@ fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() 
     let policy = config
         .idempotency_policy()
         .expect("the configured issuer scopes caller keys");
-    assert_eq!(
-        policy.caller_issuer(),
-        config.authentication().oidc().issuer()
-    );
+    assert_eq!(policy.caller_issuer(), primary(&config).issuer());
     assert_eq!(policy.receipt_retention_days(), 7);
     for days in [1_u16, 365_u16] {
         let config = parse_runtime_config(
@@ -1933,8 +2157,8 @@ fn two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions() {
             ),
         )
         .replace(
-            "    issuer: https://issuer.example\n",
-            "    issuer: https://issuer.example\n    issuers: canary-c\n    audiences: canary-d\n",
+            "        issuer: https://issuer.example\n",
+            "        issuer: https://issuer.example\n        issuers: canary-c\n        audiences: canary-d\n",
         )
         .replace(
             "  hashKeyRef: secret:file/audit-key\n",
@@ -1960,8 +2184,12 @@ fn two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions() {
     for (path, key, column) in [
         ("/package/rots", "rots", 3),
         ("/package/expectedDigst", "expectedDigst", 3),
-        ("/authentication/oidc/issuers", "issuers", 5),
-        ("/authentication/oidc/audiences", "audiences", 5),
+        ("/authentication/oidc/issuers/primary/issuers", "issuers", 9),
+        (
+            "/authentication/oidc/issuers/primary/audiences",
+            "audiences",
+            9,
+        ),
         ("/audit/hashKey", "hashKey", 3),
         ("/audit/paths", "paths", 3),
     ] {
@@ -2636,20 +2864,20 @@ fn bounds_timeouts_and_retention_are_read_under_the_shared_spellings() {
         (
             "maximumTokenLifetimeSeconds: 300",
             "maxTokenLifetimeSeconds: 300",
-            "/authentication/oidc/maxTokenLifetimeSeconds",
-            "authentication.oidc.maximumTokenLifetimeSeconds",
+            "/authentication/oidc/issuers/primary/maxTokenLifetimeSeconds",
+            "authentication.oidc.issuers.ISSUER_ID.maximumTokenLifetimeSeconds",
         ),
         (
             "maximumDocumentBytes: 65536",
             "maxDocumentBytes: 65536",
-            "/authentication/oidc/jwksCache/maxDocumentBytes",
-            "authentication.oidc.jwksCache.maximumDocumentBytes",
+            "/authentication/oidc/issuers/primary/jwksCache/maxDocumentBytes",
+            "authentication.oidc.issuers.ISSUER_ID.jwksCache.maximumDocumentBytes",
         ),
         (
             "attemptTimeoutMilliseconds: 5001",
             "requestTimeoutMilliseconds: 5001",
-            "/authentication/oidc/jwksCache/requestTimeoutMilliseconds",
-            "authentication.oidc.jwksCache.attemptTimeoutMilliseconds",
+            "/authentication/oidc/issuers/primary/jwksCache/requestTimeoutMilliseconds",
+            "authentication.oidc.issuers.ISSUER_ID.jwksCache.attemptTimeoutMilliseconds",
         ),
         (
             "retentionDays: 7",
@@ -2726,7 +2954,7 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
         base.replace(
             "revokedKeyIds: [denied-kid]",
             &format!(
-                "revokedKeyIds: [denied-kid]\n    assertionIssuers:\n      {key}:\n        - https://issuer-a.example"
+                "revokedKeyIds: [denied-kid]\n        assertionIssuers:\n          {key}:\n            - https://issuer-a.example"
             ),
         )
     };
@@ -2778,7 +3006,10 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
                 with_actors(key),
                 "/authentication/authorityClaims/trustedActors",
             ),
-            (with_issuers(key), "/authentication/oidc/assertionIssuers"),
+            (
+                with_issuers(key),
+                "/authentication/oidc/issuers/primary/assertionIssuers",
+            ),
         ] {
             let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("a client key that is not an external identifier is refused");
@@ -2802,11 +3033,14 @@ fn the_issuer_key_source_names_its_variant_in_a_type_member() {
         .expect_err("the kind member is refused");
     assert_eq!(
         reader_refusal(&error),
-        ("config.removed-key", "/authentication/oidc/jwksSource/kind")
+        (
+            "config.removed-key",
+            "/authentication/oidc/issuers/primary/jwksSource/kind"
+        )
     );
     let rendered = format!("{error} {}", error.render_human(None));
     assert!(
-        rendered.contains("authentication.oidc.jwksSource.type"),
+        rendered.contains("authentication.oidc.issuers.ISSUER_ID.jwksSource.type"),
         "{rendered}"
     );
 }
@@ -3159,27 +3393,24 @@ fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_clien
     let fixture = RuntimeFixture::new();
     let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let written = |member: &str| {
-        let raw = baseline.replace("    allowedClients: [registry-client]\n", member);
+        let raw = baseline.replace("        allowedClients: [registry-client]\n", member);
         assert_ne!(raw, baseline);
         raw
     };
     let clients = |raw: &str| {
         parse_runtime_config_with_env(raw, env_lookup, PRODUCTION_POSTURE)
+            .map(|config| primary(&config).token_verifier_config().allowed_clients)
             .expect("the client decision is written")
-            .authentication()
-            .oidc()
-            .token_verifier_config()
-            .allowed_clients
     };
 
     assert_eq!(clients(&baseline), vec!["registry-client"]);
-    assert!(clients(&written("    allowedClients: unrestricted\n")).is_empty());
+    assert!(clients(&written("        allowedClients: unrestricted\n")).is_empty());
 
     let error = parse_runtime_config_with_env(&written(""), env_lookup, PRODUCTION_POSTURE)
         .expect_err("leaving the client decision out is refused");
     assert_eq!(
         reader_refusal(&error),
-        ("config.missing-key", "/authentication/oidc")
+        ("config.missing-key", "/authentication/oidc/issuers/primary")
     );
     let RuntimeConfigError::Reader(reader) = &error else {
         unreachable!("the shared reader decided this refusal");
@@ -3187,9 +3418,9 @@ fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_clien
     assert!(reader.to_string().contains("allowedClients"), "{reader}");
 
     for refused in [
-        "    allowedClients: []\n",
-        "    allowedClients: every-client\n",
-        "    allowedClients: \"*\"\n",
+        "        allowedClients: []\n",
+        "        allowedClients: every-client\n",
+        "        allowedClients: \"*\"\n",
     ] {
         let error =
             parse_runtime_config_with_env(&written(refused), env_lookup, PRODUCTION_POSTURE)
@@ -3198,7 +3429,7 @@ fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_clien
             reader_refusal(&error),
             (
                 "config.invalid-value",
-                "/authentication/oidc/allowedClients"
+                "/authentication/oidc/issuers/primary/allowedClients"
             ),
             "{refused}"
         );
@@ -3208,7 +3439,7 @@ fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_clien
         let message = reader.to_string();
         assert!(
             message.contains("unrestricted, or a list of at least one OAuth client")
-                && message.contains("write unrestricted to accept every client"),
+                && message.contains("write unrestricted to admit every client"),
             "{message}"
         );
         assert!(!message.contains("every-client"), "{message}");
@@ -3222,15 +3453,15 @@ fn assertion_issuers_reach_the_verifier_and_stay_out_of_redacted_debug_output() 
         "revokedKeyIds: [denied-kid]",
         concat!(
             "revokedKeyIds: [denied-kid]\n",
-            "    assertionIssuers:\n",
-            "      registry-client:\n",
-            "        - https://assertion-issuer.example\n",
+            "        assertionIssuers:\n",
+            "          registry-client:\n",
+            "            - https://assertion-issuer.example\n",
         ),
     );
 
     let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
         .expect("assertion issuers parse");
-    let oidc = config.authentication().oidc();
+    let oidc = primary(&config);
     let verifier = oidc.token_verifier_config();
     assert_eq!(
         verifier
@@ -3257,18 +3488,18 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         )
     };
     let too_many_clients = {
-        let mut block = "    assertionIssuers:\n".to_owned();
+        let mut block = "        assertionIssuers:\n".to_owned();
         for index in 0..=128 {
             block.push_str(&format!(
-                "      registry-client-{index}:\n        - https://issuer.example\n"
+                "          registry-client-{index}:\n            - https://issuer.example\n"
             ));
         }
         block
     };
     let too_many_issuers = {
-        let mut block = "    assertionIssuers:\n      registry-client:\n".to_owned();
+        let mut block = "        assertionIssuers:\n          registry-client:\n".to_owned();
         for index in 0..=128 {
-            block.push_str(&format!("        - https://issuer-{index}.example\n"));
+            block.push_str(&format!("            - https://issuer-{index}.example\n"));
         }
         block
     };
@@ -3276,46 +3507,46 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         (
             "duplicate client key",
             insert(concat!(
-                "    assertionIssuers:\n",
-                "      registry-client:\n",
-                "        - https://issuer-a.example\n",
-                "      registry-client:\n",
-                "        - https://issuer-b.example\n",
+                "        assertionIssuers:\n",
+                "          registry-client:\n",
+                "            - https://issuer-a.example\n",
+                "          registry-client:\n",
+                "            - https://issuer-b.example\n",
             )),
             READER,
         ),
         (
             "duplicate issuer inside one client's list",
             insert(concat!(
-                "    assertionIssuers:\n",
-                "      registry-client:\n",
-                "        - https://issuer-a.example\n",
-                "        - https://issuer-a.example\n",
+                "        assertionIssuers:\n",
+                "          registry-client:\n",
+                "            - https://issuer-a.example\n",
+                "            - https://issuer-a.example\n",
             )),
             Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "empty issuer string",
             insert(concat!(
-                "    assertionIssuers:\n",
-                "      registry-client:\n",
-                "        - \"\"\n",
+                "        assertionIssuers:\n",
+                "          registry-client:\n",
+                "            - \"\"\n",
             )),
             Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "empty client key",
             insert(concat!(
-                "    assertionIssuers:\n",
-                "      \"\":\n",
-                "        - https://issuer-a.example\n",
+                "        assertionIssuers:\n",
+                "          \"\":\n",
+                "            - https://issuer-a.example\n",
             )),
             READER,
         ),
         (
             "over-long client key",
             insert(&format!(
-                "    assertionIssuers:\n      {}:\n        - https://issuer-a.example\n",
+                "        assertionIssuers:\n          {}:\n            - https://issuer-a.example\n",
                 "c".repeat(513)
             )),
             READER,
@@ -3323,7 +3554,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         (
             "over-long issuer value",
             insert(&format!(
-                "    assertionIssuers:\n      registry-client:\n        - https://{}.example\n",
+                "        assertionIssuers:\n          registry-client:\n            - https://{}.example\n",
                 "i".repeat(513)
             )),
             Refusal::Runtime(RuntimeConfigError::InvalidOidc),
@@ -3353,7 +3584,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
     // may exchange from, so an empty mapping is refused; omitting the member
     // is how a file applies no assertion-issuer rule.
     let error = parse_runtime_config_with_env(
-        &insert("    assertionIssuers: {}\n"),
+        &insert("        assertionIssuers: {}\n"),
         env_lookup,
         PRODUCTION_POSTURE,
     )
@@ -3362,7 +3593,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         reader_refusal(&error),
         (
             "config.invalid-value",
-            "/authentication/oidc/assertionIssuers"
+            "/authentication/oidc/issuers/primary/assertionIssuers"
         )
     );
     assert!(
@@ -3375,10 +3606,10 @@ fn invalid_assertion_issuer_shapes_are_refused() {
     // client rather than read as a second way to write that.
     let error = parse_runtime_config_with_env(
         &insert(concat!(
-            "    assertionIssuers:\n",
-            "      registry-client: []\n",
-            "      other-client:\n",
-            "        - https://issuer-a.example\n",
+            "        assertionIssuers:\n",
+            "          registry-client: []\n",
+            "          other-client:\n",
+            "            - https://issuer-a.example\n",
         )),
         env_lookup,
         PRODUCTION_POSTURE,
@@ -3388,7 +3619,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         reader_refusal(&error),
         (
             "config.invalid-value",
-            "/authentication/oidc/assertionIssuers/registry-client"
+            "/authentication/oidc/issuers/primary/assertionIssuers/registry-client"
         )
     );
     let rendered = error.render_human(None);
@@ -3413,18 +3644,21 @@ fn revoked_key_ids_are_canonical_and_an_empty_list_is_refused() {
     .expect_err("an empty denied key list is refused");
     assert_eq!(
         reader_refusal(&error),
-        ("config.invalid-value", "/authentication/oidc/revokedKeyIds")
+        (
+            "config.invalid-value",
+            "/authentication/oidc/issuers/primary/revokedKeyIds"
+        )
     );
     assert!(
         error.render_human(None).contains("delete revokedKeyIds"),
         "the refusal names its fix"
     );
 
-    let omitted = baseline.replace("    revokedKeyIds: [denied-kid]\n", "");
+    let omitted = baseline.replace("        revokedKeyIds: [denied-kid]\n", "");
     assert!(!omitted.contains("revokedKeyIds"));
     let config = parse_runtime_config_with_env(&omitted, env_lookup, PRODUCTION_POSTURE)
         .expect("a runtime file with no revokedKeyIds member is accepted");
-    let verifier = config.authentication().oidc().token_verifier_config();
+    let verifier = primary(&config).token_verifier_config();
     assert!(verifier.denied_kids.is_empty());
 }
 
@@ -3442,10 +3676,13 @@ fn denied_kids_is_a_value_free_removed_key_with_the_canonical_replacement() {
     };
     let diagnostic = refusal.deciding_diagnostic();
     assert_eq!(diagnostic.code, "config.removed-key");
-    assert_eq!(diagnostic.path, "/authentication/oidc/deniedKids");
+    assert_eq!(
+        diagnostic.path,
+        "/authentication/oidc/issuers/primary/deniedKids"
+    );
     assert_eq!(
         diagnostic.suggested_action,
-        "Rename `authentication.oidc.deniedKids` to `authentication.oidc.revokedKeyIds`; the values stay as they are."
+        "Rename `authentication.oidc.issuers.ISSUER_ID.deniedKids` to `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds`; the values stay as they are."
     );
     assert!(!error.render_human(None).contains("retired-key-canary"));
 }
@@ -3464,11 +3701,7 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
         let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect("explicit issuer contract");
         assert_eq!(
-            config
-                .authentication()
-                .oidc()
-                .token_verifier_config()
-                .max_token_lifetime,
+            primary(&config).token_verifier_config().max_token_lifetime,
             Some(Duration::from_secs(seconds))
         );
     }
@@ -3500,8 +3733,8 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
 fn authored_jwks_uri_override_is_refused() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        "    audience: urn:breg:test\n",
-        "    audience: urn:breg:test\n    jwksUri: https://attacker.example/jwks.json\n",
+        "        audience: urn:breg:test\n",
+        "        audience: urn:breg:test\n        jwksUri: https://attacker.example/jwks.json\n",
     );
     assert_eq!(
         refusal(
@@ -3570,8 +3803,7 @@ async fn static_jwks_file_and_env_refs_build_a_ready_key_source() {
         PRODUCTION_POSTURE,
     )
     .expect("file-pinned runtime parses");
-    let file_source = file_config
-        .oidc_key_source()
+    let file_source = primary_key_source(&file_config)
         .await
         .expect("file-pinned static JWKS constructs");
     file_source
@@ -3591,8 +3823,7 @@ async fn static_jwks_file_and_env_refs_build_a_ready_key_source() {
         PRODUCTION_POSTURE,
     )
     .expect("env-pinned runtime parses");
-    let env_source = env_config
-        .oidc_key_source()
+    let env_source = primary_key_source(&env_config)
         .await
         .expect("env-pinned static JWKS constructs");
     std::env::remove_var(STATIC_JWKS_ENV);
@@ -3746,8 +3977,7 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
         );
         let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect("runtime shell parses");
-        let error = config
-            .oidc_key_source()
+        let error = primary_key_source(&config)
             .await
             .expect_err("invalid static JWKS refused");
         let expected = match name {
@@ -3823,8 +4053,7 @@ async fn a_static_key_set_with_unknown_public_members_loads() {
             PRODUCTION_POSTURE,
         )
         .expect("runtime shell parses");
-        let source = config
-            .oidc_key_source()
+        let source = primary_key_source(&config)
             .await
             .unwrap_or_else(|error| panic!("{name} key set refused: {error}"));
         source
@@ -3849,8 +4078,7 @@ async fn a_private_member_in_a_static_key_set_is_named_in_the_startup_refusal() 
         PRODUCTION_POSTURE,
     )
     .expect("runtime shell parses");
-    let error = config
-        .oidc_key_source()
+    let error = primary_key_source(&config)
         .await
         .expect_err("private member refused");
     let rendered = error.render_human(None);
@@ -3892,8 +4120,7 @@ async fn static_jwks_resolves_once_and_rotates_only_on_reconstruction() {
         PRODUCTION_POSTURE,
     )
     .expect("static runtime parses");
-    let first_source = config
-        .oidc_key_source()
+    let first_source = primary_key_source(&config)
         .await
         .expect("first static source constructs");
     first_source
@@ -3913,8 +4140,7 @@ async fn static_jwks_resolves_once_and_rotates_only_on_reconstruction() {
         first_source.key_for_kid(second_kid).await.is_err(),
         "already constructed source does not reload the rotated file"
     );
-    let second_source = config
-        .oidc_key_source()
+    let second_source = primary_key_source(&config)
         .await
         .expect("reconstructed source reads the rotated document");
     second_source
@@ -3990,7 +4216,10 @@ fn a_substituted_value_cannot_inject_document_structure() {
     .expect_err("a substituted newline stays inside the issuer string");
     assert_eq!(
         reader_refusal(&error),
-        ("config.invalid-value", "/authentication/oidc/issuer")
+        (
+            "config.invalid-value",
+            "/authentication/oidc/issuers/primary/issuer"
+        )
     );
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("issuer.example"));
@@ -4110,7 +4339,10 @@ fn oidc_issuer_and_audience_follow_the_shared_issuer_block() {
         if typed_refusal {
             assert_eq!(
                 reader_refusal(&error),
-                ("config.invalid-value", "/authentication/oidc/issuer"),
+                (
+                    "config.invalid-value",
+                    "/authentication/oidc/issuers/primary/issuer"
+                ),
                 "{issuer}"
             );
         } else {
@@ -4134,8 +4366,8 @@ fn jwks_source_uri_kind_skips_discovery_under_the_shared_rules() {
     let fixture = RuntimeFixture::new();
     let with_uri = |uri: &str| {
         valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-            "    jwksCache:\n",
-            &format!("    jwksSource:\n      type: uri\n      uri: {uri}\n    jwksCache:\n"),
+            "        jwksCache:\n",
+            &format!("        jwksSource:\n          type: uri\n          uri: {uri}\n        jwksCache:\n"),
         )
     };
     let config = parse_runtime_config_with_env(
@@ -4165,7 +4397,7 @@ fn jwks_source_uri_kind_skips_discovery_under_the_shared_rules() {
                 reader_refusal(&error),
                 (
                     "config.invalid-value",
-                    "/authentication/oidc/jwksSource/uri"
+                    "/authentication/oidc/issuers/primary/jwksSource/uri"
                 ),
                 "{uri}"
             );
@@ -4231,7 +4463,7 @@ fn runtime_config_file_and_ancestors_require_trusted_ownership_and_modes() {
 
     let fixture = RuntimeFixture::new();
     let runtime = valid_runtime(&fixture.secret_root, &fixture.package_root)
-        .replace("    revokedKeyIds: [denied-kid]\n", "");
+        .replace("        revokedKeyIds: [denied-kid]\n", "");
     let config_path = fixture.path("runtime.yaml");
     fs::write(&config_path, &runtime).expect("runtime config writes");
     fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
@@ -4411,11 +4643,7 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
         )
         .expect("a whole-second leeway is accepted");
         assert_eq!(
-            config
-                .authentication()
-                .oidc()
-                .token_verifier_config()
-                .leeway,
+            primary(&config).token_verifier_config().leeway,
             Duration::from_millis(accepted)
         );
     }
@@ -4429,7 +4657,7 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
         reader_refusal(&error),
         (
             "config.out-of-range",
-            "/authentication/oidc/leewayMilliseconds"
+            "/authentication/oidc/issuers/primary/leewayMilliseconds"
         )
     );
     for refused in [1_u64, 500, 999, 1_500] {
@@ -4442,8 +4670,14 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
             PRODUCTION_POSTURE,
         )
         .expect_err("a leeway the verifier cannot apply exactly is refused");
-        assert_eq!(error, RuntimeConfigError::InvalidOidcLeeway, "{refused}");
-        assert_eq!(path_of(&error), "/authentication/oidc/leewayMilliseconds");
+        assert!(
+            matches!(error, RuntimeConfigError::InvalidOidcLeeway { .. }),
+            "{refused}"
+        );
+        assert_eq!(
+            path_of(&error),
+            "/authentication/oidc/issuers/primary/leewayMilliseconds"
+        );
         assert_eq!(code_of(&error), "breg.runtime.invalid-oidc-leeway");
         let message = error.to_string();
         assert!(
@@ -5798,16 +6032,16 @@ fn env_lookup(name: &str) -> Option<String> {
 
 fn runtime_with_discovery_source(fixture: &RuntimeFixture) -> String {
     valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        "    jwksCache:\n",
-        "    jwksSource:\n      type: discovery\n    jwksCache:\n",
+        "        jwksCache:\n",
+        "        jwksSource:\n          type: discovery\n        jwksCache:\n",
     )
 }
 
 fn runtime_with_static_jwks_ref(fixture: &RuntimeFixture, document_ref: &str) -> String {
     valid_runtime(&fixture.secret_root, &fixture.package_root)
     .replace(
-        "    jwksCache:\n",
-        &format!("    jwksSource:\n      type: static\n      documentRef: {document_ref}\n    jwksCache:\n"),
+        "        jwksCache:\n",
+        &format!("        jwksSource:\n          type: static\n          documentRef: {document_ref}\n        jwksCache:\n"),
     )
 }
 

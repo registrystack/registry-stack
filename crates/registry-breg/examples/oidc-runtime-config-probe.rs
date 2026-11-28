@@ -17,12 +17,16 @@ async fn main() {
         },
     )
     .expect("the BReg runtime configuration loads");
-    let keys = config
-        .oidc_key_source()
+    let issuers = config
+        .authenticator_issuers()
         .await
         .expect("configured issuer discovery is accepted");
-    keys.ensure_key_set()
-        .await
-        .expect("the discovered same-origin JWKS is fetched");
+    for issuer in &issuers {
+        issuer
+            .key_source()
+            .ensure_key_set()
+            .await
+            .expect("the discovered same-origin JWKS is fetched");
+    }
     println!("allowed");
 }

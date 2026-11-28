@@ -253,14 +253,6 @@ fn with(mut claims: Value, key: &str, value: Value) -> Value {
     claims
 }
 
-fn without(mut claims: Value, key: &str) -> Value {
-    claims
-        .as_object_mut()
-        .expect("claims are an object")
-        .remove(key);
-    claims
-}
-
 fn grant_claims(now: u64) -> Value {
     json!({
         "aud": AUDIENCE,
@@ -268,6 +260,7 @@ fn grant_claims(now: u64) -> Value {
         "registry_principal": PRINCIPAL,
         "azp": "agent-client",
         "registry_actor_kind": "agent",
+        "scope": "registry.read",
         "registry_purpose": "record-review",
         "request_purpose": "record-review",
         "registry_grant_id": "00000000-0000-4000-8000-0000000000bf",
@@ -567,7 +560,11 @@ async fn every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wir
             "visibility",
             read_request(
                 "/v1/schemas/cases",
-                Some(&token(without(service_claims(), "scope"))),
+                Some(&token(with(
+                    service_claims(),
+                    "scope",
+                    json!("unrelated.read"),
+                ))),
             ),
         ),
     ];

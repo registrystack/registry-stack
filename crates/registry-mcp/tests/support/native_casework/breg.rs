@@ -139,11 +139,11 @@ impl Breg {
                     "roles":{"migration":databases.breg_roles()[0],"runtime":databases.breg_roles()[1]}
                 },
                 "package":{"root":package},
-                "authentication":{"oidc":{
+                "authentication":{"oidc":{"issuers":{"primary":{
                     "issuer":issuer.issuer(),"audience":BREG_AUDIENCE,"allowedAlgorithm":"ES256","accessTokenType":"at+jwt",
                     "scopeClaim":"scope","scopeSeparator":" ","allowedClients":[READER_CLIENT,OPERATOR_CLIENT,REGISTRAR_CLIENT,AUTHOR_CLIENT,HUMAN_CLIENT,SOURCE_CLIENT,STATUS_CLIENT],
                     "maximumTokenLifetimeSeconds":3600,"leewayMilliseconds":0,"jwksSource":{"type":"static","documentRef":"secret:file/jwks"}
-                },"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose","trustedActors":{"casework-source-reader":"00000000-0000-4000-8000-0000000000c7"}}},
+                }}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose","trustedActors":{"casework-source-reader":"00000000-0000-4000-8000-0000000000c7"}}},
                 "audit":{"hashKeyRef":"secret:file/audit-key","path":root.join("audit/breg.jsonl")},
                 "cursor":{"secretRef":"secret:file/cursor-key"},
                 "reviewAuthorities":{"casework":{"endpoint":casework_origin.as_str(),"profile":"requester","producerId":"facility-registry","recoveryDays":7,"tokenRef":"secret:file/review-token"}}

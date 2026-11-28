@@ -74,6 +74,7 @@ fn the_development_render_of_a_full_description_is_byte_stable() {
         email: "staff-one@example.test".into(),
         password_file: "secrets/user".into(),
         attributes: [("registry_role".to_owned(), "staff".to_owned())].into(),
+        unit: None,
     });
     description.roles[0]
         .assigned_users

@@ -5802,9 +5802,14 @@ pub struct ProjectAccessProfileSource {
     pub display: PresentationSource,
     #[serde(default)]
     pub default: bool,
+    /// The caller kind this profile serves. A token whose kind is another one,
+    /// or that states none and has none declared for its issuer or client, is
+    /// refused. Omit to serve every kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKindSource>,
-    /// The OAuth clients whose tokens may select this profile. Omit to accept every client.
+    /// The OAuth clients whose tokens may select this profile, with or without
+    /// actorKind. Omit to accept every client an issuer entry of the runtime
+    /// admits.
     // Held as the listed clients, so the empty set accepts every client.
     #[serde(
         default,

@@ -3771,6 +3771,148 @@ fn check_refuses_a_runtime_configuration_in_the_reader_words() {
     );
 }
 
+/// A runtime file for the minimal example with the issuer entries `entries`,
+/// written into a scratch directory. It stands alone, so the check reads the
+/// issuer set exactly as the test wrote it.
+fn issuer_set_runtime(scratch: &TestProject, entries: &str) -> PathBuf {
+    let runtime = scratch.path().join("runtime.yaml");
+    fs::write(
+        &runtime,
+        format!(
+            "apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1\n\
+             kind: BRegRuntimeConfig\n\
+             listener:\n  bind: 127.0.0.1:8080\n\
+             identity:\n  environment: example\n  instanceId: local-directory\n  databaseId: local-directory-db\n\
+             secretProviders:\n  file:\n    root: /var/lib/breg/secrets\n\
+             database:\n  runtimeUrlRef: secret:file/runtime-database-url\n  migrationUrlRef: secret:file/migration-database-url\n  pool:\n    maximumConnections: 4\n  roles:\n    migration: breg_migration\n    runtime: breg_runtime\n\
+             package:\n  root: /var/lib/breg/package\n\
+             authentication:\n  oidc:\n    issuers:\n{entries}  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
+             audit:\n  hashKeyRef: secret:file/audit-key\n  path: /var/log/breg/audit.jsonl\n\
+             cursor:\n  secretRef: secret:file/cursor-key\n"
+        ),
+    )
+    .expect("the runtime file writes");
+    runtime
+}
+
+/// The minimal example's one issuer entry, under the id `directory`.
+const DIRECTORY_ENTRY: &str = "      directory:
+        issuer: https://issuer.example.com
+        audience: urn:breg:local-directory
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeSeparator: \" \"
+        allowedClients: [directory-client]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+";
+
+#[test]
+fn check_lists_a_jwt_issuer_entry_as_an_explicit_production_setting() {
+    let scratch = TestProject::asset_fixture();
+    let runtime = issuer_set_runtime(&scratch, DIRECTORY_ENTRY);
+    let example = minimal_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+        "--deny-warnings",
+    ]);
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["diagnostics"], json!([]), "{report}");
+    let settings = report["explicitProductionSettings"]
+        .as_array()
+        .expect("the check lists the explicit production settings");
+    assert_eq!(settings.len(), 1, "{report}");
+    let setting = &settings[0];
+    assert_eq!(setting["code"], "platform.posture.jwt-access-token");
+    assert_eq!(setting["file"], path(&runtime));
+    assert_eq!(
+        setting["pointer"],
+        "/authentication/oidc/issuers/directory/accessTokenType"
+    );
+    assert!(setting["line"].is_u64(), "{setting}");
+    assert!(
+        setting["summary"]
+            .as_str()
+            .is_some_and(|summary| !summary.is_empty()),
+        "{setting}"
+    );
+
+    let human = bregctl(&["check", path(&example), "--runtime-config", path(&runtime)]);
+    assert_eq!(human.status.code(), Some(0), "{human:?}");
+    let rendered = human_output(&human);
+    assert!(
+        rendered.contains("platform.posture.jwt-access-token")
+            && rendered.contains("/authentication/oidc/issuers/directory/accessTokenType"),
+        "{rendered}"
+    );
+
+    // An entry that leaves the type at at+jwt states no explicit setting,
+    // and the list is still written.
+    let strict = issuer_set_runtime(
+        &scratch,
+        &DIRECTORY_ENTRY.replace("        accessTokenType: JWT\n", ""),
+    );
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&strict),
+    ]);
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    assert_eq!(json_stdout(&json)["explicitProductionSettings"], json!([]));
+}
+
+#[test]
+fn check_refuses_two_issuer_entries_naming_one_issuer_at_the_second() {
+    let scratch = TestProject::asset_fixture();
+    let second = DIRECTORY_ENTRY
+        .replace("      directory:\n", "      partners:\n")
+        .replace("[directory-client]", "[partner-client]");
+    let runtime = issuer_set_runtime(&scratch, &format!("{DIRECTORY_ENTRY}{second}"));
+    let example = minimal_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["code"], "platform.oidc.duplicate-issuer");
+    assert_eq!(
+        diagnostic["path"],
+        "/authentication/oidc/issuers/partners/issuer"
+    );
+    assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
+    let related = diagnostic["related"].as_array().expect("related list");
+    assert_eq!(related.len(), 1, "{diagnostic}");
+    assert_eq!(
+        related[0]["path"],
+        "/authentication/oidc/issuers/directory/issuer"
+    );
+    assert!(related[0]["line"].is_u64(), "{diagnostic}");
+    assert!(
+        !report.to_string().contains("issuer.example.com"),
+        "the refusal never repeats the issuer: {report}"
+    );
+}
+
 fn external_views_example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/examples/external-views")
@@ -3968,7 +4110,7 @@ fn check_refuses_a_runtime_that_lists_none_of_the_clients_a_profile_names() {
     let diagnostic = &diagnostics[0];
     assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
     assert_eq!(diagnostic["severity"], "error");
-    assert_eq!(diagnostic["path"], "/authentication/oidc/allowedClients");
+    assert_eq!(diagnostic["path"], "/authentication/oidc/issuers");
     assert_eq!(diagnostic["source"]["file"], path(&runtime));
     assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
     // The refusal names the member, never a configured client.
@@ -4012,10 +4154,7 @@ fn check_refuses_unlisted_clients_on_action_and_proposal_only_profiles() {
     let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
     assert_eq!(diagnostics.len(), 1, "{report}");
     assert_eq!(diagnostics[0]["code"], "breg.runtime.clients-unlisted");
-    assert_eq!(
-        diagnostics[0]["path"],
-        "/authentication/oidc/allowedClients"
-    );
+    assert_eq!(diagnostics[0]["path"], "/authentication/oidc/issuers");
     assert!(!report.to_string().contains("portal"), "{report}");
 
     let accepted_runtime = edited_runtime_config(&scratch, |source| {
@@ -4151,7 +4290,10 @@ fn check_warns_of_a_wildcard_spelled_allowed_client_and_denies_it_on_request() {
     assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
     assert_eq!(diagnostic["severity"], "warning");
     assert_eq!(diagnostic["code"], "breg.access.wildcard-spelled-item");
-    assert_eq!(diagnostic["path"], "/authentication/oidc/allowedClients/0");
+    assert_eq!(
+        diagnostic["path"],
+        "/authentication/oidc/issuers/primary/allowedClients/0"
+    );
     assert_eq!(diagnostic["source"]["file"], path(&runtime));
     assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
 
@@ -4352,8 +4494,8 @@ taskGrantStatus:
                 "  bind: 127.0.0.1:8080\n  publicOrigin: ${BREG_CHECK_TEST_ORIGIN}\n",
             )
             .replace(
-                "    issuer: https://issuer.example.com\n",
-                "    issuer: ${BREG_CHECK_TEST_ISSUER}\n    jwksSource:\n      type: uri\n      \
+                "        issuer: https://issuer.example.com\n",
+                "        issuer: ${BREG_CHECK_TEST_ISSUER}\n        jwksSource:\n          type: uri\n          \
                  uri: ${BREG_CHECK_TEST_JWKS}\n",
             )
             .replace(
@@ -4443,7 +4585,10 @@ fn check_says_so_when_an_expression_stops_it() {
         )
     };
     for (edit, pointer) in [
-        (stopped_reader, "/authentication/oidc/allowedAlgorithm"),
+        (
+            stopped_reader,
+            "/authentication/oidc/issuers/primary/allowedAlgorithm",
+        ),
         (stopped_rules, "/metricsListener"),
     ] {
         let runtime = edited_runtime_config(&scratch, edit);
@@ -4516,7 +4661,7 @@ fn project_acceptance_applies_after_the_runtime_warning_is_collected() {
         warning["scope"],
         json!({
             "file": "runtime.example.yaml",
-            "path": "/authentication/oidc/allowedAlgorithm"
+            "path": "/authentication/oidc/issuers/primary/allowedAlgorithm"
         })
     );
 
@@ -11312,22 +11457,24 @@ package:
   root: {package}
 authentication:
   oidc:
-    issuer: https://oidc-is-not-opened.invalid
-    audience: urn:breg:verify
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [verify-client]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 1
-      outageToleranceSeconds: 900
+    issuers:
+      primary:
+        issuer: https://oidc-is-not-opened.invalid
+        audience: urn:breg:verify
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [verify-client]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 1
+          outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

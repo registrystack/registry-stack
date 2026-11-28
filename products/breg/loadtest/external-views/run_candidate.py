@@ -158,13 +158,13 @@ def runtime_config(work, roles, pack, listener, prefix="", identities=IDENTITIES
         },
         "package": {"root": str(pack)},
         "authentication": {
-            "oidc": {
+            "oidc": {"issuers": {"primary": {
                 "issuer": ISSUER, "audience": AUDIENCE, "allowedAlgorithm": "EdDSA",
                 "accessTokenType": "JWT", "scopeClaim": "scope", "scopeSeparator": " ",
                 "allowedClients": sorted({*identities, WORKER_CLIENT}), "maximumTokenLifetimeSeconds": token_lifetime,
                 "leewayMilliseconds": 30000,
                 "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
-            },
+            }}},
             "authorityClaims": {"principal": "registry_principal", "purpose": "registry_purpose"},
         },
         "audit": {"hashKeyRef": "secret:file/audit-key", "path": str(work / "audit" / f"{prefix}audit.jsonl")},

@@ -288,14 +288,14 @@ impl Breg {
                 "database":{"runtimeUrlRef":format!("secret:file/database-{database}-1"), "migrationUrlRef":format!("secret:file/database-{database}-0"), "testOnlyPlaintext":true,
                     "pool":{"maximumConnections":4}, "roles":{"migration":service.roles[0], "runtime":service.roles[1]}},
                 "package":{"root":package},
-                "authentication":{"oidc":{"issuer":issuer.issuer(), "audience":"urn:example:applications", "allowedAlgorithm":"ES256", "accessTokenType":"at+jwt", "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":["application-reader"],
-                    "maximumTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}}, "authorityClaims":{"principal":"sub"}},
+                "authentication":{"oidc":{"issuers":{"primary":{"issuer":issuer.issuer(), "audience":"urn:example:applications", "allowedAlgorithm":"ES256", "accessTokenType":"at+jwt", "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":["application-reader"],
+                    "maximumTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}}}}, "authorityClaims":{"principal":"sub"}},
                 "audit":{"hashKeyRef":"secret:file/audit-key", "path":service.root.join("audit/breg.jsonl")},
                 "cursor":{"secretRef":"secret:file/cursor-key"}
             });
             if citizen {
                 config["authentication"]["authorityClaims"]["purpose"] = json!("registry_purpose");
-                config["authentication"]["oidc"]["allowedClients"] = json!([
+                config["authentication"]["oidc"]["issuers"]["primary"]["allowedClients"] = json!([
                     "application-reader",
                     "citizen-gateway",
                     "citizen-review-page"

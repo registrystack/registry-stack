@@ -170,6 +170,17 @@ fn write_ctl_report<T: Serialize + ?Sized>(
     stdout: &mut dyn Write,
     report: &T,
 ) -> serde_json::Result<()> {
+    write_ctl_report_with_settings(format, stdout, report, None)
+}
+
+/// [`write_ctl_report`] that also lists `explicit_settings`, the explicit
+/// production settings a checked runtime file states, when given.
+fn write_ctl_report_with_settings<T: Serialize + ?Sized>(
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    report: &T,
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
+) -> serde_json::Result<()> {
     let mut value = serde_json::to_value(report)?;
     let members = value.as_object_mut().ok_or_else(|| {
         serde_json::Error::io(io::Error::other("a BReg command report must be an object"))
@@ -186,13 +197,16 @@ fn write_ctl_report<T: Serialize + ?Sized>(
             )));
         }
     }
-    let report =
+    let mut report =
         registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
             .map_err(|error| serde_json::Error::io(io::Error::other(error)))?;
-    let report = match format {
+    let mut report = match format {
         OutputFormat::JsonWithPosture(posture) => report.with_posture(posture),
         _ => report,
     };
+    if let Some(settings) = explicit_settings {
+        report = report.explicit_settings(settings);
+    }
     serde_json::to_writer_pretty(stdout, &report)
 }
 // Keep ctl-authored project and module source capture aligned with the
@@ -776,6 +790,10 @@ struct GenerateArgs {
     /// Authentication contract the generated Adapter pack requires from its endpoint binding.
     #[arg(long, value_enum)]
     authentication: Option<EvidenceSourceAuthenticationArg>,
+    /// The id under authentication.oidc.issuers to describe (identity-facts
+    /// only). Required when the runtime declares more than one issuer.
+    #[arg(long, value_name = "ISSUER_ID")]
+    issuer: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -9631,6 +9649,18 @@ fn generate_requested(
     posture: DeclaredPosture,
     args: &GenerateArgs,
 ) -> Result<SuccessReport, FailureReport> {
+    if args.issuer.is_some() && args.artifact != ArtifactSelector::IdentityFacts {
+        return Err(source_failure(
+            "generate",
+            diagnostic(
+                "identity-facts.arguments",
+                "arguments",
+                "--issuer applies to generate identity-facts",
+            ),
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ));
+    }
     if args.artifact == ArtifactSelector::IdentityFacts {
         return generate_identity_facts(posture, args);
     }
@@ -9940,7 +9970,7 @@ fn generate_identity_facts(
     {
         return Err(fail(
             "identity-facts.arguments",
-            "generate identity-facts accepts --runtime-config and --output only",
+            "generate identity-facts accepts --runtime-config, --issuer and --output only",
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
         ));
@@ -9965,15 +9995,27 @@ fn generate_identity_facts(
         .map_err(|error| runtime_config_failure("generate", error))?;
     let profile = profile(args.production);
     let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;
-    let stated = identity_facts::facts(&config, &compiled).map_err(|error| {
-        fail(
-            "identity-facts.unstatable",
-            &error.to_string(),
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        )
-    })?;
-    let facts = stated.facts;
+    let facts =
+        identity_facts::facts(&config, &compiled, args.issuer.as_deref()).map_err(|error| {
+            fail(
+                error.code(),
+                &error.to_string(),
+                match error {
+                    identity_facts::FactsError::IssuerRequired(_)
+                    | identity_facts::FactsError::UnknownIssuer(_) => {
+                        DiagnosticArtifact::CommandArguments
+                    }
+                    _ => DiagnosticArtifact::RuntimeConfiguration,
+                },
+                match error {
+                    identity_facts::FactsError::IssuerRequired(_)
+                    | identity_facts::FactsError::UnknownIssuer(_) => {
+                        SuggestedAction::CorrectCommandUsage
+                    }
+                    _ => SuggestedAction::CorrectRuntimeConfiguration,
+                },
+            )
+        })?;
     identity_facts::write(&facts, &args.output).map_err(|error| {
         fail(
             "identity-facts.output-failed",
@@ -10004,15 +10046,7 @@ fn generate_identity_facts(
                 "claims": facts.claims.len(),
             }
         })),
-        next_steps: stated
-            .omitted_agent_profiles
-            .iter()
-            .map(|id| {
-                format!(
-                    "The access profile `{id}` requires an agent and is left out of the identity facts: it is reached only by a delegated or task-grant token, which hosted generation does not issue, so a grant naming it is refused."
-                )
-            })
-            .collect(),
+        next_steps: Vec::new(),
     })
 }
 

@@ -754,7 +754,7 @@ fn expected_operational_event(
         OperationalEvent::ClientsUnrestricted => (
             OperationalLogLevel::Info,
             "registry_breg::startup",
-            "authentication.oidc.allowedClients is unrestricted: a token from any client is accepted",
+            "an authentication.oidc.issuers entry leaves allowedClients unrestricted: a token from any client of its issuer is accepted",
             None,
             Some("startup.authentication.clients_unrestricted"),
         ),
@@ -857,7 +857,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         }
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::AuthenticationClientsUnlisted => {
-            "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
+            "the project names clients that no authentication.oidc.issuers entry lists in allowedClients; list each client named in requesterClients, trusted actors, or consent recipients in the allowedClients of the entry whose issuer signs its tokens"
         }
         StartupError::EventDestinations(_) => "the Registry event destination bindings were refused",
         StartupError::RetainedHookBindings { .. } => {
@@ -1648,7 +1648,8 @@ fn pinned_authenticator(registry: &CompiledRegistry) -> Arc<RegistryAuthenticato
     )
 }
 
-/// A bearer the pinned authenticator accepts for the `public` profile.
+/// A bearer the pinned authenticator accepts for the `public` profile. It
+/// grants a scope, so it is an access token and not an identity-only one.
 fn reader_bearer() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1664,6 +1665,7 @@ fn reader_bearer() -> String {
             "iat": now,
             "nbf": now,
             "exp": now + 300,
+            "scope": "registry.read",
             "registry_actor_kind": "service",
             "registry_principal": "startup-reader",
         }),
@@ -1782,23 +1784,25 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: https://issuer.example
-    audience: urn:breg:test
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [registry-client]
-    revokedKeyIds: [denied-kid]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 900
+    issuers:
+      primary:
+        issuer: https://issuer.example
+        audience: urn:breg:test
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [registry-client]
+        revokedKeyIds: [denied-kid]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

@@ -5885,6 +5885,14 @@ pub(crate) fn refusal_problem(code: ProblemCode, check: FailedCheck) -> Response
     crate::correlation::note_refusal(build_problem(code, code.description()), check)
 }
 
+/// [`refusal_problem`] with a whole note, so a remedy reaches the log line.
+pub(crate) fn refusal_problem_with_note(
+    code: ProblemCode,
+    note: registry_platform_authcommon::RefusalNote,
+) -> Response {
+    crate::correlation::attach_refusal_note(build_problem(code, code.description()), note)
+}
+
 /// The codes answered as a refusal of authority: every 401 and 403, and the
 /// 404 that hides what the caller may see.
 fn refuses_authority(code: ProblemCode) -> bool {

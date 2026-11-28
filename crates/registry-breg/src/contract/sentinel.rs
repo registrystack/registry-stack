@@ -202,43 +202,6 @@ shape_union!(RowBoundaries { scalar => Unrestricted, list => Listed, mapping => 
 const UNRESOLVED_REFERENCE: &str = "a row boundary set reference that the reader expanded";
 const UNRESOLVED_REFERENCE_ACTION: &str = "Declare the set under rowBoundarySets in the same file and read the file through the project reader.";
 
-/// The OAuth clients a runtime accepts tokens from.
-#[cfg(feature = "runtime")]
-pub(crate) enum Clients {}
-
-#[cfg(feature = "runtime")]
-impl Member for Clients {
-    const EXPECTED: &'static str = "unrestricted, or a list of at least one OAuth client";
-    const ACTION: &'static str = "List the OAuth clients whose tokens this registry accepts, or write unrestricted to accept every client.";
-}
-
-/// The OAuth clients whose tokens a runtime accepts: the keyword
-/// `unrestricted`, or a list of at least one client.
-#[cfg(feature = "runtime")]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(untagged))]
-pub(crate) enum AllowedClients {
-    /// Accept a token from every client.
-    Unrestricted(Unrestricted<Clients>),
-    /// Accept a token only from a listed client.
-    Listed(Listed<Vec<String>, Clients>),
-}
-
-#[cfg(feature = "runtime")]
-shape_union!(AllowedClients { scalar => Unrestricted, list => Listed });
-
-/// Reads the runtime's accepted clients into the list the token verifier
-/// holds, where empty means every client.
-#[cfg(feature = "runtime")]
-pub(crate) fn allowed_clients<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<String>, D::Error> {
-    Ok(match AllowedClients::deserialize(deserializer)? {
-        AllowedClients::Unrestricted(_) => Vec::new(),
-        AllowedClients::Listed(Listed(clients, _)) => clients,
-    })
-}
-
 pub(super) fn required_scopes<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<UniqueSet<String>, D::Error> {

@@ -431,7 +431,7 @@ fn deployment_signed_by(seal: Option<SealSpec>, signer: Signer) -> Fixture {
         }
     };
     let runtime = format!(
-        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{}\n  shutdownGraceMilliseconds: 5000\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauthentication:\n  oidc:\n    issuer: https://issuer.example.test\n    audience: urn:render:test\n    allowedClients: [{OTHER_CLIENT}, {SEAL_CLIENT}]\n    jwksSource:\n      type: static\n      documentRef: secret:file/jwks.json\n{LIMITS}audit:\n  path: {}\n{signing}",
+        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{}\n  shutdownGraceMilliseconds: 5000\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauthentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://issuer.example.test\n        audience: urn:render:test\n        allowedClients: [{OTHER_CLIENT}, {SEAL_CLIENT}]\n        jwksSource:\n          type: static\n          documentRef: secret:file/jwks.json\n{LIMITS}audit:\n  path: {}\n{signing}",
         free_port(),
         package.display(),
         home.display(),
@@ -1369,7 +1369,7 @@ fn explicit_unrestricted_clients_are_logged_and_reported_but_absent_from_readine
     std::fs::write(&fixture.runtime_path, text).unwrap();
 
     let server = start_server(&fixture);
-    let pointer = "/authentication/oidc/allowedClients";
+    let pointer = "/authentication/oidc/issuers/main/allowedClients";
     assert!(
         server.log().iter().any(|event| event["fields"]["message"]
             == "explicit production setting in use"

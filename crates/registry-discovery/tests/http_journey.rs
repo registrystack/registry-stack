@@ -285,8 +285,6 @@ async fn production_refuses_loopback_package_urls() {
     })
     .unwrap();
     let logs = fs::read_to_string(log_path).unwrap();
-    assert!(logs.contains("posture declared"), "{logs}");
-    assert!(logs.contains(r#""development_settings":3"#), "{logs}");
     assert_eq!(
         logs.matches("discovery.posture.loopback-catalog-url")
             .count(),

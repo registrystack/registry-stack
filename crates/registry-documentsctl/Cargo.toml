@@ -38,6 +38,7 @@ registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-yaml.workspace = true
+registry-thunderid-tooling.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
 use axum::Router;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httpsec::{response_trace_id, TraceId};
-use registry_platform_oidc::{JwksFetcher, TokenVerifier};
+use registry_platform_oidc::JwksFetcher;
 use registry_platform_yaml::{
     shape_union, tagged_union, ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Node,
     RemovedKey, Report, RetiredApiVersion, Severity, Source, UniqueList,
@@ -36,7 +36,7 @@ use proposals::ProposalJourneyOperation;
 
 use crate::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture};
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
-use crate::auth::RegistryAuthenticator;
+use crate::auth::{AuthenticatorIssuer, RegistryAuthenticator};
 use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
 use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use crate::contract::{AccessProfileSource, ConstraintSource, LookupValueOrigin, Operation};
@@ -382,7 +382,7 @@ impl fmt::Display for FixtureError {
             Self::AuthorityWideningRefused => "the fixture authority reference was refused",
             Self::RequestConstructionRefused => "the fixture request could not be constructed",
             Self::AuthenticationActorKindMissing => {
-                "the fixture credential is missing the configured actor-kind claim"
+                "the fixture credential grants no scope and no actor kind is declared for its issuer or client"
             }
             Self::AuthenticationCredentialRefused => {
                 "the fixture credential failed token verification; check its signing key, signature, issuer, audience, validity period, and client"
@@ -3611,12 +3611,11 @@ pub async fn execute_schema_test(
     suite: &ValidatedFixtureJourneys,
     credentials: SchemaTestCredentialBindings,
 ) -> Result<SchemaTestReceipt, FixtureError> {
-    let key_source = config
-        .oidc_key_source()
+    let issuers = config
+        .authenticator_issuers()
         .await
         .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?;
-    execute_schema_test_with_key_source(database, config, package, suite, credentials, key_source)
-        .await
+    execute_schema_test_with_issuers(database, config, package, suite, credentials, issuers).await
 }
 
 #[cfg(feature = "postgres-test")]
@@ -3629,17 +3628,22 @@ pub async fn execute_schema_test_with_key_source_for_test(
     credentials: SchemaTestCredentialBindings,
     key_source: Arc<JwksFetcher>,
 ) -> Result<SchemaTestReceipt, FixtureError> {
-    execute_schema_test_with_key_source(database, config, package, suite, credentials, key_source)
-        .await
+    let issuers = config
+        .authentication()
+        .oidc()
+        .issuers()
+        .map(|entry| entry.authenticator_issuer(Arc::clone(&key_source)))
+        .collect();
+    execute_schema_test_with_issuers(database, config, package, suite, credentials, issuers).await
 }
 
-async fn execute_schema_test_with_key_source(
+async fn execute_schema_test_with_issuers(
     database: PreparedSchemaTestDatabase,
     config: &RuntimeConfig,
     package: &PreparedPackage,
     suite: &ValidatedFixtureJourneys,
     credentials: SchemaTestCredentialBindings,
-    key_source: Arc<JwksFetcher>,
+    issuers: Vec<AuthenticatorIssuer>,
 ) -> Result<SchemaTestReceipt, FixtureError> {
     // Credential coverage and mode are pure preflight. Keep this before even
     // reading candidate database facts so malformed inputs cannot trigger I/O.
@@ -3648,14 +3652,8 @@ async fn execute_schema_test_with_key_source(
     let initial_facts = database_execution_facts(&pool).await?;
     let (candidate, compiled) =
         validate_prepared_schema_test_candidate(package, &initial_facts, suite)?;
-    let mut runtime = SchemaTestRuntime::new(
-        database,
-        config,
-        compiled,
-        key_source,
-        initial_facts.clone(),
-    )
-    .await?;
+    let mut runtime =
+        SchemaTestRuntime::new(database, config, compiled, issuers, initial_facts.clone()).await?;
 
     let mut bearer_index = 0usize;
     let mut observations = BTreeMap::new();
@@ -3761,7 +3759,6 @@ struct SchemaTestRuntime {
     pool: RuntimePool,
     initial_facts: SchemaTestExecutionFacts,
     authenticator: Arc<RegistryAuthenticator>,
-    verifier: TokenVerifier,
     readiness: Arc<SchemaTestReadiness>,
     registry: Arc<CompiledRegistry>,
     package_revision: String,
@@ -3776,13 +3773,18 @@ impl SchemaTestRuntime {
         database: PreparedSchemaTestDatabase,
         config: &RuntimeConfig,
         compiled: CompiledRegistry,
-        key_source: Arc<JwksFetcher>,
+        issuers: Vec<AuthenticatorIssuer>,
         initial_facts: SchemaTestExecutionFacts,
     ) -> Result<Self, FixtureError> {
-        key_source
-            .ensure_key_set()
-            .await
-            .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?;
+        let key_sources = issuers
+            .iter()
+            .map(|issuer| Arc::clone(issuer.key_source()))
+            .collect::<Vec<_>>();
+        for key_source in &key_sources {
+            key_source.ensure_key_set().await.map_err(|_| {
+                FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication)
+            })?;
+        }
         let pool = database.pool();
         let registry = Arc::new(compiled);
         // The schema test runs from operator tooling beside the runtime, so it
@@ -3824,22 +3826,17 @@ impl SchemaTestRuntime {
                 })?,
         );
         let authenticator = Arc::new(
-            RegistryAuthenticator::new(
+            RegistryAuthenticator::with_issuers(
                 &registry,
-                config.authentication().oidc().token_verifier_config(),
-                Arc::clone(&key_source),
+                issuers,
                 config.authentication().authority_claim_config(),
             )
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?,
         );
-        let verifier = TokenVerifier::new(
-            config.authentication().oidc().token_verifier_config(),
-            Arc::clone(&key_source),
-        );
         let readiness = Arc::new(SchemaTestReadiness {
             pool: pool.clone(),
             catalog_verifier: database.catalog_verifier(),
-            key_source,
+            key_sources,
         });
         if !readiness.is_ready().await {
             return Err(FixtureError::CandidateBindingRefused);
@@ -3927,7 +3924,6 @@ impl SchemaTestRuntime {
             pool,
             initial_facts,
             authenticator,
-            verifier,
             readiness,
             registry,
             package_revision: expected.package_digest,
@@ -3944,8 +3940,8 @@ impl SchemaTestRuntime {
         token: &str,
     ) -> Result<(), FixtureError> {
         let verified = self
-            .verifier
-            .verify(token)
+            .authenticator
+            .verify_token(token)
             .await
             .map_err(fixture_verification_error)?;
         let mapped = self
@@ -4125,16 +4121,16 @@ fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> Fixtu
         | OidcError::InvalidToken
         | OidcError::InvalidTimeClaims
         | OidcError::ClientNotAllowed
-        | OidcError::AssertionIssuerNotAllowed => FixtureError::AuthenticationCredentialRefused,
+        | OidcError::AssertionIssuerNotAllowed
+        | OidcError::ActorKindConflict
+        | OidcError::ActorKindMalformed => FixtureError::AuthenticationCredentialRefused,
+        OidcError::IdentityOnly => FixtureError::AuthenticationActorKindMissing,
         _ => FixtureError::RequestConstructionRefused,
     }
 }
 
 fn fixture_authentication_error(error: crate::auth::AuthenticationError) -> FixtureError {
     match error {
-        crate::auth::AuthenticationError::MissingActorKind => {
-            FixtureError::AuthenticationActorKindMissing
-        }
         crate::auth::AuthenticationError::VerificationRefused => {
             FixtureError::AuthenticationCredentialRefused
         }
@@ -4204,7 +4200,8 @@ fn assert_exact_claims(
 struct SchemaTestReadiness {
     pool: RuntimePool,
     catalog_verifier: PreparedSchemaTestCatalogVerifier,
-    key_source: Arc<JwksFetcher>,
+    /// The key source of every issuer entry.
+    key_sources: Vec<Arc<JwksFetcher>>,
 }
 
 impl SchemaTestReadiness {
@@ -4232,10 +4229,12 @@ impl SchemaTestReadiness {
             .verify()
             .await
             .map_err(|_| FixtureError::CandidateBindingRefused)?;
-        self.key_source
-            .ensure_key_set()
-            .await
-            .map_err(|_| FixtureError::ExecutionRefused)?;
+        for key_source in &self.key_sources {
+            key_source
+                .ensure_key_set()
+                .await
+                .map_err(|_| FixtureError::ExecutionRefused)?;
+        }
         Ok(())
     }
 }
@@ -6425,7 +6424,7 @@ mod tests {
     #[test]
     fn fixture_refusals_distinguish_missing_claim_from_refused_credential() {
         assert_eq!(
-            fixture_authentication_error(crate::auth::AuthenticationError::MissingActorKind),
+            fixture_verification_error(registry_platform_oidc::OidcError::IdentityOnly),
             FixtureError::AuthenticationActorKindMissing
         );
         // Every verification refusal that describes the token itself is a

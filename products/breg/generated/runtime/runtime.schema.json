@@ -10,6 +10,21 @@
       ],
       "type": "string"
     },
+    "AccessTokenType": {
+      "description": "The access-token type an issuer entry admits.",
+      "oneOf": [
+        {
+          "const": "at+jwt",
+          "description": "RFC 9068 access tokens, typed `at+jwt` or `application/at+jwt`.",
+          "type": "string"
+        },
+        {
+          "const": "JWT",
+          "description": "Access tokens typed `JWT`, from a provider that does not type them\n`at+jwt`. An ID token stays refused.",
+          "type": "string"
+        }
+      ]
+    },
     "AdapterEndpointBindings": {
       "additionalProperties": false,
       "description": "The endpoint bindings of one deployment: the runtime members every\nmode shares.\nThe ingestion job's runtime document (`AdapterJobRuntimeConfig`)\nstates these members beside its own `sources`, `store`,\n`destinations`, `secretProviders`, and `hookIngress` members; the\nfacade's document states them beside the facade-only members\n(`secretProviders`, `listener`, `database`, `oidc`, `allowedClients`,\n`audit`, `idempotency`, and the cursor custody), which\n[`AdapterRuntimeConfig::endpoint_bindings`] sets aside.",
@@ -44,29 +59,6 @@
         "endpoints"
       ],
       "type": "object"
-    },
-    "AllowedClients": {
-      "anyOf": [
-        {
-          "const": "unrestricted",
-          "description": "Accept a token from every client.",
-          "type": "string"
-        },
-        {
-          "description": "Accept a token only from a listed client.",
-          "items": {
-            "maxLength": 512,
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x20\\x7F]+$",
-            "type": "string"
-          },
-          "maxItems": 128,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        }
-      ],
-      "description": "The OAuth clients whose tokens a runtime accepts: the keyword\n`unrestricted`, or a list of at least one client."
     },
     "AnonymousHttpsAcknowledgement": {
       "const": "operator-approved",
@@ -154,6 +146,15 @@
           "type": "string"
         }
       ]
+    },
+    "DeclaredActorKind": {
+      "description": "An actor kind an operator declares for a caller.",
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
     },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
@@ -726,6 +727,10 @@
       ],
       "type": "object"
     },
+    "IssuerActorKind": {
+      "$ref": "#/$defs/DeclaredActorKind",
+      "description": "The kind every token from one issuer is treated as."
+    },
     "JwksSource": {
       "description": "Where a runtime obtains the OIDC issuer's signing keys.",
       "oneOf": [
@@ -1108,7 +1113,7 @@
           "$ref": "#/$defs/RawAuthorityClaimsConfig"
         },
         "oidc": {
-          "$ref": "#/$defs/RawOidcVerifierConfig"
+          "$ref": "#/$defs/RawOidcConfig"
         }
       },
       "required": [
@@ -1547,16 +1552,45 @@
       },
       "type": "object"
     },
+    "RawOidcConfig": {
+      "additionalProperties": false,
+      "description": "The issuers this registry accepts access tokens from.",
+      "properties": {
+        "issuers": {
+          "additionalProperties": false,
+          "description": "The issuers a token may come from, by issuer id.",
+          "minProperties": 1,
+          "patternProperties": {
+            "^[a-z][a-z0-9_-]{0,63}$": {
+              "$ref": "#/$defs/RawOidcVerifierConfig"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "issuers"
+      ],
+      "type": "object"
+    },
     "RawOidcVerifierConfig": {
       "additionalProperties": false,
-      "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
+      "description": "One issuer a token may come from: the members every caller issuer entry\nshares, and the verification rules this registry adds.",
       "properties": {
         "accessTokenType": {
-          "description": "The one admitted access-token `typ` semantics. Configuring the\nRFC 9068 access-token media type as `at+jwt` or\n`application/at+jwt` admits both spellings of that one type; any\nother value (for example `JWT`) admits only that token type, matched\ncase-insensitively.",
-          "maxLength": 2048,
-          "minLength": 1,
-          "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
-          "type": "string"
+          "$ref": "#/$defs/AccessTokenType",
+          "default": "at+jwt",
+          "description": "The access-token type the entry admits. Absent reads `at+jwt`.",
+          "x-registry-explicit-production": [
+            "platform.posture.jwt-access-token"
+          ]
+        },
+        "actorKind": {
+          "$ref": "#/$defs/IssuerActorKind",
+          "description": "The kind every token from this issuer is treated as. Absent declares\nnone.",
+          "x-registry-explicit-production": [
+            "platform.posture.issuer-actor-kind"
+          ]
         },
         "allowInsecureHttp": {
           "default": false,
@@ -1570,8 +1604,30 @@
           "$ref": "#/$defs/AccessTokenAlgorithm"
         },
         "allowedClients": {
-          "$ref": "#/$defs/AllowedClients",
-          "description": "The OAuth clients whose tokens this registry accepts: `unrestricted`\nto accept a token from every client, or a list of at least one\nclient."
+          "anyOf": [
+            {
+              "const": "unrestricted",
+              "description": "Admit a token from every client the issuer verifies.",
+              "type": "string"
+            },
+            {
+              "description": "Admit a token only from a listed client.",
+              "items": {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x20\\x7F]+$",
+                "type": "string"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          ],
+          "description": "The clients whose tokens the entry admits.",
+          "x-registry-explicit-production": [
+            "platform.posture.unrestricted-clients"
+          ]
         },
         "assertionIssuers": {
           "additionalProperties": {
@@ -1603,6 +1659,20 @@
           "minLength": 1,
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
           "type": "string"
+        },
+        "clientActorKinds": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DeclaredActorKind"
+          },
+          "description": "The kind tokens from each named client are treated as. Absent declares\nnone. Not combined with `actorKind`.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-explicit-production": [
+            "platform.posture.client-actor-kinds"
+          ]
         },
         "issuer": {
           "$ref": "#/$defs/Url",
@@ -1655,10 +1725,15 @@
           "uniqueItems": true
         },
         "scopeClaim": {
+          "$ref": "#/$defs/ScopeClaimName",
+          "default": "scope",
+          "description": "The claim that carries scopes. Absent reads `scope`.",
           "maxLength": 128,
           "minLength": 1,
           "pattern": "^[\\x21-\\x7E]+$",
-          "type": "string"
+          "x-registry-explicit-production": [
+            "platform.posture.scope-claim"
+          ]
         },
         "scopeSeparator": {
           "maxLength": 1,
@@ -1670,11 +1745,9 @@
       "required": [
         "issuer",
         "audience",
-        "allowedAlgorithm",
-        "accessTokenType",
-        "scopeClaim",
-        "scopeSeparator",
         "allowedClients",
+        "allowedAlgorithm",
+        "scopeSeparator",
         "maximumTokenLifetimeSeconds",
         "leewayMilliseconds"
       ],
@@ -2234,6 +2307,10 @@
           "type": "object"
         }
       ]
+    },
+    "ScopeClaimName": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The name of the claim that carries scopes."
     },
     "SecretProvidersConfig": {
       "additionalProperties": false,

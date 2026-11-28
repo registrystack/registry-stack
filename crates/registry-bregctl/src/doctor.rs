@@ -996,12 +996,14 @@ mod tests {
             (
                 RuntimeConfigError::InvalidOidc,
                 "breg.runtime.invalid-oidc",
-                "/authentication/oidc",
+                "/authentication/oidc/issuers",
             ),
             (
-                RuntimeConfigError::InvalidOidcLeeway,
+                RuntimeConfigError::InvalidOidcLeeway {
+                    pointer: "/authentication/oidc/issuers/primary/leewayMilliseconds".to_owned(),
+                },
                 "breg.runtime.invalid-oidc-leeway",
-                "/authentication/oidc/leewayMilliseconds",
+                "/authentication/oidc/issuers/primary/leewayMilliseconds",
             ),
             (
                 RuntimeConfigError::InvalidAudit,

@@ -15,12 +15,13 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, DatabaseHost,
-    DatabaseTransport, DatabaseTransportError, DeclaredPosture, DevelopmentWitness, JwksSource,
-    LoadedRuntimeConfig, MetricsBindError, OidcIssuerConfig, PackageConfig as SharedPackageConfig,
-    Posture, PostureReport, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretError,
-    SecretFileCheck, SecretReference, SecretResolver, TaskGrantStatusConfig,
-    REMOVED_OIDC_JWKS_SOURCE_KIND,
+    check_metrics_bind_address, check_metrics_bind_apart, Admitted, AllowedClients, AuditKeyConfig,
+    CallerIssuerCore, CallerIssuerEntry, CallerIssuers, ClientRule, DatabaseHost,
+    DatabaseTransport, DatabaseTransportError, DeclaredPosture, DevelopmentWitness,
+    FoundExplicitSetting, JwksSource, LoadedRuntimeConfig, MetricsBindError,
+    PackageConfig as SharedPackageConfig, Posture, PostureReport, RemovedKey, RuntimeConfigLoader,
+    RuntimeEnvelope, SecretError, SecretFileCheck, SecretReference, SecretResolver,
+    TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
 use registry_platform_crypto::{delivery_signature::DeliveryKeys, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -28,8 +29,8 @@ use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, public_jwks_document, AccessTokenAlgorithm,
-    ClaimNames, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    fetch_discovery_for_issuer, public_jwks_document, AccessTokenAlgorithm, ClaimNames,
+    DeclaredKinds, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
     StaticJwksError, TokenVerifierConfig,
 };
 use registry_platform_yaml::{
@@ -46,7 +47,7 @@ use crate::contract::{external_id_map, local_id_map};
 #[cfg(feature = "schema")]
 use crate::contract::{external_id_map_schema, local_id_map_schema};
 use crate::{
-    auth::{AuthenticationConfigError, AuthorityClaimConfig},
+    auth::{AuthenticationConfigError, AuthenticatorIssuer, AuthorityClaimConfig},
     cursor::CursorCodec,
     event_destination::{
         labeled_delivery_keys, present_hook_key_reference, resolve_delivery_keys,
@@ -192,20 +193,92 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename database.pool.maxSize to database.pool.maximumConnections; the value stays as it is",
     },
     RemovedKey {
+        path: "authentication.oidc.issuer",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.issuer, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.audience",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.audience, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksSource",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.jwksSource, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowInsecureHttp",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.allowInsecureHttp, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedAlgorithm",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.allowedAlgorithm, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.accessTokenType",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.accessTokenType, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.scopeClaim",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.scopeClaim, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.scopeSeparator",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.scopeSeparator, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedClients",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.allowedClients, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.revokedKeyIds",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.revokedKeyIds, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.assertionIssuers",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.assertionIssuers, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.maximumTokenLifetimeSeconds",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.maximumTokenLifetimeSeconds, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.leewayMilliseconds",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.leewayMilliseconds, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksCache",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.jwksCache, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
         path: "authentication.oidc.maxTokenLifetimeSeconds",
-        replacement: "rename authentication.oidc.maxTokenLifetimeSeconds to authentication.oidc.maximumTokenLifetimeSeconds; the value stays as it is",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.maximumTokenLifetimeSeconds, in the entry of the issuer it belongs to; the value stays as it is",
     },
     RemovedKey {
         path: "authentication.oidc.deniedKids",
-        replacement: "rename `authentication.oidc.deniedKids` to `authentication.oidc.revokedKeyIds`; the values stay as they are",
+        replacement: "declare it as `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds`, in the entry of the issuer it belongs to; the values stay as they are",
     },
     RemovedKey {
-        path: "authentication.oidc.jwksCache.maxDocumentBytes",
-        replacement: "rename authentication.oidc.jwksCache.maxDocumentBytes to authentication.oidc.jwksCache.maximumDocumentBytes; the value stays as it is",
+        path: "authentication.oidc.issuers.*.maxTokenLifetimeSeconds",
+        replacement: "rename authentication.oidc.issuers.ISSUER_ID.maxTokenLifetimeSeconds to authentication.oidc.issuers.ISSUER_ID.maximumTokenLifetimeSeconds; the value stays as it is",
     },
     RemovedKey {
-        path: "authentication.oidc.jwksCache.requestTimeoutMilliseconds",
-        replacement: "rename authentication.oidc.jwksCache.requestTimeoutMilliseconds to authentication.oidc.jwksCache.attemptTimeoutMilliseconds; the value stays as it is",
+        path: "authentication.oidc.issuers.*.deniedKids",
+        replacement: "rename `authentication.oidc.issuers.ISSUER_ID.deniedKids` to `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds`; the values stay as they are",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksCache.maxDocumentBytes",
+        replacement: "rename authentication.oidc.issuers.ISSUER_ID.jwksCache.maxDocumentBytes to authentication.oidc.issuers.ISSUER_ID.jwksCache.maximumDocumentBytes; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksCache.requestTimeoutMilliseconds",
+        replacement: "rename authentication.oidc.issuers.ISSUER_ID.jwksCache.requestTimeoutMilliseconds to authentication.oidc.issuers.ISSUER_ID.jwksCache.attemptTimeoutMilliseconds; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksSource.kind",
+        replacement: "Write `authentication.oidc.issuers.ISSUER_ID.jwksSource.type` with the same value.",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksUri",
+        replacement: "Declare `authentication.oidc.issuers.ISSUER_ID.jwksSource` with `type: uri` and `uri` set to the https URL.",
     },
     RemovedKey {
         path: "audit.retainDays",
@@ -398,7 +471,15 @@ pub enum RuntimeConfigError {
     #[error("the static OIDC key set was refused")]
     InvalidStaticJwks(StaticJwksError),
     #[error("the OIDC leeway must be a whole number of seconds from 0 to 300000 milliseconds")]
-    InvalidOidcLeeway,
+    InvalidOidcLeeway {
+        /// The `leewayMilliseconds` member of the refused issuer entry.
+        pointer: String,
+    },
+    /// The issuer set breaks a rule that spans its entries, such as two
+    /// entries naming one issuer. Each diagnostic names the member to correct
+    /// and never repeats a value.
+    #[error("{}", .0.first().map_or("the issuer set was refused", |problem| problem.message.as_str()))]
+    IssuerSet(Vec<Diagnostic>),
     #[error("runtime configuration contains an invalid audit binding")]
     InvalidAudit,
     #[error("runtime configuration contains an invalid cursor binding")]
@@ -481,7 +562,10 @@ impl RuntimeConfigError {
             Self::PackageRootUnavailable => "breg.runtime.package-root-unavailable",
             Self::UnsafePackageRoot => "breg.runtime.unsafe-package-root",
             Self::InvalidOidc | Self::InvalidStaticJwks(_) => "breg.runtime.invalid-oidc",
-            Self::InvalidOidcLeeway => "breg.runtime.invalid-oidc-leeway",
+            Self::InvalidOidcLeeway { .. } => "breg.runtime.invalid-oidc-leeway",
+            Self::IssuerSet(problems) => problems
+                .first()
+                .map_or("breg.runtime.invalid-oidc", |problem| problem.code.as_str()),
             Self::InvalidAudit => "breg.runtime.invalid-audit",
             Self::InvalidCursor => "breg.runtime.invalid-cursor",
             Self::InvalidEventDestination => "breg.runtime.invalid-hook-destination",
@@ -530,8 +614,11 @@ impl RuntimeConfigError {
             Self::DatabaseTransport(_) => "/database/transport",
             Self::InvalidPackage => "/package",
             Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
-            Self::InvalidOidc | Self::InvalidStaticJwks(_) => "/authentication/oidc",
-            Self::InvalidOidcLeeway => "/authentication/oidc/leewayMilliseconds",
+            Self::InvalidOidc | Self::InvalidStaticJwks(_) => ISSUERS_POINTER,
+            Self::InvalidOidcLeeway { pointer } => pointer,
+            Self::IssuerSet(problems) => problems
+                .first()
+                .map_or(ISSUERS_POINTER, |problem| problem.path.as_str()),
             Self::InvalidAudit => "/audit",
             Self::InvalidCursor => "/cursor",
             Self::InvalidEventDestination => "/destinations/hooks",
@@ -595,13 +682,16 @@ impl RuntimeConfigError {
             }
             Self::UnsafePackageRoot => "Point package.root at a path with no symbolic link in it.",
             Self::InvalidOidc => {
-                "Correct authentication.oidc and authentication.authorityClaims: use an https issuer, loopback http, or set authentication.oidc.allowInsecureHttp: true for a declared non-loopback http issuer; keep values bounded without whitespace, list entries distinct, and claim names non-repeating."
+                "Correct each authentication.oidc.issuers entry and authentication.authorityClaims: use an https issuer, loopback http, or set allowInsecureHttp: true on the entry of a declared non-loopback http issuer; keep values bounded without whitespace, list entries distinct, and claim names non-repeating."
             }
             // The remedy is the cause's own text, which `diagnostics` states.
             Self::InvalidStaticJwks(_) => "",
-            Self::InvalidOidcLeeway => {
-                "Set authentication.oidc.leewayMilliseconds to a multiple of 1000 no greater than 300000."
+            Self::InvalidOidcLeeway { .. } => {
+                "Set leewayMilliseconds on the issuer entry to a multiple of 1000 no greater than 300000."
             }
+            Self::IssuerSet(problems) => problems
+                .first()
+                .map_or("", |problem| problem.suggested_action.as_str()),
             Self::InvalidAudit => {
                 "Give the file audit destination an absolute path, and leave audit.path, audit.rotateBytes, and audit.retentionDays out for the stdout destination."
             }
@@ -654,6 +744,22 @@ impl RuntimeConfigError {
     pub fn diagnostics(&self, file: Option<&Path>) -> Vec<Diagnostic> {
         if let Self::Reader(refusal) = self {
             return refusal.diagnostics().to_vec();
+        }
+        if let Self::IssuerSet(problems) = self {
+            return problems
+                .iter()
+                .cloned()
+                .map(|mut problem| {
+                    if problem.source.is_none() {
+                        problem.source = file.map(|file| Source {
+                            file: file.display().to_string(),
+                            line: None,
+                            column: None,
+                        });
+                    }
+                    problem
+                })
+                .collect();
         }
         let action = match self {
             Self::InvalidMetricsListener(cause) => cause.remedy(METRICS_NETWORK_EXPOSURE_KEY),
@@ -897,6 +1003,9 @@ pub struct RuntimeConfigCheck {
     /// Every finding, each naming the file as `path` was given to
     /// [`check_runtime_config`].
     pub diagnostics: Vec<Diagnostic>,
+    /// The explicit production settings the file states, as `check` lists
+    /// them. A file that could not be read lists none.
+    pub explicit_settings: Vec<FoundExplicitSetting>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
 }
@@ -970,11 +1079,21 @@ pub fn check_runtime_config(
             diagnostics: check
                 .report_with(RUNTIME_CONFIG_KIND, id_collisions)
                 .into_diagnostics(),
+            explicit_settings: Vec::new(),
             unavailable: check.unavailable,
         };
     }
     let mut diagnostics = std::mem::take(&mut check.diagnostics);
+    let mut explicit_settings = Vec::new();
     if let Some(loaded) = check.loaded.take() {
+        explicit_settings = loaded.posture.explicit_settings().to_vec();
+        // The issuer set's own rules, positioned in the file. Startup runs
+        // the same rules, so its refusal of them is not reported twice.
+        diagnostics.extend(loaded.config.authentication.oidc.issuers.check_file(
+            ISSUERS_POINTER,
+            &check,
+            RUNTIME_CONFIG_KIND,
+        ));
         // A metrics bind that passes the address rules alone can only fail the
         // overlap rule, which reads the listener bind. While that bind is an
         // expression the overlap is judged against a stand-in, so it defers.
@@ -988,6 +1107,9 @@ pub fn check_runtime_config(
                         .is_ok()
                 });
         match RuntimeConfig::from_raw(loaded) {
+            Err(RuntimeConfigError::IssuerSet(_)) => {
+                // `check_file` above reported the issuer set's problems.
+            }
             Err(error) => {
                 for refusal in error.diagnostics(None) {
                     let overlap_deferred = metrics_overlap_deferred
@@ -1021,11 +1143,11 @@ pub fn check_runtime_config(
                 }
             }
             Ok(config) => {
-                for index in config.authentication().oidc().wildcard_spelled_clients() {
+                for pointer in config.authentication().oidc().wildcard_spelled_clients() {
                     let mut warning = check.error_at(
                         RUNTIME_CONFIG_KIND,
                         "breg.access.wildcard-spelled-item",
-                        &format!("/authentication/oidc/allowedClients/{index}"),
+                        &pointer,
                         "The item is spelled like a wildcard but names one client: `*` and `unrestricted` match nothing else in this list.",
                         "List each client by its exact identifier, or write allowedClients: unrestricted to admit every client.",
                     );
@@ -1061,6 +1183,7 @@ pub fn check_runtime_config(
     }
     RuntimeConfigCheck {
         diagnostics,
+        explicit_settings,
         unavailable: check.unavailable,
     }
 }
@@ -1176,10 +1299,9 @@ fn runtime_definition_id_diagnostics(
 /// diagnostic code.
 fn authentication_refusal_site(error: AuthenticationConfigError) -> (&'static str, &'static str) {
     match error {
-        AuthenticationConfigError::NamedClientNotListed => (
-            "/authentication/oidc/allowedClients",
-            "breg.runtime.clients-unlisted",
-        ),
+        AuthenticationConfigError::NamedClientNotListed => {
+            (ISSUERS_POINTER, "breg.runtime.clients-unlisted")
+        }
         AuthenticationConfigError::PrincipalClaimMismatch => (
             "/authentication/authorityClaims/principal",
             "breg.runtime.principal-claim-mismatch",
@@ -1202,8 +1324,10 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         ["metricsListener", "bind"] => "127.0.0.1:9100",
         ["metricsListener", "networkExposure"] => "private-address",
         ["listener", "publicOrigin"] => "https://registry.invalid",
-        ["authentication", "oidc", "issuer"] => "https://issuer.invalid",
-        ["authentication", "oidc", "jwksSource", "uri"] => "https://issuer.invalid/jwks",
+        ["authentication", "oidc", "issuers", _, "issuer"] => "https://issuer.invalid",
+        ["authentication", "oidc", "issuers", _, "jwksSource", "uri"] => {
+            "https://issuer.invalid/jwks"
+        }
         ["package", "root"] => "/",
         ["package", "expectedDigest"] => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -1372,9 +1496,11 @@ impl RuntimeConfig {
         .map_err(|_| RuntimeConfigError::InvalidFieldEncryption)?;
         let package = PackageConfig::from_raw(raw.package)?;
         let authentication = AuthenticationConfig::from_raw(raw.authentication)?;
+        // Task-grant status is read with the audience of the first issuer
+        // entry in issuer id order.
         crate::task_grant::TaskGrantStatusRegistry::validate_configuration(
             &raw.task_grant_status,
-            &authentication.oidc.audience,
+            authentication.oidc.first().audience(),
         )
         .map_err(|_| RuntimeConfigError::InvalidTaskGrantStatus)?;
         let audit = AuditConfig::from_raw(raw.audit)?;
@@ -1446,7 +1572,7 @@ impl RuntimeConfig {
     ) -> Result<Arc<crate::task_grant::TaskGrantStatusRegistry>> {
         let status = crate::task_grant::TaskGrantStatusRegistry::activate(
             &self.task_grant_status,
-            &self.authentication.oidc.audience,
+            self.authentication.oidc.first().audience(),
             &self.secret_resolver()?,
             self.peer_policy(),
         )
@@ -1747,11 +1873,11 @@ impl RuntimeConfig {
     }
 
     /// The idempotency policy every write path of this runtime spends keys
-    /// under: caller keys are scoped under the configured OIDC issuer, the
-    /// only issuer whose tokens this runtime verifies.
+    /// under: caller keys are scoped under the issuer of the first issuer
+    /// entry in issuer id order.
     pub fn idempotency_policy(&self) -> Result<crate::idempotency::IdempotencyPolicy> {
         crate::idempotency::IdempotencyPolicy::new(
-            self.authentication.oidc.issuer(),
+            self.authentication.oidc.first().issuer(),
             self.retention.receipt_retention_days(),
         )
         .map_err(|_| RuntimeConfigError::InvalidBounds)
@@ -1762,11 +1888,15 @@ impl RuntimeConfig {
         &self.field_encryption
     }
 
-    pub async fn oidc_key_source(&self) -> Result<Arc<JwksFetcher>> {
-        self.authentication
-            .oidc
-            .key_source(&self.secret_resolver()?)
-            .await
+    /// One authenticator issuer per issuer entry, in issuer id order, each
+    /// with the key source its `jwksSource` names.
+    pub async fn authenticator_issuers(&self) -> Result<Vec<AuthenticatorIssuer>> {
+        let resolver = self.secret_resolver()?;
+        let mut issuers = Vec::new();
+        for entry in self.authentication.oidc.issuers() {
+            issuers.push(entry.authenticator_issuer(entry.key_source(&resolver).await?));
+        }
+        Ok(issuers)
     }
 
     /// Activate the exact deployment bindings required by the compiled Registry.
@@ -2497,19 +2627,19 @@ impl fmt::Debug for PackageConfig {
 
 #[derive(Clone)]
 pub struct AuthenticationConfig {
-    oidc: OidcVerifierConfig,
+    oidc: OidcConfig,
     authority_claims: AuthorityClaimsConfig,
 }
 
 impl AuthenticationConfig {
     fn from_raw(raw: RawAuthenticationConfig) -> Result<Self> {
         Ok(Self {
-            oidc: OidcVerifierConfig::from_raw(raw.oidc)?,
+            oidc: OidcConfig::from_raw(&raw.oidc)?,
             authority_claims: AuthorityClaimsConfig::from_raw(raw.authority_claims)?,
         })
     }
 
-    pub fn oidc(&self) -> &OidcVerifierConfig {
+    pub fn oidc(&self) -> &OidcConfig {
         &self.oidc
     }
 
@@ -2522,9 +2652,14 @@ impl AuthenticationConfig {
         &self,
         registry: &CompiledRegistry,
     ) -> std::result::Result<(), AuthenticationConfigError> {
+        let verifiers = self
+            .oidc
+            .issuers()
+            .map(OidcVerifierConfig::token_verifier_config)
+            .collect::<Vec<_>>();
         crate::auth::check_claim_mapping(
             registry,
-            &self.oidc.token_verifier_config(),
+            &verifiers.iter().collect::<Vec<_>>(),
             &self.authority_claim_config(),
         )
     }
@@ -2540,65 +2675,161 @@ impl fmt::Debug for AuthenticationConfig {
     }
 }
 
+/// The JSON pointer of the issuer set in the runtime file.
+const ISSUERS_POINTER: &str = "/authentication/oidc/issuers";
+
+/// The issuers this registry accepts access tokens from, in issuer id order.
+/// It holds at least one.
+#[derive(Clone, Debug)]
+pub struct OidcConfig {
+    issuers: Vec<OidcVerifierConfig>,
+}
+
+impl OidcConfig {
+    /// Check the set as a whole, then read each entry. A rule that spans
+    /// entries is refused with every problem the set's check found.
+    fn from_raw(raw: &RawOidcConfig) -> Result<Self> {
+        let problems = raw.issuers.check(ISSUERS_POINTER);
+        if !problems.is_empty() {
+            return Err(RuntimeConfigError::IssuerSet(problems));
+        }
+        let issuers = raw
+            .issuers
+            .iter()
+            .map(|(id, entry)| OidcVerifierConfig::from_raw(id.as_str(), entry))
+            .collect::<Result<Vec<_>>>()?;
+        if issuers.is_empty() {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        Ok(Self { issuers })
+    }
+
+    /// Every issuer entry, in issuer id order.
+    pub fn issuers(&self) -> impl Iterator<Item = &OidcVerifierConfig> {
+        self.issuers.iter()
+    }
+
+    /// The entry with the issuer id `id`.
+    #[must_use]
+    pub fn issuer(&self, id: &str) -> Option<&OidcVerifierConfig> {
+        self.issuers.iter().find(|entry| entry.id == id)
+    }
+
+    /// The first entry in issuer id order. The set holds at least one.
+    #[must_use]
+    pub fn first(&self) -> &OidcVerifierConfig {
+        &self.issuers[0]
+    }
+
+    /// The operator-visible warning emitted when an entry turns on the plain
+    /// HTTP opt-in.
+    #[must_use]
+    pub fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.issuers
+            .iter()
+            .any(|entry| entry.allow_insecure_http)
+            .then_some(
+                "an authentication.oidc.issuers entry sets allowInsecureHttp, which permits plain HTTP to its issuer and to a JWKS URI declared in configuration",
+            )
+    }
+
+    /// Whether an entry leaves `allowedClients` unrestricted, so a token
+    /// from any client of its issuer is accepted.
+    #[must_use]
+    pub fn admits_every_client(&self) -> bool {
+        self.issuers
+            .iter()
+            .any(OidcVerifierConfig::admits_every_client)
+    }
+
+    /// The pointer of each listed client spelled like a wildcard, which
+    /// names one client.
+    fn wildcard_spelled_clients(&self) -> impl Iterator<Item = String> + '_ {
+        self.issuers.iter().flat_map(|entry| {
+            entry
+                .wildcard_spelled_clients()
+                .map(move |index| format!("{}/allowedClients/{index}", entry.pointer()))
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct OidcVerifierConfig {
+    id: String,
     issuer: String,
     audience: String,
     allowed_algorithm: AccessTokenAlgorithm,
-    access_token_type: String,
-    scope_claim: String,
-    scope_separator: char,
     allowed_clients: Vec<String>,
     denied_kids: Vec<String>,
     assertion_issuers: BTreeMap<String, Vec<String>>,
     max_token_lifetime: Duration,
-    leeway: Duration,
     jwks_cache: JwksCacheConfig,
     jwks_source: OidcJwksSource,
     allow_insecure_http: bool,
+    verifier: TokenVerifierConfig,
+    declared: DeclaredKinds,
 }
 
 impl OidcVerifierConfig {
-    /// The operator-visible warning emitted when the plain HTTP opt-in is active.
+    /// The issuer id the operator gave this entry.
     #[must_use]
-    pub fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.allow_insecure_http.then_some(
-            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-        )
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
-    /// The one token issuer this runtime verifies.
+    /// The token issuer this entry verifies.
     #[must_use]
     pub fn issuer(&self) -> &str {
         &self.issuer
     }
 
-    fn from_raw(raw: RawOidcVerifierConfig) -> Result<Self> {
-        validate_oidc_value(&raw.provider.issuer)?;
-        validate_oidc_value(&raw.provider.audience)?;
+    /// The audience a token from this entry's issuer must name.
+    #[must_use]
+    pub fn audience(&self) -> &str {
+        &self.audience
+    }
+
+    /// The JSON pointer of this entry in the runtime file.
+    fn pointer(&self) -> String {
+        format!(
+            "{ISSUERS_POINTER}/{}",
+            registry_platform_yaml::escape_pointer_segment(&self.id)
+        )
+    }
+
+    fn from_raw(id: &str, raw: &RawOidcVerifierConfig) -> Result<Self> {
+        let core = &raw.core;
+        validate_oidc_value(core.provider.issuer.as_str())?;
+        validate_oidc_value(&core.provider.audience)?;
         // Loopback HTTP for the issuer or key URI is accepted in every posture.
-        raw.provider
-            .check("authentication.oidc")
+        core.provider
+            .check(&format!("authentication.oidc.issuers.{id}"))
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
-        validate_oidc_value(&raw.access_token_type)?;
-        validate_claim_name(&raw.scope_claim)?;
+        validate_claim_name(core.scope_claim.get().as_str())?;
         if raw.scope_separator.is_control() || raw.scope_separator.is_alphanumeric() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
-        validate_bounded_list(&raw.allowed_clients)?;
+        let allowed_clients = match core.allowed_clients.admitted() {
+            Admitted::Listed(clients) => clients.to_vec(),
+            Admitted::Unrestricted => Vec::new(),
+            Admitted::FromPackage | Admitted::FromPolicies => {
+                return Err(RuntimeConfigError::InvalidOidc)
+            }
+        };
+        validate_bounded_list(&allowed_clients)?;
         validate_bounded_list(&raw.revoked_key_ids)?;
         let denied_unique = raw.revoked_key_ids.iter().collect::<HashSet<_>>();
         if denied_unique.len() != raw.revoked_key_ids.len() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
-        let allowed_unique = raw.allowed_clients.iter().collect::<HashSet<_>>();
-        if allowed_unique.len() != raw.allowed_clients.len() {
+        let allowed_unique = allowed_clients.iter().collect::<HashSet<_>>();
+        if allowed_unique.len() != allowed_clients.len() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         // Duplicate assertion-issuer client keys are already refused before this
         // point: the shared reader refuses any duplicate YAML mapping key
         // anywhere in the document, including here.
-        let assertion_issuers = raw.assertion_issuers;
+        let assertion_issuers = raw.assertion_issuers.clone();
         let assertion_issuer_clients = assertion_issuers.keys().cloned().collect::<Vec<_>>();
         validate_bounded_list(&assertion_issuer_clients)?;
         for issuers in assertion_issuers.values() {
@@ -2609,24 +2840,52 @@ impl OidcVerifierConfig {
             }
         }
         let max_token_lifetime = Duration::from_secs(raw.maximum_token_lifetime_seconds);
-        let leeway = oidc_leeway(raw.leeway_milliseconds)?;
-        let jwks_source = OidcJwksSource::from_block(raw.provider.jwks_source)?;
+        let leeway = oidc_leeway(raw.leeway_milliseconds).ok_or_else(|| {
+            RuntimeConfigError::InvalidOidcLeeway {
+                pointer: format!(
+                    "{ISSUERS_POINTER}/{}/leewayMilliseconds",
+                    registry_platform_yaml::escape_pointer_segment(id)
+                ),
+            }
+        })?;
+        let jwks_source = OidcJwksSource::from_block(core.provider.jwks_source.clone())?;
+        let jwks_cache = JwksCacheConfig::from_raw(raw.jwks_cache.clone())?;
+        let verifier = TokenVerifierConfig::for_caller_issuer(
+            core,
+            vec![raw.allowed_algorithm.to_jsonwebtoken()],
+            None,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidOidc)?
+        .with_scope_separator(raw.scope_separator)
+        .with_denied_kids(raw.revoked_key_ids.iter().cloned().collect())
+        .with_assertion_issuers(assertion_issuers.clone())
+        .with_max_token_lifetime(Some(max_token_lifetime))
+        .with_leeway(leeway);
+        let declared =
+            DeclaredKinds::from_core(core).map_err(|_| RuntimeConfigError::InvalidOidc)?;
         Ok(Self {
-            issuer: raw.provider.issuer.into_string(),
-            audience: raw.provider.audience,
+            id: id.to_owned(),
+            issuer: core.provider.issuer.as_str().to_owned(),
+            audience: core.provider.audience.clone(),
             allowed_algorithm: raw.allowed_algorithm,
-            access_token_type: raw.access_token_type,
-            scope_claim: raw.scope_claim,
-            scope_separator: raw.scope_separator,
-            allowed_clients: raw.allowed_clients,
-            denied_kids: raw.revoked_key_ids,
+            allowed_clients,
+            denied_kids: raw.revoked_key_ids.clone(),
             assertion_issuers,
             max_token_lifetime,
-            leeway,
-            jwks_cache: JwksCacheConfig::from_raw(raw.jwks_cache)?,
+            jwks_cache,
             jwks_source,
-            allow_insecure_http: raw.provider.allow_insecure_http,
+            allow_insecure_http: core.provider.allow_insecure_http,
+            verifier,
+            declared,
         })
+    }
+
+    /// This entry as the authenticator verifies it, with `key_source` as
+    /// where its signing keys come from.
+    #[must_use]
+    pub fn authenticator_issuer(&self, key_source: Arc<JwksFetcher>) -> AuthenticatorIssuer {
+        AuthenticatorIssuer::new(self.id.clone(), self.token_verifier_config(), key_source)
+            .with_declared_kinds(self.declared.clone())
     }
 
     pub fn discovery_config(&self) -> OidcDiscoveryConfig {
@@ -2649,8 +2908,8 @@ impl OidcVerifierConfig {
         }
     }
 
-    /// Whether the file leaves `allowedClients` unrestricted, so a token from
-    /// any client is accepted.
+    /// Whether this entry leaves `allowedClients` unrestricted, so a token
+    /// from any client of its issuer is accepted.
     #[must_use]
     pub fn admits_every_client(&self) -> bool {
         self.allowed_clients.is_empty()
@@ -2667,22 +2926,10 @@ impl OidcVerifierConfig {
     }
 
     pub fn token_verifier_config(&self) -> TokenVerifierConfig {
-        TokenVerifierConfig::access_token_profile(
-            self.issuer.clone(),
-            vec![self.audience.clone()],
-            vec![self.allowed_algorithm.to_jsonwebtoken()],
-            access_token_typ_set(&self.access_token_type),
-        )
-        .with_scope_claim(self.scope_claim.clone())
-        .with_scope_separator(self.scope_separator)
-        .with_allowed_clients(self.allowed_clients.clone())
-        .with_denied_kids(self.denied_kids.iter().cloned().collect())
-        .with_assertion_issuers(self.assertion_issuers.clone())
-        .with_max_token_lifetime(Some(self.max_token_lifetime))
-        .with_leeway(self.leeway)
+        self.verifier.clone()
     }
 
-    async fn key_source(&self, resolver: &SecretResolver) -> Result<Arc<JwksFetcher>> {
+    pub(crate) async fn key_source(&self, resolver: &SecretResolver) -> Result<Arc<JwksFetcher>> {
         let network = IssuerNetworkPolicy::new(&self.issuer, self.allow_insecure_http)
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
         match &self.jwks_source {
@@ -2733,6 +2980,7 @@ impl fmt::Debug for OidcVerifierConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("OidcVerifierConfig")
+            .field("id", &self.id)
             .field("issuer", &"<redacted>")
             .field("audience", &"<redacted>")
             .field("allowed_algorithm", &self.allowed_algorithm)
@@ -2746,7 +2994,7 @@ impl fmt::Debug for OidcVerifierConfig {
                 &self.assertion_issuers.len(),
             )
             .field("max_token_lifetime", &self.max_token_lifetime)
-            .field("leeway", &self.leeway)
+            .field("leeway", &self.verifier.leeway)
             .field("jwks_cache", &self.jwks_cache)
             .field("jwks_source", &self.jwks_source.kind())
             .finish()
@@ -3749,35 +3997,31 @@ struct RawPackageConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuthenticationConfig {
-    oidc: RawOidcVerifierConfig,
+    oidc: RawOidcConfig,
     authority_claims: RawAuthorityClaimsConfig,
 }
 
+/// The issuers this registry accepts access tokens from.
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawOidcConfig {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
+    #[cfg_attr(feature = "schema", schemars(flatten), serde(skip_serializing))]
+    issuers: CallerIssuers<RawOidcVerifierConfig>,
+}
+
+/// One issuer a token may come from: the members every caller issuer entry
+/// shares, and the verification rules this registry adds.
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawOidcVerifierConfig {
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
-    #[cfg_attr(feature = "schema", schemars(flatten))]
-    provider: OidcIssuerConfig,
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer-core"))]
+    #[cfg_attr(feature = "schema", schemars(flatten), serde(skip_serializing))]
+    core: CallerIssuerCore<AllowedClients>,
     allowed_algorithm: AccessTokenAlgorithm,
-    /// The one admitted access-token `typ` semantics. Configuring the
-    /// RFC 9068 access-token media type as `at+jwt` or
-    /// `application/at+jwt` admits both spellings of that one type; any
-    /// other value (for example `JWT`) admits only that token type, matched
-    /// case-insensitively.
-    access_token_type: String,
-    scope_claim: String,
     scope_separator: char,
-    /// The OAuth clients whose tokens this registry accepts: `unrestricted`
-    /// to accept a token from every client, or a list of at least one
-    /// client.
-    #[serde(deserialize_with = "crate::contract::sentinel::allowed_clients")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "crate::contract::sentinel::AllowedClients")
-    )]
-    allowed_clients: Vec<String>,
     /// The signing key identifiers this registry refuses locally even while
     /// the issuer publishes them. Omitted, no key is refused; written, it
     /// names at least one key and does not revoke it at the issuer.
@@ -3811,6 +4055,14 @@ struct RawOidcVerifierConfig {
     /// Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior.
     #[serde(default)]
     jwks_cache: RawJwksCacheConfig,
+}
+
+impl CallerIssuerEntry for RawOidcVerifierConfig {
+    type Clients = AllowedClients;
+
+    fn core(&self) -> &CallerIssuerCore<AllowedClients> {
+        &self.core
+    }
 }
 
 /// An empty list is not how the file says "refuse no key" (CFG-EMPTY-2):
@@ -3869,7 +4121,7 @@ impl<'de> Deserialize<'de> for ListedIssuers {
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawJwksCacheConfig {
     /// Defaults to the bounded JWKS cache time-to-live.
@@ -4466,12 +4718,6 @@ fn install_schema_constraints(schema: &mut Value) {
             VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
         ),
         (
-            "/$defs/RawOidcVerifierConfig/properties/accessTokenType",
-            1,
-            MAX_OIDC_VALUE_BYTES,
-            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
-        ),
-        (
             "/$defs/RawOidcVerifierConfig/properties/scopeClaim",
             1,
             128,
@@ -4514,7 +4760,7 @@ fn install_schema_constraints(schema: &mut Value) {
     for pointer in [
         // The list arm of `allowedClients`; the other arm is the keyword
         // `unrestricted`.
-        "/$defs/AllowedClients/anyOf/1",
+        "/$defs/RawOidcVerifierConfig/properties/allowedClients/anyOf/1",
         "/$defs/RawOidcVerifierConfig/properties/revokedKeyIds",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/additionalProperties",
     ] {
@@ -4824,11 +5070,11 @@ fn validate_bounded_list(values: &[String]) -> Result<()> {
 
 /// The token verifier applies leeway in whole seconds, so a value carrying
 /// sub-second precision would be truncated without the operator being told.
-fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
-    if !milliseconds.is_multiple_of(1_000) {
-        return Err(RuntimeConfigError::InvalidOidcLeeway);
-    }
-    Ok(Duration::from_millis(milliseconds))
+/// `None` for such a value.
+fn oidc_leeway(milliseconds: u64) -> Option<Duration> {
+    milliseconds
+        .is_multiple_of(1_000)
+        .then(|| Duration::from_millis(milliseconds))
 }
 
 #[cfg(test)]

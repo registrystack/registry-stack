@@ -28,7 +28,7 @@ use crate::api::{
 };
 use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
-use crate::auth::{AuthenticationConfigError, RegistryAuthenticator};
+use crate::auth::{AuthenticationConfigError, AuthenticatorIssuer, RegistryAuthenticator};
 use crate::field_encryption::FieldEncryptionService;
 use crate::hooks::{HookDeliveryService, HookRetainedBindingError, HookWorker};
 use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
@@ -163,11 +163,12 @@ pub enum StartupError {
     StaticKeySet(StaticJwksError),
     #[error("the Registry authentication profile was refused")]
     Authentication,
-    /// The project names clients that `authentication.oidc.allowedClients`
-    /// does not list; `unrestricted` lists none.
+    /// The project names clients that no `authentication.oidc.issuers` entry
+    /// lists in `allowedClients`; `unrestricted` lists none.
     #[error(
-        "the project names clients that authentication.oidc.allowedClients does not list; list \
-         each client named in requesterClients, trusted actors, or consent recipients there"
+        "the project names clients that no authentication.oidc.issuers entry lists in \
+         allowedClients; list each client named in requesterClients, trusted actors, or consent \
+         recipients in the allowedClients of the entry whose issuer signs its tokens"
     )]
     AuthenticationClientsUnlisted,
     #[error("the Registry event destination bindings were refused")]
@@ -525,7 +526,7 @@ pub enum OperationalEvent {
     PostgresBaselineAdvisory(BaselineAdvisory),
     /// The role mode the runtime file selects, logged once at startup.
     RoleMode(RoleMode),
-    /// The runtime file leaves `authentication.oidc.allowedClients`
+    /// An `authentication.oidc.issuers` entry leaves `allowedClients`
     /// unrestricted, logged once at startup. It names the member only.
     ClientsUnrestricted,
     /// A supervised background task panicked, or returned before shutdown
@@ -587,7 +588,7 @@ impl OperationalEvent {
             Self::ClientsUnrestricted => OperationalLogRecord {
                 level: OperationalLogLevel::Info,
                 target: "registry_breg::startup",
-                message: "authentication.oidc.allowedClients is unrestricted: a token from any client is accepted",
+                message: "an authentication.oidc.issuers entry leaves allowedClients unrestricted: a token from any client of its issuer is accepted",
                 error: None,
                 code: Some("startup.authentication.clients_unrestricted"),
             },
@@ -914,7 +915,7 @@ impl StartupError {
             Self::Oidc | Self::StaticKeySet(_) => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
             Self::AuthenticationClientsUnlisted => {
-                "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
+                "the project names clients that no authentication.oidc.issuers entry lists in allowedClients; list each client named in requesterClients, trusted actors, or consent recipients in the allowedClients of the entry whose issuer signs its tokens"
             }
             Self::AttachmentStorage => {
                 "the Registry attachment storage or verification binding was refused"
@@ -1588,7 +1589,13 @@ pub async fn prepare_with_connection_and_key_source_for_test(
     declared: registry_platform_config::DeclaredPosture,
 ) -> Result<PreparedServer> {
     let StartupInputs { config, package } = StartupInputs::load_mapped(config_path, declared)?;
-    prepare_verified_package_with_key_source(config, package, connection, key_source).await
+    let issuers = config
+        .authentication()
+        .oidc()
+        .issuers()
+        .map(|entry| entry.authenticator_issuer(Arc::clone(&key_source)))
+        .collect();
+    prepare_verified_package_with_key_source(config, package, connection, issuers).await
 }
 
 /// Whether startup opens the configured audit destination for serving or only
@@ -1632,8 +1639,8 @@ async fn prepare_verified_package_with_connection(
         AuditOpening::CheckOnly | AuditOpening::ObservePosture => check_registry_audit(&config)?,
     };
     let cursor_codec = Arc::new(config.cursor_codec().map_err(|_| StartupError::Cursor)?);
-    let key_source = config
-        .oidc_key_source()
+    let issuers = config
+        .authenticator_issuers()
         .await
         .map_err(map_runtime_config_error)?;
     finish_prepared_server(
@@ -1641,7 +1648,7 @@ async fn prepare_verified_package_with_connection(
         startup,
         pool,
         postgres_advisories,
-        key_source,
+        issuers,
         audit,
         cursor_codec,
         opening,
@@ -1654,7 +1661,7 @@ async fn prepare_verified_package_with_key_source(
     config: RuntimeConfig,
     package: VerifiedPackage,
     connection: crate::postgres::ConnectionConfig,
-    key_source: Arc<JwksFetcher>,
+    issuers: Vec<AuthenticatorIssuer>,
 ) -> Result<PreparedServer> {
     config.posture_report().log_startup();
     let (pool, startup, postgres_advisories) = prepare_database_startup(
@@ -1673,7 +1680,7 @@ async fn prepare_verified_package_with_key_source(
         startup,
         pool,
         postgres_advisories,
-        key_source,
+        issuers,
         audit,
         cursor_codec,
         AuditOpening::Serve,
@@ -1797,16 +1804,22 @@ async fn finish_prepared_server(
     startup: VerifiedStartup,
     pool: RuntimePool,
     postgres_advisories: Vec<BaselineAdvisory>,
-    key_source: Arc<JwksFetcher>,
+    issuers: Vec<AuthenticatorIssuer>,
     audit: RegistryAudit,
     cursor_codec: Arc<crate::cursor::CursorCodec>,
     opening: AuditOpening,
 ) -> Result<PreparedServer> {
-    let oidc = config.authentication().oidc();
-    key_source
-        .ensure_key_set()
-        .await
-        .map_err(|_| StartupError::Oidc)?;
+    // Every issuer's keys are needed before the server is ready.
+    let key_sources = issuers
+        .iter()
+        .map(|issuer| Arc::clone(issuer.key_source()))
+        .collect::<Vec<_>>();
+    for key_source in &key_sources {
+        key_source
+            .ensure_key_set()
+            .await
+            .map_err(|_| StartupError::Oidc)?;
+    }
 
     let registry = Arc::new(startup.package().registry().clone());
     if crate::postgres::external_projection::enabled(&registry)
@@ -1848,10 +1861,9 @@ async fn finish_prepared_server(
             .map_err(|error| StartupError::EventDestinations(error.to_string()))?,
     );
     let authenticator = Arc::new(
-        RegistryAuthenticator::new(
+        RegistryAuthenticator::with_issuers(
             &registry,
-            oidc.token_verifier_config(),
-            Arc::clone(&key_source),
+            issuers,
             config.authentication().authority_claim_config(),
         )
         .map_err(|error| match error {
@@ -1880,7 +1892,7 @@ async fn finish_prepared_server(
         migration_role: config.database().roles().migration().clone(),
         runtime_role: config.database().roles().runtime().clone(),
         lock_key,
-        key_source: Arc::clone(&key_source),
+        key_sources,
         requires_postgis: registry.ddl().requires_postgis,
         requires_spatial_bbox: registry.ddl().requires_spatial_bbox(),
         audit_writer: audit.writer().clone(),
@@ -3165,7 +3177,8 @@ struct DynamicRuntimeReadiness {
     migration_role: SqlIdentifier,
     runtime_role: SqlIdentifier,
     lock_key: RegistryLockKey,
-    key_source: Arc<JwksFetcher>,
+    /// The key source of every issuer entry.
+    key_sources: Vec<Arc<JwksFetcher>>,
     requires_postgis: bool,
     requires_spatial_bbox: bool,
     audit_writer: AuditWriter,
@@ -3245,10 +3258,12 @@ impl DynamicRuntimeReadiness {
             .commit()
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
-        self.key_source
-            .ensure_key_set()
-            .await
-            .map_err(|_| StartupError::Oidc)?;
+        for key_source in &self.key_sources {
+            key_source
+                .ensure_key_set()
+                .await
+                .map_err(|_| StartupError::Oidc)?;
+        }
         // A writer that refused an append refuses every later one, so every
         // audited request would answer audit-unavailable until a restart.
         if !self.audit_writer.ready().await {

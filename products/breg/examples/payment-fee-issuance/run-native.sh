@@ -312,17 +312,19 @@ database:
 package: {root: $package_root}
 authentication:
   oidc:
-    issuer: $issuer
-    audience: $audience
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [issuance-service, payment-adapter, service-coordinator]
-    maximumTokenLifetimeSeconds: 7200
-    leewayMilliseconds: 60000
-    jwksCache: {cacheTtlSeconds: 600, negativeCacheTtlSeconds: 60, refreshCooldownSeconds: 30, maximumDocumentBytes: 65536, attemptTimeoutMilliseconds: 5000, outageToleranceSeconds: 0}
-    jwksSource: {type: static, documentRef: secret:file/oidc-jwks}
+    issuers:
+      primary:
+        issuer: $issuer
+        audience: $audience
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [issuance-service, payment-adapter, service-coordinator]
+        maximumTokenLifetimeSeconds: 7200
+        leewayMilliseconds: 60000
+        jwksCache: {cacheTtlSeconds: 600, negativeCacheTtlSeconds: 60, refreshCooldownSeconds: 30, maximumDocumentBytes: 65536, attemptTimeoutMilliseconds: 5000, outageToleranceSeconds: 0}
+        jwksSource: {type: static, documentRef: secret:file/oidc-jwks}
   authorityClaims: {principal: registry_principal, purpose: registry_purpose}
 audit: {hashKeyRef: secret:file/audit-key, path: $run_root/audit/audit.jsonl}
 cursor: {secretRef: secret:file/cursor-key, maximumAgeSeconds: 300}

@@ -1012,7 +1012,7 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         &private::read(&root.join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )
     .unwrap();
-    let allowed = runtime["authentication"]["oidc"]["allowedClients"]
+    let allowed = runtime["authentication"]["oidc"]["issuers"]["session"]["allowedClients"]
         .as_array()
         .expect("allowedClients is an array");
     assert!(
@@ -1053,7 +1053,7 @@ fn a_session_naming_no_breg_client_writes_the_unrestricted_keyword() {
     )
     .unwrap();
     assert_eq!(
-        runtime["authentication"]["oidc"]["allowedClients"],
+        runtime["authentication"]["oidc"]["issuers"]["session"]["allowedClients"],
         "unrestricted"
     );
 }
@@ -1117,7 +1117,7 @@ fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection
     )
     .unwrap();
     assert_eq!(
-        runtime["authentication"]["oidc"]["allowedClients"]
+        runtime["authentication"]["oidc"]["issuers"]["session"]["allowedClients"]
             .as_array()
             .unwrap()
             .iter()
@@ -1126,7 +1126,7 @@ fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection
         1
     );
     assert_eq!(
-        runtime["authentication"]["oidc"]["assertionIssuers"]["operator"],
+        runtime["authentication"]["oidc"]["issuers"]["session"]["assertionIssuers"]["operator"],
         json!(["http://127.0.0.1:18092"])
     );
 }
@@ -1399,7 +1399,7 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )
     .unwrap();
-    let allowed = runtime["authentication"]["oidc"]["allowedClients"]
+    let allowed = runtime["authentication"]["oidc"]["issuers"]["session"]["allowedClients"]
         .as_array()
         .unwrap();
     assert!(allowed.iter().any(|id| id == "portal"));
@@ -1409,7 +1409,7 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
     // against. Every declared exchange client is registered against at least
     // one connection, so each one reaches this map.
     assert_eq!(
-        runtime["authentication"]["oidc"]["assertionIssuers"],
+        runtime["authentication"]["oidc"]["issuers"]["session"]["assertionIssuers"],
         json!({"source": ["https://casework.example.test"]})
     );
     config::check_borrowed_browser_clients(
@@ -1601,11 +1601,13 @@ fn machine_resource_grants_project_exact_permissions_without_changing_bootstrap_
         &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )
     .unwrap();
-    assert!(!runtime["authentication"]["oidc"]["allowedClients"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|id| id == "task-agent"));
+    assert!(
+        !runtime["authentication"]["oidc"]["issuers"]["session"]["allowedClients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == "task-agent")
+    );
 }
 
 #[test]
@@ -1739,7 +1741,7 @@ fn an_institutional_grant_connection_pairs_clients_without_projecting_their_clai
     )
     .unwrap();
     assert_eq!(
-        runtime["authentication"]["oidc"]["assertionIssuers"],
+        runtime["authentication"]["oidc"]["issuers"]["session"]["assertionIssuers"],
         json!({"source": ["https://casework.example.test"]})
     );
 }
@@ -5441,10 +5443,12 @@ fn local_task_grant_status_uses_only_the_registered_status_client_and_resource()
                     .unwrap_or_else(|| state.audience())
             );
             assert_eq!(status["privateKeyRef"], format!("secret:file/{key}"));
-            assert!(!runtime["authentication"]["oidc"]["allowedClients"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("source")));
+            assert!(
+                !runtime["authentication"]["oidc"]["issuers"]["session"]["allowedClients"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("source"))
+            );
             assert!(!runtime.to_string().contains("\"d\""));
             registry_breg::runtime_config::load_runtime_config(
                 &file,

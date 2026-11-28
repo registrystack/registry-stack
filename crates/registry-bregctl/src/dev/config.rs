@@ -570,6 +570,8 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+/// The id of the one issuer entry a session's runtime declares.
+pub(super) const SESSION_ISSUER_ID: &str = "session";
 const ASSERTION_KEY_BYTES: usize = 16 * 1024;
 const CLIENT_SECRET_BYTES: usize = 1024;
 const PASSWORD_BYTES: usize = 1024;
@@ -2020,6 +2022,7 @@ pub(super) fn issuer_description(
             email: user.email.clone(),
             password_file: format!("secrets/user-{}", user.username).into(),
             attributes: user.attributes.clone(),
+            unit: None,
         });
         let permissions = role_permissions(&description, state, &user.grants)?;
         description.roles.push(Role {
@@ -2232,7 +2235,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         "secretProviders":{"file":{"root":final_root.join("secrets")}},
         "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maximumConnections":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
         "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
-        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":authority_claims},
+        "authentication":{"oidc":{"issuers":{SESSION_ISSUER_ID:{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}}}},"authorityClaims":authority_claims},
         "audit":{"hashKeyCustody":"development-generated","hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"destinations":{"hooks":destinations},
         "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
             "baseUrl":provider.base_url,
@@ -2258,9 +2261,9 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
     // omitted rather than written as null or `{}`.
     omit_null_members(&mut runtime);
     if assertion_issuers.is_empty() {
-        runtime["authentication"]["oidc"]
+        runtime["authentication"]["oidc"]["issuers"][SESSION_ISSUER_ID]
             .as_object_mut()
-            .expect("the runtime document carries an oidc object")
+            .expect("the runtime document carries the session issuer entry")
             .remove("assertionIssuers");
     }
     let rendered = serde_norway::to_string(&runtime)?;

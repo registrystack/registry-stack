@@ -164,8 +164,13 @@ pub(crate) fn problem_response(
 /// extensions to [`finish_response`], which counts it and writes the one
 /// bounded log line. It is never serialized, so the answer's bytes do not
 /// change.
-pub(crate) fn note_refusal(mut response: Response, check: FailedCheck) -> Response {
-    response.extensions_mut().insert(RefusalNote::new(check));
+pub(crate) fn note_refusal(response: Response, check: FailedCheck) -> Response {
+    attach_refusal_note(response, RefusalNote::new(check))
+}
+
+/// [`note_refusal`] with a whole note, so a remedy reaches the log line.
+pub(crate) fn attach_refusal_note(mut response: Response, note: RefusalNote) -> Response {
+    response.extensions_mut().insert(note);
     response
 }
 
