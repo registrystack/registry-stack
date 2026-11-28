@@ -60,9 +60,21 @@ access profile or a Record type changes through a new package applied under the 
 credential. A webhook destination's endpoint and secret change in the runtime file and apply at
 restart.
 
+The signature covers `webhook-id`, `webhook-timestamp` and the exact body, leaving the method,
+the URL and `Registry-Recipient-Binding` outside the signed input. The binding only selects a key,
+so a substituted binding selects a key the sender does not hold, and BReg requires separate keys
+per destination and per review authority because a captured delivery verifies wherever its key is held.
+Startup refuses shared key bytes and identifies both configuration paths.
+BReg refuses a timestamp more than 300 seconds from its clock and stores one completion per
+authority and `webhook-id` for the recovery window.
+
+An accepted completion only makes a result lookup due.
+
 {/* Evidence: products/breg/generated/facility/generated/openapi.json, paths;
     crates/registry-breg/src/startup.rs, production startup verifies the package once,
-    before any listener binds. */}
+    before any listener binds;
+    crates/registry-breg/src/event_destination.rs, distinct_delivery_keys();
+    crates/registry-breg/src/review_store.rs, verify_completion(), receive_completion(). */}
 
 ### In-process refresh worker
 

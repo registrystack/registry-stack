@@ -29,10 +29,8 @@ const SAMPLE_RECORD_REFERENCE: &str =
 const SAMPLE_TIME: &str = "2026-01-01T00:00:00Z";
 const SAMPLE_PACKAGE_REVISION: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-const SAMPLE_IDEMPOTENCY_KEY: &str =
-    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 const SAMPLE_REQUEST_TARGET: &str = "<configured-hook-request-target>";
-const SAMPLE_SIGNATURE: &str = "v1=<computed-at-delivery>";
+const SAMPLE_SIGNATURE: &str = "v1,<computed-at-delivery>";
 const MAX_SCHEMA_SYNTHESIS_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +38,7 @@ pub(crate) enum HookLifecycleError {
     Event,
     Sample,
     Operator,
+    EventDestinations(String),
     /// The configured active package does not match the runtime file's
     /// `package.expectedDigest` pin.
     PackagePinMismatch(PackageDigestMismatch),
@@ -193,8 +192,8 @@ pub(crate) fn sample(
     );
     let envelope = HookEnvelope {
         id: SAMPLE_EVENT_ID.to_owned(),
-        event_type: event_type.clone(),
-        source: source.clone(),
+        event_type,
+        source,
         time: sample_time()?,
         subject,
         dataschema: delivery.data_schema.clone(),
@@ -211,28 +210,11 @@ pub(crate) fn sample(
         String::from_utf8(canonical_body_bytes).map_err(|_| HookLifecycleError::Sample)?;
     let body = serde_json::to_value(&envelope).map_err(|_| HookLifecycleError::Sample)?;
     let headers = BTreeMap::from([
-        ("Accept".to_owned(), "application/json".to_owned()),
-        ("Content-Type".to_owned(), "application/json".to_owned()),
-        (
-            "Idempotency-Key".to_owned(),
-            SAMPLE_IDEMPOTENCY_KEY.to_owned(),
-        ),
-        ("X-Registry-Delivery-Attempt".to_owned(), "1".to_owned()),
-        (
-            "X-Registry-Delivery-Time".to_owned(),
-            SAMPLE_TIME.to_owned(),
-        ),
-        ("X-Registry-Event-Generation".to_owned(), "1".to_owned()),
-        (
-            "X-Registry-Signature".to_owned(),
-            SAMPLE_SIGNATURE.to_owned(),
-        ),
-        ("ce-dataschema".to_owned(), delivery.data_schema.clone()),
-        ("ce-id".to_owned(), SAMPLE_EVENT_ID.to_owned()),
-        ("ce-source".to_owned(), source),
-        ("ce-specversion".to_owned(), "1.0".to_owned()),
-        ("ce-time".to_owned(), SAMPLE_TIME.to_owned()),
-        ("ce-type".to_owned(), event_type),
+        ("accept".to_owned(), "application/json".to_owned()),
+        ("content-type".to_owned(), "application/json".to_owned()),
+        ("webhook-id".to_owned(), SAMPLE_EVENT_ID.to_owned()),
+        ("webhook-timestamp".to_owned(), "1767225600".to_owned()),
+        ("webhook-signature".to_owned(), SAMPLE_SIGNATURE.to_owned()),
     ]);
     Ok(HookSampleOutcome {
         event_id: delivery.event_id.clone(),
@@ -388,12 +370,14 @@ fn discard_with(
     })
 }
 
-/// A package pin mismatch keeps both digests; every other operator failure
-/// stays the one value-free refusal.
+/// Keep package identities and actionable event destination refusals.
 fn operator_failure(error: HookOperatorError) -> HookLifecycleError {
     match error {
         HookOperatorError::PackagePinMismatch(mismatch) => {
             HookLifecycleError::PackagePinMismatch(mismatch)
+        }
+        HookOperatorError::EventDestinations(error) => {
+            HookLifecycleError::EventDestinations(error.to_string())
         }
         HookOperatorError::Unavailable => HookLifecycleError::Operator,
     }
@@ -849,7 +833,7 @@ mod tests {
     #[test]
     fn sample_placeholders_never_claim_a_deployed_target_or_secret() {
         assert!(SAMPLE_REQUEST_TARGET.starts_with('<'));
-        assert_eq!(SAMPLE_SIGNATURE, "v1=<computed-at-delivery>");
+        assert_eq!(SAMPLE_SIGNATURE, "v1,<computed-at-delivery>");
         assert!(!SAMPLE_SIGNATURE.contains("secret"));
     }
 

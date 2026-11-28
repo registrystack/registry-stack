@@ -10,9 +10,7 @@
 //! operational vocabulary, the activated destinations, the local programs the
 //! running package holds, and proposal application with its completion
 //! barrier. The signed bytes on the wire are produced by the shared URL
-//! destination from the same field values and key material, and the
-//! idempotency domain and delivery source identity are passed through
-//! unchanged.
+//! destination from the event identity, timestamp, exact body and key material.
 
 use std::path::Path;
 #[cfg(feature = "postgres-test")]
@@ -156,6 +154,8 @@ pub enum HookOperatorError {
     /// not secrets, so the refusal names them.
     #[error("{0}")]
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
+    #[error("{0}")]
+    EventDestinations(crate::event_destination::EventDestinationActivationError),
     #[error("hook operator request is unavailable")]
     Unavailable,
 }
@@ -202,6 +202,11 @@ impl HookOperatorService {
             }
             _ => HookOperatorError::Unavailable,
         })?;
+        let destinations = Arc::new(
+            config
+                .activate_event_destinations(package.registry())
+                .map_err(HookOperatorError::EventDestinations)?,
+        );
         let connection = config
             .runtime_database_connection_config()
             .map_err(|_| HookOperatorError::Unavailable)?;
@@ -222,11 +227,6 @@ impl HookOperatorService {
         .await
         .map_err(|_| HookOperatorError::Unavailable)?;
         drop(client);
-        let destinations = Arc::new(
-            config
-                .activate_event_destinations(startup.package().registry())
-                .map_err(|_| HookOperatorError::Unavailable)?,
-        );
         let audit = RegistryAudit::open_companion(&config)
             .await
             .map_err(|_| HookOperatorError::Unavailable)?;

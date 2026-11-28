@@ -735,15 +735,21 @@ identifiers using an undocumented spelling.
 
 ### Verify a hook delivery
 
-`verifyHookDelivery` in Node and `verify_hook_delivery` in Python authenticate one exact BReg
-Version 1 hook request with the shared Rust verifier. Pass the received method, request target,
-headers, body bytes, and key without normalising them. The result carries the authenticated
-CloudEvents attributes, delivery metadata, and body. It refuses a delivery time more than 300
-seconds from the receiver clock, either way, with the code `stale-delivery`. `maxSkewSeconds`
-(Python `max_skew_seconds`, 1 to 3600) sets another window, and `callerEnforcedFreshness: true`
-(Python `caller_enforced_freshness=True`) leaves the check to the receiver. It does not decide
-whether the delivery is expected by this receiver or already applied; the receiver checks those, in
-this order.
+`verifyHookDelivery` in Node and `verify_hook_delivery` in Python authenticate one BReg
+Standard Webhooks delivery. Pass the received headers, exact body bytes, and current key.
+During rotation, pass the optional `previousKey` in Node or `previous_key` in Python.
+Each key is 32 to 64 exact bytes.
+
+The result contains `id`, `timestamp`, `source`, `type`, `time`, `dataschema`, and the
+exact `body`. The authenticated `id` matches both `webhook-id` and the envelope id.
+`timestamp` is the signed Unix seconds, returned as a decimal string in Node and an integer
+in Python. `time` is the event time as written in the envelope.
+
+The verifier refuses a timestamp more than 300 seconds from the receiver clock in either
+direction with code `stale-delivery`. Set `maxSkewSeconds` in Node or `max_skew_seconds` in
+Python to choose a window from 1 to 3600 seconds. Use
+`callerEnforcedFreshness: true` in Node or `caller_enforced_freshness=True` in Python to
+enforce the window yourself. Choose one freshness option.
 
 In both examples, `event_store.apply_once()` (`eventStore.applyOnce()` in Node) is an
 application-owned transaction that claims the event identity and commits the effect once, and
@@ -783,14 +789,13 @@ async function exactBody(request) {
   return Buffer.concat(chunks, length);
 }
 
-async function receiveWebhook(request, response, key, eventStore) {
+async function receiveWebhook(request, response, key, eventStore, previousKey) {
   const body = await exactBody(request);
   const delivery = breg.verifyHookDelivery({
-    method: request.method,
-    path: request.url,
     headers: exactHeaders(request.rawHeaders),
     body,
     key,
+    previousKey,
   });
 
   if (delivery.source !== EXPECTED_SOURCE
@@ -819,9 +824,9 @@ EXPECTED_DATASCHEMA = (
 )
 
 
-def receive_webhook(method, path, headers, body, key, event_store):
+def receive_webhook(headers, body, key, event_store, previous_key=None):
     delivery = breg.verify_hook_delivery(
-        method=method, path=path, headers=headers, body=body, key=key,
+        headers=headers, body=body, key=key, previous_key=previous_key,
     )
 
     if (delivery["source"], delivery["type"], delivery["dataschema"]) != (
@@ -835,18 +840,16 @@ def receive_webhook(method, path, headers, body, key, event_store):
     )
 ```
 
-Python takes `headers` as an ordered sequence of name and value pairs. Pass the raw request pairs so
-the verifier retains header case and duplicates, and build a normalised map only after verification.
-Bound the body size before reading it. Node refuses body and key buffers backed by shared memory and
-copies the rest before verifying.
+Python takes `headers` as ordered name and value pairs. Forward every occurrence so the
+verifier can refuse repeated headers. In Node, check the raw pairs for duplicates before
+building the map. Bound the body size before reading it. Node copies the body and key buffers
+before verification and refuses buffers backed by shared memory.
 
-Keep the key in server-side secret storage and never log the input or a failed delivery. A failure
-raises `BaseRegistryClientError` with kind `hook-verification`; its `code` and message name the
-input to check without rendering its value. Generation and attempt are decimal strings, so a 64-bit
-generation never rounds in JavaScript. A delivery outside the skew bound can still carry a valid
-signature, so the verifier refuses it before deduplication. The idempotency key identifies one delivery generation
-and survives automatic retries, but an operator replay creates a new generation and key. Deduplicate
-an effect that must happen once on `source` plus `id`, or on a business key.
+Keep keys in server-side secret storage. A refusal raises `BaseRegistryClientError` with kind
+`hook-verification`. Its code and message tell you what to check without exposing input values.
+After verification, confirm the source, type, and schema you expect. Deduplicate on `source`
+plus `id` before acting. Every retry and operator replay carries the same event id. Retain seen
+ids for at least the sender's retry span.
 [Webhooks](../../operate/breg-webhooks/) covers provisioning the key and building a receiver.
 
 {/* Evidence: crates/registry-breg-client/src/hook.rs, verify_hook_delivery;
@@ -854,8 +857,9 @@ an effect that must happen once on `source` plus `id`, or on a business key.
     crates/registry-breg-client-node/client.js, verifyHookDelivery, isSharedArrayBuffer;
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, verify_hook_delivery,
     VerifiedHookDelivery;
-    crates/registry-breg-client-py/tests/python/test_webhook_verification.py;
-    crates/registry-platform-crypto/src/delivery_signature.rs, verify_v1 */}
+    crates/registry-platform-hooks/src/receiver.rs, verify_hook_delivery;
+    crates/registry-platform-crypto/src/delivery_signature.rs, verify;
+    crates/registry-platform-crypto/tests/fixtures/standard-webhooks.json */}
 
 ### Read records
 

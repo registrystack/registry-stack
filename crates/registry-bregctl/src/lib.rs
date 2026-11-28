@@ -961,7 +961,7 @@ struct ProposalRetentionArgs {
 
 #[derive(Debug, Subcommand)]
 enum HookCommand {
-    /// Render one deterministic exact CloudEvents request with synthetic values.
+    /// Render one deterministic Standard Webhooks request with synthetic values.
     Sample(HookSampleArgs),
     /// List bounded value-free delivery metadata, including superseded bindings.
     List(HookListArgs),
@@ -5453,6 +5453,13 @@ fn hook_lifecycle_failure(command: &'static str, error: HookLifecycleError) -> F
             DiagnosticArtifact::HookSample,
             SuggestedAction::SelectHookEvent,
         ),
+        HookLifecycleError::EventDestinations(ref reason) => (
+            "hook.operation.refused",
+            "destinations.hooks",
+            reason.as_str(),
+            DiagnosticArtifact::HookOperations,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         HookLifecycleError::Operator => (
             "hook.operation.refused",
             "hook",
@@ -6830,10 +6837,16 @@ fn schema_test_runtime_setup_failure(
             "destinations.hooks",
             "configure exactly the logical destination bindings required by the candidate event deliveries before retrying",
         ),
-        SchemaTestRuntimeSetupError::EventDestinations(_) => (
+        SchemaTestRuntimeSetupError::EventDestinations(cause) => (
             "test.hook-destinations.activation-failed",
             "destinations.hooks",
-            "check the destination bindings, delivery ceilings, and referenced secret, signing, and TLS material before retrying",
+            match cause {
+                EventDestinationActivationError::SigningKeyUnavailable { .. }
+                | EventDestinationActivationError::InvalidSigningKey { .. }
+                | EventDestinationActivationError::RepeatedSigningKey { .. }
+                | EventDestinationActivationError::PreviousEqualsCurrent { .. } => "",
+                _ => "check the destination bindings, delivery ceilings, and referenced secret, signing, and TLS material before retrying",
+            },
         ),
         SchemaTestRuntimeSetupError::Evidence => (
             "test.evidence-providers.activation-failed",
@@ -6845,17 +6858,27 @@ fn schema_test_runtime_setup_failure(
             "reviewAuthorities",
             "bind every review authority the candidate's Proposal Actions name, and check the referenced credentials, before retrying",
         ),
+        SchemaTestRuntimeSetupError::ReviewAuthorityKey(_) => (
+            "test.review-authorities.activation-failed",
+            "reviewAuthorities",
+            "",
+        ),
         SchemaTestRuntimeSetupError::WasmExecution => (
             "test.wasm-execution.setup-failed",
             "wasmExecution",
             "check the WASM execution budgets and backend support before retrying",
         ),
     };
+    let message = match (&error, recovery) {
+        (SchemaTestRuntimeSetupError::EventDestinations(cause), "") => cause.to_string(),
+        (SchemaTestRuntimeSetupError::ReviewAuthorityKey(_), "") => error.to_string(),
+        _ => format!("{error}; {recovery}"),
+    };
     FailureReport {
         ok: false,
         command: "test",
         diagnostics: vec![tool_diagnostic(
-            diagnostic(code, path, &format!("{error}; {recovery}")),
+            diagnostic(code, path, &message),
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         )],
@@ -7314,10 +7337,10 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             DiagnosticArtifact::PackageActivation,
             SuggestedAction::VerifyMigrationAuthority,
         ),
-        ApplyLifecycleError::EventDestinations => (
+        ApplyLifecycleError::EventDestinations(ref reason) => (
             "apply.hook-destinations.refused",
             "destinations.hooks",
-            "the event destination bindings were refused",
+            reason.as_str(),
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
@@ -8405,11 +8428,12 @@ fn runtime_config_diagnostics(error: &RuntimeConfigError) -> Vec<Diagnostic> {
         .diagnostics(None)
         .into_iter()
         .map(|reader| {
-            diagnostic(
-                &reader.code,
-                &reader.path,
-                &format!("{}; next: {}", reader.message, reader.suggested_action),
-            )
+            let message = if matches!(error, RuntimeConfigError::InvalidDeliveryKey { .. }) {
+                format!("{} {}", reader.message, reader.suggested_action)
+            } else {
+                format!("{}; next: {}", reader.message, reader.suggested_action)
+            };
+            diagnostic(&reader.code, &reader.path, &message)
         })
         .collect()
 }

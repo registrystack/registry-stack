@@ -34,7 +34,7 @@ pub(crate) enum ApplyLifecycleError {
         found: String,
     },
     Uninitialized,
-    EventDestinations,
+    EventDestinations(String),
     FieldEncryptionConfiguration,
     FieldEncryptionCustody,
     DatabaseConfiguration,
@@ -234,10 +234,18 @@ fn execute(
         identity.instance_id(),
         identity.database_id(),
     );
-    // A plan learns from the database whether the package would be the first,
-    // so it resolves database authority first; an apply is told by --initial
-    // and checks everything the package and the runtime file decide before
-    // any database authority is resolved.
+    // A plan can verify delivery bindings before opening database authority.
+    let planned_destinations = if mode == LifecycleMode::Plan {
+        Some(
+            config
+                .activate_event_destinations(target.registry())
+                .map_err(|error| ApplyLifecycleError::EventDestinations(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    // The plan reads the activation ledger to learn whether this is the
+    // first package. Apply receives that decision through --initial.
     let mut access = None;
     let initial = match mode {
         LifecycleMode::Apply => request.initial,
@@ -291,9 +299,21 @@ fn execute(
         .map(|_| config.secret_resolver())
         .transpose()
         .map_err(|_| ApplyLifecycleError::FieldEncryptionConfiguration)?;
-    let activated_event_destinations = config
-        .activate_event_destinations(target.registry())
-        .map_err(|_| ApplyLifecycleError::EventDestinations)?;
+    let (review_authorities, activated_event_destinations) = match planned_destinations {
+        Some(destinations) => (None, destinations),
+        None => {
+            let authorities = config
+                .activate_review_authorities(target.registry())
+                .map_err(ApplyLifecycleError::RuntimeConfig)?;
+            let destinations = config
+                .activate_event_destinations_with_review_authorities(
+                    target.registry(),
+                    authorities.as_deref(),
+                )
+                .map_err(|error| ApplyLifecycleError::EventDestinations(error.to_string()))?;
+            (authorities, destinations)
+        }
+    };
     let event_destination_compatibility = activated_event_destinations.compatibility_inventory();
 
     let DatabaseAccess {
@@ -342,9 +362,14 @@ fn execute(
     // Planning never activates service bindings or performs Review HTTP. The
     // Apply proof uses only already accepted immutable Request/Result reads.
     let proposal_compatibility = match (mode, current_identity.as_ref()) {
-        (LifecycleMode::Apply, Some(current)) => runtime.block_on(
-            prepare_proposal_compatibility(&config, &connection, current, &target),
-        )?,
+        (LifecycleMode::Apply, Some(current)) => {
+            runtime.block_on(prepare_proposal_compatibility(
+                &connection,
+                current,
+                &target,
+                review_authorities.as_deref(),
+            ))?
+        }
         _ => None,
     };
     let backup_evidence = backup_arguments
@@ -441,15 +466,12 @@ fn execute(
 }
 
 async fn prepare_proposal_compatibility(
-    config: &RuntimeConfig,
     connection: &ConnectionConfig,
     current: &ExpectedRegistryIdentity,
     target: &VerifiedPackage,
+    authorities: Option<&registry_breg::review_store::ReviewAuthorityRegistry>,
 ) -> Result<Option<ProposalActivationCompatibilityInventory>, ApplyLifecycleError> {
-    let Some(authorities) = config
-        .activate_review_authorities(target.registry())
-        .map_err(ApplyLifecycleError::RuntimeConfig)?
-    else {
+    let Some(authorities) = authorities else {
         if target.registry().actions().actions.iter().any(|action| matches!(
             &action.execution,
             registry_breg::model::CompiledActionExecution::Proposal { proposal }
@@ -466,7 +488,7 @@ async fn prepare_proposal_compatibility(
         &pool,
         current,
         target,
-        &authorities,
+        authorities,
         std::time::Duration::from_secs(30),
     )
     .await

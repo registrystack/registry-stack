@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify BReg signed CloudEvents and commit receiver-owned acceptance before ACK."""
+"""Verify BReg Standard Webhooks and commit receiver-owned acceptance before ACK."""
 from __future__ import annotations
 
 import argparse
@@ -7,8 +7,8 @@ import http.server
 import json
 import os
 import sqlite3
+import stat
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -22,8 +22,53 @@ class ReceiverError(RuntimeError):
 
 
 class WebhookAcceptance(Protocol):
-    def accept(self, headers: dict[str, str], body: bytes) -> None:
+    def accept(self, delivery: breg.VerifiedHookDelivery, body: bytes) -> None:
         raise NotImplementedError
+
+
+def read_hook_key(path: Path, option: str) -> bytes:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as file:
+            metadata = os.fstat(file.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_mode & 0o077
+                or metadata.st_uid != os.getuid()
+            ):
+                raise OSError
+            key = file.read(65)
+            if len(key) == 65:
+                length = max(len(key), file.seek(0, os.SEEK_END))
+                file.seek(-1, os.SEEK_END)
+                last_byte = file.read(1)
+            else:
+                length = len(key)
+                last_byte = key[-1:]
+    except OSError:
+        raise ValueError(
+            f"{option} must name an owner-only regular file containing the exact key bytes."
+        ) from None
+    if key.startswith(b"whsec_"):
+        reason = "starts with whsec_"
+    elif not 32 <= length <= 64:
+        newline = " including a trailing newline" if last_byte == b"\n" else ""
+        reason = f"contains {length} bytes{newline}, outside the 32 to 64 byte range"
+    else:
+        return key
+    raise ValueError(f"{option} {reason}. Write the exact key bytes to the file without encoding them or adding a newline.")
+
+
+def read_hook_keys(key_path: Path, previous_key_path: Path | None) -> tuple[bytes, bytes | None]:
+    key = read_hook_key(key_path, "--key")
+    previous = read_hook_key(previous_key_path, "--previous-key") if previous_key_path else None
+    if previous == key:
+        raise ValueError(
+            "--previous-key holds the same bytes as --key. To rotate, write 32 new "
+            "random bytes to the file --key names and keep the old bytes in the file "
+            "--previous-key names."
+        )
+    return key, previous
 
 
 def _verify_webhook_request(
@@ -32,100 +77,30 @@ def _verify_webhook_request(
     header_pairs: list[tuple[str, str]],
     body: bytes,
     contract: dict[str, Any],
-) -> dict[str, str]:
-    required = {
-        "accept",
-        "content-type",
-        "ce-specversion",
-        "ce-id",
-        "ce-source",
-        "ce-type",
-        "ce-time",
-        "ce-dataschema",
-        "x-registry-event-generation",
-        "x-registry-delivery-attempt",
-        "x-registry-delivery-time",
-        "idempotency-key",
-        "x-registry-signature",
-    }
-    # The shared Rust verifier authenticates the signed attributes, request
-    # target, content type, idempotency key and exact body, and checks that
-    # generation and attempt are positive decimals. The checks below apply this
-    # receiver's own contract and clock policy to the authenticated values.
+    *,
+    previous_key: bytes | None,
+) -> breg.VerifiedHookDelivery:
+    if path != "/events":
+        raise ReceiverError("the receiver refused the webhook route")
     verified = breg.verify_hook_delivery(
-        method="POST",
-        path=path,
-        headers=header_pairs,
-        body=body,
-        key=key,
-        caller_enforced_freshness=True,
+        headers=header_pairs, body=body, key=key, previous_key=previous_key,
     )
-    headers: dict[str, str] = {}
-    for name, value in header_pairs:
-        normalized_name = name.lower()
-        if normalized_name in headers:
-            raise ReceiverError("the receiver refused a repeated webhook header")
-        headers[normalized_name] = value
-    if path != "/events" or not required.issubset(headers):
-        raise ReceiverError("the receiver refused the webhook request shape")
-    if (
-        headers["accept"] != "application/json"
-        or headers["content-type"] != "application/json"
-        or headers["ce-specversion"] != "1.0"
-    ):
-        raise ReceiverError("the receiver refused the CloudEvents profile")
-    event_uuid = str(uuid.UUID(headers["ce-id"]))
-    if event_uuid != headers["ce-id"] or headers["ce-type"] != contract["event_id"]:
-        raise ReceiverError("the receiver refused the CloudEvents identity")
+    if verified["type"] != contract["event_id"]:
+        raise ReceiverError("the receiver refused the event type")
     expected_source = (
         f"urn:registrystack:registry:{contract['registry_id']}:"
         f"instance:{contract['instance_id']}"
     )
-    if headers["ce-source"] != expected_source:
-        raise ReceiverError("the receiver refused the CloudEvents source")
+    if verified["source"] != expected_source:
+        raise ReceiverError("the receiver refused the event source")
     expected_schema_prefix = (
         f"urn:breg:event-schema:{contract['registry_id']}:{contract['record_type']}:"
         f"{contract['event_id']}:sha256:"
     )
-    schema = headers["ce-dataschema"]
+    schema = verified["dataschema"]
     if not schema.startswith(expected_schema_prefix) or schema != contract.get("data_schema", schema):
-        raise ReceiverError("the receiver refused the CloudEvents data schema")
-    event_time = datetime.fromisoformat(headers["ce-time"].replace("Z", "+00:00"))
-    delivery_time = datetime.fromisoformat(
-        headers["x-registry-delivery-time"].replace("Z", "+00:00")
-    )
-    if event_time.tzinfo is None or delivery_time.tzinfo is None:
-        raise ReceiverError("the receiver refused unzoned event time")
-    if abs((datetime.now(timezone.utc) - delivery_time).total_seconds()) > 30:
-        raise ReceiverError("the receiver refused stale delivery time")
-    idempotency_key = verified["idempotency_key"]
-    if not idempotency_key.startswith("sha256:") or len(idempotency_key) != 71:
-        raise ReceiverError("the receiver refused the idempotency key")
-    if len(body) == 0 or len(body) > WEBHOOK_RECEIVER_MAX_BODY_BYTES:
-        raise ReceiverError("the receiver refused the webhook body bounds")
-    document = json.loads(body)
-    canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    if canonical != body or not isinstance(document, dict):
-        raise ReceiverError("the receiver refused a non-canonical webhook body")
-    if set(document) != {
-        "id",
-        "type",
-        "source",
-        "time",
-        "subject",
-        "dataschema",
-        "data",
-        "causation",
-    }:
-        raise ReceiverError("the receiver refused the webhook envelope shape")
-    if (
-        document["id"] != headers["ce-id"]
-        or document["type"] != headers["ce-type"]
-        or document["source"] != headers["ce-source"]
-        or document["dataschema"] != headers["ce-dataschema"]
-        or document["time"] != headers["ce-time"]
-    ):
-        raise ReceiverError("the receiver refused an envelope that contradicts its headers")
+        raise ReceiverError("the receiver refused the event data schema")
+    document = json.loads(verified["body"])
     subject = document["subject"]
     causation = document["causation"]
     if (
@@ -156,7 +131,7 @@ def _verify_webhook_request(
         or set(document["values"]) != set(contract["event_values"])
     ):
         raise ReceiverError("the receiver refused the event data contract")
-    return headers
+    return verified
 
 
 class WebhookInbox:
@@ -179,26 +154,13 @@ class WebhookInbox:
                     "source TEXT NOT NULL, event_id TEXT NOT NULL, metadata TEXT NOT NULL, "
                     "body BLOB NOT NULL, PRIMARY KEY (source, event_id))"
                 )
-                connection.execute(
-                    "CREATE TABLE IF NOT EXISTS accepted_deliveries ("
-                    "idempotency_key TEXT PRIMARY KEY, source TEXT NOT NULL, "
-                    "event_id TEXT NOT NULL, generation TEXT NOT NULL)"
-                )
         finally:
             connection.close()
 
-    def accept(self, headers: dict[str, str], body: bytes) -> None:
-        # Call only after request verification. Attempt/time/signature change on
-        # retry; generation also changes on operator replay. The event identity
-        # must still denote one work item if earlier acknowledgements were lost.
+    def accept(self, delivery: breg.VerifiedHookDelivery, body: bytes) -> None:
+        # The same event id identifies retries and operator replays.
         metadata = json.dumps(
-            {
-                name: headers[name]
-                for name in (
-                    "ce-specversion", "ce-id", "ce-source", "ce-type", "ce-time",
-                    "ce-dataschema",
-                )
-            },
+            {name: delivery[name] for name in ("id", "source", "type", "time", "dataschema")},
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -209,30 +171,14 @@ class WebhookInbox:
                 connection.execute(
                     "INSERT INTO accepted_events (source, event_id, metadata, body) "
                     "VALUES (?, ?, ?, ?) ON CONFLICT (source, event_id) DO NOTHING",
-                    (headers["ce-source"], headers["ce-id"], metadata, body),
+                    (delivery["source"], delivery["id"], metadata, body),
                 )
                 retained = connection.execute(
-                    "SELECT metadata, body FROM accepted_events WHERE source = ? AND event_id = ?",
-                    (headers["ce-source"], headers["ce-id"]),
+                    "SELECT body FROM accepted_events WHERE source = ? AND event_id = ?",
+                    (delivery["source"], delivery["id"]),
                 ).fetchone()
-                if retained != (metadata, body):
+                if retained != (body,):
                     raise ReceiverError("the receiver refused conflicting duplicate content")
-                binding = (
-                    headers["ce-source"], headers["ce-id"],
-                    headers["x-registry-event-generation"],
-                )
-                connection.execute(
-                    "INSERT INTO accepted_deliveries (idempotency_key, source, event_id, generation) "
-                    "VALUES (?, ?, ?, ?) ON CONFLICT (idempotency_key) DO NOTHING",
-                    (headers["idempotency-key"], *binding),
-                )
-                retained_binding = connection.execute(
-                    "SELECT source, event_id, generation FROM accepted_deliveries "
-                    "WHERE idempotency_key = ?",
-                    (headers["idempotency-key"],),
-                ).fetchone()
-                if retained_binding != binding:
-                    raise ReceiverError("the receiver refused conflicting delivery identity")
             # The commit completes before the HTTP receiver can acknowledge.
         finally:
             connection.close()
@@ -259,8 +205,9 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
                 raise ReceiverError("the receiver refused the webhook length")
             body = self.rfile.read(length)
             header_pairs = list(self.headers.raw_items())
-            headers = _verify_webhook_request(
-                self.server.webhook_key, self.path, header_pairs, body, self.server.contract
+            delivery = _verify_webhook_request(
+                self.server.webhook_key, self.path, header_pairs, body, self.server.contract,
+                previous_key=self.server.webhook_previous_key,
             )
         except (
             ReceiverError, breg.BaseRegistryClientError, KeyError, TypeError, ValueError,
@@ -269,7 +216,7 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
             status = 400
         else:
             try:
-                self.server.webhook_acceptance.accept(headers, body)
+                self.server.webhook_acceptance.accept(delivery, delivery["body"])
             except ReceiverError:
                 status = 409
             except (OSError, sqlite3.Error):
@@ -280,9 +227,13 @@ class WebhookReceiver(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def make_server(port: int, key: bytes, contract: dict[str, Any], acceptance: WebhookAcceptance):
+def make_server(
+    port: int, key: bytes, contract: dict[str, Any], acceptance: WebhookAcceptance,
+    *, previous_key: bytes | None = None,
+):
     server = http.server.HTTPServer(("127.0.0.1", port), WebhookReceiver)
     server.webhook_key = key
+    server.webhook_previous_key = previous_key
     server.contract = contract
     server.webhook_acceptance = acceptance
     return server
@@ -292,6 +243,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--key", type=Path, required=True)
+    parser.add_argument("--previous-key", type=Path)
     parser.add_argument("--registry-id", required=True)
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--record-type", required=True)
@@ -299,19 +251,21 @@ def main() -> None:
     parser.add_argument("--field", action="append", required=True)
     parser.add_argument("--inbox", type=Path, required=True)
     args = parser.parse_args()
-    if not args.key.is_file() or args.key.is_symlink() or args.key.stat().st_mode & 0o077:
-        parser.error("key must be an owner-only regular file")
-    key = args.key.read_bytes()
-    if len(key) < 32:
-        parser.error("key must contain at least 32 bytes")
-    parent = args.inbox.parent
-    if not parent.is_dir() or parent.is_symlink() or parent.stat().st_mode & 0o077:
-        parser.error("inbox parent must be an owner-only directory")
-    contract = {"registry_id": args.registry_id, "instance_id": args.instance_id,
-                "record_type": args.record_type, "event_id": args.event_id,
-                "event_values": args.field}
-    with make_server(args.port, key, contract, WebhookInbox(args.inbox)) as server:
-        server.serve_forever(poll_interval=0.1)
+    try:
+        key, previous_key = read_hook_keys(args.key, args.previous_key)
+    except ValueError as error:
+        parser.error(str(error))
+    else:
+        parent = args.inbox.parent
+        if not parent.is_dir() or parent.is_symlink() or parent.stat().st_mode & 0o077:
+            parser.error("inbox parent must be an owner-only directory")
+        contract = {"registry_id": args.registry_id, "instance_id": args.instance_id,
+                    "record_type": args.record_type, "event_id": args.event_id,
+                    "event_values": args.field}
+        with make_server(
+            args.port, key, contract, WebhookInbox(args.inbox), previous_key=previous_key,
+        ) as server:
+            server.serve_forever(poll_interval=0.1)
 
 
 if __name__ == "__main__":

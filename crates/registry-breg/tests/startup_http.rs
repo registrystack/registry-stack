@@ -509,6 +509,8 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
+const EVENT_DESTINATION_REASON: &str = "the configured delivery key file is unavailable";
+
 fn startup_errors() -> [StartupError; 41] {
     [
         // The wrapped cause never changes the rendered operational message: it
@@ -561,7 +563,7 @@ fn startup_errors() -> [StartupError; 41] {
         }),
         StartupError::Authentication,
         StartupError::AuthenticationClientsUnlisted,
-        StartupError::EventDestinations,
+        StartupError::EventDestinations(EVENT_DESTINATION_REASON.to_owned()),
         StartupError::RetainedHookBindings {
             retained_deliveries: 2,
         },
@@ -846,7 +848,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::AuthenticationClientsUnlisted => {
             "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
         }
-        StartupError::EventDestinations => "the Registry event destination bindings were refused",
+        StartupError::EventDestinations(_) => "the Registry event destination bindings were refused",
         StartupError::RetainedHookBindings { .. } => {
             "retained hook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
         }
@@ -1059,9 +1061,9 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
             _ => None,
         };
         let reason = match &event {
-            OperationalEvent::StoppedWithError(StartupError::AuditDestination(reason)) => {
-                Some(reason.clone())
-            }
+            OperationalEvent::StoppedWithError(
+                StartupError::AuditDestination(reason) | StartupError::EventDestinations(reason),
+            ) => Some(reason.clone()),
             OperationalEvent::StoppedWithError(StartupError::StaticKeySet(cause)) => {
                 let reason = cause.to_string();
                 assert!(

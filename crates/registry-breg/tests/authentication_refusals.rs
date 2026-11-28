@@ -327,24 +327,36 @@ fn read_request(path: &str, authorization: &[&str]) -> Request<Body> {
     request
 }
 
-fn completion_request(authorization: Option<&str>, recipient: Option<&str>) -> Request<Body> {
-    let mut request = Request::builder()
+fn completion_keys(byte: u8) -> registry_platform_crypto::delivery_signature::DeliveryKeys {
+    use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
+    DeliveryKeys::new(DeliveryKey::new(&[byte; 32]).unwrap(), None).unwrap()
+}
+
+fn completion_request(key: Option<u8>, recipient: Option<&str>, offset: i64) -> Request<Body> {
+    let event = "00000000-0000-4000-8000-000000000001";
+    let timestamp = (chrono::Utc::now().timestamp() + offset) as u64;
+    let body = b"{}";
+    let mut builder = Request::builder()
         .method("POST")
         .uri("/v1/review-completions")
-        .body(Body::empty())
-        .expect("completion request");
-    if let Some(value) = authorization {
-        request
-            .headers_mut()
-            .insert(AUTHORIZATION, HeaderValue::from_str(value).expect("header"));
+        .header("webhook-id", event)
+        .header("webhook-timestamp", timestamp.to_string());
+    if let Some(recipient) = recipient {
+        builder = builder.header("registry-recipient-binding", recipient);
     }
-    if let Some(value) = recipient {
-        request.headers_mut().insert(
-            "registry-recipient-binding",
-            HeaderValue::from_str(value).expect("header"),
-        );
+    if let Some(key) = key {
+        let signature = registry_platform_crypto::delivery_signature::sign(
+            &completion_keys(key),
+            event,
+            timestamp,
+            body,
+        )
+        .unwrap();
+        builder = builder.header("webhook-signature", signature);
     }
-    request
+    builder
+        .body(Body::from(body.as_slice()))
+        .expect("completion request")
 }
 
 /// The review-completion router: a receiver with one authority and a pool
@@ -402,7 +414,7 @@ fn completion_app() -> axum::Router {
             "producer-profile".to_owned(),
             "producer-a".to_owned(),
             7,
-            Some(Zeroizing::new("completion-secret".to_owned())),
+            Some(completion_keys(b'k')),
             Some("registry-a".to_owned()),
         )
         .expect("review authority is valid"),
@@ -817,47 +829,51 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
     );
 
     let completions = completion_app();
+    let mut repeated = completion_request(Some(b'k'), Some("registry-a"), 0);
+    repeated.headers_mut().append(
+        "webhook-signature",
+        HeaderValue::from_static("v1,canary-second-header"),
+    );
+    let mut malformed = completion_request(Some(b'k'), Some("registry-a"), 0);
+    malformed.headers_mut().insert(
+        "webhook-timestamp",
+        HeaderValue::from_static("malformed-timestamp-canary"),
+    );
     for (name, check, request) in [
         (
-            "review-completion-without-authorization",
-            "credential-missing",
-            completion_request(None, Some("registry-a")),
+            "review-completion-without-signature",
+            "delivery-signature",
+            completion_request(None, Some("registry-a"), 0),
         ),
         (
-            "review-completion-with-two-authorization-headers",
-            "credential-malformed",
-            {
-                let mut request =
-                    completion_request(Some("Bearer completion-secret"), Some("registry-a"));
-                request.headers_mut().append(
-                    AUTHORIZATION,
-                    HeaderValue::from_static("Bearer canary-second-header"),
-                );
-                request
-            },
-        ),
-        (
-            "review-completion-with-an-unparseable-bearer",
-            "credential-malformed",
-            completion_request(Some("Bearer  completion-secret"), Some("registry-a")),
+            "review-completion-with-two-signatures",
+            "delivery-signature",
+            repeated,
         ),
         (
             "review-completion-without-recipient",
-            "credential-missing",
-            completion_request(Some("Bearer completion-secret"), None),
+            "delivery-signature",
+            completion_request(Some(b'k'), None, 0),
         ),
         (
-            "review-completion-wrong-credential",
-            "shared-secret",
-            completion_request(Some("Bearer invalid-credential-canary"), Some("registry-a")),
+            "review-completion-wrong-key",
+            "delivery-signature",
+            completion_request(Some(b'x'), Some("registry-a"), 0),
         ),
         (
             "review-completion-wrong-recipient",
-            "shared-secret",
-            completion_request(
-                Some("Bearer completion-secret"),
-                Some("wrong-recipient-canary"),
-            ),
+            "delivery-signature",
+            completion_request(Some(b'k'), Some("wrong-recipient-canary"), 0),
+        ),
+        (
+            "review-completion-expired-signature",
+            "delivery-freshness",
+            completion_request(Some(b'k'), Some("registry-a"), -301),
+        ),
+        (
+            "review-completion-malformed-timestamp",
+            "delivery-freshness",
+            malformed,
         ),
     ] {
         observed.push(observe(name, check, &completions, request).await);
@@ -931,13 +947,14 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
             "canary",
             PRINCIPAL,
             "agent-client",
-            "completion-secret",
+            "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             "registry-a",
             "Bearer",
         ] {
             assert!(
-                !case.log_text.contains(canary),
-                "{}: the log exposed {canary}",
+                !case.log_text.contains(canary) && !case.answer.to_string().contains(canary),
+                "{}: the refusal exposed a canary value",
                 case.name
             );
         }

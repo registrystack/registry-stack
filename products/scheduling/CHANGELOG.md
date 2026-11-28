@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- BREAKING: Scheduling signs every reminder delivery with Standard Webhooks.
+  The POST carries `accept`, `content-type`, `webhook-id`,
+  `webhook-timestamp` and `webhook-signature`. `webhook-id` is the outbox id and
+  stays the same on every retry. The timestamp is the Unix time at which
+  Scheduling leases the attempt. The signature covers the id, the timestamp and
+  the exact body bytes. A receiver checks a 300-second window in either
+  direction. Hook deliveries use the same signature.
+- BREAKING: `destinations.reminders.hmacSha256KeyRef` is required, and
+  `bearerTokenRef` is removed. `destinations.reminders.purposeUrls` is
+  replaced by `destinations.reminders.purposes.<purpose>`, which takes its own
+  `url` and `hmacSha256KeyRef` for `confirmation`, `change`, `cancellation` or
+  `reminder`. A purpose URL keeps the fallback URL's scheme, host and port.
+  Startup and `schedulingctl plan` refuse `bearerTokenRef` and `purposeUrls`
+  with the replacement.
+- Each key is 32 to 64 exact bytes. Startup and `schedulingctl plan` refuse a
+  key that is unavailable, too long, or starts with `whsec_`, and two reminder
+  or hook destinations that share key bytes. The refusal names both full
+  paths and never a key byte.
+- To rotate, set `previousHmacSha256KeyRef` on the reminder destination, a
+  purpose or a hook destination. Scheduling signs with both keys, current
+  first. A previous key equal to the current key is refused.
+
 - A migration adds a posture to the activation ledger. Every activation
   records production until the runtime declares its posture, and the
   activation objects in `schedulingctl` reports carry it as `posture`.

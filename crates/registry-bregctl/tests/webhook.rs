@@ -117,7 +117,7 @@ where
 }
 
 #[test]
-fn sample_is_an_exact_deterministic_cloudevents_request_without_deployment_authority() {
+fn sample_is_an_exact_deterministic_standard_webhooks_request_without_deployment_authority() {
     let project = TestProject::create();
     let (status, first, stderr) = run([
         OsStr::new("bregctl"),
@@ -159,32 +159,17 @@ fn sample_is_an_exact_deterministic_cloudevents_request_without_deployment_autho
     assert_eq!(
         headers.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from([
-            "Accept",
-            "Content-Type",
-            "Idempotency-Key",
-            "X-Registry-Delivery-Attempt",
-            "X-Registry-Delivery-Time",
-            "X-Registry-Event-Generation",
-            "X-Registry-Signature",
-            "ce-dataschema",
-            "ce-id",
-            "ce-source",
-            "ce-specversion",
-            "ce-time",
-            "ce-type",
+            "accept",
+            "content-type",
+            "webhook-id",
+            "webhook-timestamp",
+            "webhook-signature",
         ])
     );
-    assert_eq!(headers["ce-specversion"], "1.0");
-    assert_eq!(headers["ce-type"], EVENT_ID);
-    assert_eq!(
-        headers["ce-source"],
-        "urn:registrystack:registry:hook-sample:instance:<configured-instance>"
-    );
-    assert_eq!(headers["X-Registry-Signature"], "v1=<computed-at-delivery>");
-    assert!(headers["ce-dataschema"]
-        .as_str()
-        .expect("data schema is text")
-        .starts_with("urn:breg:event-schema:hook-sample:record:record-created-v1:sha256:"));
+    assert_eq!(headers["accept"], "application/json");
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(headers["webhook-timestamp"], "1767225600");
+    assert_eq!(headers["webhook-signature"], "v1,<computed-at-delivery>");
     let body = &report["request"]["body"];
     assert_eq!(
         body.as_object()
@@ -203,11 +188,17 @@ fn sample_is_an_exact_deterministic_cloudevents_request_without_deployment_autho
             "type",
         ])
     );
-    assert_eq!(body["id"], headers["ce-id"]);
-    assert_eq!(body["type"], headers["ce-type"]);
-    assert_eq!(body["source"], headers["ce-source"]);
-    assert_eq!(body["time"], headers["ce-time"]);
-    assert_eq!(body["dataschema"], headers["ce-dataschema"]);
+    assert_eq!(body["id"], headers["webhook-id"]);
+    assert_eq!(body["type"], EVENT_ID);
+    assert_eq!(
+        body["source"],
+        "urn:registrystack:registry:hook-sample:instance:<configured-instance>"
+    );
+    assert_eq!(body["time"], "2026-01-01T00:00:00Z");
+    assert!(body["dataschema"]
+        .as_str()
+        .expect("data schema is text")
+        .starts_with("urn:breg:event-schema:hook-sample:record:record-created-v1:sha256:"));
     assert_eq!(body["subject"]["recordRevision"], 1);
     assert_eq!(
         body["causation"],

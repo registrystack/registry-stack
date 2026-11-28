@@ -292,7 +292,7 @@ impl ProblemCode {
                 "The record attachment slot already holds a file and is write-once."
             }
             Self::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
-            Self::AuthenticationRefused => "The bearer credential is missing or refused.",
+            Self::AuthenticationRefused => "The bearer token or delivery signature was not accepted.",
             Self::ExternalViewIncomplete => {
                 "The external view's indexed coverage is incomplete for this request."
             }

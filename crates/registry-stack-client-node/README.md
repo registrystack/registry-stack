@@ -125,15 +125,14 @@ attempt under the key was answered and may have committed: reconcile that
 attempt before choosing a new key.
 See [Unknown outcomes](https://docs.registrystack.org/reference/client-api/#unknown-outcomes-and-the-same-key-retry).
 
-`breg.verifyHookDelivery({ method, path, headers, body, key })` authenticates
-the exact bytes of one Version 1 hook delivery. The result returns
-`deliveryTime` and `idempotencyKey`. The verifier refuses a delivery time more
-than 300 seconds from the receiver clock (code `stale-delivery`); `maxSkewSeconds`
-(1 to 3600) names another window and `callerEnforcedFreshness: true` leaves the
-bound to the receiver. The receiver must deduplicate once-only effects on authenticated `source` plus `id`, or on an
-application business key. See
+`breg.verifyHookDelivery({ headers, body, key, previousKey })` authenticates a
+Standard Webhooks delivery and returns its event attributes, signed Unix seconds
+as a decimal string, and exact body. The optional previous key supports rotation.
+The default freshness window is 300 seconds in either direction. Choose
+`maxSkewSeconds` (1 to 3600) for a custom window or `callerEnforcedFreshness: true`
+to enforce the window yourself. Deduplicate on authenticated `source` and `id`.
 [Verify a hook delivery](https://docs.registrystack.org/reference/client-api/#verify-a-hook-delivery)
-for a receiver example.
+shows a receiver example.
 
 ## Versioning
 

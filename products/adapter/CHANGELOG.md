@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- BREAKING: an Adapter job sends each Coordinator event with Standard
+  Webhooks. The POST carries `accept`, `content-type`, `webhook-id`,
+  `webhook-timestamp` and `webhook-signature`. The signature covers the
+  envelope id, the send time in Unix seconds and the exact body bytes. A retry
+  keeps the envelope id as `webhook-id` and signs with the time of that send.
+  The Version 1 headers are no longer sent.
+- BREAKING: in the job runtime file, `destinations.<binding>.signingKeyRef` is
+  now `hmacSha256KeyRef`. A job that declares a revised receiver also sets
+  `destinations.<binding>.revisedReceiver.hmacSha256KeyRef`, and a job that
+  declares none omits `revisedReceiver`. Startup refuses `signingKeyRef` with
+  the replacement, a missing or extra `revisedReceiver`, and a key that is
+  unavailable, shorter than 32 bytes, longer than 64 bytes or starts with
+  `whsec_`. It also refuses the same key bytes in two triggers, including
+  previous keys. Each refusal names the path and never a key byte.
+- To rotate a trigger key, set `previousHmacSha256KeyRef` beside its
+  `hmacSha256KeyRef`. The job sends two `v1,<base64>` entries, current first.
+  Remove the previous reference after Coordinator holds the new key.
+
 - A secret file the Adapter or an Adapter job refuses names the failed
   check and its fix. A link below the secret root now loads, so the hint
   that a link reads as a missing file is gone.

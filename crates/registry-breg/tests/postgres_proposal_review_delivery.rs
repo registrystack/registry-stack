@@ -8,6 +8,7 @@ mod client_http;
 #[allow(dead_code)]
 mod postgres_harness;
 
+use self::COMPLETION_KEY as INCOMING_TOKEN;
 use axum::{
     extract::{Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
@@ -30,6 +31,9 @@ use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegRecordFormat,
 };
+use registry_platform_crypto::delivery_signature::{
+    sign, DeliveryKey, DeliveryKeys, SignedContent,
+};
 use registry_platform_testing::CapturedDiagnosticLogs;
 use registry_review_client::{
     BearerToken, PolicyBinding, ReviewCancelRequest, ReviewCancelResponse, ReviewClient,
@@ -48,14 +52,50 @@ use std::{
 use tokio::sync::Notify;
 use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
+#[cfg(feature = "tooling")]
 use zeroize::Zeroizing;
 
 const AUTHORITY: &str = "private-review-authority-canary";
 const PRODUCER: &str = "proposal-producer";
 const OUTGOING_TOKEN: &str = "synthetic-outgoing-review-token";
-const INCOMING_TOKEN: &str = "synthetic-incoming-completion-token";
+const COMPLETION_KEY: &str = "synthetic-incoming-completion-key-canary";
+const PREVIOUS_COMPLETION_KEY: &[u8] = &[2; 32];
+const OTHER_COMPLETION_KEY: &[u8] = &[3; 32];
 const RECIPIENT: &str = "private-completion-recipient-canary";
 const TRACE: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+
+fn completion_keys(current: &[u8], previous: Option<&[u8]>) -> DeliveryKeys {
+    DeliveryKeys::new(
+        DeliveryKey::new(current).unwrap(),
+        previous.map(|key| DeliveryKey::new(key).unwrap()),
+    )
+    .unwrap()
+}
+
+fn verify_completion(
+    receiver: &ReviewCompletionReceiver,
+    keys: &DeliveryKeys,
+    recipient: &str,
+    completion: &ReviewCompletion,
+) -> Result<String, registry_platform_authcommon::FailedCheck> {
+    let now = std::time::SystemTime::now();
+    let timestamp = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let id = completion.event_id.to_string();
+    let body = serde_json::to_vec(completion).unwrap();
+    let signature = sign(keys, &id, timestamp, &body).unwrap();
+    receiver
+        .verify_completion(
+            recipient,
+            SignedContent {
+                id: &id,
+                timestamp: &timestamp.to_string(),
+                signature: &signature,
+                body: &body,
+            },
+            now,
+        )
+        .map(|(authority, _)| authority.to_owned())
+}
 
 struct Token;
 #[async_trait::async_trait]
@@ -151,21 +191,31 @@ impl Authority {
         let client = Arc::new(
             ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap(),
         );
-        let authority = Arc::new(
-            ReviewAuthorityClient::new(
-                AUTHORITY.into(),
-                ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap(),
-                Arc::new(Token),
-                "producer".into(),
-                PRODUCER.into(),
-                7,
-                Some(Zeroizing::new(INCOMING_TOKEN.into())),
-                Some(RECIPIENT.into()),
+        let make_authority = |id: &str, recipient: &str, keys| {
+            Arc::new(
+                ReviewAuthorityClient::new(
+                    id.into(),
+                    ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap(),
+                    Arc::new(Token),
+                    "producer".into(),
+                    PRODUCER.into(),
+                    7,
+                    Some(keys),
+                    Some(recipient.into()),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        );
+        };
         let registry = Arc::new(
-            ReviewAuthorityRegistry::new(BTreeMap::from([(AUTHORITY.into(), authority)])).unwrap(),
+            ReviewAuthorityRegistry::new(BTreeMap::from([(
+                AUTHORITY.into(),
+                make_authority(
+                    AUTHORITY,
+                    RECIPIENT,
+                    completion_keys(COMPLETION_KEY.as_bytes(), Some(PREVIOUS_COMPLETION_KEY)),
+                ),
+            )]))
+            .unwrap(),
         );
         Self {
             registry,
@@ -1148,7 +1198,7 @@ async fn submission_logs_identify_first_delivery_retry_and_settlement_without_va
     assert_eq!(job(&fixture, id).await["state"], "accepted");
     for canary in [
         OUTGOING_TOKEN,
-        INCOMING_TOKEN,
+        COMPLETION_KEY,
         "delivery-log-canary",
         &id.to_string(),
     ] {
@@ -1173,12 +1223,20 @@ async fn native_completion_inbox_deduplicates_refuses_substitution_correlates_an
         completed_at: result.completed_at,
     };
     let receiver = ReviewCompletionReceiver::new(fixture.pool.clone(), authority.registry.clone());
-    for (token, recipient) in [
-        (OUTGOING_TOKEN, RECIPIENT),
-        (INCOMING_TOKEN, "wrong-recipient"),
-        ("wrong-token", RECIPIENT),
+    for (key, recipient) in [
+        (&[9u8; 32][..], RECIPIENT),
+        (COMPLETION_KEY.as_bytes(), "wrong-recipient"),
+        (OTHER_COMPLETION_KEY, RECIPIENT),
     ] {
-        assert!(receiver.authority(token, recipient).is_none());
+        assert_eq!(
+            verify_completion(
+                &receiver,
+                &completion_keys(key, None),
+                recipient,
+                &completion
+            ),
+            Err(registry_platform_authcommon::FailedCheck::DeliverySignature)
+        );
     }
     assert_eq!(
         fixture
@@ -1193,7 +1251,13 @@ async fn native_completion_inbox_deduplicates_refuses_substitution_correlates_an
             .get::<_, i64>(0),
         0
     );
-    let (matched, _) = receiver.authority(INCOMING_TOKEN, RECIPIENT).unwrap();
+    let matched = verify_completion(
+        &receiver,
+        &completion_keys(COMPLETION_KEY.as_bytes(), None),
+        RECIPIENT,
+        &completion,
+    )
+    .unwrap();
     assert_eq!(matched, AUTHORITY);
     receiver.receive(&matched, &completion).await.unwrap();
     receiver.receive(&matched, &completion).await.unwrap();
@@ -1217,7 +1281,7 @@ async fn native_completion_inbox_deduplicates_refuses_substitution_correlates_an
         for canary in [
             AUTHORITY,
             RECIPIENT,
-            INCOMING_TOKEN,
+            COMPLETION_KEY,
             OUTGOING_TOKEN,
             &completion.event_id.to_string(),
             &completion.request_id.to_string(),
@@ -1294,7 +1358,7 @@ async fn native_completion_inbox_deduplicates_refuses_substitution_correlates_an
     for canary in [
         AUTHORITY,
         RECIPIENT,
-        INCOMING_TOKEN,
+        COMPLETION_KEY,
         OUTGOING_TOKEN,
         &completion.event_id.to_string(),
         &completion.request_id.to_string(),
@@ -1316,6 +1380,31 @@ async fn native_completion_inbox_deduplicates_refuses_substitution_correlates_an
         0,
         "inbox/retention is local"
     );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_completion_signed_during_rotation_is_accepted_once() {
+    let authority = Authority::start(false, true).await;
+    let fixture = fixture(&authority).await;
+    let receiver = ReviewCompletionReceiver::new(fixture.pool.clone(), authority.registry.clone());
+    let completion = ReviewCompletion {
+        event_type: ReviewCompletionType::ReviewCompleted,
+        event_id: Uuid::new_v4(),
+        request_id: Uuid::new_v4(),
+        result_id: Uuid::new_v4(),
+        completed_at: chrono::Utc::now(),
+    };
+    let keys = completion_keys(COMPLETION_KEY.as_bytes(), Some(PREVIOUS_COMPLETION_KEY));
+    for _ in 0..2 {
+        let matched = verify_completion(&receiver, &keys, RECIPIENT, &completion).unwrap();
+        receiver.receive(&matched, &completion).await.unwrap();
+    }
+    let row = fixture.database.admin.query_one(
+        "SELECT count(*) FROM registry_internal.registry_proposal_review_completions WHERE event_id=$1",
+        &[&completion.event_id],
+    ).await.unwrap();
+    assert_eq!(row.get::<_, i64>(0), 1);
     fixture.finish().await;
 }
 
@@ -2026,7 +2115,7 @@ async fn native_submission_remote_refusal_warns_the_operator_without_values() {
     );
     for canary in [
         OUTGOING_TOKEN,
-        INCOMING_TOKEN,
+        COMPLETION_KEY,
         RECIPIENT,
         "The producer is not allowed.",
         &id.to_string(),

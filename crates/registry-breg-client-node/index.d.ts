@@ -376,11 +376,10 @@ export declare function eventRecordView(argumentsJson: string): string
 
 /** Exact BReg hook request supplied by a receiver. */
 export interface HookDeliveryInput {
-  method: string
-  path: string
   headers: Record<string, string>
   body: Buffer
   key: Buffer
+  previousKey?: Buffer
   /**
    * Window around the receiver clock, in whole seconds from 1 to 3600.
    * With neither this nor `callerEnforcedFreshness`, the window is 300
@@ -433,19 +432,16 @@ export interface RawOutcome {
 /** Authenticated BReg hook metadata and exact body. */
 export interface VerifiedHookDelivery {
   id: string
+  timestamp: string
   source: string
   type: string
   time: string
   dataschema: string
-  generation: string
-  attempt: string
-  deliveryTime: string
-  idempotencyKey: string
   body: Buffer
 }
 
 /**
- * Verify a BReg Version 1 hook signature. The delivery time must fall within
+ * Verify a BReg Standard Webhooks delivery. The delivery time must fall within
  * 300 seconds of the receiver clock unless `maxSkewSeconds` or
  * `callerEnforcedFreshness` says otherwise. Deduplication stays with the
  * caller.

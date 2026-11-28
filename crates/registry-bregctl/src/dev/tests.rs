@@ -3572,6 +3572,69 @@ fn start_without_binaries(project: &Path) -> Result<Value> {
 }
 
 #[test]
+fn reclaimed_successor_with_missing_inbox_key_starts_a_fresh_session() {
+    let (_temporary, state) = retained_inbox_session(2);
+    let root = state.root();
+    fs::remove_file(config::inbox_key_path(&root, "local-hook")).unwrap();
+    let refused = start_without_binaries(&state.project)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(refused, "This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
+
+    // A successful empty Docker listing models a manually removed container.
+    stop(&state.project, true, Some(Path::new("/usr/bin/true"))).unwrap();
+    let refusal = start_without_binaries(&state.project).unwrap_err();
+    assert!(!refusal.to_string().contains("stop --remove"), "{refusal}");
+    let fresh = read_state(&root).unwrap();
+    assert_eq!(fresh.sequence, 1);
+    assert_ne!(fresh.owner, state.owner);
+    events::check_destination_keys(&root).unwrap();
+}
+
+#[test]
+fn stop_remove_reclaims_an_uncompilable_captured_inbox_project() {
+    let (_temporary, state) = retained_inbox_session(1);
+    let root = state.root();
+    fs::write(root.join("project/registry.yaml"), "not a registry").unwrap();
+    let report = stop(&state.project, true, Some(Path::new("/usr/bin/true"))).unwrap();
+    assert_eq!(report["status"], "stopped");
+    let removed = read_state(&root).unwrap();
+    assert!(removed.container_id.is_none());
+    assert!(!removed.activated);
+    let refusal = start_without_binaries(&state.project).unwrap_err();
+    assert!(
+        !refusal.to_string().contains("no longer compiles"),
+        "{refusal}"
+    );
+    let fresh = read_state(&root).unwrap();
+    assert_ne!(fresh.owner, state.owner);
+    events::check_destination_keys(&root).unwrap();
+}
+
+fn retained_inbox_session(sequence: u64) -> (tempfile::TempDir, State) {
+    let (temporary, project) = write_retained_project();
+    let file = project.join("registry.yaml");
+    let mut source: Value = serde_norway::from_slice(&fs::read(&file).unwrap()).unwrap();
+    source["recordTypes"]["record"]["hooks"] = json!([
+        {"phase":"after","id":"record-created-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"local-hook"}}
+    ]);
+    fs::write(&file, serde_norway::to_string(&source).unwrap()).unwrap();
+    let mut state = retained_session(&project, Some("c".repeat(64)));
+    let ports = unused_ports();
+    state.breg_port = ports[0];
+    state.issuer_port = ports[1];
+    state.database_port = ports[2];
+    state.webhook_port = Some(receiver_port(&state).unwrap());
+    state.sequence = sequence;
+    if sequence > 1 {
+        state.baseline_runtime = Some(state.root().join("baseline-1/runtime.yaml"));
+    }
+    state.save().unwrap();
+    config::repair_inbox(&state.root(), state.webhook_port.unwrap()).unwrap();
+    (temporary, state)
+}
+
+#[test]
 fn a_first_start_reads_the_projects_dev_clients_without_a_flag() {
     let (_temporary, project) = write_retained_project();
     let expected = fs::canonicalize(project.join("dev-clients.yaml")).unwrap();
@@ -4164,24 +4227,25 @@ fn export_client_reuses_readable_nonexecutable_credentials_only() {
 }
 
 #[test]
-fn removed_successor_database_is_refused_before_any_prerequisite_or_recreation() {
+fn removed_successor_database_restarts_from_an_initial_package() {
     let (_temporary, project) = write_retained_project();
     let mut state = retained_session(&project, Some("a".repeat(64)));
+    let ports = unused_ports();
+    state.breg_port = ports[0];
+    state.issuer_port = ports[1];
+    state.database_port = ports[2];
     state.sequence = 2;
     state.baseline_runtime = Some(state.root().join("baseline-1/runtime.yaml"));
     reclaimed(&mut state);
     state.save().unwrap();
-    let before = private::read(&state.root().join("state.json"), MAX_BYTES).unwrap();
+
     let error = start_without_binaries(&project).unwrap_err().to_string();
-    assert!(
-        error.contains("successor database was explicitly removed"),
-        "{error}"
-    );
-    assert_eq!(
-        private::read(&state.root().join("state.json"), MAX_BYTES).unwrap(),
-        before
-    );
-    assert!(read_state(&state.root()).unwrap().container_id.is_none());
+    assert!(!error.contains("successor database"), "{error}");
+    let fresh = read_state(&state.root()).unwrap();
+    assert_ne!(fresh.owner, state.owner);
+    assert_eq!(fresh.sequence, 1);
+    assert!(fresh.baseline_runtime.is_none());
+    assert!(fresh.container_id.is_none());
 }
 
 #[test]
@@ -4309,7 +4373,11 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
         let value: Value =
             serde_norway::from_slice(&fs::read(root.join(filename)).unwrap()).unwrap();
         assert_eq!(value["destinations"]["hooks"].as_object().unwrap().len(), 2);
-        for binding in value["destinations"]["hooks"].as_object().unwrap().values() {
+        for (id, binding) in value["destinations"]["hooks"].as_object().unwrap() {
+            assert_eq!(
+                binding["hmacSha256KeyRef"],
+                format!("secret:file/inbox-key-{id}")
+            );
             assert_eq!(binding["origin"], "http://127.0.0.1:18996");
             assert_eq!(binding["networkProfile"], "loopback-development-http");
             assert_eq!(binding["classificationCeiling"], "internal");
@@ -4320,6 +4388,16 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
             );
         }
     }
+    let missing = config::inbox_key_path(&root, "second-hook");
+    fs::remove_file(&missing).unwrap();
+    let error = events::check_destination_keys(&root).unwrap_err();
+    assert_eq!(error.to_string(), "This development session predates per-destination keys. Run bregctl dev stop --remove and start again.");
+    config::repair_inbox(&root, 18996).unwrap();
+    events::check_destination_keys(&root).unwrap();
+    assert_eq!(
+        fs::metadata(missing).unwrap().len(),
+        config::INBOX_KEY_BYTES
+    );
     private::validate_tree(&root).unwrap();
     let saved = read_state(&root).unwrap();
     assert_eq!(saved.webhook_port, Some(18996));
@@ -4327,6 +4405,43 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
     invalid.webhook_port = Some(invalid.breg_port);
     invalid.save().unwrap();
     assert!(read_state(&root).is_err());
+}
+
+#[test]
+fn a_retained_session_gains_a_key_for_a_new_destination_and_keeps_existing_keys() {
+    let (_project_temp, project) = write_retained_project();
+    let module = project.join("registry.yaml");
+    let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
+    source["recordTypes"]["record"]["hooks"] = json!([
+        {"phase":"after","id":"record-created-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"local-hook"}}
+    ]);
+    fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
+    let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let clients = config::clients("dev-clients.yaml", &bytes).unwrap();
+    let captured = capture(&project, &bytes).unwrap();
+    let (_temp, mut state, _, _) = fixture();
+    state.webhook_port = Some(18996);
+    let root = state.root();
+    initialize(&root, &state, &clients, &captured.files).unwrap();
+    let original = config::inbox_key_path(&root, "local-hook");
+    let bytes = private::read(&original, 64).unwrap();
+    let added = config::inbox_key_path(&root, "second-hook");
+    assert!(!added.exists());
+    source["recordTypes"]["record"]["hooks"].as_array_mut().unwrap().push(json!({
+        "phase":"after","id":"record-second-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"second-hook"}
+    }));
+    private::replace(
+        &root.join("project/registry.yaml"),
+        serde_norway::to_string(&source).unwrap().as_bytes(),
+    )
+    .unwrap();
+    private::directory(&root.join("build")).unwrap();
+    private::directory(&root.join("build/package")).unwrap();
+    config::runtime(&root, &state, &clients, false).unwrap();
+    assert_eq!(private::read(&original, 64).unwrap(), bytes);
+    let new_key = private::read(&added, 64).unwrap();
+    assert_eq!(new_key.len(), 43);
+    assert_ne!(new_key, bytes);
 }
 
 #[test]
@@ -4373,6 +4488,31 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
         serde_norway::from_slice(&fs::read(root.join("runtime-test.yaml")).unwrap()).unwrap();
     assert_eq!(runtime["destinations"]["hooks"], bindings);
     assert!(config::external_event_destinations(&compiled, &BTreeMap::new()).is_err());
+    let validate = |clients: &config::Clients| {
+        config::clients(
+            "dev-clients.yaml",
+            serde_norway::to_string(clients).unwrap().as_bytes(),
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    let distinct = clients.destinations.hooks["openfn"].clone();
+    clients
+        .destinations
+        .hooks
+        .insert("second".to_owned(), distinct);
+    assert_eq!(validate(&clients), "destinations.hooks.openfn.hmacSha256KeyRef and destinations.hooks.second.hmacSha256KeyRef resolve to the same key bytes. Give destinations.hooks.second.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there.");
+    clients
+        .destinations
+        .hooks
+        .get_mut("second")
+        .unwrap()
+        .hmac_sha256_key_ref = file_secret(&secrets, "short-event-key", &[5; 31]);
+    let error = validate(&clients);
+    assert!(
+        error.contains("destinations.hooks.second.hmacSha256KeyRef has 31 bytes"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -4491,11 +4631,7 @@ fn local_event_destinations_refuse_hmac_key_bytes_the_runtime_cannot_load() {
     let mut clients = config::clients("dev-clients.yaml", &bytes).unwrap();
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
     let secrets = secret_root(&project, &mut clients);
-    // The runtime resolves this key through the shared secret resolver, which
-    // refuses any value carrying a NUL byte. A randomly generated key holds one
-    // about one time in eight. The clients file resolves its reference through
-    // the same resolver, so it refuses the value before a start rather than
-    // leaving it to a failed one.
+    // A binary key may contain a NUL byte. Both readers use the exact bytes.
     let mut material = b"synthetic-local-event-key-for-tes".to_vec();
     material[8] = 0;
     let key = file_secret(&secrets, "event-key", &material);
@@ -4507,6 +4643,17 @@ fn local_event_destinations_refuse_hmac_key_bytes_the_runtime_cannot_load() {
             hmac_sha256_key_ref: key,
         },
     );
+    config::clients(
+        "dev-clients.yaml",
+        &serde_norway::to_string(&clients).unwrap().into_bytes(),
+    )
+    .expect("a NUL byte is valid in a binary signing key");
+
+    private::replace(
+        &secrets.join("event-key"),
+        b"whsec_synthetic-signing-key-canary",
+    )
+    .unwrap();
     let refusal = config::clients(
         "dev-clients.yaml",
         &serde_norway::to_string(&clients).unwrap().into_bytes(),
@@ -4514,21 +4661,10 @@ fn local_event_destinations_refuse_hmac_key_bytes_the_runtime_cannot_load() {
     .unwrap_err()
     .to_string();
     assert!(
-        refusal.contains("destinations.hooks.openfn.hmacSha256KeyRef could not be resolved")
-            && refusal.contains("without NUL bytes"),
+        refusal.contains("destinations.hooks.openfn.hmacSha256KeyRef")
+            && refusal.contains("Supply the exact key bytes without the whsec_ encoding."),
         "{refusal}"
     );
-
-    private::replace(
-        &secrets.join("event-key"),
-        b"synthetic-local-event-key-for-test",
-    )
-    .unwrap();
-    config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&clients).unwrap().into_bytes(),
-    )
-    .unwrap();
 }
 
 #[test]
@@ -4698,8 +4834,8 @@ fn local_review_authority_uses_refreshing_logical_client_without_exposing_creden
     let secrets = secret_root(&state.project, &mut clients);
     let completion = file_secret(
         &secrets,
-        "review-completion-token",
-        b"synthetic-completion-token",
+        "review-completion-key",
+        b"synthetic-completion-key-32-bytes",
     );
     clients.review_authorities.insert(
         "casework-a".into(),
@@ -4709,8 +4845,11 @@ fn local_review_authority_uses_refreshing_logical_client_without_exposing_creden
             producer_id: "registry-producer".into(),
             recovery_days: 7,
             client: "operator".into(),
-            completion_token_ref: Some(completion.clone()),
-            completion_recipient: Some("registry-breg".into()),
+            completion: Some(config::LocalReviewCompletion {
+                recipient_binding: "registry-breg".into(),
+                hmac_sha256_key_ref: completion.clone(),
+                previous_hmac_sha256_key_ref: None,
+            }),
         },
     );
     config::clients(
@@ -4741,10 +4880,10 @@ fn local_review_authority_uses_refreshing_logical_client_without_exposing_creden
         "secret:file/review-authority-casework-a-client-assertion-key"
     );
     assert_eq!(
-        authority["completionTokenRef"],
-        "secret:file/review-completion-casework-a-token"
+        authority["completion"]["hmacSha256KeyRef"],
+        "secret:file/review-completion-casework-a-key"
     );
-    assert_eq!(authority["completionRecipient"], "registry-breg");
+    assert_eq!(authority["completion"]["recipientBinding"], "registry-breg");
     assert!(authority.get("tokenRef").is_none());
 
     assert_eq!(
@@ -4756,26 +4895,25 @@ fn local_review_authority_uses_refreshing_logical_client_without_exposing_creden
         fs::read(root.join("credentials/operator/assertion-key.jwk")).unwrap()
     );
     assert_eq!(
-        fs::read(root.join("secrets/review-completion-casework-a-token")).unwrap(),
-        b"synthetic-completion-token"
+        fs::read(root.join("secrets/review-completion-casework-a-key")).unwrap(),
+        b"synthetic-completion-key-32-bytes"
     );
     let rendered = String::from_utf8(runtime_bytes).unwrap();
-    assert!(!rendered.contains("synthetic-completion-token"));
+    assert!(!rendered.contains("synthetic-completion-key-32-bytes"));
     assert!(!rendered.contains(completion.as_str()));
     registry_breg::runtime_config::load_runtime_config(&root.join("runtime-test.yaml")).unwrap();
 }
 
 #[test]
 fn local_review_authorities_are_closed_and_bounded() {
-    let (_temp, state, mut clients, _files) = fixture();
+    let (_temp, _state, mut clients, _files) = fixture();
     let binding = config::LocalReviewAuthority {
         endpoint: "http://127.0.0.1:18096/".into(),
         profile: "integration-requester".into(),
         producer_id: "registry-producer".into(),
         recovery_days: 7,
         client: "operator".into(),
-        completion_token_ref: None,
-        completion_recipient: None,
+        completion: None,
     };
     clients
         .review_authorities
@@ -4849,25 +4987,28 @@ fn local_review_authorities_are_closed_and_bounded() {
     )
     .is_err());
 
-    let secrets = secret_root(&state.project, &mut clients);
-    let completion = file_secret(
-        &secrets,
-        "review-completion-token",
-        b"synthetic-completion-token",
-    );
     clients.review_authorities.clear();
-    let mut mismatched = binding;
-    mismatched.completion_token_ref = Some(completion);
     clients
         .review_authorities
-        .insert("casework-a".into(), mismatched);
-    let refusal = config::clients(
-        "dev-clients.yaml",
-        &serde_norway::to_string(&clients).unwrap().into_bytes(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(refusal.contains("declared together"), "{refusal}");
+        .insert("casework-a".into(), binding);
+    for (key, replacement) in [
+        ("completionTokenRef", "completion.hmacSha256KeyRef"),
+        ("completionRecipient", "completion.recipientBinding"),
+    ] {
+        let mut raw = serde_json::to_value(&clients).unwrap();
+        raw["reviewAuthorities"]["casework-a"][key] = json!("canary-old-value");
+        let refusal = config::clients(
+            "dev-clients.yaml",
+            &serde_norway::to_string(&raw).unwrap().into_bytes(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refusal.contains(replacement), "{refusal}");
+        assert!(
+            !refusal.contains("canary-old-value"),
+            "the refusal for {key} repeats the old reference value"
+        );
+    }
 }
 
 #[test]
@@ -5047,7 +5188,15 @@ fn event_free_sessions_keep_working_without_receiver_state() {
     assert_eq!(state.webhook_port, None);
     initialize(&state.root(), &state, &clients, &files).unwrap();
     assert_eq!(read_state(&state.root()).unwrap().webhook_port, None);
-    assert!(!state.root().join("secrets/webhook-key").exists());
+    assert!(fs::read_dir(state.root().join("secrets"))
+        .unwrap()
+        .all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("inbox-key-")
+        }));
     let report = events::report(&state.root(), false).unwrap();
     assert_eq!(report["deliveries"], json!([]));
 }
@@ -5442,7 +5591,6 @@ reviewAuthorities:
     recoveryDays: 7
     client: operator
     completionTokenFile: /private/completion-token
-    completionRecipient: registry-breg
 issuer:
   interactiveApplications:
     - id: portal
@@ -5501,7 +5649,7 @@ issuer:
         ),
         (
             "/reviewAuthorities/casework-a/completionTokenFile",
-            "completionTokenRef",
+            "completion.hmacSha256KeyRef",
         ),
         (
             "/issuer/interactiveApplications/0/clientSecretFile",
@@ -5572,8 +5720,8 @@ fn a_secret_reference_needs_a_declared_provider() {
     let secrets = secret_root(&state.project, &mut clients);
     let completion = file_secret(
         &secrets,
-        "review-completion-token",
-        b"synthetic-completion-token",
+        "review-completion-key",
+        b"synthetic-completion-key-32-bytes",
     );
     clients.review_authorities.insert(
         "casework-a".into(),
@@ -5583,8 +5731,11 @@ fn a_secret_reference_needs_a_declared_provider() {
             producer_id: "registry-producer".into(),
             recovery_days: 7,
             client: "operator".into(),
-            completion_token_ref: Some(completion.clone()),
-            completion_recipient: Some("registry-breg".into()),
+            completion: Some(config::LocalReviewCompletion {
+                recipient_binding: "registry-breg".into(),
+                hmac_sha256_key_ref: completion.clone(),
+                previous_hmac_sha256_key_ref: None,
+            }),
         },
     );
     config::clients(
@@ -5604,7 +5755,7 @@ fn a_secret_reference_needs_a_declared_provider() {
         .unwrap_err()
     );
     assert!(
-        refusal.contains("reviewAuthorities.casework-a.completionTokenRef names a secret")
+        refusal.contains("reviewAuthorities.casework-a.completion.hmacSha256KeyRef names a secret")
             && refusal.contains("declares no secretProviders"),
         "{refusal}"
     );
@@ -5617,8 +5768,11 @@ fn a_secret_reference_needs_a_declared_provider() {
         .review_authorities
         .get_mut("casework-a")
         .unwrap()
-        .completion_token_ref =
-        Some(SecretReference::parse("secret:env/BREGCTL_DEV_UNSET_SECRET").unwrap());
+        .completion
+        .as_mut()
+        .unwrap()
+        .hmac_sha256_key_ref =
+        SecretReference::parse("secret:env/BREGCTL_DEV_UNSET_SECRET").unwrap();
     let refusal = format!(
         "{:#}",
         config::clients(
@@ -5628,8 +5782,8 @@ fn a_secret_reference_needs_a_declared_provider() {
         .unwrap_err()
     );
     assert!(
-        refusal.contains("completionTokenRef could not be resolved")
-            && refusal.contains("declare the provider the reference names under secretProviders"),
+        refusal.contains("completion.hmacSha256KeyRef could not be resolved")
+            && refusal.contains("Enable the reference's provider under secretProviders"),
         "{refusal}"
     );
     assert!(!refusal.contains("BREGCTL_DEV_UNSET_SECRET"), "{refusal}");
@@ -5640,8 +5794,8 @@ fn an_environment_reference_resolves_through_the_declared_provider() {
     // Cargo sets its package variables in the environment of every test it
     // runs, so the test reads one without writing the process environment.
     assert_eq!(
-        std::env::var("CARGO_PKG_NAME").as_deref(),
-        Ok(env!("CARGO_PKG_NAME"))
+        std::env::var("CARGO_PKG_REPOSITORY").as_deref(),
+        Ok(env!("CARGO_PKG_REPOSITORY"))
     );
     let (_temp, state, mut clients, files) = fixture();
     clients.secret_providers = Some(SecretProvidersConfig {
@@ -5654,8 +5808,11 @@ fn an_environment_reference_resolves_through_the_declared_provider() {
         producer_id: "registry-producer".into(),
         recovery_days: 7,
         client: "operator".into(),
-        completion_token_ref: Some(SecretReference::parse("secret:env/CARGO_PKG_NAME").unwrap()),
-        completion_recipient: Some("registry-breg".into()),
+        completion: Some(config::LocalReviewCompletion {
+            recipient_binding: "registry-breg".into(),
+            hmac_sha256_key_ref: SecretReference::parse("secret:env/CARGO_PKG_REPOSITORY").unwrap(),
+            previous_hmac_sha256_key_ref: None,
+        }),
     };
     clients
         .review_authorities
@@ -5670,15 +5827,15 @@ fn an_environment_reference_resolves_through_the_declared_provider() {
         fs::read(
             state
                 .root()
-                .join("secrets/review-completion-casework-a-token")
+                .join("secrets/review-completion-casework-a-key")
         )
         .unwrap(),
-        env!("CARGO_PKG_NAME").as_bytes()
+        env!("CARGO_PKG_REPOSITORY").as_bytes()
     );
 
     let mut unset = binding;
-    unset.completion_token_ref =
-        Some(SecretReference::parse("secret:env/BREGCTL_DEV_UNSET_SECRET").unwrap());
+    unset.completion.as_mut().unwrap().hmac_sha256_key_ref =
+        SecretReference::parse("secret:env/BREGCTL_DEV_UNSET_SECRET").unwrap();
     clients
         .review_authorities
         .insert("casework-a".into(), unset);
@@ -5691,8 +5848,8 @@ fn an_environment_reference_resolves_through_the_declared_provider() {
         .unwrap_err()
     );
     assert!(
-        refusal.contains("completionTokenRef could not be resolved")
-            && refusal.contains("set the environment variable the reference names"),
+        refusal.contains("completion.hmacSha256KeyRef could not be resolved")
+            && refusal.contains("Create the secret under the configured provider"),
         "{refusal}"
     );
     assert!(!refusal.contains("BREGCTL_DEV_UNSET_SECRET"), "{refusal}");

@@ -20,7 +20,7 @@ use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretFileCheck, SecretReference,
     SecretResolver, TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
-use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
+use registry_platform_crypto::{delivery_signature::DeliveryKeys, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
 use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
@@ -47,7 +47,10 @@ use crate::{
     auth::{AuthenticationConfigError, AuthorityClaimConfig},
     cursor::CursorCodec,
     event_destination::{
-        ActivatedEventDestinationRegistry, EventDestinationConfigs, RawEventDestinationConfigs,
+        labeled_delivery_keys, present_hook_key_reference, resolve_delivery_keys,
+        signing_key_action, ActivatedEventDestinationRegistry, EventDestinationActivationError,
+        EventDestinationConfigs, RawEventDestinationConfigs, CURRENT_KEY_MEMBER,
+        PREVIOUS_KEY_MEMBER,
     },
     model::CompiledRegistry,
     package::{
@@ -158,6 +161,14 @@ const RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] = &[RetiredApi
 /// Keys the runtime file no longer accepts, each refused with the edit that
 /// replaces it.
 const REMOVED_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "reviewAuthorities.*.completionTokenRef",
+        replacement: "Replace completionTokenRef with completion.hmacSha256KeyRef. Casework signs review completions with Standard Webhooks.",
+    },
+    RemovedKey {
+        path: "reviewAuthorities.*.completionRecipient",
+        replacement: "Move completionRecipient to completion.recipientBinding.",
+    },
     RemovedKey {
         path: "database.url",
         replacement: "delete database.url and name the connection URL by secret reference in database.runtimeUrlRef and database.migrationUrlRef",
@@ -377,6 +388,18 @@ pub enum RuntimeConfigError {
     InvalidCursor,
     #[error("runtime configuration contains an invalid event destination binding")]
     InvalidEventDestination,
+    #[error("{reason} {action}")]
+    InvalidDeliveryKey {
+        path: String,
+        reason: String,
+        action: String,
+    },
+    #[error("{first} and {second} select the same completion recipient.")]
+    DuplicateCompletionRecipient {
+        first: String,
+        second: String,
+        path: String,
+    },
     #[error(
         "runtime configuration destinations.hooks contains identifiers that differ only by `-` versus `_`"
     )]
@@ -446,6 +469,10 @@ impl RuntimeConfigError {
             Self::InvalidAudit => "breg.runtime.invalid-audit",
             Self::InvalidCursor => "breg.runtime.invalid-cursor",
             Self::InvalidEventDestination => "breg.runtime.invalid-hook-destination",
+            Self::InvalidDeliveryKey { .. } => "breg.runtime.invalid-delivery-key",
+            Self::DuplicateCompletionRecipient { .. } => {
+                "breg.runtime.duplicate-completion-recipient"
+            }
             Self::EventDestinationIdCollision => "breg.runtime.hook-destination-id-collision",
             Self::EvidenceProviderIdCollision => "breg.runtime.evidence-provider-id-collision",
             Self::ReviewAuthorityIdCollision => "breg.runtime.review-authority-id-collision",
@@ -469,7 +496,9 @@ impl RuntimeConfigError {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
             Self::InvalidBinding | Self::Secret | Self::SecretFile(_) => "",
-            Self::InvalidExternalSource { path, .. } => path,
+            Self::InvalidExternalSource { path, .. }
+            | Self::InvalidDeliveryKey { path, .. }
+            | Self::DuplicateCompletionRecipient { path, .. } => path,
             Self::InvalidTaskGrantStatus => "/taskGrantStatus",
             Self::InvalidInstanceId => "/identity/instanceId",
             Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
@@ -507,7 +536,7 @@ impl RuntimeConfigError {
     /// The edit that fixes a refusal this runtime decides itself
     /// (CFG-DIAG-6). A reader refusal carries its own action in each
     /// diagnostic.
-    fn suggested_action(&self) -> &'static str {
+    fn suggested_action(&self) -> &str {
         match self {
             Self::Reader(_) => "",
             Self::InvalidTaskGrantStatus => {
@@ -564,6 +593,8 @@ impl RuntimeConfigError {
                 "Give the file audit destination an absolute path, and leave audit.path, audit.rotateBytes, and audit.retentionDays out for the stdout destination."
             }
             Self::InvalidCursor => "Name cursor.secretRef by secret reference.",
+            Self::InvalidDeliveryKey { action, .. } => action,
+            Self::DuplicateCompletionRecipient { .. } => "Give each review authority its own completion.recipientBinding.",
             Self::InvalidEventDestination => {
                 "Correct the event destination bindings: an https origin, a path that starts with `/`, and secret references for keys and TLS material."
             }
@@ -616,7 +647,11 @@ impl RuntimeConfigError {
             Self::InvalidStaticJwks(cause) => cause.to_string(),
             other => other.suggested_action().to_owned(),
         };
-        let mut diagnostic = Diagnostic::error(self.code(), self.path(), self.to_string(), action);
+        let message = match self {
+            Self::InvalidDeliveryKey { reason, .. } => reason.clone(),
+            other => other.to_string(),
+        };
+        let mut diagnostic = Diagnostic::error(self.code(), self.path(), message, action);
         diagnostic.source = file.map(|file| Source {
             file: file.display().to_string(),
             line: None,
@@ -1285,6 +1320,7 @@ impl RuntimeConfig {
         }
         let resolver = self.secret_resolver()?;
         let mut activated = BTreeMap::new();
+        let mut recipients = BTreeMap::new();
         // Activate retained operator bindings as well as bindings referenced by
         // the new package. Durable submissions created by the previous package
         // must keep their worker after a review policy is changed or removed.
@@ -1293,18 +1329,53 @@ impl RuntimeConfig {
                 config.token_ref.as_ref(),
                 config.private_key_jwt.as_ref(),
             )?;
-            let completion = config
-                .completion
-                .as_ref()
-                .map(
-                    |(token_ref, recipient)| -> Result<(Zeroizing<String>, String)> {
-                        let token = resolver.resolve_reference(token_ref)?;
-                        let token = std::str::from_utf8(token.expose_secret())
-                            .map_err(|_| RuntimeConfigError::Secret)?;
-                        Ok((Zeroizing::new(token.to_owned()), recipient.clone()))
-                    },
-                )
-                .transpose()?;
+            let (completion_keys, recipient) = if let Some(completion) = &config.completion {
+                let block = format!("reviewAuthorities.{authority}.completion");
+                let pointer_authority = authority.replace('~', "~0").replace('/', "~1");
+                let pointer = format!("/reviewAuthorities/{pointer_authority}/completion");
+                if let Some(first) = recipients.insert(&completion.recipient_binding, authority) {
+                    return Err(RuntimeConfigError::DuplicateCompletionRecipient {
+                        first: format!("reviewAuthorities.{first}.completion.recipientBinding"),
+                        second: format!("{block}.recipientBinding"),
+                        path: format!("{pointer}/recipientBinding"),
+                    });
+                }
+                let keys = completion.resolve_keys(&resolver, &block).map_err(|error| {
+                    let (member_path, reason, action) = match error {
+                        EventDestinationActivationError::SigningKeyUnavailable {path, reason, action} => (
+                            path.clone(),
+                            format!("{path} could not be resolved: {reason}."),
+                            action.to_owned(),
+                        ),
+                        EventDestinationActivationError::InvalidSigningKey {
+                            path, length, trailing_newline, reason,
+                        } => (
+                            path.clone(),
+                            format!("{path} has {length} bytes (trailing newline: {trailing_newline})."),
+                            signing_key_action(&reason).to_owned(),
+                        ),
+                        EventDestinationActivationError::PreviousEqualsCurrent { current, previous } => (
+                            previous.clone(),
+                            format!("{previous} holds the same bytes as {current}."),
+                            format!("To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."),
+                        ),
+                        _ => unreachable!("key resolution returns only key errors"),
+                    };
+                    let member = if member_path.ends_with(PREVIOUS_KEY_MEMBER) {
+                        PREVIOUS_KEY_MEMBER
+                    } else {
+                        CURRENT_KEY_MEMBER
+                    };
+                    RuntimeConfigError::InvalidDeliveryKey {
+                        path: format!("{pointer}/{member}"),
+                        reason,
+                        action,
+                    }
+                })?;
+                (Some(keys), Some(completion.recipient_binding.clone()))
+            } else {
+                (None, None)
+            };
             let client = registry_review_client::ReviewClient::new(
                 registry_review_client::ReviewClientConfig::new(config.endpoint.clone())
                     .with_attempt_timeout(self.operational_timeouts.http_request)
@@ -1318,8 +1389,8 @@ impl RuntimeConfig {
                 config.profile.clone(),
                 config.producer_id.clone(),
                 config.recovery_days,
-                completion.as_ref().map(|(token, _)| token.clone()),
-                completion.map(|(_, recipient)| recipient),
+                completion_keys,
+                recipient,
             )
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
             activated.insert(authority.clone(), Arc::new(authority_client));
@@ -1493,11 +1564,51 @@ impl RuntimeConfig {
     > {
         let resolver = self
             .secret_resolver()
-            .map_err(|_| crate::event_destination::EventDestinationActivationError::Secret)?;
-        ActivatedEventDestinationRegistry::activate(compiled, &self.event_destinations, &resolver)
-            .map(|destinations| {
-                destinations.with_payload_retention(self.retention.payload_retention)
+            .map_err(|_| EventDestinationActivationError::Secret)?;
+        let completion_keys = self
+            .review_authorities
+            .iter()
+            .filter_map(|(authority, config)| Some((authority, config.completion.as_ref()?)))
+            .map(|(authority, completion)| {
+                let block = format!("reviewAuthorities.{authority}.completion");
+                completion
+                    .resolve_keys(&resolver, &block)
+                    .map(|keys| (block, keys))
             })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ActivatedEventDestinationRegistry::activate(
+            compiled,
+            &self.event_destinations,
+            &resolver,
+            completion_keys
+                .iter()
+                .flat_map(|(block, keys)| labeled_delivery_keys(block, keys))
+                .collect(),
+        )
+        .map(|destinations| destinations.with_payload_retention(self.retention.payload_retention))
+    }
+
+    /// Activate hook destinations and check their keys against the active review authorities.
+    pub fn activate_event_destinations_with_review_authorities(
+        &self,
+        compiled: &CompiledRegistry,
+        authorities: Option<&crate::review_store::ReviewAuthorityRegistry>,
+    ) -> std::result::Result<ActivatedEventDestinationRegistry, EventDestinationActivationError>
+    {
+        let resolver = self
+            .secret_resolver()
+            .map_err(|_| crate::event_destination::EventDestinationActivationError::Secret)?;
+        let review_keys = authorities
+            .into_iter()
+            .flat_map(|authority| authority.labeled_completion_keys())
+            .collect();
+        ActivatedEventDestinationRegistry::activate(
+            compiled,
+            &self.event_destinations,
+            &resolver,
+            review_keys,
+        )
+        .map(|destinations| destinations.with_payload_retention(self.retention.payload_retention))
     }
 
     pub fn operational_timeouts(&self) -> &OperationalTimeouts {
@@ -2972,7 +3083,7 @@ struct ReviewAuthorityConfig {
     private_key_jwt: Option<ReviewPrivateKeyJwtConfig>,
     producer_id: String,
     recovery_days: u32,
-    completion: Option<(SecretReference, String)>,
+    completion: Option<RawReviewCompletionConfig>,
 }
 
 impl ReviewAuthorityConfig {
@@ -2999,19 +3110,14 @@ impl ReviewAuthorityConfig {
                 "endpoint must not carry user information, a query or a fragment",
             ));
         }
-        let completion = match (raw.completion_token_ref, raw.completion_recipient) {
-            (None, None) => None,
-            (Some(token_ref), Some(recipient))
-                if crate::review_store::valid_completion_recipient(&recipient) =>
-            {
-                Some((token_ref, recipient))
-            }
-            _ => {
-                return Err(ReviewAuthorityRefusal(
-                    "completionTokenRef and completionRecipient must be written together, with a recipient of 1 to 256 visible ASCII characters",
-                ))
-            }
-        };
+        let completion = raw.completion;
+        if completion.as_ref().is_some_and(|completion| {
+            !crate::review_store::valid_completion_recipient(&completion.recipient_binding)
+        }) {
+            return Err(ReviewAuthorityRefusal(
+                "completion.recipientBinding must contain 1 to 256 visible ASCII characters",
+            ));
+        }
         let token_ref = raw.token_ref;
         let private_key_jwt = raw
             .private_key_jwt
@@ -3072,18 +3178,43 @@ struct RawReviewAuthorityConfig {
         schemars(with = "BoundedU32<1, { crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS }>")
     )]
     recovery_days: u32,
-    /// The bearer token the review authority presents when it notifies this
-    /// registry that a review completed. Written together with
-    /// `completionRecipient`; omitted, no completion notification is
-    /// accepted and the registry polls for results.
+    /// Standard Webhooks authentication for review completion notifications.
+    /// Omit this block to poll for results without notifications.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    completion_token_ref: Option<SecretReference>,
-    /// The logical recipient the review authority names in each completion
-    /// notification. Written together with `completionTokenRef`; omitted, no
-    /// completion notification is accepted and the registry polls for
-    /// results.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    completion_recipient: Option<String>,
+    completion: Option<RawReviewCompletionConfig>,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawReviewCompletionConfig {
+    /// Recipient binding the completion sender supplies to select this authority.
+    recipient_binding: String,
+    /// Runtime secret reference for 32 to 64 exact HMAC-SHA-256 key bytes.
+    hmac_sha256_key_ref: SecretReference,
+    /// Optional previous completion signing key during rotation.
+    #[serde(
+        default,
+        deserialize_with = "present_hook_key_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    previous_hmac_sha256_key_ref: Option<SecretReference>,
+}
+
+impl RawReviewCompletionConfig {
+    fn resolve_keys(
+        &self,
+        resolver: &SecretResolver,
+        path: &str,
+    ) -> std::result::Result<DeliveryKeys, EventDestinationActivationError> {
+        resolve_delivery_keys(
+            resolver,
+            path,
+            &self.hmac_sha256_key_ref,
+            self.previous_hmac_sha256_key_ref.as_ref(),
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -4472,9 +4603,9 @@ mod tests {
                 "exactly one of tokenRef and privateKeyJwt",
             ),
             (
-                "/completionRecipient",
-                serde_json::json!("registry"),
-                "completionTokenRef and completionRecipient",
+                "/completion",
+                serde_json::json!({"recipientBinding": "registry bad", "hmacSha256KeyRef": "secret:file/completion-key"}),
+                "completion.recipientBinding",
             ),
             (
                 "/privateKeyJwt/resource",

@@ -9150,6 +9150,85 @@ fn bregctl_schema_test_with_unreachable_database(arguments: &[&str]) -> Output {
 }
 
 #[test]
+fn apply_plan_and_hook_drain_refuse_a_key_shared_with_completion() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mut module: Value = serde_json::from_slice(&package_module_bytes()).unwrap();
+    module["recordTypes"]["record"]["hooks"] = json!([{
+        "id": "record-created",
+        "phase": "after",
+        "trigger": "created",
+        "projection": ["code"],
+        "handler": {"type":"url", "destinationId":"receiver"}
+    }]);
+    let fixture = RuntimePackageFixture::production_with_module(
+        "127.0.0.1:1".parse().unwrap(),
+        canonicalize_json(&module).unwrap(),
+    );
+    let key = [
+        uuid::Uuid::new_v4().as_bytes().as_slice(),
+        uuid::Uuid::new_v4().as_bytes(),
+    ]
+    .concat();
+    for (name, bytes) in [
+        ("hook-key", key.as_slice()),
+        ("completion-key", key.as_slice()),
+        ("review-token", b"synthetic-review-token".as_slice()),
+    ] {
+        let path = fixture.directory.path().join("secrets").join(name);
+        fs::write(&path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let raw = fs::read_to_string(&fixture.runtime_config).unwrap();
+    fs::write(
+        &fixture.runtime_config,
+        format!(
+            "{raw}{}",
+            r#"destinations:
+  hooks:
+    receiver:
+      origin: https://receiver.example/
+      path: /events
+      networkProfile: production-https
+      dnsFamily: ipv4-only
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/hook-key
+      classificationCeiling: internal
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 1000
+        maximumAttempts: 1
+reviewAuthorities:
+  casework:
+    endpoint: https://casework.example/
+    profile: producer
+    producerId: registry-producer
+    recoveryDays: 7
+    tokenRef: secret:file/review-token
+    completion:
+      recipientBinding: registry
+      hmacSha256KeyRef: secret:file/completion-key
+"#
+        ),
+    )
+    .unwrap();
+
+    for command in [
+        vec!["hook", "drain"],
+        vec!["plan", "--package", path(&fixture.package)],
+        vec!["apply", "--initial", "--package", path(&fixture.package)],
+    ] {
+        let arguments = ["--format", "json"]
+            .into_iter()
+            .chain(command)
+            .chain(["--runtime-config", path(&fixture.runtime_config)])
+            .collect::<Vec<_>>();
+        let output = bregctl_with_unreachable_database(&arguments);
+        let report = json_stdout(&output);
+        assert_eq!(report["diagnostics"][0]["message"], "destinations.hooks.receiver.hmacSha256KeyRef and reviewAuthorities.casework.completion.hmacSha256KeyRef resolve to the same key bytes. Give reviewAuthorities.casework.completion.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there.");
+    }
+}
+
+#[test]
 fn apply_and_plan_refuse_a_package_other_than_the_expected_digest_before_database_contact() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
     // A successor reads the database's activation ledger before anything

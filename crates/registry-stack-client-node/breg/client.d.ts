@@ -14,23 +14,27 @@ export type SafeInteger = number
 
 export type HookVerificationRefusalCode =
   | 'missing-header'
-  | 'invalid-delivery-time'
-  | 'stale-delivery'
   | 'duplicate-header'
+  | 'invalid-content-type'
+  | 'invalid-id'
+  | 'invalid-timestamp'
+  | 'stale-delivery'
+  | 'malformed-signature'
+  | 'unsupported-version'
+  | 'signature-mismatch'
   | 'body-too-large'
   | 'invalid-key'
-  | 'malformed-signature'
-  | 'signature-mismatch'
-  | 'unsupported-version'
+  | 'invalid-envelope'
+  | 'id-mismatch'
 
 export interface HookDeliveryInput {
-  method: string
-  path: string
   headers: Readonly<Record<string, string>>
   /** Exact bytes in a non-shared backing store. */
   body: Buffer
   /** Secret bytes in a non-shared backing store. */
   key: Buffer
+  /** Previous secret bytes during key rotation, in a non-shared backing store. */
+  previousKey?: Buffer
   /**
    * Window around the receiver clock, in whole seconds from 1 to 3600. With
    * neither this nor `callerEnforcedFreshness`, the window is 300 seconds.
@@ -46,22 +50,20 @@ export interface HookDeliveryInput {
 
 export interface VerifiedHookDelivery {
   readonly id: string
+  /** Signed Unix seconds as a decimal string. */
+  readonly timestamp: string
   readonly source: string
   readonly type: string
   readonly time: string
   readonly dataschema: string
-  readonly generation: string
-  readonly attempt: string
-  readonly deliveryTime: string
-  readonly idempotencyKey: string
   readonly body: Buffer
 }
 
 /**
- * Authenticate one exact Base Registry Engine Version 1 hook delivery. The
+ * Authenticate one exact Base Registry Engine Standard Webhooks delivery. The
  * delivery time must be within 300 seconds of the receiver clock unless
  * `maxSkewSeconds` or `callerEnforcedFreshness` says otherwise; a time outside
- * the window is refused with code `stale-delivery`. Apply idempotency policy
+ * the window is refused with code `stale-delivery`. Deduplicate on source and id
  * before acting on the body.
  */
 export declare function verifyHookDelivery(input: HookDeliveryInput): VerifiedHookDelivery

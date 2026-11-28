@@ -165,7 +165,7 @@ pub enum StartupError {
     )]
     AuthenticationClientsUnlisted,
     #[error("the Registry event destination bindings were refused")]
-    EventDestinations,
+    EventDestinations(String),
     #[error(
         "{retained_deliveries} retained hook deliveries require superseded bindings; inspect \
          them with `bregctl hook list` and either restore the exact bindings or explicitly \
@@ -731,7 +731,9 @@ impl OperationalEvent {
                     .expect("background task stop and stage refusal records have a code");
                 tracing::error!(target: "registry_breg::startup", code, message = record.message);
             }
-            Self::StoppedWithError(StartupError::AuditDestination(reason)) => {
+            Self::StoppedWithError(
+                StartupError::AuditDestination(reason) | StartupError::EventDestinations(reason),
+            ) => {
                 let error = record
                     .error
                     .expect("stopped-with-error records have a closed error");
@@ -741,6 +743,16 @@ impl OperationalEvent {
                     reason = reason.as_str(),
                     message = record.message
                 );
+            }
+            Self::StoppedWithError(StartupError::RuntimeConfig(
+                cause @ (RuntimeConfigError::InvalidDeliveryKey { .. }
+                | RuntimeConfigError::DuplicateCompletionRecipient { .. }),
+            )) => {
+                let error = record
+                    .error
+                    .expect("stopped-with-error records have a closed error");
+                let reason = cause.to_string();
+                tracing::error!(target: "registry_breg::startup", error, reason, message = record.message);
             }
             Self::StoppedWithError(StartupError::StaticKeySet(cause)) => {
                 let error = record
@@ -895,7 +907,7 @@ impl StartupError {
             Self::AttachmentStorage => {
                 "the Registry attachment storage or verification binding was refused"
             }
-            Self::EventDestinations => "the Registry event destination bindings were refused",
+            Self::EventDestinations(_) => "the Registry event destination bindings were refused",
             Self::RetainedHookBindings { .. } => {
                 "retained hook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
             }
@@ -1712,10 +1724,16 @@ async fn finish_prepared_server(
     // Every verified database holds the subject access-log storage, so
     // retention always runs.
     let access_log_retention = Some((pool.clone(), Arc::<LastSuccess>::default()));
+    let review_authorities = config
+        .activate_review_authorities(&registry)
+        .map_err(StartupError::RuntimeConfig)?;
     let event_destinations = Arc::new(
         config
-            .activate_event_destinations(&registry)
-            .map_err(|_| StartupError::EventDestinations)?,
+            .activate_event_destinations_with_review_authorities(
+                &registry,
+                review_authorities.as_deref(),
+            )
+            .map_err(|error| StartupError::EventDestinations(error.to_string()))?,
     );
     let authenticator = Arc::new(
         RegistryAuthenticator::new(
@@ -2014,7 +2032,9 @@ async fn finish_prepared_server(
             } => StartupError::RetainedHookBindings {
                 retained_deliveries,
             },
-            HookRetainedBindingError::Unavailable => StartupError::EventDestinations,
+            HookRetainedBindingError::Unavailable => StartupError::EventDestinations(
+                "retained hook bindings could not be read".to_owned(),
+            ),
         })?;
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
@@ -2022,9 +2042,6 @@ async fn finish_prepared_server(
     let hook_worker = Some(HookWorker::new(hook_delivery));
     let evidence = config
         .activate_evidence(&registry)
-        .map_err(StartupError::RuntimeConfig)?;
-    let review_authorities = config
-        .activate_review_authorities(&registry)
         .map_err(StartupError::RuntimeConfig)?;
     crate::review_store::verify_retained_bindings(&pool, &registry, review_authorities.as_deref())
         .await

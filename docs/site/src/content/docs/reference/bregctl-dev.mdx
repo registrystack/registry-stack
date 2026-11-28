@@ -148,12 +148,11 @@ the same authored project, ports, credentials, and package.
 It also lets the next start take edited inputs: once no records are retained, a changed package,
 clients file, or port ([what counts as changed](#retained-state-and-recovery)) replaces the session
 with a fresh one that keeps the previous ports and clients file and generates new keys.
-A successor package prepared for retained records cannot initialise an empty database after
-removal: start refuses before Docker.
-Create a fresh project at package sequence 1 for a separate empty experiment.
+After removing a successor database, the next start builds a fresh sequence 1 package from
+the current authored project. The new session generates its own keys.
 
 {/* Evidence: crates/registry-bregctl/src/dev/tests.rs changed_inputs_replace_a_session_whose_records_were_discarded,
-    removed_successor_database_is_refused_before_any_prerequisite_or_recreation. */}
+    removed_successor_database_restarts_from_an_initial_package. */}
 
 Use `--format json` to consume the status, URLs, audience, package digest, runtime configuration,
 and private credential file references.
@@ -171,10 +170,10 @@ that client's registered audience.
 ## Observe local events
 
 Declare an event with a webhook destination in the authored project before the first start.
-By default, `dev` binds every compiled destination to its own HMAC-verifying receiver on a free
-numeric loopback port.
-The receiver port, signing key, and bindings are retained across restarts; a conflicting receiver
-port is refused.
+By default, `dev` generates a [separate key for each compiled destination](../delivery-signing/#use-a-separate-key-for-each-destination) and binds all
+destinations to one Standard Webhooks receiver on a free numeric loopback port. The receiver
+identifies the destination by the key that verifies the delivery. The port, keys, and bindings
+are retained across restarts. A conflicting receiver port is refused.
 To deliver to an external local receiver instead, bind every compiled destination ID in
 `dev-clients.yaml`:
 
@@ -194,7 +193,8 @@ destinations:
     explicit_local_event_destinations_bind_exact_compiled_inventory,
     local_event_destinations_refuse_an_origin_without_a_usable_port. */}
 
-The key is a [secret reference](#secret-references).
+Name a [distinct key of 32 to 64 exact bytes for each destination](../delivery-signing/#use-a-separate-key-for-each-destination) using a
+[secret reference](#secret-references).
 The session copies it into its private state and uses the same bounded outbox delivery and replay
 rules.
 The origin must be numeric loopback HTTP with an explicit port.
@@ -289,22 +289,23 @@ A missing review-authority binding disables operations that require it.
 Generated CRUD, immediate Actions, and no-review Proposals remain available.
 Restore the exact binding to resume dependent work; an unavailable authority never implies approval.
 
-Polling needs no callback credential.
-To test authenticated completion delivery, add both optional fields; declaring only one is refused:
+The registry polls for results by default. To test signed completion delivery, add a
+`completion` block to the review authority. Set the same recipient binding and key at the sender.
 
 ```yaml
-completionTokenRef: secret:file/casework-completion-token
-completionRecipient: registry-breg
+completion:
+  recipientBinding: registry-breg
+  hmacSha256KeyRef: secret:file/casework-completion-key
+  # previousHmacSha256KeyRef: secret:file/casework-completion-key.previous
 ```
 
-The completion token is an independent sender credential, named by a
-[secret reference](#secret-references) and copied into private state.
-It is never used for review requests or source application.
-Operated runtime configuration also supports an explicit static `tokenRef` for an opaque renewable
-credential supplied by the deployment, but `bregctl dev` always generates the refreshing
-`privateKeyJwt` branch.
+The session copies the completion key files into private state. Each key is a
+[secret reference](#secret-references) holding 32 to 64 exact bytes.
+Review requests use the generated `privateKeyJwt` binding independently of the completion key.
+Operated runtime configuration also supports a static `tokenRef` for review requests.
 
-{/* Evidence: crates/registry-bregctl/src/dev/config.rs completionTokenRef, completionRecipient. */}
+{/* Evidence: crates/registry-bregctl/src/dev/config.rs, LocalReviewCompletion, checked_delivery_key();
+    crates/registry-bregctl/src/dev/tests.rs, local_review_authority_uses_refreshing_logical_client_without_exposing_credentials. */}
 
 ### Inspect receipts
 
@@ -317,14 +318,14 @@ bregctl dev events ./registry --include-payload
 ```
 
 The default report shows the event UUID, authored event, Record type, trigger, compiled delivery
-and destination IDs, generation, attempt, and `received` status.
+and destination IDs, `webhookId`, and `received` status.
 Record IDs and projected values are omitted.
 `--include-payload` explicitly displays the projected values from the development receiver.
 Receipts remain available while the session is stopped.
 `dev stop --remove` erases the receipt journal along with the records, including captured
 payloads.
 
-{/* Evidence: crates/registry-bregctl/src/dev/events.rs MAX_STORAGE, "eventId", "recordType", "destinationId", "idempotencyKey", "generation", "attempt", "status";
+{/* Evidence: crates/registry-bregctl/src/dev/events.rs MAX_STORAGE, "eventId", "recordType", "destinationId", "webhookId", "status";
     crates/registry-bregctl/tests/dev_lifecycle.rs installed_dev_receives_retries_replays_and_retains_authored_events. */}
 
 The receiver keeps these development values in the owner-only `.breg/dev/events.jsonl` journal,
@@ -345,8 +346,8 @@ SSL_CERT_FILE="$PWD/registry/.breg/dev/tls/ca.pem" \
 ```
 
 Delivered rows leave that queue.
-Automatic retries keep the event UUID and idempotency key; an eligible operator replay increments
-the generation.
+Retries and replays keep the event UUID, sent as `webhook-id`. An eligible operator replay
+increments the generation in the operator queue.
 Use the identifiers and generation from `hook list` with `bregctl hook replay --help`.
 Supply the same CA file and absolute runtime path for replay.
 The normal event delivery, dead-letter, and replay rules also apply to this generated runtime.
@@ -692,7 +693,7 @@ Evidence's caller credential and BReg's operator credential retain separate auth
 
 A member that names a secret holds a secret reference, never a path: `assertionKeyRef`,
 `hmacSha256KeyRef`, `tokenRef`, `trustedJwksRef`, `caBundleRef`, `privateKeyRef`,
-`completionTokenRef`, `clientSecretRef`, and `passwordRef`.
+`previousHmacSha256KeyRef`, `clientSecretRef`, and `passwordRef`.
 `secret:file/<name>` names one file directly below `secretProviders.file.root`, which must be
 absolute.
 `secret:env/<NAME>` names an environment variable of the `bregctl dev start` process and is resolved
@@ -1030,8 +1031,8 @@ reclaimable once the container is gone.
   Keeps the audit files, keys, credentials, ports, clients, and the built package.
 - Start after `--remove`: at sequence 1, creates an empty container and volume, activates the initial
   package, and replays authored seeds.
-  A retained successor refuses before Docker because its predecessor records were removed; use a
-  fresh project at sequence 1 for an empty experiment.
+  After removing a successor database, start builds a fresh sequence 1 package from the
+  current authored project and replays authored seeds.
 - Seed request committed before checkpoint: replays the same permanent BReg idempotency reservation.
   The original create result is returned without creating or overwriting a record.
 - `breg` from another release: refuses before the owned container is inspected and before the
@@ -1067,9 +1068,8 @@ reclaimable once the container is gone.
     the_changed_inputs_refusal_and_stop_help_name_the_same_two_options;
     crates/registry-bregctl/tests/dev_lifecycle.rs installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding. */}
 
-Reclamation is explicit: only `dev stop --remove` discards records, only a start after it replaces
-retained keys, and only for edited inputs; this command implements no automatic reset or general
-retained-schema upgrade.
+`dev stop --remove` discards records. The next start generates fresh keys if inputs changed,
+the captured inbox project no longer compiles, or the removed database held a successor package.
 The explicit source preparation above is limited to its reviewed policy-only successor.
 An operated successor uses BReg's normal reviewed package, migration, activation, and recovery
 procedure.

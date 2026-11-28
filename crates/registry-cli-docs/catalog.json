@@ -7562,7 +7562,7 @@
             {
               "name": "sample",
               "invocation": "bregctl hook sample",
-              "about": "Render one deterministic exact CloudEvents request with synthetic values",
+              "about": "Render one deterministic Standard Webhooks request with synthetic values",
               "long_about": null,
               "usage": "bregctl hook sample [OPTIONS] --event <ID> <PROJECT>",
               "arguments": [

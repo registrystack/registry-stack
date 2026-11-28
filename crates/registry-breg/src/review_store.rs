@@ -7,6 +7,10 @@
 //! an exact proposal and submission-digest comparison.
 
 use chrono::{DateTime, Utc};
+use registry_platform_authcommon::FailedCheck;
+use registry_platform_crypto::delivery_signature::{
+    self, DeliveryKey, DeliveryKeys, DeliverySignatureError, SignedContent, DELIVERY_TOLERANCE,
+};
 use registry_platform_httputil::client::TokenProvider;
 use registry_review_client::{
     submission_digest, BearerToken, ReviewAuth, ReviewClient, ReviewClientError, ReviewCompletion,
@@ -18,10 +22,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-use subtle::ConstantTimeEq;
 use tokio_postgres::{GenericClient, Transaction};
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 use crate::model::{CompiledProposalReview, CompiledRegistry};
 use crate::mutation::MutationError;
@@ -92,15 +94,10 @@ fn outbound_lease_seconds(request_timeout: Duration) -> i64 {
         .max(APPLICATION_LEASE_MINIMUM_SECONDS)
 }
 
-pub(crate) fn valid_completion_recipient(recipient: &str) -> bool {
+pub fn valid_completion_recipient(recipient: &str) -> bool {
     !recipient.is_empty()
         && recipient.len() <= MAXIMUM_COMPLETION_RECIPIENT_BYTES
         && recipient.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-}
-
-fn valid_completion_token(token: &str) -> bool {
-    registry_platform_authcommon::parse_bearer_token(&format!("Bearer {token}"))
-        .is_ok_and(|parsed| parsed == token)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,7 +275,7 @@ pub struct ReviewAuthorityClient {
     profile: String,
     producer_id: String,
     recovery_days: u32,
-    completion_token: Option<Zeroizing<String>>,
+    completion_keys: Option<DeliveryKeys>,
     completion_recipient: Option<String>,
     lease_seconds: i64,
     progress_lookups: tokio::sync::Semaphore,
@@ -293,7 +290,7 @@ impl ReviewAuthorityClient {
         profile: String,
         producer_id: String,
         recovery_days: u32,
-        completion_token: Option<Zeroizing<String>>,
+        completion_keys: Option<DeliveryKeys>,
         completion_recipient: Option<String>,
     ) -> Result<Self, ReviewConfigurationError> {
         if authority.trim().is_empty()
@@ -307,10 +304,7 @@ impl ReviewAuthorityClient {
             || producer_id.len() > 128
             || producer_id.chars().any(char::is_control)
             || !(1..=MAXIMUM_REVIEW_RECOVERY_DAYS).contains(&recovery_days)
-            || completion_token.is_some() != completion_recipient.is_some()
-            || completion_token
-                .as_ref()
-                .is_some_and(|token| token.len() > 4096 || !valid_completion_token(token))
+            || completion_keys.is_some() != completion_recipient.is_some()
             || completion_recipient
                 .as_ref()
                 .is_some_and(|recipient| !valid_completion_recipient(recipient))
@@ -328,7 +322,7 @@ impl ReviewAuthorityClient {
             profile,
             producer_id,
             recovery_days,
-            completion_token,
+            completion_keys,
             completion_recipient,
             lease_seconds,
             progress_lookups: tokio::sync::Semaphore::new(MAXIMUM_PROGRESS_LOOKUPS_PER_AUTHORITY),
@@ -338,6 +332,7 @@ impl ReviewAuthorityClient {
 
 pub struct ReviewAuthorityRegistry {
     authorities: BTreeMap<String, Arc<ReviewAuthorityClient>>,
+    completion_bindings: BTreeMap<String, String>,
     /// Result-feed backoff by authority. An authority with no entry is
     /// available and its feed is fetched on every worker pass.
     feed_backoff: std::sync::Mutex<BTreeMap<String, FeedBackoff>>,
@@ -468,17 +463,23 @@ impl ReviewAuthorityRegistry {
             || authorities
                 .iter()
                 .any(|(id, authority)| id != &authority.authority)
-            || authorities.values().enumerate().any(|(index, authority)| {
-                authorities
-                    .values()
-                    .skip(index + 1)
-                    .any(|other| same_completion_binding(authority, other))
-            })
         {
             return Err(ReviewConfigurationError);
         }
+        let mut completion_bindings = BTreeMap::new();
+        for (id, authority) in &authorities {
+            if let Some(recipient) = &authority.completion_recipient {
+                if completion_bindings
+                    .insert(recipient.clone(), id.clone())
+                    .is_some()
+                {
+                    return Err(ReviewConfigurationError);
+                }
+            }
+        }
         Ok(Self {
             authorities,
+            completion_bindings,
             feed_backoff: std::sync::Mutex::new(BTreeMap::new()),
             feed_clock: Arc::new(tokio::time::Instant::now),
         })
@@ -577,37 +578,40 @@ impl ReviewAuthorityRegistry {
             .map(|configured| configured.recovery_days)
     }
 
-    /// Resolve a completion sender only when both its independently configured
-    /// bearer credential and logical recipient match one authority exactly.
-    pub fn completion_authority(&self, token: &str, recipient: &str) -> Option<&str> {
-        let mut matched = None;
-        for (authority, configured) in &self.authorities {
-            let Some(expected_token) = configured.completion_token.as_ref() else {
-                continue;
-            };
-            let Some(expected_recipient) = configured.completion_recipient.as_ref() else {
-                continue;
-            };
-            let token_matches = expected_token.len() == token.len()
-                && expected_token
-                    .as_bytes()
-                    .ct_eq(token.as_bytes())
-                    .unwrap_u8()
-                    == 1;
-            let recipient_matches = expected_recipient.len() == recipient.len()
-                && expected_recipient
-                    .as_bytes()
-                    .ct_eq(recipient.as_bytes())
-                    .unwrap_u8()
-                    == 1;
-            if token_matches && recipient_matches {
-                if matched.is_some() {
-                    return None;
-                }
-                matched = Some(authority.as_str());
+    pub(crate) fn labeled_completion_keys(&self) -> impl Iterator<Item = (String, &DeliveryKey)> {
+        self.authorities.iter().flat_map(|(id, authority)| {
+            authority.completion_keys.iter().flat_map(move |keys| {
+                crate::event_destination::labeled_delivery_keys(
+                    &format!("reviewAuthorities.{id}.completion"),
+                    keys,
+                )
+            })
+        })
+    }
+
+    fn verify_completion(
+        &self,
+        recipient: &str,
+        content: SignedContent<'_>,
+        now: std::time::SystemTime,
+    ) -> Result<(&str, u32), FailedCheck> {
+        let id = self
+            .completion_bindings
+            .get(recipient)
+            .ok_or(FailedCheck::DeliverySignature)?;
+        let authority = &self.authorities[id];
+        let keys = authority
+            .completion_keys
+            .as_ref()
+            .ok_or(FailedCheck::DeliverySignature)?;
+        delivery_signature::verify(keys, content, now, DELIVERY_TOLERANCE).map_err(|error| {
+            match error {
+                DeliverySignatureError::StaleDelivery
+                | DeliverySignatureError::InvalidTimestamp => FailedCheck::DeliveryFreshness,
+                _ => FailedCheck::DeliverySignature,
             }
-        }
-        matched
+        })?;
+        Ok((id, authority.recovery_days))
     }
 
     async fn authorities_for_pending(
@@ -947,31 +951,6 @@ impl ReviewAuthorityRegistry {
     }
 }
 
-fn same_completion_binding(left: &ReviewAuthorityClient, right: &ReviewAuthorityClient) -> bool {
-    let (Some(left_token), Some(left_recipient)) =
-        (&left.completion_token, &left.completion_recipient)
-    else {
-        return false;
-    };
-    let (Some(right_token), Some(right_recipient)) =
-        (&right.completion_token, &right.completion_recipient)
-    else {
-        return false;
-    };
-    left_token.len() == right_token.len()
-        && left_token
-            .as_bytes()
-            .ct_eq(right_token.as_bytes())
-            .unwrap_u8()
-            == 1
-        && left_recipient.len() == right_recipient.len()
-        && left_recipient
-            .as_bytes()
-            .ct_eq(right_recipient.as_bytes())
-            .unwrap_u8()
-            == 1
-}
-
 fn terminal_submission_error(error: &ReviewClientError) -> bool {
     match error {
         ReviewClientError::Configuration { .. } | ReviewClientError::InvalidRequest { .. } => true,
@@ -1148,10 +1127,17 @@ impl ReviewCompletionReceiver {
         Self { pool, authorities }
     }
 
-    pub fn authority(&self, token: &str, recipient: &str) -> Option<(String, u32)> {
-        let authority = self.authorities.completion_authority(token, recipient)?;
-        let recovery_days = self.authorities.recovery_days(authority)?;
-        Some((authority.to_owned(), recovery_days))
+    pub(crate) fn contains_recipient(&self, recipient: &str) -> bool {
+        self.authorities.completion_bindings.contains_key(recipient)
+    }
+
+    pub fn verify_completion(
+        &self,
+        recipient: &str,
+        content: SignedContent<'_>,
+        now: std::time::SystemTime,
+    ) -> Result<(&str, u32), FailedCheck> {
+        self.authorities.verify_completion(recipient, content, now)
     }
 
     pub async fn receive(
@@ -3109,7 +3095,7 @@ mod tests {
         }
     }
 
-    fn authority(id: &str, completion: Option<(&str, &str)>) -> Arc<ReviewAuthorityClient> {
+    fn authority(id: &str, completion: Option<(u8, &str)>) -> Arc<ReviewAuthorityClient> {
         let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
             "https://casework.example.test/".parse().expect("URL"),
         ))
@@ -3125,74 +3111,72 @@ mod tests {
                 "producer".to_owned(),
                 format!("{id}-producer"),
                 30,
-                completion.map(|(token, _)| Zeroizing::new(token.to_owned())),
+                completion.map(|(key, _)| test_completion_keys(key)),
                 completion.map(|(_, recipient)| recipient.to_owned()),
             )
             .expect("authority"),
         )
     }
 
+    fn test_completion_keys(byte: u8) -> DeliveryKeys {
+        DeliveryKeys::new(DeliveryKey::new(&[byte; 32]).unwrap(), None).unwrap()
+    }
+
     #[test]
-    fn completion_sender_requires_exact_independent_token_and_recipient() {
+    fn a_completion_binding_selects_one_authority_and_its_keys() {
         let registry = ReviewAuthorityRegistry::new(BTreeMap::from([
             (
                 "casework-a".to_owned(),
-                authority("casework-a", Some(("sender-a", "registry-a"))),
+                authority("casework-a", Some((1, "registry-a"))),
             ),
             (
                 "casework-b".to_owned(),
-                authority("casework-b", Some(("sender-b", "registry-b"))),
+                authority("casework-b", Some((2, "registry-b"))),
             ),
         ]))
         .expect("registry");
-
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000);
+        let signature =
+            delivery_signature::sign(&test_completion_keys(1), "event", 1000, b"{}").unwrap();
+        let content = || SignedContent {
+            id: "event",
+            timestamp: "1000",
+            signature: &signature,
+            body: b"{}",
+        };
         assert_eq!(
-            registry.completion_authority("sender-a", "registry-a"),
-            Some("casework-a")
+            registry.verify_completion("registry-a", content(), now),
+            Ok(("casework-a", 30))
+        );
+        for edge in [now - DELIVERY_TOLERANCE, now + DELIVERY_TOLERANCE] {
+            assert_eq!(
+                registry.verify_completion("registry-a", content(), edge),
+                Ok(("casework-a", 30)),
+            );
+        }
+        assert_eq!(
+            registry.verify_completion("registry-b", content(), now),
+            Err(FailedCheck::DeliverySignature)
         );
         assert_eq!(
-            registry.completion_authority("sender-a", "registry-b"),
-            None
-        );
-        assert_eq!(
-            registry.completion_authority("sender-b", "registry-a"),
-            None
-        );
-        assert_eq!(
-            registry.completion_authority("outgoing-token", "registry-a"),
-            None
+            registry.verify_completion("unknown", content(), now),
+            Err(FailedCheck::DeliverySignature)
         );
     }
 
     #[test]
-    fn completion_sender_bindings_must_be_unique_pairs() {
+    fn completion_recipient_bindings_must_be_unique() {
         assert!(ReviewAuthorityRegistry::new(BTreeMap::from([
             (
                 "casework-a".to_owned(),
-                authority("casework-a", Some(("shared-sender", "registry-a"))),
+                authority("casework-a", Some((1, "registry-a")))
             ),
             (
                 "casework-b".to_owned(),
-                authority("casework-b", Some(("shared-sender", "registry-a"))),
+                authority("casework-b", Some((2, "registry-a")))
             ),
         ]))
         .is_err());
-
-        assert!(ReviewAuthorityRegistry::new(BTreeMap::from([
-            (
-                "casework-a".to_owned(),
-                authority("casework-a", Some(("shared-sender", "registry-a"))),
-            ),
-            (
-                "casework-b".to_owned(),
-                authority("casework-b", Some(("shared-sender", "registry-b"))),
-            ),
-            (
-                "casework-c".to_owned(),
-                authority("casework-c", Some(("other-sender", "registry-a"))),
-            ),
-        ]))
-        .is_ok());
     }
 
     #[test]
@@ -3242,36 +3226,9 @@ mod tests {
     }
 
     #[test]
-    fn completion_sender_rejects_tokens_outside_the_inbound_bearer_grammar() {
-        for token in ["sender token", "sender,token"] {
-            let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-                "https://casework.example.test/".parse().expect("URL"),
-            ))
-            .expect("client");
-            assert!(
-                ReviewAuthorityClient::new(
-                    "casework-a".to_owned(),
-                    client,
-                    Arc::new(
-                        registry_platform_httputil::StaticToken::new("outgoing-token".to_owned(),)
-                            .expect("outgoing token"),
-                    ),
-                    "producer".to_owned(),
-                    "registry-producer".to_owned(),
-                    30,
-                    Some(Zeroizing::new(token.to_owned())),
-                    Some("registry-a".to_owned()),
-                )
-                .is_err(),
-                "completion token {token:?} cannot authenticate the inbound route"
-            );
-        }
-    }
-
-    #[test]
     fn completion_recipient_accepts_only_bounded_visible_ascii() {
         let at_bound = "x".repeat(MAXIMUM_COMPLETION_RECIPIENT_BYTES);
-        authority("casework-a", Some(("sender-a", &at_bound)));
+        authority("casework-a", Some((1, &at_bound)));
 
         for recipient in ["contains space", "contains\t tab", "récepteur"] {
             assert!(
@@ -3296,7 +3253,7 @@ mod tests {
                 "producer".to_owned(),
                 "registry-producer".to_owned(),
                 30,
-                Some(Zeroizing::new("sender-a".to_owned())),
+                Some(test_completion_keys(1)),
                 Some(over_bound),
             )
             .is_err(),
@@ -3339,10 +3296,7 @@ mod tests {
         )]))
         .expect("registry");
 
-        assert_eq!(
-            registry.completion_authority("any-token", "any-recipient"),
-            None
-        );
+        assert!(registry.completion_bindings.is_empty());
         assert_eq!(
             registry.submission_binding("casework-a"),
             Some(("casework-a-producer", 30))

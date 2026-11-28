@@ -2144,7 +2144,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
             "The record attachment slot already holds a file and is write-once."
         }
         Code::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
-        Code::AuthenticationRefused => "The bearer credential is missing or refused.",
+        Code::AuthenticationRefused => "The bearer token or delivery signature was not accepted.",
         Code::ExternalViewIncomplete => {
             "The external view's indexed coverage is incomplete for this request."
         }
