@@ -604,14 +604,16 @@ fn scan_unread_yaml(dir: &Path, bundle: &Bundle) -> (Vec<Diagnostic>, usize) {
         if !yaml || read.contains(relative) {
             continue;
         }
-        files += 1;
-        diagnostics.extend(identify(&bundle_file_name(dir, relative), bytes.as_slice()));
+        if let Some(findings) = identify(&bundle_file_name(dir, relative), bytes.as_slice()) {
+            files += 1;
+            diagnostics.extend(findings);
+        }
     }
     (diagnostics, files)
 }
 
 /// What a YAML file no document reads holds, by its envelope.
-fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
+fn identify(file: &str, bytes: &[u8]) -> Option<Vec<Diagnostic>> {
     let unread = |message: &str| {
         let mut diagnostic = Diagnostic::warning(
             "render.bundle.unread-file",
@@ -628,11 +630,17 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
         vec![diagnostic]
     };
     let Ok(root) = Reader::new(file).scan(bytes) else {
-        return unread(
+        return Some(unread(
             "the file is outside the YAML subset configuration files use, so the check cannot \
              identify it by its envelope; no Render runtime reads it as configuration",
-        );
+        ));
     };
+    if root
+        .as_ref()
+        .is_some_and(registry_rstack_dev::is_development_companion)
+    {
+        return None;
+    }
     let text = |key: &str| {
         let entry = root.as_ref()?.get(key)?;
         match &entry.value.value {
@@ -641,9 +649,9 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
         }
     };
     let (Some((kind, at)), Some(_)) = (text("kind"), text("apiVersion")) else {
-        return unread(
+        return Some(unread(
             "the file has no apiVersion and kind, so no Render runtime reads it as configuration",
-        );
+        ));
     };
     let at_kind = |severity: Severity, code: &str, message: &str, action: &str| {
         let mut diagnostic = Diagnostic::error(code, "/kind", message, action);
@@ -655,7 +663,7 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
         });
         diagnostic
     };
-    match kind.as_str() {
+    Some(match kind.as_str() {
         LABELS_KIND => {
             let mut unused = at_kind(
                 Severity::Warning,
@@ -689,7 +697,7 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
             "the file is of a kind a Render bundle does not hold",
             "Move the file out of the bundle.",
         )],
-    }
+    })
 }
 
 /// The checks `registry-render package` applies to source before it writes
@@ -1034,5 +1042,43 @@ fn label_finding(
 fn push_once(findings: &mut Vec<Diagnostic>, diagnostic: Diagnostic) {
     if !findings.contains(&diagnostic) {
         findings.push(diagnostic);
+    }
+}
+
+#[cfg(test)]
+mod development_companion_tests {
+    use super::*;
+
+    #[test]
+    fn checks_distinguish_development_companions() {
+        for (version, kind, accepted) in [
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "RStackDev",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+                "RStackScenarios",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v2",
+                "RStackDev",
+                false,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "Unknown",
+                false,
+            ),
+        ] {
+            let bytes = format!("apiVersion: {version}\nkind: {kind}\n");
+            assert_eq!(
+                identify("dev.yaml", bytes.as_bytes()).is_none(),
+                accepted,
+                "{kind} {version}"
+            );
+        }
     }
 }

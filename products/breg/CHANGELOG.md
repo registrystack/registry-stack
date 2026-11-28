@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `bregctl init` writes a plan and scenario for `rstack dev`, including projects derived from PublicSchema.
+
 - BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The
   POST carries `webhook-id`, `webhook-timestamp` and `webhook-signature`, an
   HMAC-SHA-256 over the id, the timestamp and the exact body. It no longer

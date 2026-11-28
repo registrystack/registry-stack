@@ -17,7 +17,28 @@ Concepts, configuration, operation, and the security model are on the documentat
 - [Registry Scheduling task grants](https://docs.registrystack.org/reference/scheduling-task-grants/)
 - [Registry Scheduling API](https://docs.registrystack.org/reference/apis/registry-scheduling/)
 
-## Start from an authored project
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names. Start Docker before running the example.
+
+```sh
+schedulingctl init ./schedule --template standalone-exact-time
+rstack dev start ./schedule
+```
+
+Copy the run ID and loopback URL from the report. Ask for the starter reader’s token
+and use the header file the command prints.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+Set `HEADERS` to the header file path before calling curl.
+
+```sh
+rstack dev token "$RUN" --as reader
+curl --fail --header @"$HEADERS" "$ORIGIN/v1/offerings"
+rstack dev stop "$RUN"
+```
+
+## Deploy with a PostgreSQL server you operate
 
 Create a starter, inspect its effective configuration, and replay its fixtures:
 

@@ -245,6 +245,17 @@ pub(crate) fn check_directory(
             exit = 3;
             continue;
         }
+        if name != "runtime.yaml"
+            && name != "scenarios.yaml"
+            && Reader::new(path.display().to_string())
+                .scan(&bytes)
+                .ok()
+                .flatten()
+                .as_ref()
+                .is_some_and(registry_rstack_dev::is_development_companion)
+        {
+            continue;
+        }
         let document =
             match Reader::new(path.display().to_string()).read(&bytes, &Expect::new(FORMATS)) {
                 Ok(document) => document,
@@ -337,4 +348,60 @@ fn unreadable(path: &Path) -> Diagnostic {
         "the project entry could not be read",
         "Restore a readable project root and regular authored files.",
     )
+}
+
+#[cfg(test)]
+mod development_companion_tests {
+    use super::*;
+
+    #[test]
+    fn development_plans_cannot_occupy_reserved_project_paths() {
+        for file in ["runtime.yaml", "scenarios.yaml"] {
+            let root = tempfile::tempdir().unwrap();
+            fs::write(
+                root.path().join(file),
+                "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\n",
+            )
+            .unwrap();
+            let posture = registry_platform_config::declared_from(None, None).unwrap();
+            let (report, _) = check_directory(root.path(), None, None, false, posture);
+            assert!(report.has_errors(), "{file}");
+        }
+    }
+
+    #[test]
+    fn checks_distinguish_development_companions() {
+        let root = tempfile::tempdir().unwrap();
+        for (version, kind, accepted) in [
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "RStackDev",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+                "RStackScenarios",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v2",
+                "RStackDev",
+                false,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "Unknown",
+                false,
+            ),
+        ] {
+            fs::write(
+                root.path().join("dev.yaml"),
+                format!("apiVersion: {version}\nkind: {kind}\n"),
+            )
+            .unwrap();
+            let posture = registry_platform_config::declared_from(None, None).unwrap();
+            let (report, _) = check_directory(root.path(), None, None, false, posture);
+            assert_eq!(!report.has_errors(), accepted, "{kind} {version}");
+        }
+    }
 }

@@ -36,6 +36,8 @@ pub fn command() -> clap::Command {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Scaffold a working starter bundle.
     Init {
         /// Target directory (created if absent).
@@ -451,6 +453,7 @@ fn wants_json(cli: &Cli) -> bool {
 
 fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
     match cli.command {
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Init { dir, labels } => crate::init::scaffold(&dir, &labels),
         Command::Check {
             bundle,

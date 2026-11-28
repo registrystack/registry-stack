@@ -166,18 +166,7 @@ impl OfflineCheck {
     /// inside the package, the path and position inside it when the fault
     /// knows them, and the fault's cause.
     pub fn push_artifact_fault(&mut self, code: &str, fault: &ArtifactFault, action: &str) {
-        let schema = fault.fault();
-        let message = match schema.field() {
-            Some(field) => format!("{} ({field})", schema.cause()),
-            None => schema.cause().to_owned(),
-        };
-        let action = schema.remedy().unwrap_or(action);
         let artifact = fault.artifact();
-        let pointer = schema.path().map(schema_path_pointer).unwrap_or_default();
-        let position = schema.location().map(|location| Position {
-            line: location.line,
-            column: location.column,
-        });
         let (file, kind) = if artifact.is_empty() {
             (self.package_label(), None)
         } else if artifact == RUNTIME_DOCUMENT {
@@ -185,10 +174,8 @@ impl OfflineCheck {
         } else {
             (self.package_file(artifact), artifact_kind(artifact))
         };
-        let mut diagnostic = Diagnostic::error(code, pointer, message, action);
-        diagnostic.artifact = kind.map(str::to_owned);
-        diagnostic.source = Some(source(&file, position));
-        self.diagnostics.push(diagnostic);
+        self.diagnostics
+            .push(artifact_fault_diagnostic(code, fault, action, &file, kind));
     }
 
     /// A file inside the package, as the runtime file names the package.
@@ -952,9 +939,75 @@ fn collect_members_naming(
     }
 }
 
+/// The diagnostic for a fault reported during package loading.
+pub(crate) fn package_fault_diagnostic(error: &BundleError, root: &Path) -> Option<Diagnostic> {
+    let (code, action) = package_fault_guidance(error)?;
+    let fault = error.artifact_fault()?;
+    let artifact = fault.artifact();
+    let file = if artifact.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(artifact)
+    };
+    Some(artifact_fault_diagnostic(
+        code,
+        fault,
+        action,
+        &file.display().to_string(),
+        artifact_kind(artifact),
+    ))
+}
+
+fn package_fault_guidance(error: &BundleError) -> Option<(&'static str, &'static str)> {
+    let rebuild = "Correct the artifact the message names and rebuild the package with `evidencectl package`.";
+    Some(match error {
+        BundleError::Config(_) => ("evidence.bundle.invalid-configuration", rebuild),
+        BundleError::InvalidArtifact(_) => ("evidence.bundle.invalid-artifact", rebuild),
+        BundleError::InvalidScript(_) => ("evidence.bundle.invalid-script", rebuild),
+        BundleError::UnknownFile(_) => (
+            "evidence.bundle.unknown-file",
+            "Remove the file from the project, or reference it from evidence.yaml, and rebuild the package with `evidencectl package`.",
+        ),
+        BundleError::NotImmutable(_) => (
+            "evidence.bundle.not-immutable",
+            "Make the file read-only for every user, or mount the package read-only.",
+        ),
+        _ => return None,
+    })
+}
+
+fn artifact_fault_diagnostic(
+    code: &str,
+    fault: &ArtifactFault,
+    action: &str,
+    file: &str,
+    kind: Option<&str>,
+) -> Diagnostic {
+    let schema = fault.fault();
+    let message = match schema.field() {
+        Some(field) => format!("{} ({field})", schema.cause()),
+        None => schema.cause().to_owned(),
+    };
+    let pointer = schema.path().map(schema_path_pointer).unwrap_or_default();
+    let position = schema.location().map(|location| Position {
+        line: location.line,
+        column: location.column,
+    });
+    let mut diagnostic =
+        Diagnostic::error(code, pointer, message, schema.remedy().unwrap_or(action));
+    diagnostic.artifact = kind.map(str::to_owned);
+    diagnostic.source = Some(source(file, position));
+    diagnostic
+}
+
 /// One refusal from loading the verified bundle.
 fn push_bundle_error(check: &mut OfflineCheck, layout: &Layout, error: BundleError) {
-    let rebuild = "Correct the artifact the message names and rebuild the package with `evidencectl package`.";
+    if let (Some((code, action)), Some(fault)) =
+        (package_fault_guidance(&error), error.artifact_fault())
+    {
+        check.push_artifact_fault(code, fault, action);
+        return;
+    }
     let (code, message) = match error {
         BundleError::Refused(report) => {
             check.extend(*report);
@@ -964,34 +1017,11 @@ fn push_bundle_error(check: &mut OfflineCheck, layout: &Layout, error: BundleErr
             push_package_error(check, layout, &error);
             return;
         }
-        BundleError::Config(fault) => {
-            check.push_artifact_fault("evidence.bundle.invalid-configuration", &fault, rebuild);
-            return;
-        }
-        BundleError::InvalidArtifact(fault) => {
-            check.push_artifact_fault("evidence.bundle.invalid-artifact", &fault, rebuild);
-            return;
-        }
-        BundleError::InvalidScript(fault) => {
-            check.push_artifact_fault("evidence.bundle.invalid-script", &fault, rebuild);
-            return;
-        }
-        BundleError::UnknownFile(fault) => {
-            check.push_artifact_fault(
-                "evidence.bundle.unknown-file",
-                &fault,
-                "Remove the file from the project, or reference it from evidence.yaml, and rebuild the package with `evidencectl package`.",
-            );
-            return;
-        }
-        BundleError::NotImmutable(fault) => {
-            check.push_artifact_fault(
-                "evidence.bundle.not-immutable",
-                &fault,
-                "Make the file read-only for every user, or mount the package read-only.",
-            );
-            return;
-        }
+        BundleError::Config(_)
+        | BundleError::InvalidArtifact(_)
+        | BundleError::InvalidScript(_)
+        | BundleError::UnknownFile(_)
+        | BundleError::NotImmutable(_) => unreachable!("artifact faults were reported above"),
         BundleError::Unavailable => {
             check.mark_unavailable();
             (

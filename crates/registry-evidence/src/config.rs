@@ -1256,6 +1256,14 @@ impl EvidenceConfig {
     /// refusal is a [`ConfigError::Refused`] report whose diagnostics name
     /// the member, its line and column, and the fix (CFG-DIAG-1).
     pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
+        Self::parse_yaml_observing(bytes, |_| {})
+    }
+
+    /// Observe the decoded assurance profile before applying semantic rules.
+    pub(crate) fn parse_yaml_observing(
+        bytes: &[u8],
+        observe_assurance: impl FnOnce(AssuranceProfile),
+    ) -> Result<Self, ConfigError> {
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::TooLarge);
         }
@@ -1264,6 +1272,7 @@ impl EvidenceConfig {
             .with_hook(&mut hook)
             .decode::<Self>(bytes, &Expect::one(&EVIDENCE_BUNDLE_FORMAT))
             .map_err(|report| ConfigError::Refused(Box::new(name_the_assertion_type(report))))?;
+        observe_assurance(decoded.value.assurance_profile);
         let mut diagnostics = bundle_integrity_diagnostics(&decoded);
         if let Err(violation) = decoded.value.check_rules_after_integrity() {
             diagnostics.push(violation.diagnostic(&decoded.document));
@@ -7336,30 +7345,67 @@ mod tests {
     fn bundle_contract_and_parser_agree_on_deployable_http_issuers() {
         let schema = bundle_contract_validator();
         for profile in ["production", "evidence-grade"] {
-            for (origin, accepted) in [
-                ("http://127.0.0.1:8080", true),
-                ("http://identity.internal:8080", false),
+            for (issuer, jwks, accepted) in [
+                (
+                    "http://127.0.0.1:8080",
+                    "http://127.0.0.1:8080?keys=current",
+                    true,
+                ),
+                (
+                    "http://[0:0:0:0:0:0:0:1]:8080",
+                    "https://identity.invalid/jwks",
+                    true,
+                ),
+                (
+                    "https://identity.invalid",
+                    "http://[::ffff:192.0.2.1]:8080/jwks",
+                    false,
+                ),
+                (
+                    "http://identity.internal:8080",
+                    "https://identity.invalid/jwks",
+                    false,
+                ),
+                (
+                    "http://[::0:1]:8080",
+                    "http://[0:0:0:0:0:ffff:127.0.0.1]/jwks",
+                    true,
+                ),
+                (
+                    "HTTP://LOCALHOST:8080/realms/local",
+                    "http://[::ffff:7f01:2]?key=current",
+                    true,
+                ),
+                (
+                    "http://127.0.0.1:8080?issuer",
+                    "https://identity.invalid/jwks",
+                    false,
+                ),
+                (
+                    "https://identity.invalid",
+                    "http://localhost:8080/jwks#key",
+                    false,
+                ),
             ] {
                 let mut candidate = bundle_contract_instance(include_bytes!(
                     "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
                 ));
                 candidate["assuranceProfile"] = serde_json::json!(profile);
-                candidate["authentication"]["oidc"]["issuer"] = serde_json::json!(origin);
-                candidate["authentication"]["oidc"]["jwksSource"]["uri"] =
-                    serde_json::json!(format!("{origin}/jwks"));
+                candidate["authentication"]["oidc"]["issuer"] = serde_json::json!(issuer);
+                candidate["authentication"]["oidc"]["jwksSource"]["uri"] = serde_json::json!(jwks);
                 let yaml = serde_norway::to_string(&candidate).unwrap();
                 let parsed = EvidenceConfig::parse_yaml(yaml.as_bytes());
                 assert_eq!(
                     parsed.is_ok(),
                     accepted,
-                    "{profile}: {origin}: {:?}",
+                    "{profile}: {issuer}, {jwks}: {:?}",
                     parsed.err()
                 );
                 let validated = schema.validate(&candidate);
                 assert_eq!(
                     validated.is_ok(),
                     accepted,
-                    "{profile}: {origin}: {:?}",
+                    "{profile}: {issuer}, {jwks}: {:?}",
                     validated
                         .err()
                         .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>())

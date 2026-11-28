@@ -24,7 +24,28 @@ Coordinator is optional. A direct application can prepare a BReg Proposal, obtai
 of its exact version and effects, and ask BReg to apply it without running Coordinator. Every
 product retains its own authorization and source mutation boundary.
 
-## Create and check a project
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names. Start Docker before running the example.
+
+```sh
+coordinatorctl init --directory ./follow-up
+rstack dev start ./follow-up
+```
+
+Copy the run ID and loopback URL from the report. Ask for the starter reader’s token
+and use the header file the command prints.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+Set `HEADERS` to the header file path before calling curl.
+
+```sh
+rstack dev token "$RUN" --as reader
+curl --fail --header @"$HEADERS" "$ORIGIN/v1/workflows/follow-up"
+rstack dev stop "$RUN"
+```
+
+## Author a project for a deployment you operate
 
 From the maintained Registry Stack checkout:
 

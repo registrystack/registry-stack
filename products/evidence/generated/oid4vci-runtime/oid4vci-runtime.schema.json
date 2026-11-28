@@ -525,7 +525,7 @@
         },
         {
           "const": "supervised-local-development",
-          "description": "One supervised process group on loopback: the credential issuer is a\ncanonical `http://127.0.0.1:<port>` origin the listener binds exactly,\nwhen the issuer uses HTTP. Requires the development posture.",
+          "description": "One supervised process group on loopback. An HTTP credential issuer\nuses a loopback origin with an explicit port matching the listener.\nRequires the development posture.",
           "type": "string"
         }
       ]

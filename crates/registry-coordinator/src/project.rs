@@ -12,7 +12,7 @@ const RUNTIME: &str =
 const SCENARIOS: &str =
     include_str!("../../../products/coordinator/examples/delayed-follow-up/scenarios.yaml");
 
-/// Write exactly the four authored files and a `.gitignore` for the local
+/// Write the authored starter, development plan and a `.gitignore` for the local
 /// `.coordinator/` directory into an absent or empty directory and name them.
 /// The project id is `id` or, without one, the directory name. A directory with content is refused, and an IO failure preserves
 /// created files so the caller can inspect them without any cleanup deleting
@@ -94,7 +94,18 @@ pub fn init(path: &Path, id: Option<&str>) -> Result<Vec<&'static str>> {
         }
         _ => return Err(occupied("the path exists and is not a directory")),
     }
+    let dev_scenario =
+        include_str!("../../../products/coordinator/examples/delayed-follow-up/dev-scenarios.yaml")
+            .replace(
+                "/v1/workflows/delayed-follow-up",
+                &format!("/v1/workflows/{}", project_id.as_str()),
+            );
     let files = [
+        (
+            "dev.yaml",
+            include_str!("../../../products/coordinator/examples/delayed-follow-up/dev.yaml"),
+        ),
+        ("dev-scenarios.yaml", dev_scenario.as_str()),
         ("workflow.yaml", workflow.as_str()),
         ("functions.rhai", FUNCTIONS),
         ("runtime.yaml", runtime.as_str()),

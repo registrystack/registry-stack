@@ -267,21 +267,31 @@ async fn posture_insecure_issuers_are_development_only() {
         .env("RUST_LOG", "info")
         .env_remove("REGISTRY_STACK_POSTURE")
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let drain = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        std::io::Read::read_to_end(&mut stdout, &mut output).unwrap();
+        output
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while child.try_wait().unwrap().is_none() {
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             child.wait().unwrap();
+            drain.join().unwrap();
             panic!("the second verifier did not exit after the audit writer lock refusal");
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    let startup = child.wait_with_output().unwrap();
-    assert!(!startup.status.success());
-    let listing = String::from_utf8_lossy(&startup.stdout);
+    };
+    assert!(!status.success());
+    let output = drain.join().unwrap();
+    let listing = String::from_utf8_lossy(&output);
     let logs: Vec<serde_json::Value> = listing
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())

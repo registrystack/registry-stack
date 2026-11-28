@@ -3,7 +3,7 @@
 //! `rstack dev` runs, driven through the launcher in source mode against the
 //! development hosts built beside it. Cargo builds only the binaries of the
 //! package under test, so build the hosts first:
-//! `cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins`.
+//! See the two development host build steps in the developer-tools CI shard.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::{
@@ -19,7 +19,7 @@ fn host(name: &str) -> std::path::PathBuf {
     let path = std::path::Path::new(env!("CARGO_BIN_EXE_rstack")).with_file_name(name);
     assert!(
         path.is_file(),
-        "{} is missing; build the development hosts first: cargo build --locked -p registry-bregctl -p registry-caseworkctl -p registry-evidencectl -p registry-evidence --bins",
+        "{} is missing; build the development hosts first: run both development host build steps for the developer-tools shard in .github/workflows/ci.yml",
         path.display()
     );
     path
@@ -118,8 +118,261 @@ impl Drop for GuardFixture {
 
 #[test]
 fn every_host_runs_the_service_guard() {
-    for name in ["bregctl", "caseworkctl"] {
+    for name in [
+        "bregctl",
+        "caseworkctl",
+        "evidencectl",
+        "messagingctl",
+        "schedulingctl",
+        "documentsctl",
+        "coordinatorctl",
+        "adapterctl",
+        "registry-render",
+        "discoveryctl",
+    ] {
         hidden_guard_dispatch_reaps_workload_when_controller_closes(&host(name));
+    }
+}
+
+#[test]
+fn launcher_selects_scheduling_for_a_scheduling_only_plan() {
+    let scratch = tempfile::tempdir().unwrap();
+    let probe = scratch.path().join("schedulingctl");
+    fs::write(
+        &probe,
+        "#!/bin/sh\n[ \"$1\" = rstack-dev ] && [ \"$2\" = check ]\n",
+    )
+    .unwrap();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        scratch.path().join("dev.yaml"),
+        "products: [{product: scheduling}]\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rstack"))
+        .arg("--install-root")
+        .arg(scratch.path().join("install"))
+        .args(["dev", "check"])
+        .arg(scratch.path())
+        .env("RSTACK_SCHEDULINGCTL_BIN", &probe)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn product_starters_write_plans_that_pass_dev_check() {
+    let scratch = tempfile::tempdir().unwrap();
+    let evidence_starter = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/evidence/examples/standalone");
+    let publicschema = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/evidence/organization-selection.yaml")
+        .canonicalize()
+        .unwrap();
+    let moved_scenario = scratch.path().join("evidence-with-renamed-scenario");
+    copy_tree(&evidence_starter, &moved_scenario);
+    fs::rename(
+        moved_scenario.join("tests/scenarios.yaml"),
+        moved_scenario.join("tests/starter-scenario.yaml"),
+    )
+    .unwrap();
+    let plan = moved_scenario.join("dev.yaml");
+    fs::write(
+        &plan,
+        fs::read_to_string(&plan)
+            .unwrap()
+            .replace("tests/scenarios.yaml", "tests/starter-scenario.yaml"),
+    )
+    .unwrap();
+    let mut starters = vec![
+        ("breg", "bregctl", "RSTACK_BREGCTL_BIN", vec![]),
+        (
+            "breg",
+            "bregctl",
+            "RSTACK_BREGCTL_BIN",
+            vec!["--template", "facility-registry"],
+        ),
+        (
+            "breg",
+            "bregctl",
+            "RSTACK_BREGCTL_BIN",
+            vec!["--from", "publicschema", "--selection", utf8(&publicschema)],
+        ),
+        (
+            "evidence",
+            "evidencectl",
+            "RSTACK_EVIDENCECTL_BIN",
+            vec!["--profile", "local", "--starter", utf8(&moved_scenario)],
+        ),
+        (
+            "messaging",
+            "messagingctl",
+            "RSTACK_MESSAGINGCTL_BIN",
+            vec![],
+        ),
+        (
+            "documents",
+            "documentsctl",
+            "RSTACK_DOCUMENTSCTL_BIN",
+            vec![],
+        ),
+        (
+            "coordinator",
+            "coordinatorctl",
+            "RSTACK_COORDINATORCTL_BIN",
+            vec!["--directory"],
+        ),
+        ("adapter", "adapterctl", "RSTACK_ADAPTERCTL_BIN", vec![]),
+        ("render", "registry-render", "RSTACK_RENDER_BIN", vec![]),
+        (
+            "discovery",
+            "discoveryctl",
+            "RSTACK_DISCOVERYCTL_BIN",
+            vec![],
+        ),
+    ];
+    for template in [
+        "standalone-decision",
+        "canonical-review",
+        "single-reviewer-approval",
+        "two-peer-approval",
+        "technical-check-then-authorization",
+    ] {
+        starters.push((
+            "casework",
+            "caseworkctl",
+            "RSTACK_CASEWORKCTL_BIN",
+            vec!["--template", template],
+        ));
+    }
+    for template in [
+        "standalone-exact-time",
+        "standalone-arrival-window",
+        "resource-reservations",
+    ] {
+        starters.push((
+            "scheduling",
+            "schedulingctl",
+            "RSTACK_SCHEDULINGCTL_BIN",
+            vec!["--template", template],
+        ));
+    }
+    for (index, (product, tool_name, variable, options)) in starters.into_iter().enumerate() {
+        let target = scratch.path().join(format!("{product}-{index}"));
+        let tool = host(tool_name);
+        let initialize = || {
+            let mut command = Command::new(&tool);
+            if product == "adapter" {
+                command.args(["--format", "json"]);
+            }
+            command
+                .arg("init")
+                .args(&options)
+                .arg(&target)
+                .env_remove("REGISTRY_STACK_POSTURE")
+                .output()
+                .unwrap()
+        };
+        let output = initialize();
+        assert!(
+            output.status.success(),
+            "{product}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if product == "adapter" {
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["ok"], true);
+            assert_eq!(report["command"], "init");
+        }
+        assert!(target.join("dev.yaml").is_file(), "{product}");
+        let output = Command::new(env!("CARGO_BIN_EXE_rstack"))
+            .arg("--install-root")
+            .arg(scratch.path().join("install"))
+            .args(["dev", "check"])
+            .arg(&target)
+            .env(variable, &tool)
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{product}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if product == "evidence" {
+            let output = Command::new(&tool)
+                .arg("check")
+                .arg(&target)
+                .arg("--target")
+                .arg(target.join("local-target.yaml"))
+                .env("REGISTRY_STACK_POSTURE", "development")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "Evidence check: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for directory in ["schemas", "projections"] {
+                let source = scratch.path().join(format!("evidence-{directory}"));
+                copy_tree(&evidence_starter, &source);
+                symlink(
+                    source.join("evidence.yaml"),
+                    source.join(directory).join("link.yaml"),
+                )
+                .unwrap();
+                let output = Command::new(&tool)
+                    .args([
+                        "init",
+                        "--format",
+                        "json",
+                        "--profile",
+                        "local",
+                        "--starter",
+                    ])
+                    .arg(&source)
+                    .arg(scratch.path().join(format!("refused-{directory}")))
+                    .env_remove("REGISTRY_STACK_POSTURE")
+                    .output()
+                    .unwrap();
+                assert!(
+                    !output.status.success(),
+                    "Evidence init copied a symlink from {directory}"
+                );
+                let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(report["diagnostics"][0]["code"], "evidence.init.refused");
+            }
+        }
+        if matches!(product, "adapter" | "discovery") {
+            let refused = initialize();
+            assert!(!refused.status.success(), "{product} overwrote its starter");
+            if product == "adapter" {
+                let report: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
+                assert_eq!(report["diagnostics"][0]["code"], "adapterctl.init.refused");
+            } else {
+                assert_eq!(refused.status.code(), Some(1));
+                assert!(String::from_utf8_lossy(&refused.stderr)
+                    .contains("choose a new starter directory"));
+            }
+            let mut check = Command::new(&tool);
+            check
+                .arg("check")
+                .env("REGISTRY_STACK_POSTURE", "development");
+            if product == "discovery" {
+                check.arg("--project");
+            }
+            let output = check.arg(&target).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{product}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
 
@@ -2064,7 +2317,7 @@ fn a_malformed_plan_names_its_field_before_allocating_run_state() {
     let state = scratch.path().join("state");
     fs::write(
         scratch.path().join("dev.yaml"),
-        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\nissuer: https://example.test\nproducts: [{product: coordinator, project: registry, audience: test}]\npeople: {}\nscenarioFile: tests/scenarios.yaml\n",
+        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\nissuer: https://example.test\nproducts: [{product: unrecognised, project: registry, audience: test}]\npeople: {}\nscenarioFile: tests/scenarios.yaml\n",
     )
     .unwrap();
     // The plan lists no hosting product, so the first available host reports
@@ -2702,6 +2955,51 @@ fn casework_alone_runs_end_to_end() {
     );
 }
 
+#[test]
+#[ignore = "requires Docker and built coordinatorctl and coordinator binaries"]
+fn coordinator_starter_starts_with_run_owned_keys() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("coordinator-starter");
+    let tool = host("coordinatorctl");
+    let initialized = Command::new(&tool)
+        .args(["init", "--directory", utf8(&project)])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(initialized.status.success());
+    let local_dev = || {
+        let mut command = rstack_dev_with_host(&scratch.path().join("state"), true, &tool);
+        command
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .env_remove("RSTACK_BREGCTL_BIN")
+            .env_remove("RSTACK_BREG_BIN")
+            .env("RSTACK_COORDINATORCTL_BIN", &tool)
+            .env("RSTACK_COORDINATOR_BIN", host("coordinator"));
+        command
+    };
+
+    let start = local_dev()
+        .args(["start", utf8(&project)])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&start.stdout).unwrap();
+    if let Some(run) = report["run_id"].as_str() {
+        let stop = local_dev().args(["stop", run]).output().unwrap();
+        assert!(
+            stop.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stop.stdout)
+        );
+    }
+    assert!(
+        start.status.success(),
+        "{}",
+        String::from_utf8_lossy(&start.stdout)
+    );
+    assert_eq!(report["scenarios"][0]["steps"][0]["status"], 200);
+}
+
 /// `rstack dev` with only the Evidence tools: no BReg or Casework binary is
 /// set and none is installed, so the launcher runs the built `evidencectl` as
 /// the host. `docker_state` lets the fake Docker CLI log its calls; without it
@@ -2775,16 +3073,36 @@ fn run_evidence_alone(
     let project = scratch.join("project");
     let _source = SyntheticSource::start(&project);
 
+    let unix_seconds = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    let before = unix_seconds();
     let started = evidence_only_dev(&state, docker_state)
         .args(["start", utf8(&project)])
         .output()
         .unwrap();
+    let after = unix_seconds();
     let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
     let run_id = report["run_id"].as_str().unwrap_or_default().to_owned();
     if !started.status.success() {
         dev_json(&state, &["stop", &run_id]);
         panic!("{started:?}");
     }
+    let origin = report["products"]["evidence"]
+        .as_str()
+        .expect("Evidence origin");
+    let readiness = Command::new(system_binary("curl"))
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            &format!("{origin}/ready"),
+        ])
+        .output()
+        .unwrap();
     let stopped = evidence_only_dev(&state, docker_state)
         .args(["stop", &run_id])
         .output()
@@ -2794,6 +3112,19 @@ fn run_evidence_alone(
     }
     assert!(stopped.status.success(), "{stopped:?}");
     assert_eq!(live_runs(&state), Vec::<String>::new());
+    assert!(
+        readiness.status.success(),
+        "curl /ready: {}",
+        String::from_utf8_lossy(&readiness.stderr)
+    );
+    let ready: serde_json::Value =
+        serde_json::from_slice(&readiness.stdout).expect("Evidence /ready JSON");
+    assert_eq!(ready["posture"], "development", "Evidence /ready: {ready}");
+    let expiry = report["expires_at"].as_u64().expect("run expiry");
+    assert!(
+        (before + 8 * 3600..=after + 8 * 3600).contains(&expiry),
+        "{report}"
+    );
     report
 }
 

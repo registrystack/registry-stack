@@ -414,7 +414,7 @@ fn render(
         }
         // Evidence has no bindings: a caller reaches it with a test token.
         // Messaging has no bindings: a caller reaches it with a test token.
-        Product::Evidence | Product::Messaging => {}
+        _ => {}
     }
 }
 

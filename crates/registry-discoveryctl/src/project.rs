@@ -863,6 +863,16 @@ fn check_root_files(
         };
         let named_runtime = path.file_name() == Some("runtime.yaml".as_ref());
         let tree = Reader::new(path.display().to_string()).scan(&bytes);
+        if !named_runtime
+            && tree
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .is_some_and(registry_rstack_dev::is_development_companion)
+        {
+            continue;
+        }
+
         let kind = match &tree {
             Ok(Some(root)) => root.get("kind").and_then(|entry| match &entry.value.value {
                 NodeValue::String(text) => Some((text.text.clone(), entry.value.span.start)),
@@ -1630,5 +1640,63 @@ alternatives:
             serde_json::to_value(OriginProfile::RegistryDiscoveryV1Alpha1).unwrap(),
             registry_discovery_profile::PROFILE_ID
         );
+    }
+    #[test]
+    fn a_development_plan_cannot_occupy_the_reserved_runtime_path() {
+        let root = project(ORIGINS, &[("one.yaml", MAPPING)]);
+        fs::write(
+            root.path().join("runtime.yaml"),
+            "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\n",
+        )
+        .unwrap();
+        let checked = inspect_project(
+            root.path(),
+            ProjectOptions {
+                declared: DEVELOPMENT,
+                environment: false,
+            },
+        );
+        assert!(checked.report.has_errors());
+    }
+
+    #[test]
+    fn checks_distinguish_development_companions() {
+        let root = project(ORIGINS, &[("one.yaml", MAPPING)]);
+        for (version, kind, accepted) in [
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "RStackDev",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+                "RStackScenarios",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v2",
+                "RStackDev",
+                false,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "Unknown",
+                false,
+            ),
+        ] {
+            fs::write(
+                root.path().join("dev.yaml"),
+                format!("apiVersion: {version}\nkind: {kind}\n"),
+            )
+            .unwrap();
+            let inspected = inspect_project(
+                root.path(),
+                ProjectOptions {
+                    declared: DEVELOPMENT,
+                    environment: false,
+                },
+            );
+            assert_eq!(!inspected.report.has_errors(), accepted, "{kind} {version}");
+        }
     }
 }

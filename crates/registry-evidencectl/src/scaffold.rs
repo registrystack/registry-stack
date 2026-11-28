@@ -119,10 +119,50 @@ fn create(
         AuthoringSource::SqliteExtract => None,
         AuthoringSource::Starter(_) => None,
     };
-    let starter_files = match source {
+    let mut starter_files = match source {
         AuthoringSource::Starter(starter) => collect_starter_files(starter)?,
         AuthoringSource::OpenApi(_) | AuthoringSource::SqliteExtract => Vec::new(),
     };
+    if let (Some("init"), AuthoringSource::Starter(starter)) = (report, &source) {
+        let starter = plain_directory(starter, "starter directory")?;
+        let mut bytes = starter_files.iter().map(|file| file.contents.len()).sum();
+        for name in ["projections", "schemas"] {
+            let relative = Path::new(name);
+            match fs::symlink_metadata(starter.join(relative)) {
+                Ok(metadata) if metadata.is_dir() => {
+                    collect_starter_directory(
+                        &starter,
+                        relative,
+                        0,
+                        &mut starter_files,
+                        &mut bytes,
+                    )?;
+                }
+                Ok(_) => bail!("starter assets must be ordinary directories"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        match fs::symlink_metadata(starter.join("dev.yaml")) {
+            Ok(_) => {
+                push_starter_file(
+                    &starter,
+                    Path::new("dev.yaml"),
+                    &mut starter_files,
+                    &mut bytes,
+                )?;
+                let scenario = starter_scenario_path(
+                    &starter,
+                    &starter_files.last().expect("plan was just added").contents,
+                )?;
+                if !starter_files.iter().any(|file| file.relative == scenario) {
+                    append_starter_file(&starter, &scenario, &mut starter_files, &mut bytes)?;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     let supplied_normalized_starter = validate_normalized_starter(&starter_files)?;
     // A starter that ships no source (its README asks for one to be imported
     // or authored first) cannot yet prove itself with `fixtures run`, so the
@@ -163,7 +203,9 @@ fn create(
             .with_context(|| format!("creating the empty {directory} directory"))?;
     }
     for file in starter_files {
-        write_new_file(&staged_root.join(file.relative), &file.contents, 0o644)?;
+        let path = staged_root.join(file.relative);
+        fs::create_dir_all(path.parent().expect("starter file has a parent"))?;
+        write_new_file(&path, &file.contents, 0o644)?;
     }
     if !supplied_normalized_starter {
         write_normalized_starter(staged_root, source)?;
@@ -242,6 +284,15 @@ fn create(
             .join(registry_evidence_authoring::layout::SECRETS_DIRECTORY)
             .display()
     );
+    if command == "init" && args.directory.join("dev.yaml").is_file() {
+        if args.directory.join("serve-source.py").is_file() {
+            println!(
+                "  Before the assertion scenario, run python3 {} --port 8081 in another terminal.",
+                args.directory.join("serve-source.py").display()
+            );
+        }
+        println!("  Next: rstack dev start {}", args.directory.display());
+    }
     match source {
         AuthoringSource::OpenApi(_) => println!(
             "Next: run `evidencectl source suggest {}` to draft one editable source.",
@@ -443,6 +494,59 @@ fn push_starter_file(
     if !starter_relative_path(relative) {
         bail!("starter files must stay in ordinary Evidence authoring directories");
     }
+    append_starter_file(root, relative, files, bytes)
+}
+
+fn starter_scenario_path(root: &Path, bytes: &[u8]) -> Result<PathBuf> {
+    use registry_platform_yaml::{NodeValue, Reader};
+    use std::path::Component;
+
+    let plan = Reader::new("dev.yaml")
+        .scan(bytes)
+        .map_err(|_| anyhow::anyhow!("the starter development plan is unreadable"))?;
+    let scenario = plan
+        .as_ref()
+        .filter(|plan| registry_rstack_dev::is_development_companion(plan))
+        .and_then(|plan| plan.get("scenarioFile"))
+        .and_then(|entry| match &entry.value.value {
+            NodeValue::String(value) => Some(value.text.as_str()),
+            _ => None,
+        })
+        .context("the starter development plan must name scenarioFile")?;
+    let relative = Path::new(scenario);
+    anyhow::ensure!(
+        !scenario.is_empty()
+            && !scenario.contains('\\')
+            && relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(part)
+            if part.to_str().is_some_and(|part| !part.starts_with('.')))),
+        "scenarioFile must name a relative path inside the starter"
+    );
+    anyhow::ensure!(
+        relative != Path::new("dev.yaml"),
+        "scenarioFile cannot name the development plan"
+    );
+
+    let mut ancestor = root.to_path_buf();
+    if let Some(parent) = relative.parent() {
+        for part in parent {
+            ancestor.push(part);
+            anyhow::ensure!(
+                fs::symlink_metadata(&ancestor)?.is_dir(),
+                "development scenarios must be under ordinary starter directories"
+            );
+        }
+    }
+    Ok(relative.to_owned())
+}
+
+fn append_starter_file(
+    root: &Path,
+    relative: &Path,
+    files: &mut Vec<StarterFile>,
+    bytes: &mut usize,
+) -> Result<()> {
     if files.len() >= MAX_STARTER_FILES {
         bail!("starter directory contains too many files");
     }
@@ -474,6 +578,9 @@ fn push_starter_file(
 }
 
 fn starter_relative_path(relative: &Path) -> bool {
+    if relative == Path::new("dev.yaml") {
+        return true;
+    }
     let text = relative.to_string_lossy();
     if text.is_empty() || text.contains('\\') {
         return false;
@@ -488,7 +595,7 @@ fn starter_relative_path(relative: &Path) -> bool {
     if STARTER_TOP_LEVEL_FILES.contains(&first) {
         return components.next().is_none();
     }
-    STARTER_DIRECTORIES.contains(&first)
+    (STARTER_DIRECTORIES.contains(&first) || matches!(first, "projections" | "schemas"))
         && components.all(|component| match component {
             std::path::Component::Normal(part) => part
                 .to_str()

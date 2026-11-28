@@ -1299,7 +1299,7 @@ fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
-            rendered.contains("runtime configuration is invalid"),
+            rendered.contains("evidence.runtime.report-unreadable"),
             "{format}: {rendered}"
         );
         if format == "json" {
@@ -1309,9 +1309,13 @@ fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
             assert_eq!(report["status"], "domain-refusal");
             assert_eq!(
                 report["diagnostics"][0]["code"],
-                "evidence.runtime.configuration-refused"
+                "evidence.runtime.report-unreadable"
             );
         } else {
+            assert!(
+                rendered.contains("runtime configuration is invalid"),
+                "{rendered}"
+            );
             assert!(output.stdout.is_empty());
         }
     }

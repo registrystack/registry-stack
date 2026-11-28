@@ -25,6 +25,7 @@ tls-test = ["registry-platform-httputil/test-support"]
 postgres-test = []
 
 [dependencies]
+registry-rstack-dev.workspace = true
 base64.workspace = true
 clap.workspace = true
 graphql-parser.workspace = true

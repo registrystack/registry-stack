@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+issuer: https://identity.starter.example.test
+products:
+  - {product: documents, project: ., audience: "urn:example:documents"}
+people:
+  reader:
+    subject: starter-reader
+    client: civil-registry-app
+    grants:
+      documents: {profile: custodian-app, scopes: ["documents:custody"], claims: {registry_actor_kind: service}}
+  citizen:
+    subject: starter-citizen
+    client: citizen-portal
+    grants:
+      documents: {profile: citizen, scopes: ["documents:own"], claims: {registry_actor_kind: human}}
+  staff:
+    subject: starter-staff
+    client: case-portal
+    grants:
+      documents: {profile: staff, scopes: ["documents:read"], claims: {registry_actor_kind: human}}
+  partner:
+    subject: starter-partner
+    client: partner-portal
+    grants:
+      documents: {profile: reader, scopes: ["documents:read"], claims: {registry_actor_kind: human}}
+scenarioFile: dev-scenarios.yaml

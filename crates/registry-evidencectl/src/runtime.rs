@@ -146,7 +146,7 @@ pub(crate) fn run(
         declared,
     )?;
     let posture_conflict = base.diagnostics().iter().any(is_posture_refusal);
-    if !base.status.success() && !posture_conflict {
+    if !base.succeeded() && !posture_conflict {
         // `evidence check` exits 3 when an input it depends on could not be
         // read, such as an unreadable runtime file or package.
         let detail = base.render_diagnostics();
@@ -213,7 +213,7 @@ pub(crate) fn run(
     }
 
     let dependency = dependency?;
-    if dependency.status.success() {
+    if dependency.succeeded() {
         let report = DoctorReport {
             runtime_config: &runtime_config,
             proof_boundary: proof_boundary(args.without_audit_lock),
@@ -225,7 +225,7 @@ pub(crate) fn run(
                 Some(declared),
             )?,
             OutputFormat::Human => {
-                if let Some(report) = &dependency.report {
+                if let Ok(report) = &dependency.report {
                     if let (Some(digest), Some(count)) =
                         (&report.package_digest, report.requirements)
                     {
@@ -234,8 +234,6 @@ pub(crate) fn run(
                     if !report.diagnostics.is_empty() {
                         eprint!("{}", Report::new(report.diagnostics.clone()).render_human());
                     }
-                } else {
-                    print!("{}", String::from_utf8_lossy(&dependency.stdout));
                 }
                 println!(
                     "Dependency preflight passed for {}",
@@ -326,27 +324,30 @@ fn runtime_diagnostic_is_dependency_failure(diagnostic: &[u8]) -> bool {
 
 struct CheckOutcome {
     status: ExitStatus,
-    stdout: Vec<u8>,
     stderr: Vec<u8>,
-    report: Option<RuntimeCheckReport>,
+    report: Result<RuntimeCheckReport, Diagnostic>,
 }
 
 impl CheckOutcome {
+    fn succeeded(&self) -> bool {
+        self.status.success() && self.report.is_ok()
+    }
+
     fn diagnostics(&self) -> &[Diagnostic] {
-        self.report
-            .as_ref()
-            .map_or(&[], |report| &report.diagnostics)
+        match &self.report {
+            Ok(report) => &report.diagnostics,
+            Err(diagnostic) => std::slice::from_ref(diagnostic),
+        }
     }
 
     fn render_diagnostics(&self) -> Vec<u8> {
-        self.report.as_ref().map_or_else(
-            || self.stderr.clone(),
-            |report| {
-                Report::new(report.diagnostics.clone())
-                    .render_human()
-                    .into_bytes()
-            },
-        )
+        let mut rendered = Report::new(self.diagnostics().to_vec())
+            .render_human()
+            .into_bytes();
+        if self.report.is_err() {
+            rendered.extend_from_slice(&self.stderr);
+        }
+        rendered
     }
 }
 
@@ -415,11 +416,19 @@ fn invoke_check(
     )
     .map_err(|_| operational_diagnostic(runtime_config))?;
 
-    let report = serde_json::from_slice(&runtime_output).ok();
+    let report = serde_json::from_slice(&runtime_output).map_err(|_| {
+        let mut diagnostic = Diagnostic::error(
+            "evidence.runtime.report-unreadable",
+            "",
+            "Evidence runtime check returned an unreadable JSON report.",
+            "Check that the Evidence runtime binary can produce a JSON check report, then rerun doctor.",
+        );
+        diagnostic.artifact = Some(runtime_config.display().to_string());
+        diagnostic
+    });
     Ok(CheckOutcome {
         status,
         report,
-        stdout: runtime_output,
         stderr: runtime_diagnostic,
     })
 }
@@ -538,7 +547,7 @@ mod tests {
             .expect("stub");
         writeln!(
             script,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf 'passed\\n'",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '{{\"diagnostics\":[]}}\\n'",
             arguments.display()
         )
         .expect("script");

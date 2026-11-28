@@ -224,6 +224,12 @@ pub(super) enum Product {
     Casework,
     Evidence,
     Messaging,
+    Scheduling,
+    Documents,
+    Coordinator,
+    Adapter,
+    Render,
+    Discovery,
 }
 
 impl Product {
@@ -233,7 +239,35 @@ impl Product {
             Self::Casework => "casework",
             Self::Evidence => "evidence",
             Self::Messaging => "messaging",
+            Self::Scheduling => "scheduling",
+            Self::Documents => "documents",
+            Self::Coordinator => "coordinator",
+            Self::Adapter => "adapter",
+            Self::Render => "render",
+            Self::Discovery => "discovery",
         }
+    }
+    pub(super) fn manifest(self) -> &'static str {
+        match self {
+            Self::Breg => "registry.yaml",
+            Self::Casework => "casework.yaml",
+            Self::Evidence => "evidence.yaml",
+            Self::Messaging => "messaging.yaml",
+            Self::Scheduling => "scheduling.yaml",
+            Self::Documents => "documents.yaml",
+            Self::Coordinator => "workflow.yaml",
+            Self::Adapter => "project.yaml",
+            Self::Render => "manifest.yaml",
+            Self::Discovery => "origins.yaml",
+        }
+    }
+
+    pub(super) fn needs_database(self) -> bool {
+        !matches!(self, Self::Evidence | Self::Render | Self::Discovery)
+    }
+
+    pub(super) fn verifies_tokens(self) -> bool {
+        self != Self::Discovery
     }
 }
 
@@ -251,7 +285,7 @@ pub(super) struct Plan {
     pub issuer: String,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
-    /// The test people, keyed by a lowercase local identifier. Define 1 to 256, and give at least one grant to every started product.
+    /// The test people, keyed by a lowercase local identifier. Define up to 256, and give at least one grant to every started product that verifies tokens.
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "keyed_schema::<LocalId, TestPerson>")
@@ -318,7 +352,7 @@ pub(super) struct ApplicationPlan {
 pub(super) struct ProductPlan {
     /// Which product to start.
     pub product: Product,
-    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework, evidence.yaml for Evidence or messaging.yaml for Messaging.
+    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain the product’s project manifest.
     pub project: PathBuf,
     /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
@@ -344,8 +378,9 @@ pub(super) struct TestPerson {
     /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
-    /// The authority this person holds in each product, keyed by `breg`, `casework`, `evidence` or `messaging`. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.
+    /// The authority this person holds in each product, keyed by its product identifier. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.
     #[serde(deserialize_with = "deserialize_grants")]
+    #[cfg_attr(feature = "schema", schemars(with = "GrantsDocument"))]
     pub grants: BTreeMap<Product, Grant>,
     /// Forward the same authority to both products. Both grants must declare the same scopes and additional claims.
     #[serde(default, rename = "caseworkContext")]
@@ -357,7 +392,7 @@ pub(super) struct TestPerson {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Grant {
-    /// Local identifier of the product profile this grant uses.
+    /// Local identifier of the product profile, the Coordinator caller policy, or a local label for a product without profiles.
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub profile: String,
     /// Distinct scopes written into the token, at most 32, each an OAuth scope-token of 1 to 256 bytes: printable ASCII without spaces, double quotes or backslashes.
@@ -371,12 +406,18 @@ pub(super) struct Grant {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 struct GrantsDocument {
     breg: Option<Grant>,
     casework: Option<Grant>,
     evidence: Option<Grant>,
     messaging: Option<Grant>,
+    scheduling: Option<Grant>,
+    documents: Option<Grant>,
+    coordinator: Option<Grant>,
+    adapter: Option<Grant>,
+    render: Option<Grant>,
 }
 
 fn deserialize_grants<'de, D>(
@@ -391,6 +432,13 @@ where
         grants.casework.map(|grant| (Product::Casework, grant)),
         grants.evidence.map(|grant| (Product::Evidence, grant)),
         grants.messaging.map(|grant| (Product::Messaging, grant)),
+        grants.scheduling.map(|grant| (Product::Scheduling, grant)),
+        grants.documents.map(|grant| (Product::Documents, grant)),
+        grants
+            .coordinator
+            .map(|grant| (Product::Coordinator, grant)),
+        grants.adapter.map(|grant| (Product::Adapter, grant)),
+        grants.render.map(|grant| (Product::Render, grant)),
     ]
     .into_iter()
     .flatten()
@@ -457,13 +505,13 @@ pub(super) struct Step {
     pub id: String,
     /// The product that receives the request.
     pub product: Product,
-    /// The test person who sends the request. The person needs a grant for this step's product.
+    /// The test person who sends the request. Omit for a public Discovery request.
     #[serde(rename = "as")]
-    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
-    pub person: String,
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
+    pub person: Option<String>,
     /// The HTTP method.
     pub method: Method,
-    /// Request path, starting with `/v1/`, at most 2048 characters, without whitespace, control characters, backslashes or fragments. It may contain `{{name}}` references to earlier captures.
+    /// Request path, starting with `/v1/` or using the Adapter effective-contract path, at most 2048 characters, without whitespace, control characters, backslashes or fragments. It may contain `{{name}}` references to earlier captures.
     pub path: String,
     /// JSON request body, at most 1 MiB once encoded. String values may contain `{{name}}` references to earlier captures. Do not combine with `raw`.
     pub body: Option<Value>,
@@ -1121,7 +1169,7 @@ impl Plan {
             !self.products.is_empty(),
             "/products",
             "The plan must name at least one product.",
-            "Add a BReg, Casework, Evidence or Messaging product to products.",
+            "Add a supported product to products.",
         )?;
         let mut products = BTreeSet::new();
         let mut audiences = BTreeSet::new();
@@ -1150,12 +1198,7 @@ impl Plan {
                 "The product project must be a relative path inside the development project directory.",
                 "Set project to `.` or a relative path made only of normal path components.",
             )?;
-            let manifest = match entry.product {
-                Product::Breg => "registry.yaml",
-                Product::Casework => "casework.yaml",
-                Product::Evidence => "evidence.yaml",
-                Product::Messaging => "messaging.yaml",
-            };
+            let manifest = entry.product.manifest();
             require_file_inside(
                 root,
                 &entry.project.join(manifest),
@@ -1172,11 +1215,18 @@ impl Plan {
             )?;
         }
         require(
-            (1..=MAXIMUM_PEOPLE).contains(&self.people.len()),
+            self.people.len() <= MAXIMUM_PEOPLE,
             "/people",
-            "The plan must define 1 to 256 test people.",
-            "Add or remove test people until people contains between 1 and 256 entries.",
+            "The plan may define at most 256 test people.",
+            "Remove test people until people contains at most 256 entries.",
         )?;
+        require(
+            !self.people.is_empty() || products.iter().all(|product| !product.verifies_tokens()),
+            "/people",
+            "The plan must define test people for products that verify tokens.",
+            "Add a test person with a grant for each product that verifies tokens.",
+        )?;
+        let mut coordinator_scopes = BTreeMap::new();
         for (name, person) in &self.people {
             require(
                 identifier(name),
@@ -1211,7 +1261,7 @@ impl Plan {
                 !person.grants.is_empty(),
                 &format!("{field}/grants"),
                 "The test person must have at least one product grant.",
-                "Add a BReg, Casework, Evidence or Messaging grant for this test person.",
+                "Add a grant for a started product that verifies tokens.",
             )?;
             for (product, grant) in &person.grants {
                 let field = format!("{field}/grants/{}", product.name());
@@ -1237,6 +1287,24 @@ impl Plan {
                     "The grant must contain at most 32 scopes, each an OAuth scope-token.",
                     "Remove excess scopes, and keep each scope within 256 bytes of printable ASCII without spaces, double quotes or backslashes.",
                 )?;
+                if *product == Product::Coordinator {
+                    require(
+                        grant.profile == person.client,
+                        &format!("{field}/profile"),
+                        "The Coordinator grant's profile must match its client policy ID.",
+                        "Set profile to the person's client.",
+                    )?;
+                    let scopes = grant.scopes.iter().collect::<BTreeSet<_>>();
+                    let expected = coordinator_scopes
+                        .entry(&person.client)
+                        .or_insert_with(|| scopes.clone());
+                    require(
+                        *expected == scopes,
+                        &format!("{field}/scopes"),
+                        "Coordinator grants for the same client must have the same scopes.",
+                        "Align the scopes for every Coordinator grant using this client.",
+                    )?;
+                }
                 for claim in grant.claims.keys() {
                     if self.application.is_some() && browser_host_claim(claim) {
                         return refuse(
@@ -1299,7 +1367,10 @@ impl Plan {
                 )?;
             }
         }
-        for product in products {
+        for product in products
+            .into_iter()
+            .filter(|product| product.verifies_tokens())
+        {
             require(
                 self.people
                     .values()
@@ -1344,28 +1415,34 @@ impl Journey {
                 "Set id to a lowercase local identifier or dotted sequence of local identifiers.",
             )?;
             require(
-                plan.people
-                    .get(&step.person)
-                    .is_some_and(|person| person.grants.contains_key(&step.product)),
+                if step.product.verifies_tokens() {
+                    step.person
+                        .as_ref()
+                        .and_then(|name| plan.people.get(name))
+                        .is_some_and(|person| person.grants.contains_key(&step.product))
+                } else {
+                    step.person.is_none() && plan.products.iter().any(|p| p.product == step.product)
+                },
                 &format!("{field}/as"),
                 "The step must name a test person with a grant for its product.",
                 "Set as to a test person that has a grant for this step's product.",
             )?;
             require(
-                valid_path(&step.path),
+                valid_path(&step.path) && (step.path != ADAPTER_CONTRACT_PATH || step.product == Product::Adapter),
                 &format!("{field}/path"),
                 "The request path must be a relative product API path starting with /v1/.",
                 "Set path to a bounded /v1/ path without whitespace, control characters, backslashes, or fragments.",
             )?;
             if step.product == Product::Breg {
-                let grant_profile = &plan.people[&step.person].grants[&Product::Breg].profile;
+                let person = step.person.as_ref().expect("validated BReg step");
+                let grant_profile = &plan.people[person].grants[&Product::Breg].profile;
                 if let Some(named) = path_access_profile(&step.path) {
                     require(
                         named == *grant_profile || named.contains("{{"),
                         &format!("{field}/path"),
                         format!(
                             "Step `{}` names the BReg access profile `{named}`, but its test person `{}` has a grant for `{grant_profile}`.",
-                            step.id, step.person
+                            step.id, person
                         ),
                         format!(
                             "Remove `accessProfile={named}` from the path (the scenario takes the profile from the test person's grant), or run the step as a test person whose BReg grant selects `{named}`."
@@ -1676,9 +1753,11 @@ fn require_file_inside(
     }
 }
 
+pub(super) const ADAPTER_CONTRACT_PATH: &str = "/.well-known/registry-adapter/effective-contract";
+
 pub(super) fn valid_path(value: &str) -> bool {
     value.len() <= 2048
-        && value.starts_with("/v1/")
+        && (value.starts_with("/v1/") || value == ADAPTER_CONTRACT_PATH)
         && !value.contains(['\\', '#'])
         && !value.chars().any(|c| c.is_control() || c.is_whitespace())
 }
@@ -1756,7 +1835,7 @@ mod tests {
         plan.people.insert("person-256".to_owned(), copy());
         let refusal = plan.validate(root.path()).unwrap_err().to_string();
         assert!(refusal.contains("/people"), "{refusal}");
-        assert!(refusal.contains("1 to 256 test people"), "{refusal}");
+        assert!(refusal.contains("at most 256 test people"), "{refusal}");
     }
 
     /// Writes `tests/scenarios.yaml` holding one scenario.
@@ -2726,5 +2805,123 @@ mod tests {
         .unwrap();
         let error = read_plan(root.path()).err().unwrap().to_string();
         assert!(error.contains("profile"), "{error}");
+    }
+    #[test]
+    fn new_products_have_closed_grants_and_discovery_needs_none() {
+        for (name, manifest) in [
+            ("scheduling", "scheduling.yaml"),
+            ("documents", "documents.yaml"),
+            ("coordinator", "workflow.yaml"),
+            ("adapter", "project.yaml"),
+            ("render", "manifest.yaml"),
+            ("discovery", "origins.yaml"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            fs::write(root.path().join(manifest), "fixture").unwrap();
+            fs::create_dir(root.path().join("tests")).unwrap();
+            fs::write(root.path().join("tests/scenarios.yaml"), "fixture").unwrap();
+            let plan = |people: Value| {
+                json!({
+                    "apiVersion": API_VERSION,
+                    "kind": KIND,
+                    "issuer": "https://issuer.example.invalid",
+                    "products": [{"product": name, "project": ".", "audience": name}],
+                    "people": people,
+                    "scenarioFile": "tests/scenarios.yaml",
+                })
+            };
+            let people = if name == "discovery" {
+                json!({})
+            } else {
+                json!({"operator": {"subject": "operator", "client": "console",
+                    "grants": {name: {"profile": "console", "scopes": []}}}})
+            };
+            let file = root.path().join("dev.yaml");
+            fs::write(&file, plan(people).to_string()).unwrap();
+            let decoded =
+                read_plan(root.path()).unwrap_or_else(|error| panic!("{name}: {error:#}"));
+            validate_plan(root.path(), &decoded)
+                .unwrap_or_else(|error| panic!("{name}: {error:#}"));
+            assert_eq!(decoded.value.products[0].product.name(), name);
+
+            if name != "discovery" {
+                fs::write(root.path().join("messaging.yaml"), "fixture").unwrap();
+                let mut missing_grant = plan(json!({
+                    "operator": {"subject": "operator", "client": "console",
+                        "grants": {"messaging": {"profile": "operator", "scopes": []}}}
+                }));
+                missing_grant["products"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                        "product": "messaging", "project": ".", "audience": "messaging"
+                    }));
+                fs::write(&file, missing_grant.to_string()).unwrap();
+                let decoded = read_plan(root.path()).unwrap();
+                let error = validate_plan(root.path(), &decoded).unwrap_err();
+                assert!(format!("{error:#}").contains(&format!(
+                    "The plan must define at least one grant for {name}."
+                )));
+            }
+        }
+    }
+    #[test]
+    fn coordinator_grant_conflicts_are_reported_at_the_grant() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("workflow.yaml"), "fixture").unwrap();
+        fs::write(root.path().join("scenarios.yaml"), "fixture").unwrap();
+        let mut plan = json!({
+            "apiVersion": API_VERSION, "kind": KIND,
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "coordinator", "project": ".", "audience": "coordinator"}],
+            "people": {
+                "first": {"subject": "first", "client": "console",
+                    "grants": {"coordinator": {"profile": "console", "scopes": ["status"]}}},
+                "second": {"subject": "second", "client": "console",
+                    "grants": {"coordinator": {"profile": "reader", "scopes": ["start"]}}},
+            },
+            "scenarioFile": "scenarios.yaml",
+        });
+        for (field, fix) in [("profile", json!("console")), ("scopes", json!(["status"]))] {
+            let pointer = format!("/people/second/grants/coordinator/{field}");
+            fs::write(root.path().join("dev.yaml"), plan.to_string()).unwrap();
+            let decoded = read_plan(root.path()).unwrap();
+            let error = validate_plan(root.path(), &decoded).unwrap_err();
+            assert!(format!("{error:#}").contains(&pointer), "{error:#}");
+            *plan.pointer_mut(&pointer).unwrap() = fix;
+        }
+        fs::write(root.path().join("dev.yaml"), plan.to_string()).unwrap();
+        validate_plan(root.path(), &read_plan(root.path()).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn plan_does_not_accept_authentication_overrides_or_unknown_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let valid = json!({
+            "apiVersion": API_VERSION,
+            "kind": KIND,
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "scheduling", "project": ".", "audience": "urn:scheduling"}],
+            "people": {"reader": {"subject": "reader", "client": "console",
+                "grants": {"scheduling": {"profile": "reader", "scopes": []}}}},
+            "scenarioFile": "scenarios.yaml",
+        });
+        for (pointer, field) in [
+            ("", "issuerUrl"),
+            ("/products/0", "jwksUri"),
+            ("/people/reader/grants", "unknown"),
+            ("/people/reader/grants/scheduling", "role"),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.pointer_mut(pointer).unwrap()[field] = json!("unexpected");
+            fs::write(root.path().join("dev.yaml"), invalid.to_string()).unwrap();
+            let error = read_plan(root.path())
+                .err()
+                .expect("unknown member refused");
+            assert!(
+                error.to_string().contains(&format!("{pointer}/{field}")),
+                "{error:#}"
+            );
+        }
     }
 }

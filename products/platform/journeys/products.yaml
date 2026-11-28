@@ -72,7 +72,7 @@ products:
     cargoFeatures: []
     usesPostgres: true
     verifiesTokens: true
-    rstackDevPlan: false
+    rstackDevPlan: true
   - id: documents
     tier: primary
     binary: documents
@@ -82,7 +82,7 @@ products:
     cargoFeatures: []
     usesPostgres: true
     verifiesTokens: true
-    rstackDevPlan: false
+    rstackDevPlan: true
   - id: coordinator
     tier: primary
     binary: coordinator
@@ -92,7 +92,7 @@ products:
     cargoFeatures: []
     usesPostgres: true
     verifiesTokens: true
-    rstackDevPlan: false
+    rstackDevPlan: true
   - id: adapter
     tier: primary
     binary: adapter
@@ -102,7 +102,7 @@ products:
     cargoFeatures: []
     usesPostgres: true
     verifiesTokens: true
-    rstackDevPlan: false
+    rstackDevPlan: true
   - id: render
     tier: primary
     binary: registry-render
@@ -112,7 +112,7 @@ products:
     cargoFeatures: []
     usesPostgres: false
     verifiesTokens: true
-    rstackDevPlan: false
+    rstackDevPlan: true
   - id: discovery
     tier: primary
     binary: discovery
@@ -122,7 +122,7 @@ products:
     cargoFeatures: [registry-discovery/server]
     usesPostgres: false
     verifiesTokens: false
-    rstackDevPlan: false
+    rstackDevPlan: true
   - id: breg-mcp
     tier: supporting
     parent: breg

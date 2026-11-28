@@ -528,6 +528,42 @@ fn compile_preview_seal_renders_the_sealed_variant_without_a_signature() {
 }
 
 #[test]
+fn package_excludes_development_companions() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("bundle");
+    let package = root.path().join("package");
+    assert!(run(&["init", bundle.to_str().unwrap()]).status.success());
+    std::fs::copy(bundle.join("dev.yaml"), bundle.join("copy-of-dev.yml")).unwrap();
+    std::fs::write(
+        bundle.join("alternate.json"),
+        r#"{"apiVersion":"id.registrystack.org/formats/rstack/scenarios/v1alpha1","kind":"RStackScenarios"}"#,
+    ).unwrap();
+
+    let output = run(&[
+        "package",
+        "--bundle",
+        bundle.to_str().unwrap(),
+        "--output",
+        package.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sums = std::fs::read_to_string(package.join("SHA256SUMS")).unwrap();
+    for companion in [
+        "dev.yaml",
+        "dev-scenarios.yaml",
+        "copy-of-dev.yml",
+        "alternate.json",
+    ] {
+        assert!(!package.join(companion).exists(), "{companion}");
+        assert!(!sums.contains(companion), "{companion}");
+    }
+}
+
+#[test]
 fn package_command_writes_repeatable_verified_envelopes_and_revision() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);

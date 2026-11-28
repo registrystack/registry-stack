@@ -17,7 +17,7 @@ and [CLI report contract](contracts/cli/README.md) own exact wire shapes.
 The [stage outcomes example](examples/stage-outcomes/README.md) keeps one review
 history while offering different decisions at local and final review.
 
-## First submitted review
+## Start a development run
 
 The starter needs no BReg service. It declares a `decision` policy with
 `purpose: answer`, `context: {mode: submitted}`, a bounded `displaySchema`,

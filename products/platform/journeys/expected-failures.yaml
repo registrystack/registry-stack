@@ -109,12 +109,11 @@ expectedFailures:
     reason: "prepare and issuer pass (adapterctl check of the facade-recovery example with the breg-records profile). adapterctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: evidence
-    step: issuer
-    code: product.evidence.bundle.invalid-authentication
-    removedBy: posture
-    basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "evidencectl check refuses the local target (outer code evidence.target.publication-invalid): the local profile takes only a canonical 127.0.0.1 HTTP origin with a port, and a Keycloak issuer carries the /realms/<realm> path, so any such issuer needs allowInsecureHttp: true. The loopback transport class of the posture change removes the URL-shape rule. Behind it the call is predicted to stop at token-type, because Keycloak sends typ JWT."
+    step: call
+    code: http.401.token-type
+    removedBy: caller-contract
+    basis: predicted
+    reason: "The local profile accepts the loopback Keycloak issuer with its realm path. The protected call is expected to refuse the access token because Keycloak sends typ JWT and Evidence requires at+jwt."
   - journey: own-provider
     product: render
     step: call

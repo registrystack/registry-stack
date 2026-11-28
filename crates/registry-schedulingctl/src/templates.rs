@@ -41,6 +41,11 @@ pub(super) fn template_files(template: &str) -> Option<Vec<(&'static str, &'stat
                 "fixtures/named-intervals.yaml",
                 example!("resource-reservations", "fixtures/named-intervals.yaml"),
             ),
+            ("dev.yaml", example!("resource-reservations", "dev.yaml")),
+            (
+                "dev-scenarios.yaml",
+                example!("resource-reservations", "dev-scenarios.yaml"),
+            ),
         ]),
         "standalone-exact-time" => Some(vec![
             (
@@ -62,6 +67,11 @@ pub(super) fn template_files(template: &str) -> Option<Vec<(&'static str, &'stat
             (
                 "fixtures/fold-day-rebooking.yaml",
                 example!("standalone-exact-time", "fixtures/fold-day-rebooking.yaml"),
+            ),
+            ("dev.yaml", example!("standalone-exact-time", "dev.yaml")),
+            (
+                "dev-scenarios.yaml",
+                example!("standalone-exact-time", "dev-scenarios.yaml"),
             ),
         ]),
         "standalone-arrival-window" => Some(vec![
@@ -90,6 +100,14 @@ pub(super) fn template_files(template: &str) -> Option<Vec<(&'static str, &'stat
                     "standalone-arrival-window",
                     "fixtures/household-afternoon.yaml"
                 ),
+            ),
+            (
+                "dev.yaml",
+                example!("standalone-arrival-window", "dev.yaml"),
+            ),
+            (
+                "dev-scenarios.yaml",
+                example!("standalone-arrival-window", "dev-scenarios.yaml"),
             ),
         ]),
         _ => None,
@@ -140,11 +158,13 @@ mod tests {
     fn every_template_file_names_its_schema_on_its_first_line() {
         for template in TEMPLATE_NAMES {
             for (relative, contents) in template_files(template).unwrap() {
-                let format = match relative {
-                    "scheduling.yaml" => "project",
-                    "records.yaml" => "records",
-                    "runtime.example.yaml" => "runtime",
-                    _ if relative.starts_with("fixtures/") => "fixture",
+                let (owner, format) = match relative {
+                    "scheduling.yaml" => ("scheduling", "project"),
+                    "records.yaml" => ("scheduling", "records"),
+                    "runtime.example.yaml" => ("scheduling", "runtime"),
+                    "dev.yaml" => ("rstack", "dev"),
+                    "dev-scenarios.yaml" => ("rstack", "scenarios"),
+                    _ if relative.starts_with("fixtures/") => ("scheduling", "fixture"),
                     _ => panic!("{template}: unexpected file {relative}"),
                 };
                 assert_eq!(
@@ -152,7 +172,7 @@ mod tests {
                     Some(
                         format!(
                             "# yaml-language-server: $schema=https://id.registrystack.org/\
-                             schemas/scheduling/{format}/{format}.v1alpha1.schema.json"
+                             schemas/{owner}/{format}/{format}.v1alpha1.schema.json"
                         )
                         .as_str()
                     ),
@@ -324,6 +344,8 @@ mod tests {
                 "records.yaml",
                 "fixtures/counter-stations.yaml",
                 "fixtures/fold-day-rebooking.yaml",
+                "dev.yaml",
+                "dev-scenarios.yaml",
             ]
         );
     }

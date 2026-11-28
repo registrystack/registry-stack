@@ -41,7 +41,7 @@ with the caller's source of record.
 | `registry-messagingctl` | Adopter and local operator tooling, the `messagingctl` binary. |
 | `registry-messaging-client` | The bounded Rust client over the runtime's HTTP contract. |
 
-## Running locally
+## Start a development run
 
 `rstack dev` runs a package end to end on one machine from a development plan. It needs Docker for
 PostgreSQL and, when a provider is `smtp`, Mailpit. `messagingctl init` writes the plan, `dev.yaml`,
@@ -51,10 +51,12 @@ and a scenario file with the starter:
 messagingctl init ./notices
 rstack dev check ./notices
 rstack --format json dev start ./notices --ttl 2h > run.json
-RUN="$(jq -r .run_id run.json)"
-HEADERS="$(rstack dev token "$RUN" --as case-system | awk '$1 == "messaging" && $2 == "headers" {print $3}')"
+RUN="$(jq -er '.run_id' run.json)"
+ORIGIN="$(jq -er '.products.messaging' run.json)"
+HEADERS="$(rstack --format json dev token "$RUN" --as case-system |
+  jq -er '.credentials[] | select(.product == "messaging") | .header_file')"
 printf '%s\n' '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}' |
-  rstack messaging api /v1/messages --url "$(jq -r .products.messaging run.json)" \
+  rstack messaging api /v1/messages --url "$ORIGIN" \
     --header @"$HEADERS" --idempotency-key first --input -
 rstack dev stop "$RUN"
 ```

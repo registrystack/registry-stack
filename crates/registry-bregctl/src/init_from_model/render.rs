@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Renders a plan into the files of a registry project.
 //!
-//! The files are the same six a plain `init` writes, minus the module and
-//! plus the echoed selection, and every value in them comes from the plan:
+//! The files describe the derived registry, its development fixtures and run,
+//! and the echoed selection. Every project-specific value comes from the plan:
 //! this module decides layout and wording only. The YAML is written by hand
 //! rather than serialized, so the project carries the comments a reader
 //! needs and keeps the key order a reader expects.
@@ -34,6 +34,11 @@ pub(crate) fn render(plan: &Plan, selection: &Selection) -> BTreeMap<String, Vec
     BTreeMap::from([
         ("README.md".to_owned(), readme(plan).into_bytes()),
         ("registry.yaml".to_owned(), registry(plan).into_bytes()),
+        ("dev.yaml".to_owned(), development_plan(plan).into_bytes()),
+        (
+            "dev/scenarios.yaml".to_owned(),
+            development_scenarios(plan).into_bytes(),
+        ),
         (
             "runtime.example.yaml".to_owned(),
             runtime_example(plan).into_bytes(),
@@ -51,6 +56,76 @@ pub(crate) fn render(plan: &Plan, selection: &Selection) -> BTreeMap<String, Vec
             selection_echo(selection).into_bytes(),
         ),
     ])
+}
+
+fn development_plan(plan: &Plan) -> String {
+    let mut yaml = Yaml::default();
+    yaml.line(0, "# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1",
+    );
+    yaml.line(0, "kind: RStackDev");
+    yaml.entry(0, "issuer", &base_iri(plan));
+    yaml.line(0, "products:");
+    yaml.line(1, "- product: breg");
+    yaml.line(2, "project: .");
+    yaml.entry(2, "audience", &format!("urn:example:{}", plan.registry_id));
+    yaml.line(0, "people:");
+    let callers = [
+        Some((
+            OPERATOR_PROFILE,
+            operator_principal(plan),
+            operate_scope(plan),
+            "registry-operations",
+        )),
+        (!reader_entities(plan).is_empty()).then(|| {
+            (
+                READER_PROFILE,
+                reader_principal(plan),
+                read_scope(plan),
+                "registry-reporting",
+            )
+        }),
+    ];
+    for (profile, subject, scope, purpose) in callers.into_iter().flatten() {
+        yaml.line(1, &format!("{profile}:"));
+        yaml.entry(2, "subject", &subject);
+        yaml.entry(2, "client", profile);
+        yaml.line(2, "grants:");
+        yaml.line(3, "breg:");
+        yaml.entry(4, "profile", profile);
+        yaml.line(4, &format!("scopes: [{}]", scalar(&scope)));
+        yaml.line(4, "claims:");
+        yaml.entry(5, "registry_purpose", purpose);
+        yaml.line(5, "registry_actor_kind: service");
+    }
+    yaml.line(0, "scenarioFile: dev/scenarios.yaml");
+    yaml.finish()
+}
+
+fn development_scenarios(plan: &Plan) -> String {
+    let mut yaml = Yaml::default();
+    yaml.line(0, "# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+    );
+    yaml.line(0, "kind: RStackScenarios");
+    yaml.line(0, "scenarios:");
+    yaml.line(1, "- id: read-starter");
+    yaml.line(2, "steps:");
+    yaml.line(3, "- id: list-records");
+    yaml.line(4, "product: breg");
+    yaml.line(4, "as: operator");
+    yaml.line(4, "method: GET");
+    yaml.entry(
+        4,
+        "path",
+        &format!("/v1/records/{}", plan.entities[0].route),
+    );
+    yaml.line(4, "expect: {status: 200}");
+    yaml.finish()
 }
 
 /// The entities the reader profile may read: those not classified
@@ -1643,6 +1718,8 @@ mod tests {
             vec![
                 "README.md",
                 "dev-clients.yaml",
+                "dev.yaml",
+                "dev/scenarios.yaml",
                 SELECTION_PATH,
                 "registry.yaml",
                 "runtime.example.yaml",

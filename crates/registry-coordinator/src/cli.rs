@@ -111,6 +111,8 @@ enum ExplainTopic {
 }
 #[derive(Subcommand)]
 enum Command {
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Send one raw HTTP request using a saved Coordinator connection.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage named Coordinator API connections.
@@ -124,7 +126,7 @@ enum Command {
         #[arg(long, hide = true, env = "COORDINATOR_BIN", value_name = "BINARY")]
         coordinator_bin: Option<PathBuf>,
     },
-    /// Create a reviewed four-file starter and its .gitignore in a new or empty directory.
+    /// Create a reviewed starter with a development plan in a new or empty directory.
     Init {
         #[arg(long)]
         /// New or empty project directory; a directory with content is refused.
@@ -386,6 +388,7 @@ impl Command {
         match self {
             Self::Api(_) => "api",
             Self::Connection { .. } => "connection",
+            Self::RstackDev(_) => "rstack-dev",
             Self::Serve { .. } => "serve",
             Self::Init { .. } => "init",
             Self::Check { .. } => "check",
@@ -881,6 +884,7 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
         Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
     };
     match &cli.command {
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
         }
@@ -1254,6 +1258,13 @@ pub async fn run() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    if let Command::RstackDev(args) = cli.command {
+        return tokio::task::spawn_blocking(move || {
+            registry_rstack_dev::run(args, &mut std::io::stdout(), &mut std::io::stderr())
+        })
+        .await
+        .unwrap_or(std::process::ExitCode::FAILURE);
+    }
     let posture_flag = match &cli.command {
         Command::Provision(args) => args.posture.as_deref().or(cli.posture.as_deref()),
         _ => cli.posture.as_deref(),

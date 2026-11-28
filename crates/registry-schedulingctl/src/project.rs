@@ -897,7 +897,9 @@ mod tests {
                 "runtime.example.yaml",
                 "records.yaml",
                 "fixtures/household-morning.yaml",
-                "fixtures/household-afternoon.yaml"
+                "fixtures/household-afternoon.yaml",
+                "dev.yaml",
+                "dev-scenarios.yaml"
             ])
         );
         // The printed sequence names the runtime file by a path that is

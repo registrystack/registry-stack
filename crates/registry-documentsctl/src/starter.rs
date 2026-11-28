@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The starter `documentsctl init` writes: the maintained example under
-//! `products/documents/examples/starter`, embedded file for file, so the
+//! `products/documents/examples/development-starter`, embedded file for file, so the
 //! command and the published example cannot drift apart.
 
 use std::fs;
@@ -9,14 +9,24 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// Every file of the starter, by its path relative to the new directory.
-pub(crate) const FILES: [(&str, &str); 2] = [
+pub(crate) const FILES: [(&str, &str); 4] = [
     (
         "documents.yaml",
-        include_str!("../../../products/documents/examples/starter/documents.yaml"),
+        include_str!("../../../products/documents/examples/development-starter/documents.yaml"),
     ),
     (
         "runtime.example.yaml",
-        include_str!("../../../products/documents/examples/starter/runtime.example.yaml"),
+        include_str!(
+            "../../../products/documents/examples/development-starter/runtime.example.yaml"
+        ),
+    ),
+    (
+        "dev.yaml",
+        include_str!("../../../products/documents/examples/development-starter/dev.yaml"),
+    ),
+    (
+        "dev-scenarios.yaml",
+        include_str!("../../../products/documents/examples/development-starter/dev-scenarios.yaml"),
     ),
 ];
 
@@ -90,14 +100,15 @@ mod tests {
 
     #[test]
     fn the_starter_embeds_every_file_of_the_published_example() {
-        let example =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/documents/examples/starter");
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/documents/examples/development-starter");
         let mut published = fs::read_dir(&example)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         published.sort();
-        let embedded = FILES.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        let mut embedded = FILES.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        embedded.sort_unstable();
         assert_eq!(published, embedded);
         for (name, contents) in FILES {
             assert_eq!(fs::read_to_string(example.join(name)).unwrap(), contents);
@@ -110,7 +121,12 @@ mod tests {
         let directory = parent.path().join("project");
         assert_eq!(
             write(&directory).unwrap(),
-            ["documents.yaml", "runtime.example.yaml"]
+            [
+                "documents.yaml",
+                "runtime.example.yaml",
+                "dev.yaml",
+                "dev-scenarios.yaml"
+            ]
         );
         for (name, contents) in FILES {
             assert_eq!(fs::read_to_string(directory.join(name)).unwrap(), contents);

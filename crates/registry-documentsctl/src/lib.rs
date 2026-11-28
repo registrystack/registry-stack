@@ -84,6 +84,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Write the starter project into a new directory.
     Init(InitArgs),
     /// Check a project, a runtime configuration, or both, offline.
@@ -529,6 +531,9 @@ where
             return ExitCode::from(USAGE_EXIT);
         }
     };
+    if let Command::RstackDev(args) = cli.command {
+        return registry_rstack_dev::run(args, stdout, stderr);
+    }
     let command = command_path(&cli.command);
     let (posture_flag, production) = match &cli.command {
         Command::Check(args) => (args.posture.as_deref(), args.production),
@@ -546,6 +551,7 @@ where
             (args.activation.posture.as_deref(), false)
         }
         Command::Init(_) | Command::Package(_) => (None, false),
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
     };
     let mut refusal = |code, message, action| {
         let mut outcome = Outcome::refused(USAGE_EXIT, code, "arguments", message);
@@ -575,6 +581,7 @@ where
         }
     };
     let mut outcome = match &cli.command {
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Provision(args) => return provision(args, cli.format, declared),
         Command::Init(args) => init(&args.directory),
         Command::Check(args) => check(args, declared),
@@ -635,6 +642,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Check(_) => "check",
         Command::Package(_) => "package",
         Command::Plan(_) => "plan",
+        Command::RstackDev(_) => "rstack-dev",
         Command::Provision(_) => "provision",
         Command::Apply(_) => "apply",
         Command::Status(_) => "status",
@@ -1422,7 +1430,12 @@ mod tests {
         assert_eq!(report["status"], "complete");
         assert_eq!(
             report["created"],
-            json!(["documents.yaml", "runtime.example.yaml"])
+            json!([
+                "documents.yaml",
+                "runtime.example.yaml",
+                "dev.yaml",
+                "dev-scenarios.yaml"
+            ])
         );
         let (code, _) = json_report(&["check", "--project", target]);
         assert_eq!(code, ExitCode::SUCCESS, "the starter checks clean");

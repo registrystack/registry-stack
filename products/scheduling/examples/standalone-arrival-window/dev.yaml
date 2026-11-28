@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
+kind: RStackDev
+issuer: https://identity.starter.example.test
+products:
+  - {product: scheduling, project: ., audience: "urn:example:scheduling"}
+people:
+  reader:
+    subject: starter-reader
+    client: starter-client
+    grants:
+      scheduling: {profile: reader, scopes: ["scheduling:read"], claims: {registry_actor_kind: service}}
+scenarioFile: dev-scenarios.yaml

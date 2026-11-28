@@ -2544,18 +2544,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_loaded_development_service_accepts_a_marked_ordinary_offer_token() {
-        let directory = canonical_tempdir();
+    async fn loaded_services_apply_posture_to_marked_ordinary_offer_tokens() {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
         let issuer = registry_platform_testing::MockHttpUpstream::start().await;
         let key = private_jwk("offer-test");
         issuer
             .expect("GET", "/jwks.json")
             .respond_json(200, json!({"keys": [public_jwk(&key)]}))
             .await;
-        let mut config = load_deployment(directory.path());
-        config.offers.issuer = issuer.url();
-        config.offers.jwks_uri = format!("{}/jwks.json", issuer.url());
-        config.offers.algorithms = vec![crate::config::AccessTokenAlgorithm::ES256];
         let token = proof_jwt_with_header(
             &key,
             json!({"alg": "ES256", "typ": "at+jwt", "kid": "offer-test"}),
@@ -2570,8 +2567,43 @@ mod tests {
                 "registry_posture": "development",
             }),
         );
-        let service = DeliveryService::load(config).await.unwrap();
-        service.authorizer.authorize(&token).await.unwrap();
+        for posture in [Posture::Development, Posture::Production] {
+            let directory = canonical_tempdir();
+            let path = write_deployment(directory.path(), 8090, 0o600);
+            let document = fs::read_to_string(&path)
+                .unwrap()
+                .replace(
+                    "  issuer: https://mint.example.org",
+                    &format!("  issuer: {}", issuer.url()),
+                )
+                .replace(
+                    "  jwksUri: https://mint.example.org/.well-known/jwks.json",
+                    &format!(
+                        "  jwksUri: {}/jwks.json\n  algorithms: [ES256]",
+                        issuer.url()
+                    ),
+                );
+            fs::write(&path, document).unwrap();
+            let config = DeliveryConfig::load(
+                &path,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let service = DeliveryService::load(config).await.unwrap();
+            let result = service.authorizer.authorize(&token).await;
+            match posture {
+                Posture::Development => {
+                    result.unwrap();
+                }
+                Posture::Production => assert!(matches!(
+                    result,
+                    Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims))
+                )),
+            }
+        }
     }
 
     #[tokio::test]
