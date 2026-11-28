@@ -51,6 +51,18 @@
   refused. To migrate, write the store's or verifier's own IPv4 or native
   IPv6 address, or a name that answers one.
 
+- Proposal applicants can answer mirrored review asks with text and cited additions.
+  The independent `answer` grant and promoted link bind the command to the current
+  submission and ETag. Open asks derive `awaiting-party` status. Answer delivery
+  sends only subject and stored time under the producer credential, with its own
+  recovery deadline. Human reviewers read answers and cited verified files live
+  from `context.asks`, even without an authored additions context field.
+  Applicant pages must explain that disclosure before answering.
+- BREAKING: strict Proposal clients must accept `asks` and the availability reasons
+  `ask-answered`, `ask-closed` and `ask-due-passed` (all `receipt-only`). Hooks without
+  a transition filter also receive `proposal.asked` and `proposal.answered`.
+  Per-version erasure plans count questions, answers and citation references.
+
 - BREAKING: Proposal slot uploads now answer `413 attachment.too-large` and
   `415 attachment.content-type`, matching supporting-document additions.
   They previously used generic request and media-type codes.

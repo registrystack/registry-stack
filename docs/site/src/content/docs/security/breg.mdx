@@ -76,6 +76,20 @@ An accepted completion only makes a result lookup due.
     crates/registry-breg/src/event_destination.rs, distinct_delivery_keys();
     crates/registry-breg/src/review_store.rs, verify_completion(), receive_completion(). */}
 
+### Review ask disclosure
+
+An applicant's answer and cited files are disclosed to the reviewers of the current accepted review, even when no authored additions context field exists.
+The applicant page must explain this before answering.
+The source serves questions and answers under human GetReviewContext authority, with exact current submission and review binding checks on cited-file downloads.
+Institutional delegated reads receive neither questions nor answers.
+No human token is forwarded to the review authority. The worker sends only the subject and stored answer timestamp under its producer credential.
+Answer audits retain cited file IDs, and ask-bound download audits identify the actor, ask and file without recording content.
+Casework reads answer content live and does not persist it.
+
+{/* Evidence: crates/registry-breg/tests/support/proposal_review_asks.rs;
+    crates/registry-casework/src/review/source_answers.rs;
+    crates/registry-casework-breg/src/lib.rs. */}
+
 ### In-process refresh worker
 
 Indexed external views are refreshed by a worker inside BReg, not by an outside client.

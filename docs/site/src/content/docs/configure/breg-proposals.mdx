@@ -123,7 +123,7 @@ Any required Evidence is resolved under explicit operator trust and the Action's
 
 Profiles declare `permissions.records`, `permissions.actions`, and `permissions.proposals` independently.
 Start authorises creation of a draft.
-Proposal Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply each need their own grant.
+Proposal Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, Apply, Add, and Answer each need their own grant.
 `get-application-actor` is a supplemental disclosure grant and must appear with Get in the same Proposal grant.
 List requires List authority and conceals other owners' and jurisdictions' work before filters or counts.
 Record and changes projections in review context also require current Record disclosure.
@@ -793,6 +793,67 @@ Use the `added` hook transition to observe the value-free `proposal.added` event
     crates/registry-breg/src/mutation/proposal/context_projection.rs;
     crates/registry-breg/tests/support/proposal_additions.rs;
     crates/registry-breg/src/proposal_retention.rs. */}
+
+## Answer a reviewer's ask
+
+A reviewer can ask for an explanation, supporting files, or both while the review stays open.
+BReg learns of asks by polling the review authority within its configured worker cadence.
+The Proposal's `asks` array shows the current submission's questions newest first, with their wants, absolute `askedAt` and optional `dueAt`, state and answer link.
+Get authority controls question and answer disclosure, including on list items and command responses.
+An open, unanswered ask changes the same derived status and turn to `awaiting-party` and `party`.
+After the local answer commits, they return to `in-review` and `official` when review remains pending.
+
+Grant `answer` in the applicant profile's Proposal operations.
+If the ask wants documents, also grant `add` with the additions slot in `writableAttachments`, as described above.
+Follow the ask's promoted `links.answer` with the current `If-Match` and a caller-chosen `Idempotency-Key`:
+
+```http
+POST /v1/proposals/{proposal_id}/asks/{ask_id}/answer?accessProfile=applicant
+Content-Type: application/json
+If-Match: "<current-proposal-etag>"
+Idempotency-Key: <caller-chosen-key>
+
+{"text":"The explanation","additions":["<addition-uuid>"]}
+```
+
+`text` is required for an `answer` want, must be nonblank and is bounded to 2,000 UTF-8 bytes.
+A `document` want requires at least one addition ID from this submission, added at or after the ask and not cited by another answer.
+The list holds at most 32 distinct IDs. Unknown body members are refused.
+Use `request.invalid` and its `fieldPath` to correct the body.
+The successful response is the full caller-filtered Proposal with a new ETag, unchanged submission version and unchanged frozen effects.
+Resending the same key and request returns the stored response. Changing the body with that key conflicts.
+
+Page authors must tell applicants before they answer:
+
+> Your answer and any file you attach go to the reviewers of this application.
+
+Answering discloses the answer and its cited files to reviewers of this review even when the Action declares no additions context field.
+BReg serves them live in the reserved `context.asks` sibling beside authored `context.fields`.
+Casework joins validated answers onto its own asks by ask ID and does not store their text or file descriptors.
+Reviewers use their own review-context authority and token. Delegated institutional context reads receive neither asks nor answers.
+A cited file's download remains bound to the current review request, submission version, frozen effect and context schema, and its bytes must pass verification.
+A file not cited by an answer still needs an authored additions context field.
+
+The answer link becomes unavailable with `ask-answered`, `ask-closed` or `ask-due-passed`, each with recovery `receipt-only`.
+Shared lifecycle refusals still apply. Availability is an observation, so refetch after a refusal.
+The due date is absolute from the provider's ask, not from when BReg polls it.
+BReg refuses answers after that date by its own clock. The provider judges an answer by its stored `answeredAt`.
+An on-time answer can therefore be delivered after the provider has marked the ask expired.
+BReg rounds a higher-precision ask time up to a microsecond and uses the later of that instant and its own commit clock for `answeredAt`.
+
+The worker sends the provider only the frozen subject and stored answer time, using BReg's producer credential.
+Answer text and files stay in BReg.
+Transient failures retry with the same key and timestamp until this answer's recovery deadline, measured from `answeredAt`.
+A deterministic refusal ends delivery and preserves the local answer. `review.ask-not-open` records that the provider no longer accepts it.
+Revise, Rebase and Cancel close open asks and supersede pending deliveries for that submission.
+The `asked` and `answered` hook transitions carry value-free lifecycle events.
+Question disclosure and ask-bound downloads are audited, and the answer audit records only cited file IDs.
+Answers and added files follow the Action's `retention` mode and are erased per submission version by operator erasure.
+
+{/* Evidence: crates/registry-breg/tests/support/proposal_review_asks.rs;
+    crates/registry-breg/src/review_store/asks.rs answer_time;
+    crates/registry-breg/src/review_store/asks/delivery.rs;
+    crates/registry-casework/src/review/source_answers.rs. */}
 
 ## Keep a supporting document on the record
 

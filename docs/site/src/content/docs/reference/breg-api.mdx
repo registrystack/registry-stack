@@ -590,6 +590,24 @@ the Proposal Get authority: its frozen `effectDigest`, its `review` result, its 
 progress. Once its result window has lapsed and no application receipt remains, it answers
 `410 proposal.submission_expired`; the Proposal stays readable.
 
+### Proposal asks
+
+`POST /v1/proposals/{proposal_id}/asks/{ask_id}/answer` requires the selected profile's `answer` authority, `If-Match`, `Idempotency-Key` and an `application/json` body with optional `text` and `additions` members.
+The ask's wants determine which members are required. Unknown members are refused.
+A 200 response carries the updated caller-filtered Proposal and ETag.
+Get authority controls the optional `asks` member on Proposal reads and command responses.
+Follow each ask's `links.answer`, including its typed availability and recovery.
+See [Answer a reviewer's ask](../../configure/breg-proposals/#answer-a-reviewers-ask) for limits, delivery and disclosure.
+
+Human review-context responses carry intrinsic answers in `context.asks`, outside the authored field schema.
+A cited-file download selects `reviewAskId` instead of `reviewContextField`, with the existing `submissionVersion`, `effectDigest` and `contextSchemaDigest` query members.
+The selector admits only a cited file in the current accepted review binding and preserves every existing download verification and authority check.
+Institutional task-grant context does not carry asks or answers.
+
+{/* Evidence: crates/registry-breg/src/proposal_artifacts.rs;
+    crates/registry-breg/tests/proposal_asks.rs;
+    crates/registry-breg/tests/support/proposal_review_asks.rs. */}
+
 ### Proposal attachments
 
 `GET`, `PATCH`, and `DELETE /v1/proposals/{proposal_id}/attachments/{slot_id}` read, upload, and

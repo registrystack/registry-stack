@@ -92,8 +92,8 @@ A Proposal lifecycle hook is declared on the Action under `execution.proposal.ho
 transitions, and uses its own value-free event schema; it is separate from Record field
 projections.
 If you omit `transitions`, BReg matches every Proposal transition.
-This includes `added` and its `proposal.added` event.
-Your existing receiver must accept this event when its hook has no transition filter.
+This includes `added`, `asked` and `answered`, with events `proposal.added`, `proposal.asked` and `proposal.answered`.
+Your existing receiver must accept these events when its hook has no transition filter.
 Set an explicit `transitions` list if your receiver accepts only selected events.
 
 {/* Evidence: crates/registry-breg/src/proposal_hooks.rs matching_transitions;
