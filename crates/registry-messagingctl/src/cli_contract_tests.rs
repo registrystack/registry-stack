@@ -30,24 +30,13 @@ fn invoke(arguments: impl IntoIterator<Item = OsString>) -> (ExitCode, Value) {
 }
 
 #[test]
-fn ready_session_points_the_reader_to_the_public_api_command() {
-    let report = json!({
-        "state":"ready",
-        "api":"http://127.0.0.1:8107",
-        "metrics":"http://127.0.0.1:9107",
-        "mailpit":"http://127.0.0.1:8025",
-        "mockGateway":"http://127.0.0.1:8187",
-        "runtimeConfig":"/project/.messaging/dev/runtime.yaml",
-        "log":"/project/.messaging/dev/messaging.log"
-    });
-    let mut output = Vec::new();
-    render_dev(&report, &mut output).expect("render ready session");
-    let output = String::from_utf8(output).expect("UTF-8 report");
-    assert!(
-        output.contains("next: rstack messaging dev token --client CLIENT, then rstack messaging api PATH --url URL --header @FILE"),
-        "{output}"
-    );
-    assert!(!output.contains("curl -H @HEADER_FILE"), "{output}");
+fn legacy_dev_is_an_unknown_subcommand() {
+    let refusal = Cli::try_parse_from(["messagingctl", "dev"]).unwrap_err();
+    assert_eq!(refusal.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    assert!(Cli::command()
+        .render_long_help()
+        .to_string()
+        .contains("Use rstack dev"));
 }
 
 /// Every JSON report opens with `ok`, `command`, and `status` in that order;
@@ -371,12 +360,6 @@ fn every_public_json_report_opens_with_the_envelope() {
             all.push(data.clone().into_os_string());
             all
         },
-        path_arguments(&["dev"], &root.join("absent")),
-        {
-            let mut all = arguments(&["dev", "token", "client"]);
-            all.push(root.join("absent").into_os_string());
-            all
-        },
         arguments(&["--not-a-real-argument"]),
         arguments(&["check"]),
     ];
@@ -469,15 +452,6 @@ fn every_report_names_its_command_and_status() {
         assert_eq!(report["command"], command, "{report}");
         assert_eq!(report["status"], "operational-failure", "{report}");
     }
-
-    let (_, token) = invoke({
-        let mut all = arguments(&["dev", "token", "client"]);
-        all.push(root.join("absent").into_os_string());
-        all
-    });
-    assert_eq!(token["command"], "dev token");
-    let (_, dev) = invoke(path_arguments(&["dev"], &root.join("absent")));
-    assert_eq!(dev["command"], "dev");
 }
 
 #[test]
@@ -726,9 +700,6 @@ fn every_artifact_word_a_refusal_names_is_kebab_case() {
         ("message.dispatch-started", "message"),
         ("message.changed", "message"),
         ("message.outcome-unknown", "message"),
-        ("dev.refused", "dev-session"),
-        ("dev.failed", "dev-session"),
-        ("dev.interrupted", "dev-session"),
     ];
     for (code, artifact) in by_code {
         for exit in [DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT] {

@@ -101,6 +101,23 @@ pub async fn acquire(
     key: PrivateJwk,
     grant_id: &str,
 ) -> Result<GrantCredential, ToolingError> {
+    acquire_with_peer_policy(
+        connection,
+        client_id,
+        key,
+        grant_id,
+        registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+    )
+    .await
+}
+
+pub(crate) async fn acquire_with_peer_policy(
+    connection: &GrantConnection,
+    client_id: &str,
+    key: PrivateJwk,
+    grant_id: &str,
+    peer_policy: registry_platform_httputil::PeerPolicy,
+) -> Result<GrantCredential, ToolingError> {
     connection.validate()?;
     if !crate::description::valid_uuid(grant_id) {
         return Err(refused("an approved grant UUID is required"));
@@ -149,16 +166,13 @@ pub async fn acquire(
             "Casework refused the grant; check its approval, client, expiry and revocation",
         ));
     }
-    registry_platform_httputil::validate_response_headers(
-        response.headers(),
-        registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
-    )
-    .map_err(|error| match error {
-        registry_platform_httputil::ResponseHeaderError::DevelopmentPeer => {
-            refused("the Casework peer declared development and this tooling refuses it")
-        }
-        _ => refused("the Casework assertion headers exceed their bounds"),
-    })?;
+    registry_platform_httputil::validate_response_headers(response.headers(), peer_policy)
+        .map_err(|error| match error {
+            registry_platform_httputil::ResponseHeaderError::DevelopmentPeer => {
+                refused("the Casework peer declared development and this tooling refuses it")
+            }
+            _ => refused("the Casework assertion headers exceed their bounds"),
+        })?;
     if response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)

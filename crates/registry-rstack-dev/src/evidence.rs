@@ -150,15 +150,24 @@ impl ProductRunner<'_> {
             false,
             || self.ensure_active(),
         )?;
-        let listener = self
-            .issuer_listener
-            .take()
-            .context("the run issuer listener is not reserved")?;
-        let jwks = JwksServer::start(listener, &self.issuer_jwks()?)?;
+        let jwks = if plan.jwks_uri().is_some() {
+            None
+        } else {
+            let listener = self
+                .issuer_listener
+                .take()
+                .context("the run issuer listener is not reserved")?;
+            Some(JwksServer::start(listener, &self.issuer_jwks()?)?)
+        };
+        let jwks_uri = jwks
+            .as_ref()
+            .map(JwksServer::uri)
+            .or_else(|| plan.jwks_uri().map(str::to_owned))
+            .context("missing Evidence key endpoint")?;
         let target_file = target_dir.join("target.yaml");
         let missing = self.point_target_at_run(
             &target_file,
-            (bind, &jwks.uri()),
+            (bind, &jwks_uri),
             &secrets,
             &package_root,
             &plan.product(Product::Evidence).audience,
@@ -211,7 +220,7 @@ impl ProductRunner<'_> {
             false,
             || self.ensure_active(),
         )?;
-        self.jwks = Some(jwks);
+        self.jwks = jwks;
         Ok(config)
     }
 
@@ -312,7 +321,13 @@ impl ProductRunner<'_> {
         // The run issuer is the key set server's own origin: a local Evidence
         // target accepts only a canonical loopback issuer whose key set is
         // served from that origin.
-        configure_run_oidc(oidc, &self.input.plan.issuer, jwks_uri, audience);
+        if self.input.plan.jwks_uri().is_some() {
+            oidc["issuer"] = json!(self.input.plan.issuer);
+            oidc["jwksSource"] = json!({"type": "uri", "uri": jwks_uri});
+            oidc["audience"] = json!(audience);
+        } else {
+            configure_run_oidc(oidc, &self.input.plan.issuer, jwks_uri, audience);
+        }
         target["listener"]["bind"] = json!(bind);
         target["service"]["publicOrigin"] = json!(format!("http://{bind}"));
         target["package"]["root"] = json!(package);

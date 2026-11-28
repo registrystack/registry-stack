@@ -133,19 +133,7 @@ test('allowances pass on BReg and cross-product pages', async () => {
   );
 });
 
-test('SSL_CERT_FILE passes on a BReg page only when it names the bregctl dev CA file', async () => {
-  await withFixture(
-    {
-      pages: {
-        'src/content/docs/reference/bregctl-dev.mdx':
-          'SSL_CERT_FILE="$PWD/registry/.breg/dev/tls/ca.pem" \\\n',
-      },
-    },
-    async (root) => {
-      const result = await runGate(root);
-      assert.equal(result.code, 0, result.output);
-    },
-  );
+test('BReg pages refer to caBundleRef for database trust', async () => {
   await withFixture(
     {
       pages: {

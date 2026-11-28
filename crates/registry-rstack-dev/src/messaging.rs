@@ -207,6 +207,9 @@ impl ProductRunner<'_> {
                 token: zeroize::Zeroizing::new(fs::read_to_string(self.root.join(token_file))?),
                 callback_key: zeroize::Zeroizing::new(fs::read(self.root.join(key_file))?),
                 runtime_origin: format!("http://{bind}"),
+                response_latency: mock_gateway_latency(
+                    std::env::var_os(MOCK_LATENCY_ENV).as_deref(),
+                )?,
             })
             .map_err(operational)?;
             for provider in http {
@@ -237,6 +240,20 @@ impl ProductRunner<'_> {
         }
         Ok(Value::Object(connections))
     }
+}
+
+const MOCK_LATENCY_ENV: &str = "RSTACK_DEV_MESSAGING_MOCK_LATENCY_MS";
+
+fn mock_gateway_latency(value: Option<&std::ffi::OsStr>) -> Result<Duration> {
+    let Some(value) = value else {
+        return Ok(Duration::ZERO);
+    };
+    let milliseconds = value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value <= 9_000)
+        .with_context(|| format!("{MOCK_LATENCY_ENV} must be a whole number from 0 to 9000"))?;
+    Ok(Duration::from_millis(milliseconds))
 }
 
 fn smtp_connection(port: u16) -> Value {
@@ -289,6 +306,20 @@ pub(super) fn messaging_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_latency_is_optional_and_below_the_provider_timeout() {
+        use std::ffi::OsStr;
+
+        assert_eq!(mock_gateway_latency(None).unwrap(), Duration::ZERO);
+        assert_eq!(
+            mock_gateway_latency(Some(OsStr::new("200"))).unwrap(),
+            Duration::from_millis(200)
+        );
+        for value in ["", "-1", "9001", "invalid"] {
+            assert!(mock_gateway_latency(Some(OsStr::new(value))).is_err());
+        }
+    }
 
     fn plan() -> Plan {
         serde_json::from_value(json!({

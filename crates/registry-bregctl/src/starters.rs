@@ -265,7 +265,7 @@ fn next_steps(destination: &Path, id: &str) -> Vec<String> {
             "inspect the compiled contract with 'bregctl explain model {}'",
             destination.display()
         ),
-        format!("start the local registry with 'bregctl dev start {}'", destination.display()),
+        format!("start the local registry with 'rstack dev start {}'", destination.display()),
         "replace the example registry identity and source revision before preparing a production package".to_owned(),
     ]
 }

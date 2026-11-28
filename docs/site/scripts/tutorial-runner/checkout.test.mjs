@@ -23,6 +23,8 @@ test('a checkout copy holds the files a clone would, as they stand in the workin
     git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'init');
     await writeFile(join(repo, 'products/example/registry.yaml'), 'edited in the working tree\n');
     await writeFile(join(repo, 'new.txt'), 'untracked\n');
+    await mkdir(join(repo, '.lane-scratch'));
+    await writeFile(join(repo, '.lane-scratch/session.json'), 'private journey state\n');
     await mkdir(join(repo, 'target'));
     await writeFile(join(repo, 'target/build.bin'), 'ignored\n');
     await rm(join(repo, 'gone.txt'));
@@ -33,6 +35,7 @@ test('a checkout copy holds the files a clone would, as they stand in the workin
     assert.equal(await readFile(join(dest, 'new.txt'), 'utf8'), 'untracked\n');
     assert.equal(await readlink(join(dest, 'link.yaml')), 'products/example/registry.yaml');
     assert.equal(existsSync(join(dest, 'target')), false);
+    assert.equal(existsSync(join(dest, '.lane-scratch')), false);
     assert.equal(existsSync(join(dest, 'gone.txt')), false);
     assert.equal(existsSync(join(dest, '.git')), false);
   } finally {

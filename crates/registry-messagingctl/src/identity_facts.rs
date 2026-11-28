@@ -4,7 +4,7 @@
 //! audience it trusts, the clients that entry admits, and each access
 //! profile with the scopes and requester clients it names among them.
 //! `generate identity-facts` writes them from the deployment's own
-//! configuration, and `messagingctl dev` derives the clients its session
+//! configuration, and the stack runner derives the clients its session
 //! admits through the same function, so a session and a deployment agree.
 
 use std::collections::BTreeMap;

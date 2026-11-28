@@ -525,23 +525,10 @@ class ReservationJourney(native.Journey):
         ]
         native.private(clients_path, clients)
         self.ctl("bregctl", "check", source)
-        source_port, database_port = native.free_ports(2)
-        self.sessions.append(("bregctl", source))
-        report = self.ctl(
-            "bregctl",
-            "dev",
-            "start",
-            source,
-            "--breg-port",
-            source_port,
-            "--database-port",
-            database_port,
-            "--issuer-project",
-            issuer,
-            "--breg-bin",
-            self.bin / "breg",
-        )
-        return source, f"http://127.0.0.1:{source_port}", report
+        journeys = source / "tests/journeys.yaml"
+        native.private(journeys, yaml.safe_load(journeys.read_text()))
+        report = self.start_breg(source, resource="urn:example:reservation-source")
+        return source, self.urls["breg"], report
 
     def review_casework(
         self,
@@ -645,7 +632,7 @@ class ReservationJourney(native.Journey):
         self.ctl("caseworkctl", "apply", "--runtime-config", runtime)
         child = self.spawn("casework", runtime, "reservation-review-casework")
         self.ready(child, url)
-        administrator = self.token("bregctl", owner, "administrator")
+        administrator = self.token("administrator")
         headers = {"Registry-Casework-Profile": "administrator"}
         directory = native.http(
             "GET", url + "/v1/directory", administrator, headers=headers
@@ -857,7 +844,7 @@ class ReservationJourney(native.Journey):
         identifier: str,
         record: dict[str, object],
     ) -> tuple[dict[str, object], str]:
-        producer = self.token("bregctl", owner, "review-producer")
+        producer = self.token("review-producer")
         grant_request = self.review_request(binding, identifier, record)
         grant_request["subject"]["type"] = "reservation-capacity-authorization"
         grant_request["requesterReference"] = "capacity:" + identifier
@@ -870,7 +857,7 @@ class ReservationJourney(native.Journey):
                 "Idempotency-Key": "native-grant-review-" + identifier,
             },
         )
-        staff = self.token("bregctl", owner, "staff")
+        staff = self.token("staff")
         headers = {"Registry-Casework-Profile": "staff"}
         deadline = time.monotonic() + 30
         while True:
@@ -915,7 +902,7 @@ class ReservationJourney(native.Journey):
                 "Idempotency-Key": "native-capacity-grant-" + identifier,
             },
         )
-        bootstrap = self.token("bregctl", owner, "task-agent")
+        bootstrap = self.token("task-agent")
         assertion = native.http(
             "POST",
             casework_url + f"/v1/task-grants/{grant['id']}/assertion",
@@ -953,7 +940,7 @@ class ReservationJourney(native.Journey):
         excluded_request: str,
         decision: str,
     ) -> None:
-        staff = self.token("bregctl", owner, "staff")
+        staff = self.token("staff")
         headers = {"Registry-Casework-Profile": "staff"}
         deadline = time.monotonic() + 60
         while True:
@@ -1013,24 +1000,9 @@ class ReservationJourney(native.Journey):
         bootstrap = native.write_breg(self.root / "issuer-owner", self.urls)
         add_reservation_source_client(bootstrap)
         self.ctl("bregctl", "check", bootstrap)
-        bootstrap_breg, bootstrap_database = native.free_ports(2)
-        self.sessions.append(("bregctl", bootstrap))
-        bootstrap_report = self.ctl(
-            "bregctl",
-            "dev",
-            "start",
-            bootstrap,
-            "--breg-port",
-            bootstrap_breg,
-            "--issuer-port",
-            self.ports["issuer"],
-            "--database-port",
-            bootstrap_database,
-            "--breg-bin",
-            self.bin / "breg",
-        )
+        bootstrap_report = self.start_breg(bootstrap)
         resource = bootstrap_report["resource"]
-        agent_subject = native.subject(self.token("bregctl", bootstrap, "task-agent"))
+        agent_subject = native.subject(self.token("task-agent"))
         source, source_url, _ = self.source_service(bootstrap)
 
         (coordinator_port,) = native.free_ports(1)
@@ -1087,7 +1059,7 @@ class ReservationJourney(native.Journey):
         )
         assert runtime_binding == binding
 
-        source_token = self.token("bregctl", bootstrap, "reservation-source-agent")
+        source_token = self.token("reservation-source-agent")
         reservations = {}
         for label, policy, start in (
             ("request-only-success", "request-only", "2026-11-03T09:00:00Z"),

@@ -4013,7 +4013,7 @@
       "description": "The session service requires the caller to sign in again.",
       "source": {
         "path": "clients/typescript/core.ts",
-        "sha256": "6a2e60d3759ec2b3d22082900a7dd8d24da4bd92c4b40106b5bf588610b11d76"
+        "sha256": "2d176558a97aab1f6991ba954106a8a36a414da6167d725fda014b5300da6e0f"
       },
       "problem": {
         "code": "session.expired",
@@ -4032,7 +4032,7 @@
       "description": "The session service could not determine the session state.",
       "source": {
         "path": "clients/typescript/core.ts",
-        "sha256": "6a2e60d3759ec2b3d22082900a7dd8d24da4bd92c4b40106b5bf588610b11d76"
+        "sha256": "2d176558a97aab1f6991ba954106a8a36a414da6167d725fda014b5300da6e0f"
       },
       "problem": {
         "code": "session.unavailable",
@@ -5058,7 +5058,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
+        "sha256": "0d573722da697acc15b6b74b4e86627d022f3e98f1a040ffc556816492aca83d"
       },
       "artifact": {
         "path": "products/breg/generated/tools/backup-binding.v1alpha1.schema.json",
@@ -5076,7 +5076,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
+        "sha256": "0d573722da697acc15b6b74b4e86627d022f3e98f1a040ffc556816492aca83d"
       },
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
@@ -5130,7 +5130,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
+        "sha256": "0d573722da697acc15b6b74b4e86627d022f3e98f1a040ffc556816492aca83d"
       },
       "artifact": {
         "path": "products/breg/generated/tools/example-scenarios.v1alpha1.schema.json",
@@ -5148,7 +5148,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
+        "sha256": "0d573722da697acc15b6b74b4e86627d022f3e98f1a040ffc556816492aca83d"
       },
       "artifact": {
         "path": "products/breg/generated/tools/journeys.v1.schema.json",
@@ -5202,7 +5202,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
+        "sha256": "0d573722da697acc15b6b74b4e86627d022f3e98f1a040ffc556816492aca83d"
       },
       "artifact": {
         "path": "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
@@ -5238,7 +5238,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
+        "sha256": "0d573722da697acc15b6b74b4e86627d022f3e98f1a040ffc556816492aca83d"
       },
       "artifact": {
         "path": "products/breg/generated/tools/model-selection.v1alpha1.schema.json",
@@ -5382,7 +5382,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "7b4cee96f3149fc660933051e881429c9665565dd825d9b1f8307292a1ae8afa"
+        "sha256": "0d573722da697acc15b6b74b4e86627d022f3e98f1a040ffc556816492aca83d"
       },
       "artifact": {
         "path": "products/breg/generated/tools/schema-test-credentials.v1.schema.json",
@@ -6246,7 +6246,7 @@
       "description": "rstack error report JSON Schema.",
       "source": {
         "path": "crates/registry-rstack/src/cli.rs",
-        "sha256": "630efdec25ad01f376b9246d6150323da3ee1146e003c7aab3a9e2f2aa4f01e1"
+        "sha256": "1bc5772fdfb478e0791e09158c0400ff5f5b2930cd00596bd00ecc2f3dca474f"
       },
       "artifact": {
         "path": "products/platform/schemas/rstack-dev-error.v1.schema.json",
@@ -6358,7 +6358,7 @@
       },
       "artifact": {
         "path": "products/platform/generated/dev/dev.v1alpha1.schema.json",
-        "sha256": "db1d0819ce0adae6c2db3352716eabb726f85ba0cb6aa374f0c0013882c66dbb",
+        "sha256": "3262ec582aacb1967514fca5a27c20bdfad6869478c50424c038e22e6972c535",
         "mediaType": "application/schema+json"
       }
     },

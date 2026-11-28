@@ -271,7 +271,7 @@ def run(args):
     os.umask(0o077)
     journey = EventJourney(root, args.bin_dir.resolve(), 1,
                            build_manifest=args.build_manifest.resolve() if args.build_manifest else None,
-                           required_binaries=["breg", "bregctl", "coordinator", "coordinatorctl"],
+                           required_binaries=["rstack", "breg", "bregctl", "coordinator", "coordinatorctl"],
                            require_reviewed_notice_starter=False)
     succeeded = False
     try:
@@ -293,11 +293,8 @@ def run(args):
         journey.ctl("bregctl", "generate", "schemas", owner, "--output", schemas)
         data_schemas = {trigger: json.loads((schemas / f"generated/event-schemas/application.application-{trigger}-v1.schema.json").read_text())
                         for trigger in ("created", "patched")}
-        journey.sessions.append(("bregctl", owner))
-        report = journey.ctl("bregctl", "dev", "start", owner, "--breg-port", journey.ports["breg"],
-            "--issuer-port", journey.ports["issuer"], "--database-port", journey.ports["bregdb"], "--breg-bin", journey.bin / "breg")
-        state = json.loads(Path(report["stateFile"]).read_text())
-        source = f"urn:registrystack:registry:{native.SOURCE}:instance:{state['instanceId']}"
+        report = journey.start_breg(owner)
+        source = f"urn:registrystack:registry:{native.SOURCE}:instance:{report['instanceId']}"
         journey.event_sources = {
             "registry": {"source": source, "triggers": {"event-follow-up": {
                 trigger: {"hmacSha256KeyRef": f"secret:file/{trigger}-key"} for trigger in paths}}},
@@ -313,7 +310,7 @@ def run(args):
                 "authorization": journey.authorization(reader, report["resource"], ["records:get"])}},
             coordinator_port, "coordinator-event-intake", primary_project=project,
             additional_projects=(("scheduling-event-observer", alternate),))
-        seed = journey.token("bregctl", owner, "seed-client")
+        seed = journey.token("seed-client")
         body = {"data": {"tenant": "tenant-a", "applicantName": "Synthetic event applicant", "benefitProgram": "pilot",
                           "requestedAmount": 1, "email": "synthetic@example.invalid", "noticeAllowed": False, "appointmentAllowed": False}}
         _, created_headers, created = request("POST", journey.urls["breg"] + "/v1/records/applications?accessProfile=seeder",
@@ -368,16 +365,8 @@ def run(args):
         source_events = {delivery["headers"]["webhook-id"] for delivery in proxy.deliveries
                          if delivery["status"] == 204 and json.loads(delivery["body"])["source"] == source}
         assert len(source_events) == 3, "exactly three committed BReg events were authenticated and accepted"
-        previous_ca = journey.env.get("SSL_CERT_FILE")
-        try:
-            journey.env["SSL_CERT_FILE"] = str(owner / ".breg/dev/tls/ca.pem")
-            wait_for(lambda: not journey.ctl("bregctl", "hook", "list", "--runtime-config", report["runtimeConfig"])["deliveries"],
-                     "the producer delivery queue did not drain")
-        finally:
-            if previous_ca is None:
-                journey.env.pop("SSL_CERT_FILE", None)
-            else:
-                journey.env["SSL_CERT_FILE"] = previous_ca
+        wait_for(lambda: not journey.ctl("bregctl", "hook", "list", "--runtime-config", report["runtimeConfig"])["deliveries"],
+                 "the producer delivery queue did not drain")
         runs = journey.producer_request(owner, "GET", coordinator_url + "/v1/runs")
         assert len(runs["runs"]) == 4, "duplicate, replay and refused source/event must not create extra Runs"
         value_free = {"ok": True, "createdRun": created_run, "directPatchRun": patched[0]["run"], "actionPatchRun": action_run,

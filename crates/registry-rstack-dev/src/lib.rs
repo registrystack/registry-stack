@@ -11,10 +11,13 @@
 //! that product's own CLI and runtime binaries.
 
 mod bindings;
+mod breg_run;
+pub use breg_run::BregRun;
 mod browser;
 mod database;
 mod docker;
 mod explain;
+mod external_breg;
 pub(crate) mod guard;
 mod issuer;
 mod journey;
@@ -1191,7 +1194,7 @@ fn add_run_addresses(report: &mut Value, plan: &plan::Plan, application: Option<
     if let Some((url, issuer)) = application {
         report["issuer"] = json!(issuer);
         report["application"] = json!(url);
-    } else if plan.paired_run_binding() {
+    } else if plan.paired_run_binding() || plan.jwks_uri().is_some() {
         report["issuer"] = json!(plan.issuer);
     }
 }
@@ -1641,6 +1644,10 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
     );
     let root = run_dir(run_id)?;
     let input: RunInput = read_json(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)?;
+    ensure!(
+        input.plan.jwks_uri().is_none(),
+        "This run uses an external issuer. Obtain tokens from that issuer."
+    );
     let signer = Issuer::load(&root)?;
     let run_expires = report["expires_at"]
         .as_u64()

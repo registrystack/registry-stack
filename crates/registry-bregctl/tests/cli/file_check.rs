@@ -120,9 +120,6 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
         "crates/registry-linkml/publicschema/starters/household.yaml",
         "products/breg/acceptance/facility/dev-clients.yaml",
         "crates/registry-bregctl/tests/fixtures/retained-native/example-catalog/examples/scenarios.json",
-        "products/breg/examples/formats/dev-session/.breg/dev/state.json",
-        "products/breg/examples/formats/dev-session/.breg/dev/source-prepared-source.json",
-        "products/breg/examples/formats/dev-session/.breg/dev/source-transition.json",
     ] {
         let output = check_file(&repository(example), &["--format", "json", "--deny-warnings"]);
         let report = json_report(&output);
@@ -489,10 +486,9 @@ fn an_oversize_file_is_refused_by_the_shared_reader() {
     }
 }
 
-/// CFG-SEC-2: a file BReg reads as written refuses a substitution
-/// expression; a file a command wrote keeps the text it copied.
+/// CFG-SEC-2: a file BReg reads as written refuses a substitution expression.
 #[test]
-fn an_expression_is_refused_in_a_file_read_as_written_and_kept_in_a_written_one() {
+fn an_expression_is_refused_in_a_file_read_as_written() {
     let scratch = scratch();
     let credentials = scratch.path().join("credentials.yaml");
     let example = fs::read_to_string(repository(
@@ -516,23 +512,6 @@ fn an_expression_is_refused_in_a_file_read_as_written_and_kept_in_a_written_one(
     assert!(report["diagnostics"][0]["suggestedAction"]
         .as_str()
         .is_some_and(|action| action.contains("secret reference")));
-
-    let transition = scratch.path().join("source-transition.json");
-    let example = fs::read_to_string(repository(
-        "products/breg/examples/formats/dev-session/.breg/dev/source-transition.json",
-    ))
-    .unwrap();
-    let copied = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\\n";
-    assert!(example.contains(copied));
-    fs::write(
-        &transition,
-        example.replace(copied, "url: ${BREG_DATABASE_URL}\\n"),
-    )
-    .unwrap();
-    let output = check_file(&transition, &["--format", "json"]);
-    let report = json_report(&output);
-    assert_eq!(output.status.code(), Some(0), "{report}");
-    assert_eq!(report["diagnostics"], json!([]));
 }
 
 /// An explicit native project with journeys and local clients for reader checks.

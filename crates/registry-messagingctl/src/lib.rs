@@ -27,10 +27,8 @@
 //! - `retention erase-expired` reports what the configured retention
 //!   periods say had expired by `--before`, and with `--apply` erases it,
 //!   with the migration credential. A cutoff in the future is refused.
-//! - `dev` runs the package in the foreground against PostgreSQL and Mailpit
-//!   in Docker and a mock HTTP gateway, with the runtime in this process,
-//!   and removes its containers on Ctrl-C; `dev token` writes a bearer
-//!   header file for a client an access profile names.
+//!
+//! Use `rstack dev` to run a local Messaging project.
 //!
 //! Exit codes: 0 when the command succeeds, 1 when the configuration,
 //! package, preview, message action, or retention cutoff is refused, 2 for a usage error, and
@@ -81,7 +79,6 @@ use uuid::Uuid;
 
 #[cfg(test)]
 mod cli_contract_tests;
-mod dev;
 mod identity_facts;
 mod provision;
 mod report;
@@ -95,7 +92,8 @@ use report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
 #[command(
     name = "messagingctl",
     version = registry_platform_buildinfo::DISPLAY_VERSION,
-    about = "Registry Messaging adopter and local operator tooling"
+    about = "Registry Messaging adopter and local operator tooling",
+    after_help = "Use rstack dev to run a local Messaging project."
 )]
 struct Cli {
     /// Emit the selected command's report in this format.
@@ -135,17 +133,6 @@ enum Command {
     /// Erase what the retention periods say has expired.
     #[command(subcommand)]
     Retention(RetentionCommand),
-    /// Run an authoring project locally with PostgreSQL, Mailpit, and a mock HTTP
-    /// gateway in Docker, until Ctrl-C.
-    ///
-    /// The session pulls and runs the pinned images
-    /// docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-    /// and
-    /// ghcr.io/axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d,
-    /// the Docker Official Images reference and upstream GHCR mirror of postgres:17.11 and
-    /// axllent/mailpit:v1.31.2 at those digests. Each publishes on 127.0.0.1
-    /// only, and the session removes both when it stops.
-    Dev(dev::DevArgs),
     /// Call the Messaging HTTP API with a saved connection or an explicit URL.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage saved Messaging API connections.
@@ -406,7 +393,7 @@ struct PackageSource {
     ArgGroup::new("checked")
         .required(true)
         .multiple(true)
-        .args(["runtime_config", "package", "project", "dev_state"])
+        .args(["runtime_config", "package", "project"])
 ))]
 struct CheckArgs {
     /// Check under the production posture.
@@ -418,9 +405,6 @@ struct CheckArgs {
         help = "Declared posture: development or production. Unset means production."
     )]
     posture: Option<String>,
-    /// Generated development session state. Checked offline without secrets.
-    #[arg(long, value_name = "FILE", conflicts_with_all = ["runtime_config", "package", "project"])]
-    dev_state: Option<PathBuf>,
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
@@ -548,8 +532,6 @@ enum View {
     MessageShow,
     MessageAction,
     Retention,
-    Dev,
-    DevToken,
 }
 
 impl Outcome {
@@ -719,14 +701,6 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "message",
             "Run messagingctl messages show MESSAGE_ID before acting again.",
         ),
-        "dev.refused" => (
-            "dev-session",
-            "Correct the project or request the message names, then retry.",
-        ),
-        "dev.failed" | "dev.interrupted" => (
-            "dev-session",
-            "Restore Docker or the file the message names, then rerun messagingctl dev.",
-        ),
         _ if exit == OPERATIONAL_FAILURE_EXIT => (
             "runtime-dependency",
             "Restore the file, secret, database, or service the message names, then retry.",
@@ -858,7 +832,6 @@ where
             return serve(args, declared, cli.format, format_requested, stdout, stderr)
         }
         Command::Provision(args) => return provision(&args, cli.format, declared),
-        Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
         Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
         Command::Api(args) => return api(*args, format_requested, stderr),
         Command::Connection { command } => {
@@ -901,7 +874,6 @@ fn command_path(command: &Command) -> &'static str {
         Command::Messages(MessagesCommand::Settle(_)) => "messages settle",
         Command::Messages(MessagesCommand::Cancel(_)) => "messages cancel",
         Command::Retention(RetentionCommand::EraseExpired(_)) => "retention erase-expired",
-        Command::Dev(args) => dev::command_path(args),
         Command::Api(_) => "api",
         Command::Connection { .. } => "connection",
         Command::RstackDev(_) => "rstack-dev",
@@ -1349,26 +1321,6 @@ fn config_refusal(error: &RuntimeConfigError) -> Outcome {
 /// authoring project, and report what the runtime would serve, rendering
 /// each template's sample in every locale it declares.
 fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
-    if let Some(path) = &args.dev_state {
-        return match dev::check_session_file(path) {
-            Ok(report)
-                if args.deny_warnings
-                    && registry_platform_config::has_denied_warnings(report.diagnostics()) =>
-            {
-                Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &report)
-            }
-            Ok(report) => Outcome::new(
-                json!({
-                    "ok": true,
-                    "devState": path,
-                    "filesChecked": report.files_checked().unwrap_or(1),
-                    "diagnostics": report.to_json_value(),
-                }),
-                View::Check,
-            ),
-            Err(failure) => Outcome::diagnosed(failure.exit, &failure.report),
-        };
-    }
     let given = match (&args.package, &args.project) {
         (Some(root), _) => Some((root, load_package(root))),
         (None, Some(root)) => Some((root, load_project(root))),
@@ -2414,8 +2366,6 @@ fn render_human(
         View::MessageShow => render_message_show(report, stdout),
         View::MessageAction => render_message_action(report, stdout),
         View::Retention => render_retention(report, stdout),
-        View::Dev => render_dev(report, stdout),
-        View::DevToken => render_dev_token(report, stdout),
     }
 }
 
@@ -2452,43 +2402,6 @@ fn render_generate_identity_facts(report: &Value, stdout: &mut dyn io::Write) ->
     writeln!(stdout, "claims: {}", report["claims"])
 }
 
-fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    if report["state"] == json!("stopped") {
-        writeln!(stdout, "stopped; the session's containers are removed")?;
-        return writeln!(
-            stdout,
-            "session directory: {}",
-            text(&report["sessionDirectory"])
-        );
-    }
-    writeln!(stdout, "ready")?;
-    for (label, key) in [
-        ("api", "api"),
-        ("metrics", "metrics"),
-        ("mailpit", "mailpit"),
-        ("mock gateway", "mockGateway"),
-        ("runtime config", "runtimeConfig"),
-        ("log", "log"),
-    ] {
-        writeln!(stdout, "  {label}: {}", text(&report[key]))?;
-    }
-    writeln!(
-        stdout,
-        "next: rstack messaging dev token --client CLIENT, then rstack messaging api PATH --url URL --header @FILE; Ctrl-C stops the session"
-    )?;
-    writeln!(stdout, "To reuse the runtime file, start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.")
-}
-
-fn render_dev_token(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    writeln!(stdout, "header file: {}", text(&report["headerFile"]))?;
-    writeln!(
-        stdout,
-        "valid for {} seconds; send with curl -H @{}",
-        report["expiresInSeconds"],
-        text(&report["headerFile"])
-    )
-}
-
 fn render_init(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     writeln!(stdout, "created: {}", text(&report["directory"]))?;
     for file in report["created"].as_array().into_iter().flatten() {
@@ -2505,9 +2418,6 @@ fn render_check(
     settings: &[registry_cli_report::ExplicitSettingLine],
     stdout: &mut dyn io::Write,
 ) -> io::Result<()> {
-    if let Some(path) = report["devState"].as_str() {
-        return writeln!(stdout, "ok: {path}");
-    }
     match report["runtimeConfig"].as_str() {
         Some(path) => writeln!(stdout, "ok: {path}")?,
         None => writeln!(stdout, "ok: {}", text(&report["project"]))?,

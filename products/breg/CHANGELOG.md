@@ -7,6 +7,8 @@
 
 - The Node and Python clients accept development peers by default and offer a configuration option to reject them.
 
+- BREAKING: Use `rstack dev` for local BReg runs. `bregctl examples run` and `bregctl prepare-source` take the ready run ID.
+
 - The published runtime schema types each `authentication.oidc.issuers` key as a local identifier (`propertyNames: {$ref: LocalId}`), as the other products' issuer maps do.
 
 

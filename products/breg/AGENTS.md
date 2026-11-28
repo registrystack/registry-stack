@@ -69,7 +69,7 @@ Changing the blocklist is a boundary decision: record it in this file.
   scenario file (`configure/run-a-project-with-rstack-dev.mdx`),
   `products/breg/quickstart/` for the scripted first hour, and
   `products/breg/examples/` for the canonical projects and their scenario
-  files. `reference/bregctl-dev.mdx` documents the older `bregctl dev` lifecycle.
+  files for the local development workflow.
 - Canonical projects: `products/breg/examples/`, `products/breg/acceptance/`,
   and `products/breg/fixtures/`. `products/breg/examples/README.md` indexes the
   examples; acceptance and fixture projects carry a README where one exists.

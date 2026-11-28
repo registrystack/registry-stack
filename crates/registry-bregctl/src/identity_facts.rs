@@ -4,7 +4,7 @@
 //! profiles.
 //!
 //! `generate identity-facts` writes them for the hosted identity generator.
-//! `bregctl dev` derives its local authority claim names through
+//! Development tooling derives its local authority claim names through
 //! [`authority_claims`], the function the facts use, so a session and a
 //! deployment name the same claims.
 
@@ -46,12 +46,10 @@ const PURPOSE_CLAIM: &str = "registry_purpose";
 pub(crate) struct AuthorityClaims {
     /// The one claim every profile reads the principal from.
     pub principal: String,
-    /// Whether any profile requires a purpose.
-    pub purpose_required: bool,
 }
 
-/// The principal claim the compiled profiles share, and whether a purpose is
-/// required. Refuses when profiles disagree on the principal claim, because
+/// The principal claim the compiled profiles share. Refuses when profiles
+/// disagree on the principal claim, because
 /// one runtime names one.
 pub(crate) fn authority_claims(compiled: &CompiledRegistry) -> Result<AuthorityClaims, String> {
     let inventory = authority_inventory(compiled)
@@ -71,10 +69,7 @@ pub(crate) fn authority_claims(compiled: &CompiledRegistry) -> Result<AuthorityC
             ))
         }
     };
-    Ok(AuthorityClaims {
-        principal,
-        purpose_required: inventory.purpose_required,
-    })
+    Ok(AuthorityClaims { principal })
 }
 
 #[derive(Debug)]

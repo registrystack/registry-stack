@@ -850,6 +850,8 @@ mod tests {
     fn plan() -> Plan {
         Plan {
             issuer: "https://identity.example.test/realms/dev".to_owned(),
+            external_jwks_uri: None,
+            external_breg: None,
             products: vec![
                 ProductPlan {
                     product: Product::Breg,

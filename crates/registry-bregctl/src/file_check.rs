@@ -23,8 +23,8 @@ use registry_platform_yaml::{
 use serde::Serialize;
 
 use crate::{
-    data_lifecycle, dev, init_from_model, test_lifecycle, write_ctl_report, OutputFormat,
-    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
+    data_lifecycle, dev_clients, examples, init_from_model, test_lifecycle, write_ctl_report,
+    OutputFormat, DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
 };
 
 /// What `bregctl check --file` was asked to check.
@@ -87,7 +87,7 @@ type Check = fn(&Input<'_>) -> Result<Vec<Diagnostic>, Failure>;
 /// it is refused with, when the file is read as written (CFG-SEC-2); and its
 /// check. A file a command writes holds text it copied, which is never
 /// substituted, so it has no remedy.
-const CHECKS: [(FormatSpec<'static>, Option<&str>, Check); 16] = [
+const CHECKS: [(FormatSpec<'static>, Option<&str>, Check); 13] = [
     (
         registry_platform_yaml::CHECK_ACCEPTANCES_FORMAT,
         Some(WRITE_THE_VALUE),
@@ -156,24 +156,15 @@ const CHECKS: [(FormatSpec<'static>, Option<&str>, Check); 16] = [
         |input| init_from_model::check_selection(input.document),
     ),
     (
-        dev::DEV_CLIENTS_FORMAT,
+        dev_clients::DEV_CLIENTS_FORMAT,
         Some(WRITE_THE_VALUE_OR_A_SECRET_REFERENCE),
-        |input| Ok(dev::check_clients(input.document)?),
+        |input| Ok(dev_clients::check(input.document)?),
     ),
     (
-        dev::examples::EXAMPLE_SCENARIOS_FORMAT,
+        examples::EXAMPLE_SCENARIOS_FORMAT,
         Some(WRITE_THE_VALUE),
-        |input| Ok(dev::examples::check(input.document)?),
+        |input| Ok(examples::check(input.document)?),
     ),
-    (dev::DEV_STATE_FORMAT, None, |input| {
-        Ok(dev::check_state(input.document)?)
-    }),
-    (dev::PREPARED_SOURCE_FORMAT, None, |input| {
-        Ok(dev::check_prepared(input.document)?)
-    }),
-    (dev::SOURCE_TRANSITION_FORMAT, None, |input| {
-        Ok(dev::check_transition(input.document)?)
-    }),
 ];
 
 /// The report `--format json` writes, success or not (CFG-DIAG-1).

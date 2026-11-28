@@ -11,6 +11,8 @@
 - Managed development volumes are bound to a private per-user project state directory. A missing volume starts fresh. Use `rstack dev stop RUN_ID --clean` to remove the managed volume and state after stopping.
 - Managed restarts validate retained files before opening them and refresh run-specific PostgreSQL TLS and Messaging gateway credentials. Only Coordinator projects with authenticated workflow connections retain their local issuer port.
 
+- BREAKING: `rstack dev` is the local development entry point for Messaging and supports an explicitly declared external issuer.
+
 - Managed Coordinator runs reuse their local connection issuer address so workflows already waiting can resume after a restart.
 
 - Scheduling restarts apply the authored package and retain the running environment's records unless the project's records.yaml changed.

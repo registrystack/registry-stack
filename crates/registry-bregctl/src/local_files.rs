@@ -126,25 +126,3 @@ pub(super) fn lock(path: &Path) -> Result<Lock> {
         .context("another local lifecycle operation or supervisor is active")?;
     Ok(Lock { _file: file })
 }
-
-pub(super) fn validate_tree(root: &Path) -> Result<()> {
-    check(root, true)?;
-    for entry in fs::read_dir(root)? {
-        let path = entry?.path();
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.is_dir() {
-            validate_tree(&path)?;
-        } else if path.file_name().is_some_and(|name| name == "control.sock") {
-            use std::os::unix::fs::FileTypeExt;
-            if !metadata.file_type().is_socket()
-                || metadata.uid() != rustix::process::geteuid().as_raw()
-                || metadata.mode() & 0o077 != 0
-            {
-                bail!("local control socket ownership is invalid");
-            }
-        } else {
-            check(&path, false)?;
-        }
-    }
-    Ok(())
-}

@@ -332,10 +332,10 @@ test('test-background and test-cwd mistakes are errors that name the line', () =
 
 test('test-retry runs an sh fence again until the blocks below it match, for at most its seconds', () => {
   const { steps, errors } = readJourney(
-    '```sh test-retry="10" test-cwd="first"\nbregctl dev events\n```\n\n```json test-excerpt\n{"status": "received"}\n```\n',
+    '```sh test-retry="10" test-cwd="first"\nrstack dev status RUN_ID\n```\n\n```json test-excerpt\n{"status": "received"}\n```\n',
   );
   assert.deepEqual(errors, []);
-  assert.deepEqual(steps[0], { kind: 'run', line: 1, heading: '', code: 'bregctl dev events', cwd: 'first', retry: 10 });
+  assert.deepEqual(steps[0], { kind: 'run', line: 1, heading: '', code: 'rstack dev status RUN_ID', cwd: 'first', retry: 10 });
   assert.equal(steps[1].runIndex, 0);
 });
 

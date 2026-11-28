@@ -399,6 +399,30 @@ fields.
     crates/registry-rstack-dev/src/lib.rs CLEANUP_BUDGET, lost-supervisor, registry.rstack.error.v1;
     crates/registry-rstack-dev/src/journey.rs JOURNEY_ATTEMPT_LIMIT. */}
 
+## Use an issuer you run
+
+Set `issuer` to the exact token issuer and `externalJwksUri` to its public key endpoint.
+Use HTTPS or loopback HTTP. Keep each product's audience in its `products` entry.
+BReg expects RS256 access tokens from an external issuer.
+
+Set `scenarios: []` in the scenario file and drive the run with credentials obtained from
+the external issuer. `rstack dev token` only issues tokens for the runner's own issuer.
+
+When a BReg project declares the corresponding connection, the plan can bind external fixtures:
+
+- `externalBreg.reviewAuthority` names the Casework producer, token endpoint and private-key JWT credentials.
+- `externalBreg.taskGrant` pairs the exact assertion issuer and client with the Casework status connection.
+- `externalBreg.hooks` binds declared destination IDs to signed outbound requests to a loopback event proxy.
+
+For BReg schema rehearsals, `externalBreg.schemaTestHeaders` maps each selected person
+to an owner-only bearer header obtained from the external issuer.
+
+Use `secret:file/NAME` for fixture keys and headers. Put each file under the project's
+`fixture/` directory and run `chmod 600` on it.
+
+For a Messaging throughput rehearsal, set `RSTACK_DEV_MESSAGING_MOCK_LATENCY_MS` before
+starting the run. The local mock gateway delays its responses by this many milliseconds.
+
 ## The managed PostgreSQL server
 
 The run starts PostgreSQL for BReg, Casework, Messaging, Scheduling, Documents, Coordinator and

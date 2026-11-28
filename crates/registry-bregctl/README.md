@@ -10,13 +10,10 @@ sign or apply production changes.
 
 Use `rstack dev` to run a project locally. Its `dev.yaml` plan names the callers and a scenario
 file, and `rstack dev start` sends the scenarios once the registry is running (see
-[Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)). The `bregctl dev` and `bregctl examples` commands below are
-the older local loop that `rstack dev` replaces.
-
-`bregctl examples list PROJECT` describes the project's declared teaching
-scenarios and retained attempts without starting services or creating credentials.
-`bregctl examples run SCENARIO PROJECT` uses only that project's ready owned
-`bregctl dev` instance. The fixed scenarios are `starter-data`, `first-record`
+[Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)). `bregctl examples list PROJECT` describes the authored catalogue offline.
+Use `bregctl examples list PROJECT --run-id RUN_ID` to include attempts for a ready run.
+`bregctl examples run SCENARIO PROJECT --run-id RUN_ID` runs a scenario against the
+ready development run for that project. The fixed scenarios are `starter-data`, `first-record`
 and `reviewed-change`. Inputs default to the file declared in
 `examples/scenarios.json`; `--input FILE` selects a separately editable JSON file.
 The runner uses ordinary native client authorization and never issues a schema-test
@@ -48,16 +45,15 @@ explicitly run `--step inspect`, `--step approve` or `--step reject`, and
 pagination information in the output; the runner does not follow pages.
 
 Every mutation first persists its exact native request or action, preconditions
-and attempt-scoped idempotency key in owner-only `.breg/dev/examples` state.
+and attempt-scoped idempotency key in the runner's owner-only example state.
 Returned UUIDs are persisted before dependent writes. Uncertain operations resume
 through the native client's validated recovery API with the original action,
 including when an applied action is no longer advertised on the current record.
 A completed mutation never repopulates an edited or deleted sample. Attempts bind
 exact source, package, clients, scenario and input bytes plus the owned database
-container identity. Ordinary stop/start retains attempts; explicit database
-removal invalidates them. Changed inputs require `--new-attempt` and ordinary
-uniqueness checks. Concurrent examples and dev lifecycle changes share the dev
-lock. Failures retain partial progress and never reset the registry; list attempts
+identity. Stop and start retain attempts for managed runs. Starting with
+`--clean` clears them. Changed inputs require `--new-attempt` and ordinary
+uniqueness checks. The example state lock serializes example commands. Failures retain partial progress and never reset the registry; list attempts
 and resume the original command. Successful reports include UUIDs and the actual
 next command.
 

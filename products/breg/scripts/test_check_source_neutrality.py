@@ -189,10 +189,10 @@ class SourceNeutralityTests(unittest.TestCase):
     def test_documentation_site_path_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            source = root / "crates/registry-bregctl/src/dev/tests.rs"
+            source = root / "crates/registry-bregctl/src/test_fixture.rs"
             source.parent.mkdir(parents=True)
             source.write_text(
-                'const PAGE: &str = "../../docs/site/src/content/docs/reference/bregctl-dev.mdx";\n',
+                'const PAGE: &str = "../../docs/site/src/content/docs/configure/run-a-project-with-rstack-dev.mdx";\n',
                 encoding="utf-8",
             )
             self.assertEqual([], CHECKER.find_violations(root))
@@ -200,7 +200,7 @@ class SourceNeutralityTests(unittest.TestCase):
     def test_domain_identifier_after_documentation_site_path_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            source = root / "crates/registry-bregctl/src/dev/tests.rs"
+            source = root / "crates/registry-bregctl/src/test_fixture.rs"
             source.parent.mkdir(parents=True)
             source.write_text(
                 'const PAGE: &str = "../../docs/site/src/content/docs/configure/farmer-pilot.mdx";\n',

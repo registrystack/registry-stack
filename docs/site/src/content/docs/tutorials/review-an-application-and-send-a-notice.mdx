@@ -26,7 +26,7 @@ approval email from Registry Messaging. Coordinator does the rest, even across a
   outcome="One approved, unchanged application produces one finished run and one email in local Mailpit."
   time="About 20 minutes"
   level="Local evaluation only"
-  prerequisites={['Docker 24 or later with host networking', 'OpenSSL', 'Python 3.11 or later and uv', 'curl', 'jq', 'Linux amd64 or macOS arm64', 'Verified native tools, a matching source archive, and the unified Python client']}
+  prerequisites={['Docker 24 or later with host networking', 'OpenSSL', 'Python 3.11 or later and uv', 'curl', 'jq', 'Linux amd64 or macOS arm64 and the repository Rust toolchain', 'Verified native tools, a matching source archive, and the unified Python client']}
 />
 
 ## Prepare verified release assets
@@ -39,7 +39,7 @@ Coordinator starts.
 Download the source archive for your chosen [release](https://github.com/registrystack/registry-stack/releases)
 and follow `release/VERIFY.md` at that tag to verify the manifest and asset
 checksums. Keep the verified manifest, `SHA256SUMS`, the unified Python wheel
-for your platform, and the six native assets named below in one directory.
+for your platform, and the native assets named below in one directory.
 Extract the source archive in a fresh directory and work from its root.
 
 :::note[Original candidate evaluation]
@@ -73,7 +73,7 @@ elif host in (("Linux", "x86_64"), ("Linux", "amd64")):
     target, suffix = "linux-amd64", "_x86_64.manylinux2014_x86_64.whl"
 else:
     raise SystemExit("This tutorial supports macOS arm64 and Linux amd64.")
-tools = ("breg", "bregctl", "casework", "caseworkctl", "coordinator", "coordinatorctl")
+tools = ("rstack", "breg", "bregctl", "casework", "caseworkctl", "coordinator", "coordinatorctl")
 checksums = {}
 for line in (assets / "SHA256SUMS").read_text().splitlines():
     if not line.strip():
@@ -107,6 +107,8 @@ for tool, path in zip(tools, files):
     (output / tool).chmod(0o755)
 print(json.dumps({"tools": str(output), "clientWheel": str(wheels[0])}))
 PY
+cargo build --locked -p registry-thunderid-tooling --features session --example journey-issuer
+cp target/debug/examples/journey-issuer tutorial-work/native-tools/journey-issuer
 
 release_manifest="$REGISTRY_STACK_ASSETS/registry-stack-v${REGISTRY_STACK_VERSION}-release-manifest.json"
 MESSAGING_IMAGE="$(
@@ -131,7 +133,7 @@ Docker pulls the Linux amd64 image for this local run.
 : "${REGISTRY_STACK_CLIENT:=$(jq -r .clientWheel tutorial-work/prepared-tools.json)}"
 : "${MESSAGING_IMAGE:?set the published Messaging image digest}"
 export COORDINATOR_TUTORIAL_BIN_DIR REGISTRY_STACK_CLIENT
-for tool in breg bregctl casework caseworkctl coordinator coordinatorctl; do
+for tool in rstack journey-issuer breg bregctl casework caseworkctl coordinator coordinatorctl; do
   test -x "$COORDINATOR_TUTORIAL_BIN_DIR/$tool"
 done
 export PATH="$COORDINATOR_TUTORIAL_BIN_DIR:$PATH"
@@ -140,8 +142,7 @@ docker pull --platform linux/amd64 "$MESSAGING_IMAGE"
 
 The session's `--released-clients` option reads BReg and admits the run through
 the installed unified Python client. It uses the active workflow revision and
-repeats one identical start key to confirm the same run identity. No Rust input
-helper or Rust toolchain is needed. The preparation selects the exact local
+repeats one identical start key to confirm the same run identity. The separate Rust fixture owns the local ThunderID registration and bearer-token exchanges. The preparation selects the exact local
 wheel through `REGISTRY_STACK_CLIENT`. When that variable is unset, the start
 command instead selects the named published version. Keep this terminal open.
 
@@ -320,9 +321,8 @@ If a request answers `401`, the local token expired. Refresh the staff token, an
 token for `coordinatorctl`, then repeat:
 
 ```sh test-skip="only after a token expires"
-owner="$(jq -r .ownerProject "$session")"
-bregctl dev token staff "$owner"
-bregctl dev token coordinator-producer "$owner"
+python3 products/coordinator/examples/reviewed-notice/session.py refresh-tokens
+staff_headers="$(jq -r .staffHeaderFile "$session")"
 (umask 077 && sed -n 's/^Authorization: Bearer //p' \
   "$(jq -r .coordinatorHeaderFile "$session")" > tutorial-work/coordinator.token)
 ```

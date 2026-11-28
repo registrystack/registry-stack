@@ -13,7 +13,7 @@ use registry_breg::{fixtures, migration_plan};
 use registry_platform_yaml::{EnvelopeRule, FormatSpec, VersionStatus};
 use serde_json::{json, Map, Value};
 
-use crate::{dev, init_from_model, test_lifecycle};
+use crate::{dev_clients, examples, init_from_model, test_lifecycle};
 
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 const SCHEMA_ID_BASE: &str = "https://id.registrystack.org/schemas/";
@@ -55,15 +55,15 @@ fn tools() -> [Tool; 7] {
             namespace: "breg",
             format: "dev-clients",
             title: "Base Registry Engine development clients",
-            spec: dev::config::DEV_CLIENTS_FORMAT,
-            members: dev::config::clients_schema,
+            spec: dev_clients::DEV_CLIENTS_FORMAT,
+            members: dev_clients::clients_schema,
         },
         Tool {
             namespace: "breg",
             format: "example-scenarios",
             title: "Base Registry Engine example scenarios",
-            spec: dev::examples::EXAMPLE_SCENARIOS_FORMAT,
-            members: dev::examples::catalogue_schema,
+            spec: examples::EXAMPLE_SCENARIOS_FORMAT,
+            members: examples::catalogue_schema,
         },
         Tool {
             namespace: "breg",

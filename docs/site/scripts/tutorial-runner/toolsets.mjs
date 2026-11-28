@@ -209,7 +209,7 @@ function productToolset({
         const stateDir = join(dirname(readerDir), 'rstack-dev');
         let runs = [];
         try {
-          runs = (await readdir(stateDir, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
+          runs = (await readdir(stateDir, { withFileTypes: true })).filter((entry) => entry.isDirectory() && /^[0-9a-f]{32}$/u.test(entry.name));
         } catch (error) {
           if (error.code !== 'ENOENT') throw error;
         }
@@ -429,12 +429,11 @@ export async function clientEnvironment(steps, repoRoot, workRoot) {
   };
 }
 
-// Base Registry Engine: breg and bregctl. `bregctl dev` resolves `breg` from
-// PATH, so both are served by name.
+// Serve BReg and its operator tool by name for the rstack development runner.
 const bregProduct = productToolset({
   label: 'breg and bregctl',
   // A page whose sh fences match this runs the toolset, so its gate must
-  // cover it (tutorial-runner/gate.mjs). A path such as .breg/dev or
+  // cover it (tutorial-runner/gate.mjs). Project and state paths such as
   // tutorial-work/breg names no command, and neither does a value such as
   // serviceKind=breg.
   commands: /(^|[^\w./=-])(bregctl|breg)([^\w./-]|$)|(^|\s)rstack\s+breg(?:\s|$)/mu,
@@ -445,7 +444,6 @@ const bregProduct = productToolset({
   cargoArgs: ['-p', 'registry-breg', '--features', 'registry-breg/runtime', '-p', 'registry-bregctl', '-p', 'registry-rstack'],
   profileVariable: 'BREG_TUTORIAL_CARGO_PROFILE',
   targetName: 'breg-tutorial-source',
-  sessions: [['bregctl', '.breg/dev/state.json']],
   devRuns: true,
   managedComponents: { breg: { entrypoint: 'bregctl', binaries: ['bregctl', 'breg'] } },
   // A reader installs the client packages at the version `breg --version`
@@ -527,6 +525,8 @@ const coordinatorProduct = productToolset({
   commands: /(^|[^\w./=-])(coordinatorctl|coordinator|reviewed-notice-input)([^\w./-]|$)|products\/coordinator\/examples\/reviewed-notice\/session\.py/mu,
   includes: ['breg', 'casework'],
   binaries: [
+    ['rstack', 'RSTACK_BIN'],
+    ['journey-issuer', 'JOURNEY_ISSUER_BIN', 'examples/journey-issuer'],
     ['coordinator', 'COORDINATOR_BIN'],
     ['coordinatorctl', 'COORDINATORCTL_BIN'],
     ['breg', 'BREG_BIN'],
@@ -535,6 +535,9 @@ const coordinatorProduct = productToolset({
     ['caseworkctl', 'CASEWORKCTL_BIN'],
   ],
   cargoArgs: [
+    '-p', 'registry-rstack',
+    '-p', 'registry-thunderid-tooling', '--features', 'registry-thunderid-tooling/session',
+    '--example', 'journey-issuer',
     '-p', 'registry-coordinator',
     '-p', 'registry-breg', '--features', 'registry-breg/runtime', '-p', 'registry-bregctl',
     '-p', 'registry-casework', '-p', 'registry-caseworkctl',
@@ -543,7 +546,6 @@ const coordinatorProduct = productToolset({
   targetName: 'coordinator-tutorial-source',
   sessions: [
     ['caseworkctl', '.casework/dev/state.json'],
-    ['bregctl', '.breg/dev/state.json'],
   ],
 });
 
