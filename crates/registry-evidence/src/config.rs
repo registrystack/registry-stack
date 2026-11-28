@@ -13,7 +13,7 @@ use std::str::FromStr;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_adapter_core::{AdapterEndpointBindings, EvidenceConnectionPolicy};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
-use registry_platform_config::SecretReference;
+pub use registry_platform_config::SecretReference;
 use registry_platform_config::{
     check_metrics_bind_address, check_metrics_bind_apart, contains_environment_expression,
     AuditKeyConfig, JwksSource, ListenerBind, LoadedRuntimeConfig, MetricsBindError,
@@ -2599,6 +2599,21 @@ impl RuntimeConfig {
             })
     }
 
+    /// Decode a captured runtime for comparison with a package before deciding posture.
+    pub fn inspect_yaml(
+        path: &Path,
+        bytes: &[u8],
+        declared: DeclaredPosture,
+        environment: bool,
+    ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
+        let check = Self::loader(declared).check_offline_bytes(path, bytes, environment, |_| {
+            registry_platform_config::DEFAULT_STAND_IN
+        });
+        check
+            .loaded
+            .ok_or_else(|| ConfigError::Refused(Box::new(Report::new(check.diagnostics))))
+    }
+
     /// Refuse the document with the first rule it breaks, as startup does.
     pub fn validate(&self) -> Result<(), ConfigError> {
         match self.findings().into_iter().next() {
@@ -3466,23 +3481,16 @@ impl OidcAuthenticationConfig {
         let jwks_uri = Url::parse(self.jwks_uri())
             .map_err(|_| ConfigError::Invalid("authentication JWKS URI is invalid"))?;
         let plain_http = issuer.scheme() == "http" || jwks_uri.scheme() == "http";
-        // Deployable bundles require HTTPS for the issuer and the JWKS URI.
-        // The plain HTTP opt-in exists for the local profile alone, so a
-        // deployable bundle that sets it is refused rather than ignored.
-        if assurance_profile != AssuranceProfile::Local {
-            if self.provider.allow_insecure_http {
-                return Err(ConfigError::InvalidField(
-                    "production and evidence-grade authentication requires HTTPS; remove allowInsecureHttp, which only the local assurance profile accepts",
-                    "authentication.oidc.allowInsecureHttp",
-                ));
-            }
-            if plain_http {
-                return invalid(
-                    "production and evidence-grade authentication requires HTTPS for the issuer and JWKS URI; plain HTTP is accepted only under the local assurance profile",
-                );
-            }
+        if assurance_profile != AssuranceProfile::Local && self.provider.allow_insecure_http {
+            return Err(ConfigError::InvalidField(
+                "production and evidence-grade authentication permits HTTP only on loopback; remove allowInsecureHttp, which only the local assurance profile accepts",
+                "authentication.oidc.allowInsecureHttp",
+            ));
         }
-        if plain_http && !self.provider.allow_insecure_http {
+        if plain_http
+            && !self.provider.allow_insecure_http
+            && assurance_profile == AssuranceProfile::Local
+        {
             // The local permission is for a supervised issuer on this
             // deployment's own loopback: a canonical numeric origin, with the
             // JWKS served from that exact origin. It is not a permission for
@@ -3528,11 +3536,20 @@ impl OidcAuthenticationConfig {
                 }
             }
         }
-        self.provider.check("authentication.oidc").map_err(|_| {
-            ConfigError::InvalidField(
-                "the OIDC issuer, audience, or JWKS source is invalid",
-                "authentication.oidc",
-            )
+        self.provider.check("authentication.oidc").map_err(|error| {
+            if plain_http && !self.provider.allow_insecure_http
+                && error.kind() == registry_platform_config::ConfigBlockErrorKind::InvalidUri
+            {
+                ConfigError::InvalidField(
+                    "plain HTTP authentication requires a loopback issuer and JWKS URI wherever HTTP is used",
+                    "authentication.oidc",
+                )
+            } else {
+                ConfigError::InvalidField(
+                    "the OIDC issuer, audience, or JWKS source is invalid",
+                    "authentication.oidc",
+                )
+            }
         })?;
         if self
             .tls_trust_profile
@@ -7374,18 +7391,30 @@ mod tests {
                 "local assurance accepted JWKS URI {invalid}"
             );
         }
+    }
 
-        for profile in [
-            AssuranceProfile::Production,
-            AssuranceProfile::EvidenceGrade,
-        ] {
-            let mut candidate = config.clone();
-            candidate.assurance_profile = profile;
-            assert!(
-                candidate.validate().is_err(),
-                "{profile:?} inherited the local HTTP exception"
-            );
-        }
+    #[test]
+    fn production_oidc_accepts_loopback_http_without_opt_in() {
+        let mut candidate = plain_http_issuer_candidate("local", false);
+        let oidc = &mut candidate["authentication"]["oidc"];
+        oidc["issuer"] = serde_json::json!("http://127.0.0.1:8080");
+        oidc["jwksSource"]["uri"] = serde_json::json!("http://127.0.0.1:8080/jwks");
+        let mut auth = EvidenceConfig::parse_projection(&candidate)
+            .expect("local OIDC configuration decodes")
+            .authentication
+            .oidc;
+        auth.validate(AssuranceProfile::Production)
+            .expect("production permits loopback HTTP");
+
+        auth.provider.jwks_source = JwksSource::Uri {
+            uri: registry_platform_yaml::Url::new("http://identity.internal:8080/jwks").unwrap(),
+        };
+        let error = auth
+            .validate(AssuranceProfile::Production)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("loopback"), "{error}");
+        assert!(!error.contains("identity.internal"), "{error}");
     }
 
     fn plain_http_issuer_candidate(profile: &str, opt_in: bool) -> serde_json::Value {
@@ -7435,24 +7464,22 @@ mod tests {
         assert!(!error.contains("identity.internal"), "{error}");
     }
 
-    /// The frozen contract promises HTTPS for deployable bundles, so the
-    /// plain HTTP opt-in is refused there rather than honored.
+    /// Deployable bundles accept loopback HTTP without opting in.
     #[test]
-    fn deployable_profiles_refuse_plain_http_and_the_insecure_http_opt_in() {
+    fn deployable_profiles_refuse_non_loopback_http_and_the_insecure_http_opt_in() {
         for profile in ["production", "evidence-grade"] {
             for opt_in in [false, true] {
                 let error =
                     EvidenceConfig::parse_projection(&plain_http_issuer_candidate(profile, opt_in))
                         .expect_err("deployable bundles require HTTPS")
                         .to_string();
-                assert!(
-                    error.contains("production and evidence-grade authentication requires HTTPS"),
-                    "{profile}: {error}"
-                );
-                assert!(
-                    error.contains("local assurance profile"),
-                    "{profile}: {error}"
-                );
+                assert!(error.contains("loopback"), "{profile}: {error}");
+                if opt_in {
+                    assert!(
+                        error.contains("remove allowInsecureHttp"),
+                        "{profile}: {error}"
+                    );
+                }
                 assert!(!error.contains("identity.internal"), "{profile}: {error}");
             }
 

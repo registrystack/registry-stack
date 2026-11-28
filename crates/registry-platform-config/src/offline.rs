@@ -12,7 +12,7 @@ use registry_platform_yaml::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::loader::Decision;
+use crate::loader::{Decision, RuntimeConfigError};
 use crate::{
     contains_environment_expression, LoadedRuntimeConfig, RuntimeConfigLoader, UNAVAILABLE_CODE,
 };
@@ -237,11 +237,23 @@ impl RuntimeConfigLoader {
         substitute: bool,
         stand_in_for: fn(&str) -> &'static str,
     ) -> RuntimeFileCheck<T> {
-        let file = path.display().to_string();
         // One read under the loader's file rules serves the scan and the
         // decode, so nothing is opened before those rules have accepted it.
-        let bytes = self.read_file(path);
-        let tree = bytes.as_deref().ok().and_then(|bytes| scan(&file, bytes));
+        match self.read_file(path) {
+            Ok(bytes) => self.check_offline_bytes(path, &bytes, substitute, stand_in_for),
+            Err(error) => self.check_offline_input(path, Err(error), substitute, stand_in_for),
+        }
+    }
+
+    pub(crate) fn check_offline_input<T: DeserializeOwned>(
+        &self,
+        path: &Path,
+        bytes: Result<&[u8], RuntimeConfigError>,
+        substitute: bool,
+        stand_in_for: fn(&str) -> &'static str,
+    ) -> RuntimeFileCheck<T> {
+        let file = path.display().to_string();
+        let tree = bytes.as_ref().ok().and_then(|bytes| scan(&file, bytes));
         let deferred = match (&tree, substitute) {
             (Some(root), false) => Deferred::collect(root, stand_in_for),
             _ => Deferred::default(),
@@ -250,14 +262,14 @@ impl RuntimeConfigLoader {
             if substitute {
                 self.parse_file::<T>(
                     path,
-                    &bytes,
+                    bytes,
                     &|name| std::env::var(name).ok(),
                     Decision::Report,
                 )
             } else {
                 self.parse_file_with_stand_ins::<T>(
                     path,
-                    &bytes,
+                    bytes,
                     &|pointer| deferred.stand_in(pointer).to_owned(),
                     Decision::Report,
                 )

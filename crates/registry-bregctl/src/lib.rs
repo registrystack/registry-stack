@@ -130,6 +130,13 @@ use test_lifecycle::{TestLifecycleError, TestLifecycleRequest};
 
 use registry_platform_config::{declared, DeclaredPosture, Posture, PostureSource};
 
+fn peer_policy(posture: DeclaredPosture) -> registry_platform_httputil::PeerPolicy {
+    match posture.posture {
+        Posture::Production => registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+    }
+}
+
 const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
     posture: Posture::Production,
     source: PostureSource::Default,
@@ -1414,6 +1421,9 @@ impl From<DataRunStatusArg> for BRegIngestionRunStatus {
 
 #[derive(Debug, Args)]
 struct DataRunListArgs {
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
     #[arg(long, value_name = "URL")]
     breg_url: String,
@@ -1442,6 +1452,9 @@ struct DataRunListArgs {
 
 #[derive(Debug, Args)]
 struct DataRunCancelArgs {
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
     #[arg(long, value_name = "URL")]
     breg_url: String,
@@ -1507,6 +1520,9 @@ impl From<StatisticsWithdrawalReasonArg> for BRegWithdrawalReason {
 
 #[derive(Debug, Args)]
 struct StatisticsPublishArgs {
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
     #[arg(long, value_name = "URL")]
     breg_url: String,
@@ -1532,6 +1548,9 @@ struct StatisticsPublishArgs {
 
 #[derive(Debug, Args)]
 struct StatisticsWithdrawArgs {
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
     #[arg(long, value_name = "URL")]
     breg_url: String,
@@ -1583,6 +1602,9 @@ struct DataValidateArgs {
 
 #[derive(Debug, Args)]
 struct DataImportArgs {
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Absolute closed package directory used only for deterministic planning.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
     package: PathBuf,
@@ -2145,7 +2167,7 @@ struct ToolFinding<'a> {
     artifact: DiagnosticArtifact,
     path: &'a str,
     message: &'a str,
-    suggested_action: SuggestedAction,
+    suggested_action: &'a SuggestedAction,
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<&'a registry_platform_yaml::Source>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2167,7 +2189,7 @@ where
             artifact: finding.artifact,
             path: &finding.path,
             message: &finding.message,
-            suggested_action: finding.suggested_action,
+            suggested_action: &finding.suggested_action,
             source: finding.source.as_ref(),
             related: (!finding.related.is_empty()).then_some(finding.related.as_slice()),
         })
@@ -2243,7 +2265,7 @@ enum DiagnosticArtifact {
     TimerOperator,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum SuggestedAction {
     CorrectCommandUsage,
@@ -2303,6 +2325,8 @@ enum SuggestedAction {
     VerifyTimerOperator,
     #[serde(untagged)]
     PostureRecovery(&'static str),
+    #[serde(untagged)]
+    RuntimeRecovery(String),
 }
 
 #[derive(Serialize)]
@@ -2313,6 +2337,7 @@ struct DoctorSuccessReport<'a> {
     checked: &'static [&'static str],
     role_mode: &'static str,
     advisories: Vec<DoctorAdvisory<'a>>,
+    diagnostics: &'a [registry_platform_yaml::Diagnostic],
 }
 
 /// What one-role mode guards and what it does not, said wherever the role
@@ -2348,6 +2373,12 @@ impl Serialize for ObservedNumbers<'_> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VerifySuccessReport {
+    #[serde(
+        rename = "diagnostics",
+        serialize_with = "serialize_findings",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    findings: Vec<ToolDiagnostic>,
     ok: bool,
     command: &'static str,
     assurance: BaselineAssurance,
@@ -2359,6 +2390,12 @@ struct VerifySuccessReport {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MigrationExplainSuccessReport {
+    #[serde(
+        rename = "diagnostics",
+        serialize_with = "serialize_findings",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    findings: Vec<ToolDiagnostic>,
     ok: bool,
     command: &'static str,
     assurance: BaselineAssurance,
@@ -3110,14 +3147,54 @@ where
         Command::Data(DataArgs {
             command: DataCommand::Export(args),
         }) => Some(args.posture.flag.as_deref()),
+        Command::Data(DataArgs {
+            command: DataCommand::Import(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Data(DataArgs {
+            command:
+                DataCommand::Runs(DataRunsArgs {
+                    command: DataRunsCommand::List(args),
+                }),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Data(DataArgs {
+            command:
+                DataCommand::Runs(DataRunsArgs {
+                    command: DataRunsCommand::Cancel(args),
+                }),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Statistics(StatisticsArgs {
+            command: StatisticsCommand::Publish(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Statistics(StatisticsArgs {
+            command: StatisticsCommand::Withdraw(args),
+        }) => Some(args.posture.flag.as_deref()),
         Command::Generate(args) => Some(args.posture.flag.as_deref()),
         Command::Provision(args) => Some(args.shared.posture.as_deref()),
         Command::Timer(args) => Some(args.posture_flag()),
         Command::Dev(args) => Some(args.posture_flag()),
-        _ => None,
+        Command::DevSupervisor(_) => Some(None),
+        Command::Api(_)
+        | Command::Connection { .. }
+        | Command::Mcp(_)
+        | Command::Review(_)
+        | Command::Init(_)
+        | Command::Project(_)
+        | Command::Module(_)
+        | Command::Examples(_)
+        | Command::RstackDev(_)
+        | Command::Hook(HookArgs {
+            command: HookCommand::Sample(_),
+        })
+        | Command::FieldEncryption(FieldEncryptionArgs {
+            command: FieldEncryptionCommand::Keygen(_),
+        })
+        | Command::Explain(_)
+        | Command::Data(DataArgs {
+            command: DataCommand::Validate(_),
+        }) => None,
     };
     let force_production = matches!(&cli.command, Command::Check(args) if args.production);
-    let is_dev = matches!(&cli.command, Command::Dev(_));
+    let is_dev = matches!(&cli.command, Command::Dev(_) | Command::DevSupervisor(_));
     let (posture, format) = if let Some(flag) = posture_flag {
         if force_production && flag == Some("development") {
             return write_posture_usage(
@@ -3132,14 +3209,22 @@ where
         let posture = match declared(flag.or(force_production.then_some("production"))) {
             Ok(posture) => posture,
             Err(error) => {
+                let message = if force_production
+                    && flag.is_none()
+                    && error.code() == "platform.posture.conflict"
+                {
+                    "--production and REGISTRY_STACK_POSTURE declare different postures"
+                } else {
+                    error.message()
+                };
                 return write_posture_usage(
                     error.code(),
-                    error.message(),
+                    message,
                     error.suggested_action(),
                     cli.format,
                     stdout,
                     stderr,
-                )
+                );
             }
         };
         let posture = if is_dev && posture.posture == Posture::Production {
@@ -3448,21 +3533,7 @@ where
         }
         Command::Doctor(args) => {
             return match doctor::run(posture, &args.runtime_config) {
-                Ok(doctor::Outcome::PostureMismatch(recorded)) => {
-                    write_doctor_posture_finding(recorded, format, stdout, stderr)
-                }
-                Ok(doctor::Outcome::Checked(success)) => write_doctor_success(
-                    &success.checked.postgres_advisories,
-                    success.checked.role_mode,
-                    &success.checked.unbound_review_authorities,
-                    &success.checked.unavailable_external_projections,
-                    &success.checked.external_projections,
-                    &success.checked.external_refresh_plans,
-                    &success.external_refresh_timings,
-                    format,
-                    stdout,
-                    stderr,
-                ),
+                Ok(success) => write_doctor_success(&success, format, stdout, stderr),
                 Err(refusal) => {
                     let (artifact, action) = if refusal.runtime_configuration {
                         (
@@ -3482,7 +3553,9 @@ where
                             diagnostics: refusal
                                 .diagnostics
                                 .into_iter()
-                                .map(|diagnostic| tool_diagnostic(diagnostic, artifact, action))
+                                .map(|diagnostic| {
+                                    tool_diagnostic(diagnostic, artifact, action.clone())
+                                })
                                 .collect(),
                         },
                         format,
@@ -3542,7 +3615,7 @@ where
                 };
             }
             DataCommand::Import(args) => {
-                return match data_import(&args) {
+                return match data_import(posture, &args) {
                     Ok(report) => write_data_import_success(&report, format, stdout, stderr),
                     Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
@@ -3555,13 +3628,13 @@ where
             }
             DataCommand::Runs(args) => match args.command {
                 DataRunsCommand::List(args) => {
-                    return match data_runs_list(&args) {
+                    return match data_runs_list(posture, &args) {
                         Ok(report) => write_data_run_list_success(&report, format, stdout, stderr),
                         Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                     };
                 }
                 DataRunsCommand::Cancel(args) => {
-                    return match data_runs_cancel(&args) {
+                    return match data_runs_cancel(posture, &args) {
                         Ok(report) => {
                             write_data_run_cancel_success(&report, format, stdout, stderr)
                         }
@@ -3572,13 +3645,13 @@ where
         },
         Command::Statistics(args) => match args.command {
             StatisticsCommand::Publish(args) => {
-                return match statistics_publish(&args) {
+                return match statistics_publish(posture, &args) {
                     Ok(report) => write_statistics_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
             }
             StatisticsCommand::Withdraw(args) => {
-                return match statistics_withdraw(&args) {
+                return match statistics_withdraw(posture, &args) {
                     Ok(report) => write_statistics_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
@@ -3641,17 +3714,47 @@ where
             };
         }
         Command::IdempotencyRetention(args) => {
+            use registry_breg::idempotency_retention::IdempotencyRetentionOperatorService;
+            use registry_breg::mutation::MutationError;
             let IdempotencyRetentionCommand::EraseExpired(args) = args.command;
+            let cutoff = chrono::DateTime::parse_from_rfc3339(&args.before)
+                .map(|time| time.with_timezone(&chrono::Utc));
+            let before = match cutoff {
+                Ok(time) if args.runtime_config.is_absolute() && time <= chrono::Utc::now() => time,
+                _ => {
+                    return write_failure(
+                        &idempotency_retention_failure(MutationError::InvalidRequest),
+                        format,
+                        stdout,
+                        stderr,
+                    )
+                }
+            };
+            let config = match registry_breg::runtime_config::load_runtime_config(
+                &args.runtime_config,
+                posture,
+            ) {
+                Ok(config) => config,
+                Err(error) => {
+                    let failure = if is_posture_refusal(&error) {
+                        runtime_config_failure("idempotency-retention erase-expired", error)
+                    } else {
+                        idempotency_retention_failure(MutationError::Unavailable)
+                    };
+                    return write_failure(&failure, format, stdout, stderr);
+                }
+            };
             let outcome = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|_| registry_breg::mutation::MutationError::Unavailable)
+                .map_err(|_| MutationError::Unavailable)
                 .and_then(|runtime| {
-                    runtime.block_on(registry_breg::idempotency_retention::erase_expired(
-                        &args.runtime_config,
-                        &args.before,
-                        posture,
-                    ))
+                    runtime.block_on(async {
+                        IdempotencyRetentionOperatorService::from_loaded_config(config)
+                            .await?
+                            .erase_expired(before)
+                            .await
+                    })
                 });
             return match outcome {
                 Ok(erased) => {
@@ -4420,6 +4523,7 @@ fn proposal_retention_failure(
     error: ProposalRetentionCliError,
 ) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
+        ProposalRetentionCliError::RuntimeConfig(error) => return runtime_config_failure(command, error),
         ProposalRetentionCliError::PackagePinMismatch(mismatch) => {
             return package_pin_failure(
                 command,
@@ -5822,6 +5926,7 @@ fn unavailable_hook_event(compiled: &CompiledRegistry) -> FailureReport {
 
 fn hook_lifecycle_failure(command: &'static str, error: HookLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
+        HookLifecycleError::RuntimeConfig(error) => return runtime_config_failure(command, error),
         HookLifecycleError::PackagePinMismatch(mismatch) => {
             return package_pin_failure(command, "hook.package.refused", "package", &mismatch);
         }
@@ -5891,18 +5996,24 @@ fn data_validate(args: &DataValidateArgs) -> Result<DataValidateSuccessReport, F
     })
 }
 
-fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Refusal> {
-    let outcome = data_lifecycle::run_import(DataImportRequest {
-        package: &args.package,
-        breg_url: &args.breg_url,
-        access_token_file: &args.access_token_file,
-        entity: &args.entity,
-        operation: args.operation.into(),
-        profile: &args.profile,
-        input: &args.input,
-        checkpoint: &args.checkpoint,
-        max_chunks: args.max_chunks,
-    })
+fn data_import(
+    posture: DeclaredPosture,
+    args: &DataImportArgs,
+) -> Result<DataImportSuccessReport, Refusal> {
+    let outcome = data_lifecycle::run_import(
+        posture,
+        DataImportRequest {
+            package: &args.package,
+            breg_url: &args.breg_url,
+            access_token_file: &args.access_token_file,
+            entity: &args.entity,
+            operation: args.operation.into(),
+            profile: &args.profile,
+            input: &args.input,
+            checkpoint: &args.checkpoint,
+            max_chunks: args.max_chunks,
+        },
+    )
     .map_err(|error| data_lifecycle_refusal("data import", "data.import", error))?;
     Ok(DataImportSuccessReport {
         ok: true,
@@ -5955,17 +6066,23 @@ fn data_export(
     })
 }
 
-fn data_runs_list(args: &DataRunListArgs) -> Result<DataRunListSuccessReport, Refusal> {
-    let outcome = data_lifecycle::list_ingestion_runs(DataRunListRequest {
-        breg_url: &args.breg_url,
-        access_token_file: &args.access_token_file,
-        record_route: &args.record_route,
-        profile: &args.profile,
-        status: args.status.map(Into::into),
-        input_digest: args.input_digest.as_deref(),
-        cursor: args.cursor.as_deref(),
-        limit: args.limit,
-    })
+fn data_runs_list(
+    posture: DeclaredPosture,
+    args: &DataRunListArgs,
+) -> Result<DataRunListSuccessReport, Refusal> {
+    let outcome = data_lifecycle::list_ingestion_runs(
+        posture,
+        DataRunListRequest {
+            breg_url: &args.breg_url,
+            access_token_file: &args.access_token_file,
+            record_route: &args.record_route,
+            profile: &args.profile,
+            status: args.status.map(Into::into),
+            input_digest: args.input_digest.as_deref(),
+            cursor: args.cursor.as_deref(),
+            limit: args.limit,
+        },
+    )
     .map_err(|error| data_lifecycle_refusal("data runs list", "data.runs.list", error))?;
     Ok(DataRunListSuccessReport {
         ok: true,
@@ -5974,14 +6091,20 @@ fn data_runs_list(args: &DataRunListArgs) -> Result<DataRunListSuccessReport, Re
     })
 }
 
-fn data_runs_cancel(args: &DataRunCancelArgs) -> Result<DataRunCancelSuccessReport, Refusal> {
-    let outcome = data_lifecycle::cancel_ingestion_run(DataRunCancelRequest {
-        breg_url: &args.breg_url,
-        access_token_file: &args.access_token_file,
-        record_route: &args.record_route,
-        profile: &args.profile,
-        run_id: args.run_id,
-    })
+fn data_runs_cancel(
+    posture: DeclaredPosture,
+    args: &DataRunCancelArgs,
+) -> Result<DataRunCancelSuccessReport, Refusal> {
+    let outcome = data_lifecycle::cancel_ingestion_run(
+        posture,
+        DataRunCancelRequest {
+            breg_url: &args.breg_url,
+            access_token_file: &args.access_token_file,
+            record_route: &args.record_route,
+            profile: &args.profile,
+            run_id: args.run_id,
+        },
+    )
     .map_err(|error| data_lifecycle_refusal("data runs cancel", "data.runs.cancel", error))?;
     Ok(DataRunCancelSuccessReport {
         ok: true,
@@ -5991,17 +6114,21 @@ fn data_runs_cancel(args: &DataRunCancelArgs) -> Result<DataRunCancelSuccessRepo
 }
 
 fn statistics_publish(
+    posture: DeclaredPosture,
     args: &StatisticsPublishArgs,
 ) -> Result<StatisticsMutationSuccessReport, FailureReport> {
-    let release = statistics_lifecycle::publish(StatisticsPublishRequest {
-        breg_url: &args.breg_url,
-        access_token_file: &args.access_token_file,
-        dataset: &args.dataset,
-        period: &args.period,
-        status: args.status.into(),
-        profile: &args.profile,
-        idempotency_key: &args.idempotency_key,
-    })
+    let release = statistics_lifecycle::publish(
+        posture,
+        StatisticsPublishRequest {
+            breg_url: &args.breg_url,
+            access_token_file: &args.access_token_file,
+            dataset: &args.dataset,
+            period: &args.period,
+            status: args.status.into(),
+            profile: &args.profile,
+            idempotency_key: &args.idempotency_key,
+        },
+    )
     .map_err(|error| statistics_lifecycle_failure("statistics publish", error))?;
     Ok(StatisticsMutationSuccessReport {
         ok: true,
@@ -6011,18 +6138,22 @@ fn statistics_publish(
 }
 
 fn statistics_withdraw(
+    posture: DeclaredPosture,
     args: &StatisticsWithdrawArgs,
 ) -> Result<StatisticsMutationSuccessReport, FailureReport> {
-    let release = statistics_lifecycle::withdraw(StatisticsWithdrawRequest {
-        breg_url: &args.breg_url,
-        access_token_file: &args.access_token_file,
-        dataset: &args.dataset,
-        period: &args.period,
-        version: args.version,
-        reason: args.reason.into(),
-        profile: &args.profile,
-        idempotency_key: &args.idempotency_key,
-    })
+    let release = statistics_lifecycle::withdraw(
+        posture,
+        StatisticsWithdrawRequest {
+            breg_url: &args.breg_url,
+            access_token_file: &args.access_token_file,
+            dataset: &args.dataset,
+            period: &args.period,
+            version: args.version,
+            reason: args.reason.into(),
+            profile: &args.profile,
+            idempotency_key: &args.idempotency_key,
+        },
+    )
     .map_err(|error| statistics_lifecycle_failure("statistics withdraw", error))?;
     Ok(StatisticsMutationSuccessReport {
         ok: true,
@@ -6342,6 +6473,13 @@ fn data_lifecycle_failure(
             DiagnosticArtifact::DataTransport,
             SuggestedAction::VerifyDataTransport,
         ),
+        DataLifecycleError::DevelopmentPeer => (
+            format!("{prefix}.development-peer"),
+            "bregUrl",
+            "the Base Registry Engine peer declared development",
+            DiagnosticArtifact::DataTransport,
+            SuggestedAction::PostureRecovery("Point this command at a production peer, or declare development with --posture development."),
+        ),
         DataLifecycleError::Runtime | DataLifecycleError::Transport => (
             format!("{prefix}.transport.unavailable"),
             "transport",
@@ -6399,7 +6537,7 @@ fn data_lifecycle_failure(
 fn diff(posture: DeclaredPosture, args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
     let (candidate, candidate_source) =
         compile_with_source(&args.project, ProfileArg::Authoring, "diff")?;
-    let (baseline_registry, baseline_revision, baseline_assurance) =
+    let (baseline_registry, baseline_revision, baseline_assurance, posture_diagnostics) =
         match (&args.runtime_config, &args.package) {
             (Some(runtime_path), None) => {
                 // The running package is the predecessor of the project being
@@ -6408,28 +6546,30 @@ fn diff(posture: DeclaredPosture, args: &DiffArgs) -> Result<DiffSuccessReport, 
                 // against its sum file. Its changes are classified against the
                 // packaged migration baseline, the schema the successor plan
                 // runs over.
-                let (predecessor, registry) = inspect_runtime_predecessor_rehearsal_baseline(
-                    posture,
-                    runtime_path,
-                )
-                .map_err(|error| match error {
-                    RuntimePackageInspectionError::RuntimeConfigPath => diff_failure(
-                        "diff.runtime-config.path-invalid",
-                        "runtimeConfig",
-                        "the runtime configuration path must be absolute",
-                    ),
-                    RuntimePackageInspectionError::RuntimeConfig(error) => {
-                        runtime_config_diff_failure(error)
-                    }
-                    RuntimePackageInspectionError::Package(error) => package_diff_failure(error),
-                    RuntimePackageInspectionError::SharedPackage(message) => {
-                        diff_failure("diff.package.integrity-refused", "package", &message)
-                    }
-                })?;
+                let (predecessor, registry, diagnostics) =
+                    inspect_runtime_predecessor_rehearsal_baseline(posture, runtime_path).map_err(
+                        |error| match error {
+                            RuntimePackageInspectionError::RuntimeConfigPath => diff_failure(
+                                "diff.runtime-config.path-invalid",
+                                "runtimeConfig",
+                                "the runtime configuration path must be absolute",
+                            ),
+                            RuntimePackageInspectionError::RuntimeConfig(error) => {
+                                runtime_config_diff_failure(error)
+                            }
+                            RuntimePackageInspectionError::Package(error) => {
+                                package_diff_failure(error)
+                            }
+                            RuntimePackageInspectionError::SharedPackage(message) => {
+                                diff_failure("diff.package.integrity-refused", "package", &message)
+                            }
+                        },
+                    )?;
                 (
                     registry.with_migration_baseline_schema(predecessor.migration_baseline()),
                     predecessor.package_digest().to_owned(),
                     BaselineAssurance::RuntimeBound,
+                    diagnostics,
                 )
             }
             (None, Some(package_root)) => {
@@ -6439,6 +6579,7 @@ fn diff(posture: DeclaredPosture, args: &DiffArgs) -> Result<DiffSuccessReport, 
                     inspected.registry().clone(),
                     inspected.package_digest().to_owned(),
                     BaselineAssurance::IntegrityOnly,
+                    Vec::new(),
                 )
             }
             _ => unreachable!("clap enforces exactly one diff baseline selector"),
@@ -6485,6 +6626,7 @@ fn diff(posture: DeclaredPosture, args: &DiffArgs) -> Result<DiffSuccessReport, 
                 None => tool_diagnostic(diagnostic, artifact, action),
             }
         })
+        .chain(runtime_posture_findings(posture_diagnostics))
         .collect();
     Ok(DiffSuccessReport {
         ok: true,
@@ -6505,7 +6647,7 @@ fn package(args: &PackageArgs, posture: DeclaredPosture) -> Result<PackageSucces
         None => package_lifecycle::receipt_schema_fingerprint(&args.test_receipt)
             .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?,
     };
-    let mut candidate = capture_candidate(&args.candidate, "package", false, Some(posture))?;
+    let mut candidate = capture_candidate(&args.candidate, "package", false, posture, true)?;
     let diagnostics = std::mem::take(&mut candidate.posture_diagnostics);
     let prepared = candidate
         .prepare(schema_fingerprint)
@@ -6553,7 +6695,7 @@ fn test(posture: DeclaredPosture, args: &TestArgs) -> Result<SchemaTestSuccessRe
         unreachable!("clap requires --credentials and --output unless --fingerprint-only is set")
     };
     let output = test_lifecycle::preflight_output(output).map_err(test_lifecycle_failure)?;
-    let candidate = capture_candidate(&args.candidate, "test", true, None)?;
+    let candidate = capture_candidate(&args.candidate, "test", true, posture, false)?;
     let outcome = match test_lifecycle::run(
         posture,
         TestLifecycleRequest {
@@ -6607,7 +6749,7 @@ fn measure_schema_fingerprint(
     posture: DeclaredPosture,
     args: &TestArgs,
 ) -> Result<SchemaFingerprintReport, Refusal> {
-    let candidate = capture_candidate(&args.candidate, "test", false, None)?;
+    let candidate = capture_candidate(&args.candidate, "test", false, posture, false)?;
     let measurement = test_lifecycle::measure(posture, candidate, &args.runtime_config)
         .map_err(test_lifecycle_failure)?;
     Ok(SchemaFingerprintReport {
@@ -6641,6 +6783,7 @@ fn baseline_fingerprint_drift_finding(drift: &BaselineFingerprintDrift) -> Diagn
 /// migration over its schema. The predecessor was verified a moment earlier;
 /// this second read is bound to the same package digest.
 fn capture_rehearsal_baseline(
+    posture: DeclaredPosture,
     command: &'static str,
     baseline_package: &std::path::Path,
     package_digest: &str,
@@ -6659,7 +6802,7 @@ fn capture_rehearsal_baseline(
         )
     };
     let (predecessor, registry) =
-        inspect_baseline_rehearsal(baseline_package).map_err(|error| match error {
+        inspect_baseline_rehearsal(posture, baseline_package).map_err(|error| match error {
             error @ PackageError::PreviousReleaseSources(_) => {
                 baseline_package_failure(command, error)
             }
@@ -6680,7 +6823,8 @@ fn capture_candidate(
     args: &PackageCandidateArgs,
     command: &'static str,
     rehearse_successor: bool,
-    package_posture: Option<DeclaredPosture>,
+    posture: DeclaredPosture,
+    check_project_posture: bool,
 ) -> Result<CapturedPackageCandidate, Refusal> {
     let capture_failure = |diagnostic| {
         source_failure(
@@ -6693,7 +6837,8 @@ fn capture_candidate(
     let selected_project = canonicalize_project_path(&args.project).map_err(&capture_failure)?;
     let source = capture_resolved_project_source(&selected_project).map_err(capture_failure)?;
     let compiled = compile_captured_project(&source, ProfileArg::Production, command)?;
-    let posture_diagnostics = if let Some(declared) = package_posture {
+    let posture_diagnostics = if check_project_posture {
+        let declared = posture;
         if declared.posture == Posture::Production {
             refuse_deployment_identity(&source, command)?;
         }
@@ -6760,7 +6905,7 @@ fn capture_candidate(
     let mut reviewed_changes = String::new();
     let (from_package_digest, migration_plan) = match args.baseline_package.as_deref() {
         Some(baseline_package) => {
-            let baseline = inspect_baseline_package(baseline_package)
+            let baseline = inspect_baseline_package(posture, baseline_package)
                 .map_err(|error| baseline_package_failure(command, error))?;
             if baseline.package_id() != compiled.registry_id() {
                 return Err(candidate_failure(
@@ -6775,6 +6920,7 @@ fn capture_candidate(
             }
             if rehearse_successor {
                 rehearsal_baseline = Some(capture_rehearsal_baseline(
+                    posture,
                     command,
                     baseline_package,
                     baseline.package_digest(),
@@ -7958,7 +8104,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 SuggestedAction::CorrectPackageBuild,
             ),
             registry_breg::migration::MigrationError::PostureMismatch { recorded, .. } => {
-                let mut failure = source_failure(
+                return source_failure(
                     command,
                     diagnostic(
                         registry_breg::migration::POSTURE_MISMATCH_CODE,
@@ -7968,11 +8114,6 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     DiagnosticArtifact::DatabaseMigration,
                     SuggestedAction::PostureRecovery(registry_breg::migration::posture_mismatch_action(recorded)),
                 );
-                failure.diagnostics[0].related.push(ToolRelatedDiagnostic {
-                    file: None, line: None, column: None, path: "database".to_owned(),
-                    message: registry_breg::migration::posture_mismatch_action(recorded).to_owned(),
-                });
-                return failure;
             }
             registry_breg::migration::MigrationError::PackageBinding => (
                 "apply.package.refused",
@@ -8337,10 +8478,12 @@ fn verify(
     posture: DeclaredPosture,
     args: &VerifyArgs,
 ) -> Result<VerifySuccessReport, FailureReport> {
-    let inspected = inspect_runtime_package(posture, &args.runtime_config)
-        .map_err(|error| inspection_failure("verify", "verify", error))?;
+    let (inspected, posture_diagnostics) =
+        inspect_runtime_package(posture, &args.runtime_config)
+            .map_err(|error| inspection_failure("verify", "verify", error))?;
     let registry = inspected.registry();
     Ok(VerifySuccessReport {
+        findings: runtime_posture_findings(posture_diagnostics),
         ok: true,
         command: "verify",
         assurance: BaselineAssurance::RuntimeBound,
@@ -8367,9 +8510,11 @@ fn migration_explain(
     posture: DeclaredPosture,
     args: &MigrationExplainArgs,
 ) -> Result<MigrationExplainSuccessReport, FailureReport> {
-    let inspected = inspect_runtime_package(posture, &args.runtime_config)
-        .map_err(|error| inspection_failure("migration explain", "migration.explain", error))?;
+    let (inspected, posture_diagnostics) =
+        inspect_runtime_package(posture, &args.runtime_config)
+            .map_err(|error| inspection_failure("migration explain", "migration.explain", error))?;
     Ok(MigrationExplainSuccessReport {
+        findings: runtime_posture_findings(posture_diagnostics),
         ok: true,
         command: "migration explain",
         assurance: BaselineAssurance::RuntimeBound,
@@ -8585,7 +8730,14 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
                     SuggestedAction::RestorePreActivationBackup,
                 ),
             },
-            ReconcileError::Unavailable | ReconcileError::PostureMismatch { .. } => (
+            ReconcileError::PostureMismatch { recorded, .. } => (
+                registry_breg::migration::POSTURE_MISMATCH_CODE,
+                "/database",
+                registry_breg::migration::posture_mismatch_message(recorded),
+                DiagnosticArtifact::DatabaseMigration,
+                SuggestedAction::PostureRecovery(registry_breg::migration::posture_mismatch_action(recorded)),
+            ),
+            ReconcileError::Unavailable => (
                 "migration.reconcile.unavailable",
                 "database",
                 "the Registry migration state is unavailable",
@@ -8877,11 +9029,43 @@ fn runtime_config_diagnostics(error: &RuntimeConfigError) -> Vec<Diagnostic> {
         .collect()
 }
 
+fn runtime_posture_findings(
+    diagnostics: Vec<registry_platform_yaml::Diagnostic>,
+) -> Vec<ToolDiagnostic> {
+    diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            let action = SuggestedAction::RuntimeRecovery(diagnostic.suggested_action.clone());
+            positioned_tool_diagnostic(diagnostic, DiagnosticArtifact::RuntimeConfiguration, action)
+        })
+        .collect()
+}
+
+fn write_runtime_findings(
+    diagnostics: &[ToolDiagnostic],
+    stdout: &mut dyn Write,
+) -> io::Result<()> {
+    let mut lines = report::Lines::new();
+    lines.findings(&report_findings(diagnostics));
+    stdout.write_all(lines.finish().as_bytes())
+}
+
+fn is_posture_refusal(error: &RuntimeConfigError) -> bool {
+    matches!(error, RuntimeConfigError::Reader(refusal) if refusal
+        .diagnostics()
+        .iter()
+        .any(|item| item.code.contains(".posture.")))
+}
+
 fn runtime_config_failure(command: &'static str, error: RuntimeConfigError) -> FailureReport {
-    FailureReport {
-        ok: false,
-        command,
-        diagnostics: runtime_config_diagnostics(&error)
+    let diagnostics = error.diagnostics(None);
+    let findings = if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code.contains(".posture."))
+    {
+        runtime_posture_findings(diagnostics)
+    } else {
+        runtime_config_diagnostics(&error)
             .into_iter()
             .map(|diagnostic| {
                 tool_diagnostic(
@@ -8890,7 +9074,12 @@ fn runtime_config_failure(command: &'static str, error: RuntimeConfigError) -> F
                     SuggestedAction::CorrectRuntimeConfiguration,
                 )
             })
-            .collect(),
+            .collect()
+    };
+    FailureReport {
+        ok: false,
+        command,
+        diagnostics: findings,
     }
 }
 
@@ -9387,9 +9576,6 @@ fn generate_requested(
     posture: DeclaredPosture,
     args: &GenerateArgs,
 ) -> Result<SuccessReport, FailureReport> {
-    if args.artifact == ArtifactSelector::Odrl {
-        return generate_odrl(args);
-    }
     if args.artifact == ArtifactSelector::IdentityFacts {
         return generate_identity_facts(posture, args);
     }
@@ -9407,6 +9593,9 @@ fn generate_requested(
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
         ));
+    }
+    if args.artifact == ArtifactSelector::Odrl {
+        return generate_odrl(args);
     }
     let fail = |message: &str| {
         source_failure(
@@ -9645,7 +9834,10 @@ fn generate_external_source_facts(
         revision: Some(compiled.revision().to_owned()),
         registry_revision: None,
         package_digest: None,
-        findings: positioned_compiler_findings(&compiled, &project),
+        findings: positioned_compiler_findings(&compiled, &project)
+            .into_iter()
+            .chain(config.posture_report().diagnostics(runtime_path))
+            .collect(),
         artifacts: vec![artifact_report(
             &args.output.display().to_string(),
             "application/json",
@@ -9742,7 +9934,10 @@ fn generate_identity_facts(
         revision: Some(compiled.revision().to_owned()),
         registry_revision: None,
         package_digest: None,
-        findings: positioned_compiler_findings(&compiled, &source),
+        findings: positioned_compiler_findings(&compiled, &source)
+            .into_iter()
+            .chain(config.posture_report().diagnostics(runtime_config))
+            .collect(),
         artifacts: vec![artifact_report(
             &args.output.display().to_string(),
             "application/yaml",
@@ -13823,17 +14018,22 @@ fn write_dev_success(
 
 #[allow(clippy::too_many_arguments)]
 fn write_doctor_success(
-    advisories: &[registry_breg::postgres::BaselineAdvisory],
-    role_mode: registry_breg::postgres::RoleMode,
-    unbound_review_authorities: &[String],
-    unavailable_external_projections: &BTreeMap<String, String>,
-    external_projections: &[registry_breg::startup::ExternalProjectionStatus],
-    external_refresh_plans: &[registry_breg::startup::ExternalRefreshPlanStatus],
-    external_refresh_timings: &[registry_breg::runtime_config::ExternalRefreshTiming],
+    success: &doctor::DoctorSuccess,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
+    let registry_breg::startup::CheckedStartup {
+        postgres_advisories: advisories,
+        role_mode,
+        unbound_review_authorities,
+        unavailable_external_projections,
+        external_projections,
+        external_refresh_plans,
+        ..
+    } = &success.checked;
+    let role_mode = *role_mode;
+    let external_refresh_timings = &success.external_refresh_timings;
     let review_messages = unbound_review_authorities.iter().map(|authority| format!(
         "Submit is unavailable for Proposals using review authority `{authority}`; configure its reviewAuthorities binding. Unrelated operations and draft Start/Edit do not need this binding."
     )).collect::<Vec<_>>();
@@ -13936,12 +14136,31 @@ fn write_doctor_success(
             observed: ObservedNumbers(observed),
         });
     }
+    let posture_messages = success
+        .diagnostics
+        .iter()
+        .map(|finding| {
+            format!(
+                "{}: {} Next: {}",
+                finding.path, finding.message, finding.suggested_action
+            )
+        })
+        .collect::<Vec<_>>();
+    for (finding, message) in success.diagnostics.iter().zip(&posture_messages) {
+        doctor_advisories.push(DoctorAdvisory {
+            code: finding.code.clone(),
+            severity: "warning",
+            message,
+            observed: ObservedNumbers(&[]),
+        });
+    }
     let report = DoctorSuccessReport {
         ok: true,
         command: "doctor",
         checked: &doctor::CHECKED_DEPENDENCIES,
         role_mode: role_mode.as_str(),
         advisories: doctor_advisories,
+        diagnostics: &success.diagnostics,
     };
     let result = if format.is_json() {
         write_ctl_report(format, &mut *stdout, &report)
@@ -14372,6 +14591,7 @@ fn write_verify_success(
             ],
             stdout,
         )
+        .and_then(|()| write_runtime_findings(&report.findings, stdout))
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -14674,37 +14894,10 @@ fn activation_posture_finding(recorded: Posture) -> registry_platform_yaml::Diag
     };
     registry_platform_yaml::Diagnostic::warning(
         POSTURE_MISMATCH_CODE,
-        "database",
+        "/database",
         posture_mismatch_message(recorded),
         posture_mismatch_action(recorded),
     )
-}
-
-fn write_doctor_posture_finding(
-    recorded: Posture,
-    format: OutputFormat,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> ExitCode {
-    let finding = activation_posture_finding(recorded);
-    let result = if format.is_json() {
-        write_ctl_report(
-            format,
-            &mut *stdout,
-            &json!({
-                "ok": true, "command": "doctor", "diagnostics": [finding],
-            }),
-        )
-        .map_err(io::Error::other)
-        .and_then(|()| writeln!(stdout))
-    } else {
-        writeln!(
-            stdout,
-            "{}",
-            registry_platform_yaml::Report::new(vec![finding]).render_human()
-        )
-    };
-    write_result(result, stderr)
 }
 
 fn write_status_success(
@@ -14808,6 +15001,7 @@ fn write_migration_explain_success(
             .and_then(|()| writeln!(stdout))
     } else {
         write_migration_explain_human(report, stdout)
+            .and_then(|()| write_runtime_findings(&report.findings, stdout))
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -16023,7 +16217,24 @@ fn write_failure_with_exit(
             // diagnostics below it carry their own severity and closing count.
             let mut lines = report::Lines::new();
             lines.lead(&format!("bregctl {} refused.", report.command));
-            lines.refusal_findings(&report_findings(&report.diagnostics));
+            let messages = report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| match &diagnostic.suggested_action {
+                    SuggestedAction::PostureRecovery(action) => {
+                        format!("{} Next: {action}", diagnostic.message)
+                    }
+                    SuggestedAction::RuntimeRecovery(action) => {
+                        format!("{} Next: {action}", diagnostic.message)
+                    }
+                    _ => diagnostic.message.clone(),
+                })
+                .collect::<Vec<_>>();
+            let mut findings = report_findings(&report.diagnostics);
+            for (finding, message) in findings.iter_mut().zip(&messages) {
+                finding.message = message;
+            }
+            lines.refusal_findings(&findings);
             stderr.write_all(lines.finish().as_bytes())
         }
     };
@@ -16037,6 +16248,35 @@ fn write_failure_with_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_doctor_fixture(
+        advisories: &[registry_breg::postgres::BaselineAdvisory],
+        role_mode: registry_breg::postgres::RoleMode,
+        unbound_review_authorities: &[String],
+        unavailable_external_projections: &BTreeMap<String, String>,
+        external_projections: &[registry_breg::startup::ExternalProjectionStatus],
+        external_refresh_plans: &[registry_breg::startup::ExternalRefreshPlanStatus],
+        external_refresh_timings: &[registry_breg::runtime_config::ExternalRefreshTiming],
+        format: OutputFormat,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        let success = doctor::DoctorSuccess {
+            checked: registry_breg::startup::CheckedStartup {
+                recorded_posture: Posture::Production,
+                postgres_advisories: advisories.to_vec(),
+                role_mode,
+                unbound_review_authorities: unbound_review_authorities.to_vec(),
+                unavailable_external_projections: unavailable_external_projections.clone(),
+                external_projections: external_projections.to_vec(),
+                external_refresh_plans: external_refresh_plans.to_vec(),
+            },
+            diagnostics: Vec::new(),
+            external_refresh_timings: external_refresh_timings.to_vec(),
+        };
+        write_doctor_success(&success, format, stdout, stderr)
+    }
 
     #[test]
     fn statistics_diagnostic_reports_a_development_peer_as_an_invalid_response() {
@@ -16559,6 +16799,8 @@ mod tests {
             local_identity["message"]
                 .as_str()
                 .is_some_and(|message| message.contains("replace canonicalBaseIri")
+                    && message.contains("--posture development")
+                    && message.contains("REGISTRY_STACK_POSTURE=development")
                     && message.contains("Nothing was changed")),
             "{local_identity}"
         );
@@ -16820,27 +17062,33 @@ mod tests {
                     stream.write_all(response.as_bytes()).unwrap();
                 });
                 let error = if withdraw {
-                    statistics_lifecycle::withdraw(StatisticsWithdrawRequest {
-                        breg_url: &url,
-                        access_token_file: &token_file,
-                        dataset: "population",
-                        period: "2025-01",
-                        version: 1,
-                        reason: registry_breg_client::BRegWithdrawalReason::ComputationError,
-                        profile: "publisher",
-                        idempotency_key: "statistics-retry-key",
-                    })
+                    statistics_lifecycle::withdraw(
+                        DEFAULT_POSTURE,
+                        StatisticsWithdrawRequest {
+                            breg_url: &url,
+                            access_token_file: &token_file,
+                            dataset: "population",
+                            period: "2025-01",
+                            version: 1,
+                            reason: registry_breg_client::BRegWithdrawalReason::ComputationError,
+                            profile: "publisher",
+                            idempotency_key: "statistics-retry-key",
+                        },
+                    )
                     .unwrap_err()
                 } else {
-                    statistics_lifecycle::publish(StatisticsPublishRequest {
-                        breg_url: &url,
-                        access_token_file: &token_file,
-                        dataset: "population",
-                        period: "2025-01",
-                        status: registry_breg_client::BRegReleaseStatus::Final,
-                        profile: "publisher",
-                        idempotency_key: "statistics-retry-key",
-                    })
+                    statistics_lifecycle::publish(
+                        DEFAULT_POSTURE,
+                        StatisticsPublishRequest {
+                            breg_url: &url,
+                            access_token_file: &token_file,
+                            dataset: "population",
+                            period: "2025-01",
+                            status: registry_breg_client::BRegReleaseStatus::Final,
+                            profile: "publisher",
+                            idempotency_key: "statistics-retry-key",
+                        },
+                    )
                     .unwrap_err()
                 };
                 server.join().unwrap();
@@ -16876,15 +17124,18 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        let error = statistics_lifecycle::publish(StatisticsPublishRequest {
-            breg_url: &url,
-            access_token_file: &token_file,
-            dataset: "population",
-            period: "2025-01",
-            status: registry_breg_client::BRegReleaseStatus::Final,
-            profile: "publisher",
-            idempotency_key: "statistics-retry-key",
-        })
+        let error = statistics_lifecycle::publish(
+            DEFAULT_POSTURE,
+            StatisticsPublishRequest {
+                breg_url: &url,
+                access_token_file: &token_file,
+                dataset: "population",
+                period: "2025-01",
+                status: registry_breg_client::BRegReleaseStatus::Final,
+                profile: "publisher",
+                idempotency_key: "statistics-retry-key",
+            },
+        )
         .unwrap_err();
         let report =
             serde_json::to_value(statistics_lifecycle_failure("statistics", error)).unwrap();
@@ -16963,27 +17214,33 @@ mod tests {
                 stream.write_all(response.as_bytes()).unwrap();
             });
             let error = if withdraw {
-                statistics_lifecycle::withdraw(StatisticsWithdrawRequest {
-                    breg_url: &url,
-                    access_token_file: &token_file,
-                    dataset: "population",
-                    period: "2025-01",
-                    version: 1,
-                    reason: registry_breg_client::BRegWithdrawalReason::ComputationError,
-                    profile: "publisher",
-                    idempotency_key: "statistics-response-binding",
-                })
+                statistics_lifecycle::withdraw(
+                    DEFAULT_POSTURE,
+                    StatisticsWithdrawRequest {
+                        breg_url: &url,
+                        access_token_file: &token_file,
+                        dataset: "population",
+                        period: "2025-01",
+                        version: 1,
+                        reason: registry_breg_client::BRegWithdrawalReason::ComputationError,
+                        profile: "publisher",
+                        idempotency_key: "statistics-response-binding",
+                    },
+                )
                 .unwrap_err()
             } else {
-                statistics_lifecycle::publish(StatisticsPublishRequest {
-                    breg_url: &url,
-                    access_token_file: &token_file,
-                    dataset: "population",
-                    period: "2025-01",
-                    status: registry_breg_client::BRegReleaseStatus::Final,
-                    profile: "publisher",
-                    idempotency_key: "statistics-response-binding",
-                })
+                statistics_lifecycle::publish(
+                    DEFAULT_POSTURE,
+                    StatisticsPublishRequest {
+                        breg_url: &url,
+                        access_token_file: &token_file,
+                        dataset: "population",
+                        period: "2025-01",
+                        status: registry_breg_client::BRegReleaseStatus::Final,
+                        profile: "publisher",
+                        idempotency_key: "statistics-response-binding",
+                    },
+                )
                 .unwrap_err()
             };
             server.join().unwrap();
@@ -18288,7 +18545,7 @@ mod tests {
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], RoleMode::Split, &[], &BTreeMap::new(), &[], &[], &[], format, &mut stdout, &mut stderr),
+                write_doctor_fixture(&[], RoleMode::Split, &[], &BTreeMap::new(), &[], &[], &[], format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(
@@ -18304,7 +18561,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert_eq!(
-            write_doctor_success(
+            write_doctor_fixture(
                 &[],
                 RoleMode::Single,
                 &[],
@@ -18331,7 +18588,7 @@ mod tests {
 
         let mut stdout = Vec::new();
         assert_eq!(
-            write_doctor_success(
+            write_doctor_fixture(
                 &[],
                 RoleMode::Single,
                 &[],
@@ -18367,7 +18624,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert_eq!(
-            write_doctor_success(
+            write_doctor_fixture(
                 &advisories,
                 RoleMode::Split,
                 &[],
@@ -18409,7 +18666,7 @@ mod tests {
 
         let mut stdout = Vec::new();
         assert_eq!(
-            write_doctor_success(
+            write_doctor_fixture(
                 &advisories,
                 RoleMode::Split,
                 &[],
@@ -18469,7 +18726,7 @@ mod tests {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
             assert_eq!(
-                write_doctor_success(
+                write_doctor_fixture(
                     &[],
                     RoleMode::Split,
                     &["local-review".into()],
@@ -18511,7 +18768,7 @@ mod tests {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
             assert_eq!(
-                write_doctor_success(
+                write_doctor_fixture(
                     &[],
                     RoleMode::Split,
                     &[],
@@ -18570,7 +18827,7 @@ mod tests {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
             assert_eq!(
-                write_doctor_success(
+                write_doctor_fixture(
                     &[],
                     RoleMode::Split,
                     &[],
@@ -18639,7 +18896,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert_eq!(
-            write_doctor_success(
+            write_doctor_fixture(
                 &[],
                 RoleMode::Split,
                 &[],
@@ -18688,7 +18945,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert_eq!(
-            write_doctor_success(
+            write_doctor_fixture(
                 &[],
                 RoleMode::Split,
                 &[],
@@ -18723,12 +18980,20 @@ mod tests {
         for recorded in [Posture::Production, Posture::Development] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
-            let exit = write_doctor_posture_finding(
-                recorded,
-                OutputFormat::Json,
-                &mut stdout,
-                &mut stderr,
-            );
+            let success = doctor::DoctorSuccess {
+                checked: registry_breg::startup::CheckedStartup {
+                    recorded_posture: recorded,
+                    postgres_advisories: Vec::new(),
+                    role_mode: RoleMode::Split,
+                    unbound_review_authorities: Vec::new(),
+                    unavailable_external_projections: BTreeMap::new(),
+                    external_projections: Vec::new(),
+                    external_refresh_plans: Vec::new(),
+                },
+                diagnostics: vec![activation_posture_finding(recorded)],
+                external_refresh_timings: Vec::new(),
+            };
+            let exit = write_doctor_success(&success, OutputFormat::Json, &mut stdout, &mut stderr);
             assert_eq!(exit, ExitCode::SUCCESS);
             let report: Value = serde_json::from_slice(&stdout).unwrap();
             assert_eq!(report["status"], "complete");
@@ -19069,7 +19334,8 @@ accessProfiles:
             },
             "package",
             false,
-            Some(DEFAULT_POSTURE),
+            DEFAULT_POSTURE,
+            true,
         )
         .unwrap_or_else(|_| panic!("capture includes governed journeys through the selected root"));
         assert_eq!(
@@ -19112,10 +19378,10 @@ accessProfiles:
         // unchanged.
         compile(&project, ProfileArg::Production, "dev")
             .unwrap_or_else(|_| panic!("the dev compile accepts the placeholder"));
-        assert!(capture_candidate(&args, "test", false, None).is_ok());
+        assert!(capture_candidate(&args, "test", false, DEFAULT_POSTURE, false).is_ok());
 
         let Err(Refusal::Tool(refused)) =
-            capture_candidate(&args, "package", false, Some(DEFAULT_POSTURE))
+            capture_candidate(&args, "package", false, DEFAULT_POSTURE, true)
         else {
             panic!("a deployment capture refuses the placeholder");
         };

@@ -138,6 +138,8 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             source.to_str().unwrap(),
             "--action",

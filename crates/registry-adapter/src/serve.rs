@@ -1028,6 +1028,7 @@ pub(crate) async fn grant_when_split(
 type LoadedServeConfig = (
     registry_platform_config::LoadedRuntimeConfig<AdapterRuntimeConfig>,
     Option<registry_platform_config::LoadedRuntimeConfig<crate::payments::config::PaymentsConfig>>,
+    serde_json::Map<String, serde_json::Value>,
 );
 
 /// Read the two files before deciding whether any collected setting is allowed.
@@ -1049,8 +1050,7 @@ pub(crate) fn load_serve_configuration(
     )
     .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS)
     .check_offline::<AdapterRuntimeConfig>(&path, true, |_| "");
-    let payments =
-        payments_path.map(|path| crate::payments::http::check_config_in_posture(path, declared));
+    let payments = payments_path.map(|path| crate::payments::http::load_config(path, declared));
     let diagnostics = runtime
         .diagnostics
         .into_iter()
@@ -1069,55 +1069,79 @@ pub(crate) fn load_serve_configuration(
             .map(registry_platform_yaml::Diagnostic::render_human)
             .collect::<String>();
         return Err(ServeError::Configuration(format!(
-            "the runtime config was refused: {}",
+            "the configuration was refused: {}",
             details.trim_end()
         )));
     }
-    let mut runtime = runtime
-        .loaded
-        .expect("a successful check reads the runtime file");
-    let payments =
-        payments.map(|file| file.loaded.expect("a successful check reads the companion"));
+    let mut runtime = runtime.loaded.ok_or_else(|| {
+        ServeError::Configuration("the runtime configuration could not be loaded".to_owned())
+    })?;
+    let payments = payments
+        .map(|file| {
+            file.loaded.ok_or_else(|| {
+                ServeError::Configuration(
+                    "the payment configuration could not be loaded".to_owned(),
+                )
+            })
+        })
+        .transpose()?;
     registry_adapter_core::record_endpoint_posture(&runtime.config.endpoints, &mut runtime.posture);
+    let mut readiness_posture = runtime.posture.ready_member();
     if let Some(payments) = &payments {
+        let settings = readiness_posture
+            .get_mut("developmentSettings")
+            .and_then(serde_json::Value::as_array_mut);
+        let mut payment_ready = payments.posture.ready_member();
+        if let (Some(settings), Some(serde_json::Value::Array(payment_settings))) =
+            (settings, payment_ready.remove("developmentSettings"))
+        {
+            let file = payments_path.and_then(std::path::Path::file_name);
+            settings.extend(payment_settings.into_iter().map(|mut setting| {
+                if let Some(file) = file {
+                    setting["file"] = serde_json::json!(file.to_string_lossy());
+                }
+                setting
+            }));
+        }
         for setting in payments.posture.settings() {
             runtime.posture.record(setting.clone());
         }
-        let source = match declared.source {
-            registry_platform_config::PostureSource::Flag => "flag",
-            registry_platform_config::PostureSource::Environment => "environment",
-            registry_platform_config::PostureSource::Default => "default",
-        };
-        tracing::info!(
-            posture = declared.posture.as_str(),
-            posture_source = source,
-            development_settings = runtime.posture.settings().len(),
-            explicit_production_settings = runtime.posture.explicit_settings().len(),
-            "posture declared"
-        );
-        for setting in runtime.posture.explicit_settings() {
-            tracing::info!(
-                setting_code = setting.setting.code,
-                pointer = setting.pointer.as_deref().unwrap_or(""),
-                file = %path.display(),
-                "explicit production setting in use"
-            );
-        }
-        for diagnostic in &diagnostics {
-            tracing::warn!(
-                error_code = diagnostic.code,
-                pointer = diagnostic.path,
-                file = diagnostic
-                    .source
-                    .as_ref()
-                    .map_or("", |source| source.file.as_str()),
-                "development-only setting in use; production refuses it"
-            );
-        }
-    } else {
-        runtime.posture.log_startup();
     }
-    Ok((runtime, payments))
+    let source = match declared.source {
+        registry_platform_config::PostureSource::Flag => "flag",
+        registry_platform_config::PostureSource::Environment => "environment",
+        registry_platform_config::PostureSource::Default => "default",
+    };
+    tracing::info!(
+        posture = declared.posture.as_str(),
+        posture_source = source,
+        development_settings = runtime.posture.settings().len(),
+        explicit_production_settings = runtime.posture.explicit_settings().len(),
+        "posture declared"
+    );
+    for setting in runtime.posture.explicit_settings() {
+        tracing::info!(
+            setting_code = setting.setting.code,
+            pointer = setting.pointer.as_deref().unwrap_or(""),
+            file = %path.display(),
+            "explicit production setting in use"
+        );
+    }
+    for diagnostic in diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code.split('.').nth(1) == Some("posture"))
+    {
+        tracing::warn!(
+            error_code = diagnostic.code,
+            pointer = diagnostic.path,
+            file = diagnostic
+                .source
+                .as_ref()
+                .map_or("", |source| source.file.as_str()),
+            "development-only setting in use; production refuses it"
+        );
+    }
+    Ok((runtime, payments, readiness_posture))
 }
 
 async fn run_facade(
@@ -1129,7 +1153,8 @@ async fn run_facade(
     payment_provider_pack: &[std::path::PathBuf],
     declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(), ServeError> {
-    let (runtime, payments) = load_serve_configuration(runtime_path, payments_path, declared)?;
+    let (runtime, payments, readiness_posture) =
+        load_serve_configuration(runtime_path, payments_path, declared)?;
     let loaded = crate::engine::load::load_with_target_from_runtime(
         project_directory,
         profile_path,
@@ -1380,6 +1405,7 @@ async fn run_facade(
         metrics: Arc::clone(&metrics),
         codec,
         loaded,
+        readiness_posture,
         effective_contract,
         authenticator,
         journal,

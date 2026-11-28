@@ -265,6 +265,7 @@ fn bounded_version(node: &Path, script: Option<&Path>) -> Result<String> {
     }
     command
         .arg("--version")
+        .env(super::POSTURE_ENV, super::DEVELOPMENT)
         .env_remove("RSTACK_DEV_DATABASE_URL")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -677,7 +678,9 @@ impl<'a> ProductRunner<'a> {
         entry: &Path,
         arguments: &[&std::ffi::OsStr],
     ) -> Result<()> {
-        let mut command = guard::Command::isolated(self.root, name, node, root, &BTreeMap::new())?;
+        let environment =
+            BTreeMap::from([(super::POSTURE_ENV.to_owned(), super::DEVELOPMENT.to_owned())]);
+        let mut command = guard::Command::isolated(self.root, name, node, root, &environment)?;
         command.arg(entry).args(arguments);
         let log = open_log(self.root, name)?;
         command.stdout(log.try_clone()?).stderr(log);
@@ -737,19 +740,11 @@ impl<'a> ProductRunner<'a> {
             ],
         )?;
         let build = self.root.join("breg-build");
-        // `--local` skips the refusal for the reserved placeholder identity a
-        // deployable package must not carry; the run is never deployed.
+        // The run packages under the development posture because it is never deployed.
         self.tool(
             Product::Breg,
             "package",
-            &[
-                project.as_os_str(),
-                "--test-receipt".as_ref(),
-                receipt.as_os_str(),
-                "--output".as_ref(),
-                build.as_os_str(),
-                "--local".as_ref(),
-            ],
+            &breg_package_arguments(project, &receipt, &build),
         )?;
         let package = build.join("package");
         let urls = database
@@ -947,9 +942,7 @@ impl<'a> ProductRunner<'a> {
                 if name == "breg" && authority.requires_postgis {
                     config["listener"]["publicOrigin"] = json!(format!("http://{bind}"));
                 }
-                // A development run initializes a disposable local database, as
-                // `bregctl dev` does; BReg accepts local-file key custody only
-                // for that environment.
+                // The run initializes a disposable database under the development posture.
                 config["identity"] = json!({
                     "environment": "local", "instanceId": identity,
                     "databaseId": identity
@@ -1335,6 +1328,22 @@ fn secret_ref(name: &str) -> String {
     format!("secret:file/{name}")
 }
 
+fn breg_package_arguments<'a>(
+    project: &'a Path,
+    receipt: &'a Path,
+    build: &'a Path,
+) -> [&'a std::ffi::OsStr; 7] {
+    [
+        project.as_os_str(),
+        "--test-receipt".as_ref(),
+        receipt.as_os_str(),
+        "--output".as_ref(),
+        build.as_os_str(),
+        "--posture".as_ref(),
+        super::DEVELOPMENT.as_ref(),
+    ]
+}
+
 /// The members both products' runtime configurations share, and the OIDC
 /// settings each completes. They name the run's secrets by reference only:
 /// `config` writes the secrets beside them.
@@ -1363,7 +1372,7 @@ fn shared_config(
         "audience": plan.product(product).audience,
         "allowedClients": clients,
         "scopeClaim": "scope",
-        "jwksSource": {"type": "static", "documentRef": secret_ref("jwks")}
+        "jwksSource": {"type": "test-issuer", "documentRef": secret_ref("jwks")}
     });
     let mut database = json!({
         "runtimeUrlRef": secret_ref(&format!("{name}-runtime-url")),
@@ -1374,6 +1383,7 @@ fn shared_config(
     }
     let audit = json!({
         "hashKeyRef": secret_ref(&format!("{name}-audit-key")),
+        "hashKeyCustody": "development-generated",
         "path": root.join(format!("{name}-audit")).join("audit.jsonl"),
     });
     let config = json!({
@@ -1406,7 +1416,7 @@ fn casework_config(
     );
     config["apiVersion"] = json!("id.registrystack.org/formats/casework/runtime/v1alpha1");
     config["kind"] = json!("CaseworkRuntimeConfig");
-    config["listener"] = json!({"bind": bind, "tlsTermination": "development-loopback"});
+    config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
     config["identity"] = json!({"databaseId": identity});
     config["authentication"] = json!({"oidc": oidc});
     config
@@ -2233,6 +2243,7 @@ impl Drop for ProductRunner<'_> {
 pub(super) fn child_command(binary: &Path) -> Command {
     let mut command = Command::new(binary);
     command
+        .env(super::POSTURE_ENV, super::DEVELOPMENT)
         .env_remove("RSTACK_DEV_DATABASE_URL")
         .process_group(0)
         .stdin(Stdio::null())
@@ -3328,6 +3339,14 @@ mod tests {
             let casework: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
             assert_eq!(breg["authentication"]["oidc"]["issuer"], expected);
             assert_eq!(casework["authentication"]["oidc"]["issuer"], expected);
+            for config in [&breg, &casework] {
+                assert_eq!(
+                    config["authentication"]["oidc"]["jwksSource"]["type"],
+                    "test-issuer"
+                );
+                assert_eq!(config["audit"]["hashKeyCustody"], "development-generated");
+            }
+            assert_eq!(casework["listener"]["tlsTermination"], "loopback-plaintext");
             if !application {
                 for config in [&breg, &casework] {
                     assert!(!config["authentication"]["oidc"]["allowedClients"]
@@ -3359,6 +3378,30 @@ mod tests {
                 "urn:journey:breg"
             );
         }
+    }
+
+    #[test]
+    fn breg_package_arguments_declare_development() {
+        let args = breg_package_arguments(
+            Path::new("project"),
+            Path::new("receipt.json"),
+            Path::new("build"),
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--posture" && pair[1] == "development"));
+        assert!(!args.contains(&std::ffi::OsStr::new("--local")));
+    }
+
+    #[test]
+    fn direct_product_tools_declare_development() {
+        use registry_platform_config::{DEVELOPMENT, POSTURE_ENV};
+        use std::ffi::OsStr;
+
+        let command = child_command(Path::new("/bin/sh"));
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == POSTURE_ENV && value == Some(OsStr::new(DEVELOPMENT))));
     }
 
     #[test]
@@ -4193,7 +4236,7 @@ mod tests {
         let encoded = fs::read_to_string(&key).unwrap();
 
         // The rehearsal and the served database read the same run key, by
-        // reference only; local-file custody requires local initialization.
+        // reference only. Local-file custody requires the development posture.
         for name in ["breg-test", "breg"] {
             let (config, text) = breg_config(&runner, &root, name);
             assert_eq!(

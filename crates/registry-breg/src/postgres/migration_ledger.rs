@@ -943,12 +943,14 @@ async fn update_outcome(
              WHERE activation_id = $2
                AND package_digest = $3
                AND predecessor_package_digest IS NOT DISTINCT FROM $4
+               AND coalesce(to_jsonb(registry_migrations) ->> 'posture', 'production') = $5
                AND outcome IN ('applying', 'failed')",
             &[
                 &outcome,
                 &entry.activation_id,
                 &entry.package_digest,
                 &entry.predecessor_package_digest,
+                &entry.posture.as_str(),
             ],
         )
         .await?;

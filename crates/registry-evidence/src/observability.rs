@@ -164,6 +164,7 @@ pub(crate) fn operation_id(extensions: &axum::http::Extensions) -> OperationId {
 pub(crate) fn is_refusal_code(code: ProblemCode) -> bool {
     match code {
         ProblemCode::AuthenticationFailed
+        | ProblemCode::DevelopmentAssertion
         | ProblemCode::NotAuthorized
         | ProblemCode::RateLimited => true,
         ProblemCode::MalformedRequest

@@ -477,6 +477,224 @@ async fn replace_task_holder(store: &PostgresStore, task_id: Uuid, subject: &str
 }
 
 #[tokio::test]
+async fn development_runtime_marks_probes_audit_and_task_assertions() {
+    use crate::{ActivationCandidate, ApplyRequest};
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm};
+    use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
+
+    let f = fixture(900).await;
+    let mut project = f.project.clone();
+    project.context_providers.clear();
+    project.review_policies[0].context = registry_casework_core::ReviewContextPolicy::Submitted;
+    project.check().unwrap();
+    let policy = project.compile_policy("external-review").unwrap();
+    let db = f.store.client().await.unwrap();
+    db.execute(
+        "UPDATE casework_review_requests SET context_strategy='submitted', context=$1,
+         policy_snapshot=$2, policy_digest=$3",
+        &[
+            &json!({"person-reference":"synthetic-person"}),
+            &serde_json::to_value(&policy).unwrap(),
+            &policy.identity.digest.to_string(),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let package = root.path().join("package");
+    let manifest = BTreeMap::from([(
+        crate::POLICY_FILE.into(),
+        serde_norway::to_string(&project).unwrap().into_bytes(),
+    )]);
+    registry_platform_config::write_package(
+        &package,
+        &manifest,
+        None,
+        &crate::package_limits(),
+        crate::PACKAGE_COMMAND,
+    )
+    .unwrap();
+    let secrets = root.path().join("secrets");
+    fs::create_dir(&secrets).unwrap();
+    fs::set_permissions(&secrets, fs::Permissions::from_mode(0o700)).unwrap();
+    let issuer_key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let authority_key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let mut authority_document = serde_json::to_value(authority_key.public()).unwrap();
+    authority_document["d"] = json!(authority_key.d);
+    let base = std::env::var("CASEWORK_ASSIGNMENT_TEST_DATABASE_URL").unwrap();
+    let separator = if base.contains('?') { '&' } else { '?' };
+    for (name, bytes) in [
+        (
+            "url",
+            format!("{base}{separator}options=-csearch_path%3D{}", f.schema).into_bytes(),
+        ),
+        ("audit", vec![b'a'; 64]),
+        (
+            "issuer",
+            serde_json::to_vec(&json!({"keys":[issuer_key.public()]})).unwrap(),
+        ),
+        (
+            "authority",
+            serde_json::to_vec(&authority_document).unwrap(),
+        ),
+    ] {
+        let path = secrets.join(name);
+        fs::write(&path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let api = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let metrics = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let api_addr = api.local_addr().unwrap();
+    let metrics_addr = metrics.local_addr().unwrap();
+    let audit = root.path().join("audit.ndjson");
+    let runtime = root.path().join("runtime.yaml");
+    fs::write(
+        &runtime,
+        serde_norway::to_string(&json!({
+            "apiVersion": crate::RUNTIME_CONFIG_API_VERSION,
+            "kind": crate::RUNTIME_CONFIG_KIND,
+            "identity": {"databaseId": "development-test"},
+            "package": {"root": package},
+            "listener": {"bind": api_addr.to_string(), "tlsTermination": "loopback-plaintext"},
+            "metricsListener": {"bind": metrics_addr.to_string()},
+            "database": {"runtimeUrlRef": "secret:file/url", "migrationUrlRef": "secret:file/url",
+                         "testOnlyPlaintext": true},
+            "secretProviders": {"file": {"root": secrets}},
+            "authentication": {"oidc": {"issuer": ISSUER, "audience": "urn:casework:test", "scopeClaim": "scope",
+              "allowedClients": ["human-client", "agent-client"],
+              "jwksSource": {"type": "static", "documentRef": "secret:file/issuer"}}},
+            "audit": {"path": audit, "hashKeyRef": "secret:file/audit"},
+            "taskAuthority": {"issuer": "https://authority.test", "exchangeAudience": ISSUER,
+                              "signingKeyRef": "secret:file/authority", "statusClients": {}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let declared = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+    let verified = crate::RuntimeConfig::load(&runtime, declared)
+        .unwrap()
+        .config
+        .load_package()
+        .unwrap();
+    let user = f.store.current_user().await.unwrap();
+    f.store
+        .apply_activation(
+            &user,
+            &ActivationCandidate {
+                posture: declared.posture,
+                database_id: "development-test",
+                package_digest: verified.digest(),
+                project: verified.project(),
+                providers: &[],
+            },
+            &ApplyRequest::default(),
+        )
+        .await
+        .unwrap();
+
+    drop((api, metrics));
+
+    let bearer = |subject: &str, client: &str, kind: &str, scope: &str| {
+        let now = now_seconds().unwrap();
+        let header = json!({"typ":"at+jwt","alg":"ES256","kid":issuer_key.kid});
+        let payload = json!({"iss":ISSUER,"aud":"urn:casework:test","sub":subject,"azp":client,
+            "registry_actor_kind":kind,"scope":scope,"iat":now,"exp":now+300});
+        let input = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+        );
+        let signature = sign(input.as_bytes(), &issuer_key).unwrap();
+        format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature))
+    };
+    let assertions = async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let api = format!("http://{api_addr}");
+        let ready = loop {
+            if let Ok(response) = client.get(format!("{api}/ready")).send().await {
+                break response;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        assert_eq!(ready.status(), StatusCode::OK);
+        assert_eq!(ready.headers()["registry-posture"], "development");
+        assert_eq!(
+            ready.json::<Value>().await.unwrap()["posture"],
+            "development"
+        );
+        let metrics = client
+            .get(format!("http://{metrics_addr}/metrics"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(metrics.status(), StatusCode::OK);
+        assert_eq!(metrics.headers()["registry-posture"], "development");
+
+        let approval = client
+            .post(format!(
+                "{api}/v1/review-tasks/{}/task-grants",
+                f.review_task
+            ))
+            .bearer_auth(bearer("human", "human-client", "human", "casework:staff"))
+            .header(CASEWORK_PROFILE_HEADER, "staff")
+            .header(IF_MATCH_HEADER, "\"1\"")
+            .header(IDEMPOTENCY_KEY_HEADER, "development-grant")
+            .json(&json!({"templateId":"summary","templateVersion":"1"}))
+            .send()
+            .await
+            .unwrap();
+        let status = approval.status();
+        let grant = approval.json::<Value>().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{grant}");
+        let grant_id = grant["id"].as_str().unwrap();
+        let assertion = client
+            .post(format!("{api}/v1/task-grants/{grant_id}/assertion"))
+            .bearer_auth(bearer(
+                "agent",
+                "agent-client",
+                "agent",
+                "casework:grants:assert",
+            ))
+            .send()
+            .await
+            .unwrap();
+        let status = assertion.status();
+        let assertion = assertion.json::<Value>().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "task assertion refused");
+        let jwt = assertion["assertion"].as_str().unwrap();
+        let payload = URL_SAFE_NO_PAD
+            .decode(jwt.split('.').nth(1).unwrap())
+            .unwrap();
+        let claims: Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(claims["registry_posture"], "development");
+
+        let lines = fs::read_to_string(audit).unwrap();
+        assert!(!lines.is_empty());
+        for line in lines.lines() {
+            let value: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(value["posture"], "development");
+        }
+    };
+    tokio::select! {
+        result = crate::serve_from_path(&runtime, declared) => panic!("runtime stopped: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(20), assertions) => result.unwrap(),
+    }
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn task_http_approval_assertion_status_and_revocation_enforce_current_authority() {
     let f = fixture(900).await;
     let human = token("human", "human-client", "human", "casework:staff");

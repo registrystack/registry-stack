@@ -189,6 +189,12 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         .as_array()
         .unwrap()
         .is_empty());
+    let audit = std::fs::read_to_string(project.join("state/audit.caseworkctl.ndjson")).unwrap();
+    assert!(!audit.is_empty());
+    for line in audit.lines() {
+        let line: Value = serde_json::from_str(line).unwrap();
+        assert_eq!(line["posture"], "development");
+    }
     let (exit, status) = invoke("status", "development", &[]);
     assert_eq!(exit, ExitCode::SUCCESS, "{status:?}");
     let (exit, replan) = invoke("plan", "development", &[]);
@@ -270,6 +276,61 @@ fn plan_refusals_preserve_actionable_schema_recovery() {
     assert!(diagnostic
         .suggested_action
         .contains("supports this database schema"));
+}
+
+#[test]
+fn invalid_posture_is_reported_as_usage() {
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let exit = main_entry_from(
+        [
+            "caseworkctl",
+            "--format",
+            "json",
+            "check",
+            ".",
+            "--posture",
+            "bogus",
+        ]
+        .map(OsString::from),
+        &mut stdout,
+        &mut stderr,
+    );
+    assert_eq!(exit, ExitCode::from(report::USAGE_EXIT));
+    assert!(stderr.is_empty());
+    let report: Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(report["status"], "usage-error");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "platform.posture.invalid-value"
+    );
+}
+
+#[test]
+fn production_check_refuses_unrestricted_clients() {
+    let root = canonical_tempdir();
+    let project = root.path().join("project");
+    project::init(&project, "standalone-decision").unwrap();
+    let result = project::check_runtime_config(
+        &project,
+        &project.join("runtime.example.yaml"),
+        false,
+        false,
+        project::check(&project, false, false),
+        DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    );
+    let error = result.unwrap_err();
+    assert!(configuration_report(&error)
+        .unwrap()
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| {
+            diagnostic.code == "casework.posture.unrestricted-clients"
+                && diagnostic.path == "/authentication/oidc/allowedClients"
+                && diagnostic.severity == registry_platform_yaml::Severity::Error
+        }));
 }
 
 #[test]

@@ -235,8 +235,7 @@ impl Casework {
             &root.path().join("package.log"),
         );
 
-        let database = std::env::var("ADAPTER_TEST_DATABASE_URL")
-            .expect("the native runner supplies disposable PostgreSQL");
+        let database = crate::job_fixture::test_database_url();
         let schema = format!("adapter_casework_{}", uuid::Uuid::new_v4().simple());
         let (admin, connection) = tokio_postgres::connect(&database, tokio_postgres::NoTls)
             .await

@@ -85,7 +85,10 @@ Evidence project check: complete
 Project: .
 Target: local-target.yaml
 Deployment inputs missing: signer.publicJwkFile; the compiled-target bundle check was skipped. Supply them and rerun check to prove the target.
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 ```
 
 `check` compiled `evidence.yaml` against `local-target.yaml`, which holds the source address and the

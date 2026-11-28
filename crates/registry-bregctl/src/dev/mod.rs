@@ -1414,15 +1414,7 @@ fn start(args: StartArgs) -> Result<Value> {
     state.failure = None;
     state.save()?;
     let log = log_file(&root, "supervisor")?;
-    let mut supervisor = development_command(std::env::current_exe()?)
-        .arg("__dev-supervisor")
-        .arg("--dev-root")
-        .arg(&root)
-        .arg("--breg-bin")
-        .arg(breg)
-        .arg("--docker-bin")
-        .arg(docker)
-        .stdin(Stdio::null())
+    let mut supervisor = supervisor_command(&std::env::current_exe()?, &root, &breg, &docker)
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log))
         .spawn()
@@ -1976,7 +1968,7 @@ const MAX_VERSION: usize = 200;
 /// itself. Diagnostics stay in the owner-only log directory.
 fn binary(root: &Path, path: &Path) -> Result<Binary> {
     let (success, bytes) = output(
-        development_command(path).arg("--version"),
+        &mut version_command(path),
         root,
         &format!(
             "version-{}",
@@ -2058,15 +2050,47 @@ fn development_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
-fn service(binary: &Path, args: &[&str], config: &Path, root: &Path, name: &str) -> Result<Child> {
-    let mut child = development_command(binary)
+fn supervisor_command(executable: &Path, root: &Path, breg: &Path, docker: &Path) -> Command {
+    let mut command = development_command(executable);
+    command
+        .arg("__dev-supervisor")
+        .arg("--dev-root")
+        .arg(root)
+        .arg("--breg-bin")
+        .arg(breg)
+        .arg("--docker-bin")
+        .arg(docker)
+        .stdin(Stdio::null());
+    command
+}
+
+fn service_command(binary: &Path, args: &[&str], config: &Path, root: &Path) -> Command {
+    let mut command = development_command(binary);
+    command
         .args(args)
         .arg(config)
         .env("SSL_CERT_FILE", root.join("tls/ca.pem"))
         .env("BREG_LOG", "warn")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+fn version_command(path: &Path) -> Command {
+    let mut command = development_command(path);
+    command.arg("--version");
+    command
+}
+
+fn docker_child_command(path: &Path, args: &[&str]) -> Command {
+    let mut command = development_command(path);
+    command.args(args);
+    command
+}
+
+fn service(binary: &Path, args: &[&str], config: &Path, root: &Path, name: &str) -> Result<Child> {
+    let mut child = service_command(binary, args, config, root)
         .spawn()
         .context("cannot start local service")?;
     let out = child.stdout.take().context("service output pipe missing")?;
@@ -2334,8 +2358,13 @@ fn activation(success: bool, report: &[u8]) -> Result<Activation> {
     }) {
         return Ok(Activation::NotActivated);
     }
+    let recovery = if posture_mismatch {
+        ". To recreate the retained development database, run bregctl dev stop --remove, then bregctl dev start."
+    } else {
+        ""
+    };
     bail!(
-        "doctor refused before activation: {}",
+        "doctor refused before activation: {}{recovery}",
         diagnostics
             .iter()
             .map(|entry| format!(
@@ -2373,7 +2402,7 @@ fn docker_command(
     input: Option<Input<'_>>,
 ) -> Result<Vec<u8>> {
     command(
-        development_command(docker).args(args),
+        &mut docker_child_command(docker, args),
         &state.root(),
         name,
         input,
@@ -3292,17 +3321,20 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
     if let Some(authority_id) = state.seed_import_authorities.get(&seed.id).cloned() {
         let checkpoint = seed_root.join(format!("{authority_id}.checkpoint.json"));
         if checkpoint.exists() {
-            let resumed = run_import(DataImportRequest {
-                package: &package,
-                breg_url: &breg_origin,
-                access_token_file: &token,
-                entity: &seed.record_type,
-                operation: DataImportOperation::Create,
-                profile: &seed.access_profile,
-                input: &input,
-                checkpoint: &checkpoint,
-                max_chunks: None,
-            });
+            let resumed = run_import(
+                crate::DEV_POSTURE,
+                DataImportRequest {
+                    package: &package,
+                    breg_url: &breg_origin,
+                    access_token_file: &token,
+                    entity: &seed.record_type,
+                    operation: DataImportOperation::Create,
+                    profile: &seed.access_profile,
+                    input: &input,
+                    checkpoint: &checkpoint,
+                    max_chunks: None,
+                },
+            );
             match resumed {
                 Ok(resumed) => {
                     if !resumed.complete || resumed.committed_items != 1 {
@@ -3450,7 +3482,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
     state.save()?;
 
     let checkpoint = seed_root.join(format!("{authority_id}.checkpoint.json"));
-    let outcome = run_import(DataImportRequest {
+    let outcome = run_import(crate::DEV_POSTURE, DataImportRequest {
         package: &package,
         breg_url: &breg_origin,
         access_token_file: &token,

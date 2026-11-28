@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -803,6 +803,31 @@ Review and save the authored source and declaration through normal tooling befor
 {/* Evidence: crates/registry-rstack-dev/src/plan.rs caseworkSourceCredentialRoles;
     crates/registry-rstack-dev/src/bindings.rs humanSourceAuthentication. */}
 
+## Deployment posture
+
+`rstack dev` sets `REGISTRY_STACK_POSTURE=development` on every Registry Stack product and tool it starts.
+If you set `REGISTRY_STACK_POSTURE=production`, both `rstack dev check` and `rstack dev start` refuse the command.
+Unset the variable or set it to `development` before running either command.
+
+A running product lists its accepted development settings at `/ready`, sends `Registry-Posture: development` in its HTTP responses, and includes the posture in its audit lines.
+Use one posture across your stack because a production product refuses responses marked as development.
+If Evidence signs assertions with a local key file, run the stack in development. For production assertion signing, configure Transit.
+
+The runner configures the run's test issuer key set and generated audit key for BReg, Casework, and Messaging.
+For BReg it also uses the development package posture, which accepts placeholder identity, and supplies a local field encryption key when the project encrypts fields.
+The Casework and Messaging listeners and Mailpit SMTP connection use `loopback-plaintext`, which is valid in either posture on loopback.
+
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs require_development;
+    crates/registry-rstack-dev/src/guard.rs breg_guard_launch_declares_development_for_the_workload;
+    crates/registry-rstack-dev/src/products.rs shared_config, casework_config, breg_package_arguments, local-file;
+    crates/registry-rstack-dev/src/messaging.rs smtp_connection, messaging_config;
+    crates/registry-platform-config/src/posture.rs ready_member;
+    crates/registry-platform-config/src/blocks.rs LoopbackPlaintext;
+    crates/registry-platform-httpsec/src/server.rs posture_mark;
+    crates/registry-platform-httputil/src/lib.rs RefuseDevelopmentPeer;
+    crates/registry-platform-audit/src/writer.rs posture;
+    crates/registry-evidence/src/bundle.rs evidence.posture.local-assurance. */}
+
 ## Run isolation
 
 Each run listens on loopback, creates separate databases and migration and runtime logins, and pins its own public signing key in the runtime files.
@@ -819,7 +844,7 @@ A spatial BReg run also creates a `NOLOGIN` role whose name starts with `breg_bb
 
 A BReg project with encrypted fields runs without extra setup.
 `start` draws a development data key for the run from the operating system's random source and writes it as `field-key` in the run directory, readable only by your user.
-BReg reads it through its `local-file` key custody, which it accepts only for a local development database.
+BReg reads it through its `local-file` key custody, which it accepts only in the development posture.
 The key is never printed, never written to the checkout, and is removed with the run directory on stop, TTL expiry, and a failed start.
 When a run needs recovery, the report names the key file under `recovery.field_encryption_key` until `stop --recover` removes it.
 Every run gets a new key, so encrypted data does not outlive its run.

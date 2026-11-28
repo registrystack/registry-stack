@@ -367,6 +367,7 @@ def verify_deployment_key(root, bin_dir, env, run_root, headers):
         )
     )
     config = json.loads((run_root / "breg-runtime.yaml").read_text())
+    config["authentication"]["oidc"]["jwksSource"]["type"] = "static"
     config["authentication"]["oidc"]["jwksSource"]["documentRef"] = (
         "secret:file/deployment-jwks"
     )
@@ -377,7 +378,8 @@ def verify_deployment_key(root, bin_dir, env, run_root, headers):
     process = subprocess.Popen(
         [bin_dir / "breg", "--runtime-config", runtime_file],
         env={
-            key: value for key, value in env.items() if key != "RSTACK_DEV_DATABASE_URL"
+            **{key: value for key, value in env.items() if key != "RSTACK_DEV_DATABASE_URL"},
+            "REGISTRY_STACK_POSTURE": "development",
         },
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

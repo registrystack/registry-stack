@@ -584,6 +584,7 @@ mod tests {
     fn a_plan_is_initial_until_the_ledger_records_an_applied_activation() {
         let recorded = |activation_applied| {
             Ok(Some(RecordedRegistryState {
+                posture: registry_platform_config::Posture::Production,
                 identity: registry_breg::postgres::ExpectedRegistryIdentity {
                     package_id: "registry".to_owned(),
                     database_id: "database".to_owned(),

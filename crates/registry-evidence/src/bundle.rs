@@ -220,6 +220,38 @@ fn configuration_error(artifact: &str, file: &Path, error: ConfigError) -> Bundl
     }
 }
 
+fn with_posture_findings(
+    error: BundleError,
+    path: &Path,
+    mut diagnostics: Vec<registry_platform_yaml::Diagnostic>,
+) -> BundleError {
+    use registry_platform_yaml::{Diagnostic, Source};
+    if diagnostics.is_empty() {
+        return error;
+    }
+    match error {
+        BundleError::Refused(report) => diagnostics.extend(report.into_diagnostics()),
+        error => {
+            let pointer = error
+                .artifact_fault()
+                .and_then(|fault| fault.fault().path());
+            let mut diagnostic = Diagnostic::error(
+                "evidence.deployment.invalid-input",
+                pointer.unwrap_or_default(),
+                error.to_string(),
+                "Correct the deployment input the message names.",
+            );
+            diagnostic.source = Some(Source {
+                file: path.display().to_string(),
+                line: None,
+                column: None,
+            });
+            diagnostics.push(diagnostic);
+        }
+    }
+    BundleError::Refused(Box::new(Report::new(diagnostics)))
+}
+
 /// An artifact fault whose artifact the caller binds later.
 fn invalid_artifact(cause: &'static str) -> BundleError {
     BundleError::InvalidArtifact(ArtifactFault::unbound(cause))
@@ -501,6 +533,14 @@ impl SourceExtract {
 impl RuntimeDocument {
     pub fn load(path: impl AsRef<Path>, declared: DeclaredPosture) -> Result<Self, BundleError> {
         let path = path.as_ref();
+        let bytes = Self::read(path)?;
+        let loaded =
+            RuntimeConfig::parse_yaml_with(&bytes, declared, |name| std::env::var(name).ok())
+                .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
+        Self::capture(path, bytes, loaded)
+    }
+
+    fn read(path: &Path) -> Result<Vec<u8>, BundleError> {
         if path.file_name().and_then(|name| name.to_str()) != Some(RUNTIME_FILE) {
             return Err(BundleError::InvalidPath);
         }
@@ -515,19 +555,21 @@ impl RuntimeDocument {
         let writable_runtime = "the runtime file is writable";
         validate_read_only(&metadata, filesystem_read_only, writable_runtime)
             .map_err(|error| error.in_artifact(RUNTIME_FILE))?;
-        let bytes = read_stable_file(
+        read_stable_file(
             path,
             &metadata,
             crate::config::MAX_CONFIG_BYTES as u64,
             filesystem_read_only,
             writable_runtime,
         )
-        .map_err(|error| error.in_artifact(RUNTIME_FILE))?;
-        // `${NAME}` in a string value reads the process environment; the
-        // loader refuses it in a secret reference and under secretProviders.
-        let loaded =
-            RuntimeConfig::parse_yaml_with(&bytes, declared, |name| std::env::var(name).ok())
-                .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
+        .map_err(|error| error.in_artifact(RUNTIME_FILE))
+    }
+
+    fn capture(
+        path: &Path,
+        bytes: Vec<u8>,
+        loaded: registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
+    ) -> Result<Self, BundleError> {
         let config = loaded.config;
         if let Some(file) = &config.secret_providers.file {
             validate_secret_root(&file.root)?;
@@ -626,14 +668,12 @@ impl DeploymentInputs {
         runtime_path: impl AsRef<Path>,
         declared: DeclaredPosture,
     ) -> Result<Self, BundleError> {
-        let mut runtime = RuntimeDocument::load(runtime_path, declared)?;
-        let mut bundle = Bundle::load_pinned(&runtime.config.package)?;
-        if let Some(conflict) = bundle.record_posture(&mut runtime.posture, Some(&runtime.config)) {
-            return Err(BundleError::Refused(Box::new(Report::new(vec![conflict]))));
-        }
-        runtime.posture.decide(runtime.path()).map_err(|error| {
-            BundleError::Refused(Box::new(Report::new(error.diagnostics().to_vec())))
-        })?;
+        let path = runtime_path.as_ref();
+        let bytes = RuntimeDocument::read(path)?;
+        let mut loaded = RuntimeConfig::inspect_yaml(path, &bytes, declared, true)
+            .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
+        let mut bundle = Bundle::preflight_runtime_package(path, &mut loaded, false)?;
+        let runtime = RuntimeDocument::capture(path, bytes, loaded)?;
         bundle.bind_target_authority(runtime.config.authority.as_ref())?;
         validate_runtime_bindings(&bundle, &runtime.config)?;
         Ok(Self { bundle, runtime })
@@ -655,7 +695,8 @@ impl DeploymentInputs {
 
 pub type EvidenceBundle = Bundle;
 
-static LOCAL_ASSURANCE: DevelopmentSetting = DevelopmentSetting {
+/// Posture setting recorded for a bundle with local assurance.
+pub static LOCAL_ASSURANCE: DevelopmentSetting = DevelopmentSetting {
     code: "evidence.posture.local-assurance",
     key: "assuranceProfile",
     summary: "local assurance permits locally held signing keys",
@@ -670,6 +711,102 @@ static CREDENTIAL_FREE_SOURCE: DevelopmentSetting = DevelopmentSetting {
 };
 
 impl Bundle {
+    /// Verify the runtime and its pinned package before capturing dependencies.
+    /// Collect package posture whenever the pin can be verified, even if an
+    /// independent runtime binding prevents startup or activation.
+    pub fn preflight_runtime_package(
+        path: &Path,
+        loaded: &mut registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
+        require_authority: bool,
+    ) -> Result<Self, BundleError> {
+        let runtime = &loaded.config;
+        let mut findings = runtime.findings().into_iter();
+        let first = findings.next();
+        let invalid_pin = first
+            .iter()
+            .chain(findings.as_slice())
+            .any(|finding| finding.pointer.starts_with("/package/"));
+        let semantic = first
+            .map_or(Ok(()), |finding| Err(finding.error))
+            .and_then(|()| {
+                if require_authority && runtime.authority.is_none() {
+                    return Err(ConfigError::InvalidField(
+                        "runtime authority binding is required",
+                        "authority",
+                    ));
+                }
+                Ok(())
+            });
+        if invalid_pin {
+            let error = semantic.expect_err("a refused pin is a runtime finding");
+            return Err(with_posture_findings(
+                configuration_error(RUNTIME_FILE, path, error),
+                path,
+                loaded.posture.diagnostics(path),
+            ));
+        }
+        let package = Self::load_pinned(&runtime.package);
+        let bundle = match package {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                let error = semantic.err().map_or(error, |error| {
+                    configuration_error(RUNTIME_FILE, path, error)
+                });
+                return Err(with_posture_findings(
+                    error,
+                    path,
+                    loaded.posture.diagnostics(path),
+                ));
+            }
+        };
+        if let Err(error) = semantic {
+            return Err(with_posture_findings(
+                configuration_error(RUNTIME_FILE, path, error),
+                path,
+                bundle.posture_findings(&mut loaded.posture, Some(runtime), path),
+            ));
+        }
+        bundle.decide_posture(&mut loaded.posture, runtime, path)?;
+        Ok(bundle)
+    }
+
+    /// Refuse incompatible runtime and package posture before consuming the deployment.
+    pub fn decide_posture(
+        &self,
+        report: &mut PostureReport,
+        runtime: &RuntimeConfig,
+        runtime_path: &Path,
+    ) -> Result<(), BundleError> {
+        let diagnostics = self.posture_findings(report, Some(runtime), runtime_path);
+        if diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == registry_platform_yaml::Severity::Error)
+        {
+            return Err(BundleError::Refused(Box::new(Report::new(diagnostics))));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn posture_findings(
+        &self,
+        report: &mut PostureReport,
+        runtime: Option<&RuntimeConfig>,
+        runtime_path: &Path,
+    ) -> Vec<registry_platform_yaml::Diagnostic> {
+        let conflict = self.record_posture(report, runtime);
+        let mut diagnostics = report.diagnostics(runtime_path);
+        let package = self.root().join(CONFIG_FILE);
+        for (setting, diagnostic) in report.settings().iter().zip(&mut diagnostics) {
+            if setting.origin == SettingOrigin::Package {
+                if let Some(source) = &mut diagnostic.source {
+                    source.file = package.display().to_string();
+                }
+            }
+        }
+        diagnostics.extend(conflict);
+        diagnostics
+    }
+
     /// Record package settings and development-only runtime bindings.
     pub fn record_posture(
         &self,

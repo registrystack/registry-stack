@@ -383,7 +383,9 @@ impl DeliveryService {
         let audit = Arc::new(
             DeliveryAudit::initialize(destination, audit_key, config.posture.posture()).await?,
         );
-        let authorizer = Arc::new(MintResourceServer::from_config(&config.offers));
+        let authorizer = Arc::new(
+            MintResourceServer::from_config(&config.offers).with_posture(config.posture.posture()),
+        );
         Ok(Self::with_halves(config, authorizer, issuer, audit))
     }
 

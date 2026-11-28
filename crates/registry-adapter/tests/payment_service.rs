@@ -266,8 +266,12 @@ async fn setup() -> (PaymentStore, Arc<Registry>, Arc<Provider>) {
         let mut client = pool.get().await.unwrap();
         migrate(&mut client).await.unwrap();
     }
-    let store = PaymentStore::new(pool, format!("payment-service-{}", Uuid::new_v4()))
-        .with_development(development());
+    let store = PaymentStore::new(
+        pool,
+        format!("payment-service-{}", Uuid::new_v4()),
+        registry_platform_config::Posture::Development,
+    )
+    .with_development(development());
     let registry = Arc::new(Registry {
         bill: Mutex::new(bill()),
         fail_read: AtomicBool::new(false),

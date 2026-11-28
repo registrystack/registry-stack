@@ -739,6 +739,7 @@ mod tests {
 
     fn snapshot(status: &str, target: Option<&str>) -> MaintenanceSnapshot {
         MaintenanceSnapshot {
+            posture: registry_platform_config::Posture::Production,
             identity: ExpectedRegistryIdentity {
                 package_id: "registry".to_owned(),
                 database_id: "primary".to_owned(),

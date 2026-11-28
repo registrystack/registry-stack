@@ -1975,8 +1975,51 @@ pub async fn execute_export_page<Dispatch, DispatchFuture, DispatchError>(
     schema_fingerprint: &str,
     prior_output: &DataExportOutputState,
     resume_state: &DataExportResumeState,
-    mut dispatch: Dispatch,
+    dispatch: Dispatch,
 ) -> Result<Option<DataExportProgress>, DataError>
+where
+    Dispatch: FnMut(DataHttpRequest) -> DispatchFuture,
+    DispatchFuture: Future<Output = Result<DataHttpResponse, DispatchError>>,
+{
+    execute_export_page_with_dispatch_error(
+        plan,
+        checkpoint,
+        package_revision,
+        schema_fingerprint,
+        prior_output,
+        resume_state,
+        dispatch,
+    )
+    .await
+    .map_err(|error| match error {
+        ExportPageError::Data(error) => error,
+        ExportPageError::Dispatch(_) => DataError::TransportUnavailable,
+    })
+}
+
+/// The failure of exporting a page, preserving the caller's transport error.
+#[derive(Debug)]
+pub enum ExportPageError<E> {
+    Data(DataError),
+    Dispatch(E),
+}
+
+impl<E> From<DataError> for ExportPageError<E> {
+    fn from(error: DataError) -> Self {
+        Self::Data(error)
+    }
+}
+
+/// Export a page and return dispatch failures without discarding their kind.
+pub async fn execute_export_page_with_dispatch_error<Dispatch, DispatchFuture, DispatchError>(
+    plan: &DataExportPlan,
+    checkpoint: &mut DataExportCheckpoint,
+    package_revision: &str,
+    schema_fingerprint: &str,
+    prior_output: &DataExportOutputState,
+    resume_state: &DataExportResumeState,
+    mut dispatch: Dispatch,
+) -> Result<Option<DataExportProgress>, ExportPageError<DispatchError>>
 where
     Dispatch: FnMut(DataHttpRequest) -> DispatchFuture,
     DispatchFuture: Future<Output = Result<DataHttpResponse, DispatchError>>,
@@ -1989,7 +2032,7 @@ where
         resume_state,
     )?;
     if checkpoint.is_complete() {
-        return Err(DataError::CheckpointMismatch);
+        return Err(DataError::CheckpointMismatch.into());
     }
     let fields = plan.requested_fields.join(",");
     let page_size = plan.maximum_page_size.to_string();
@@ -2019,13 +2062,13 @@ where
         body: Vec::new(),
     })
     .await
-    .map_err(|_| DataError::TransportUnavailable)?;
+    .map_err(ExportPageError::Dispatch)?;
     let (records, next_cursor) = validate_export_response(&response, plan)?;
     if resume_state
         .next_cursor()
         .is_some_and(|prior| next_cursor.as_deref() == Some(prior))
     {
-        return Err(DataError::InvalidResponse);
+        return Err(DataError::InvalidResponse.into());
     }
     let mut page_bytes = Vec::with_capacity(response.body.len());
     for record in &records {
@@ -2037,7 +2080,7 @@ where
     // page that would leave an uncommitted tail longer than the resume looks
     // for rather than publish a checkpoint no resume could recover from.
     if page_bytes.len() > MAX_DATA_EXPORT_PAGE_BYTES {
-        return Err(DataError::InvalidResponse);
+        return Err(DataError::InvalidResponse.into());
     }
     let added_record_count =
         u64::try_from(records.len()).map_err(|_| DataError::InvalidResponse)?;

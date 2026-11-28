@@ -1458,7 +1458,7 @@ fn write_yaml(path: &Path, value: &Value) -> Result<()> {
     let header = if path.file_name().and_then(|name| name.to_str()) == Some("casework.yaml") {
         "# yaml-language-server: $schema=.casework/schemas/project.schema.json\n"
     } else if path.file_name().and_then(|name| name.to_str()) == Some("runtime.example.yaml") {
-        "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n"
+        "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n# Development example. Production requires an explicit list of admitted OAuth clients.\n"
     } else {
         ""
     };
@@ -1776,6 +1776,7 @@ pub(super) fn add(
     breg_package: Option<&Path>,
     package_output: Option<&Path>,
     bregctl: &Path,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<Value> {
     bregctl_version(bregctl)?;
     let proposals = explain(bregctl, breg_project, "proposals")?;
@@ -1826,10 +1827,21 @@ pub(super) fn add(
 
     if project.exists() {
         let provider_id = existing_agreement(project, pattern, &plan, &export)?;
-        let check = confirmed(
+        let mut check = confirmed(
             crate::project::check(project, false, false)?,
             "caseworkctl check",
         )?;
+        let runtime_path = project.join("runtime.example.yaml");
+        if runtime_path.is_file() {
+            check = crate::project::check_runtime_config(
+                project,
+                &runtime_path,
+                false,
+                false,
+                Ok(check),
+                declared,
+            )?;
+        }
         ensure_policy_binding(project, &plan)?;
         let pairing = breg_package
             .map(|package| {
@@ -1917,10 +1929,7 @@ pub(super) fn add(
             false,
             false,
             Ok(check),
-            registry_platform_config::DeclaredPosture {
-                posture: registry_platform_config::Posture::Development,
-                source: registry_platform_config::PostureSource::Default,
-            },
+            declared,
         )?,
         "caseworkctl check --runtime-config",
     )?;
@@ -2017,13 +2026,19 @@ pub(super) fn add(
             pairing,
             package,
             source_writes: false,
-            next: format!("{next} For local use, start with rstack dev, set REGISTRY_STACK_POSTURE=development, or pass --posture development."),
+            next: format!("{next} The runtime example is for development. For local use, start with rstack dev, set REGISTRY_STACK_POSTURE=development, or pass --posture development."),
         },
     )
 }
 
 #[cfg(test)]
 mod tests {
+    const DEVELOPMENT_POSTURE: registry_platform_config::DeclaredPosture =
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        };
+
     use super::*;
 
     #[cfg(unix)]
@@ -3410,6 +3425,54 @@ exit 1
         let breg_project = temporary.path().join("breg-project");
         fs::create_dir(&breg_project).unwrap();
 
+        let run_with_posture = |posture: &str| {
+            let args = [
+                "caseworkctl",
+                "--format",
+                "json",
+                "provider",
+                "add",
+                project.to_str().unwrap(),
+                "--breg-project",
+                breg_project.to_str().unwrap(),
+                "--action",
+                "correct-address",
+                "--pattern",
+                "single-reviewer-approval",
+                "--bregctl-bin",
+                bregctl.to_str().unwrap(),
+                "--posture",
+                posture,
+            ];
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = crate::main_entry_from(
+                args.into_iter().map(std::ffi::OsString::from),
+                &mut stdout,
+                &mut stderr,
+            );
+            (exit, serde_json::from_slice::<Value>(&stdout).unwrap())
+        };
+        let assert_production_refuses = || {
+            let (exit, report) = run_with_posture("production");
+            assert_eq!(
+                exit,
+                std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT)
+            );
+            let diagnostics = report["diagnostics"].as_array().unwrap();
+            let refusal = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic["code"] == "casework.posture.unrestricted-clients")
+                .expect("production reports unrestricted clients");
+            assert_eq!(refusal["path"], "/authentication/oidc/allowedClients");
+            assert!(refusal["suggestedAction"]
+                .as_str()
+                .unwrap()
+                .contains("--posture development"));
+        };
+        assert_production_refuses();
+        assert!(!project.exists());
+
         let created = add(
             &project,
             &breg_project,
@@ -3418,13 +3481,18 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap();
         assert_eq!(created["ok"], true, "initial generation");
         assert_eq!(created["outcome"], "created");
+        assert_production_refuses();
+        let (exit, report) = run_with_posture("development");
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        assert_eq!(report["posture"]["value"], "development");
         assert_eq!(
             created["next"],
-            "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package. For local use, start with rstack dev, set REGISTRY_STACK_POSTURE=development, or pass --posture development."
+            "Create a BReg deployment package, then run provider add again with --breg-package to verify the native export and dry-run the Casework package. The runtime example is for development. For local use, start with rstack dev, set REGISTRY_STACK_POSTURE=development, or pass --posture development."
         );
         assert!(created.get("state").is_none());
         assert_eq!(created["providerId"], "correct-address-context");
@@ -3452,6 +3520,35 @@ exit 1
                 .unwrap()
                 .join(".casework/package"))
         );
+        let mut production_runtime = runtime.clone();
+        let clients = &mut production_runtime["authentication"]["oidc"];
+        clients["allowedClients"] = json!(["casework-client"]);
+        clients["assertionIssuers"] = json!({"casework-client": ["https://issuer.example.test", "https://issuer.example.test"]});
+        write_yaml(&runtime_path, &production_runtime).unwrap();
+        let (exit, report) = run_with_posture("production");
+        assert_eq!(
+            exit,
+            std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT)
+        );
+        assert!(report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| {
+                diagnostic["code"] == "casework.runtime.invalid-assertion-issuers"
+                    && diagnostic["path"] == "/authentication/oidc/assertionIssuers"
+            }));
+
+        production_runtime["authentication"]["oidc"]
+            .as_object_mut()
+            .unwrap()
+            .remove("assertionIssuers");
+        write_yaml(&runtime_path, &production_runtime).unwrap();
+        let (exit, report) = run_with_posture("production");
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        assert_eq!(report["posture"]["value"], "production");
+        fs::write(&runtime_path, &runtime_bytes).unwrap();
+
         let authored = crate::project::read_project(&project)
             .unwrap()
             .document
@@ -3492,6 +3589,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap();
         assert_eq!(rerun["ok"], true, "unchanged project rerun");
@@ -3525,6 +3623,7 @@ exit 1
                 None,
                 None,
                 &bregctl,
+                DEVELOPMENT_POSTURE,
             )
             .unwrap()["outcome"],
             "in-agreement",
@@ -3557,6 +3656,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         assert_eq!(
@@ -3584,6 +3684,7 @@ exit 1
                 None,
                 None,
                 &bregctl,
+                DEVELOPMENT_POSTURE,
             )
             .unwrap()["outcome"],
             "in-agreement",
@@ -3603,6 +3704,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         assert_eq!(
@@ -3642,6 +3744,7 @@ exit 1
                 None,
                 None,
                 &bregctl,
+                DEVELOPMENT_POSTURE,
             )
             .unwrap()["outcome"],
             "in-agreement",
@@ -3665,6 +3768,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         let failure = error.downcast_ref::<ProviderAddFailure>().unwrap();
@@ -3698,6 +3802,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         let failure = error.downcast_ref::<ProviderAddFailure>().unwrap();
@@ -3731,6 +3836,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         let failure = error.downcast_ref::<ProviderAddFailure>().unwrap();
@@ -3764,6 +3870,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         let failure = error.downcast_ref::<ProviderAddFailure>().unwrap();
@@ -3823,6 +3930,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap();
         let runtime_path = project.join("runtime.example.yaml");
@@ -3892,6 +4000,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap();
 
@@ -3930,6 +4039,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap();
         assert_eq!(rerun["outcome"], "in-agreement", "explicit policy defaults");
@@ -3951,6 +4061,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         let failure = error.downcast_ref::<ProviderAddFailure>().unwrap();
@@ -3977,6 +4088,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         let failure = error.downcast_ref::<ProviderAddFailure>().unwrap();
@@ -4026,6 +4138,7 @@ exit 1
             None,
             None,
             &missing,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap();
         assert_eq!(refused["ok"], false, "missing BReg configuration");
@@ -4056,6 +4169,7 @@ exit 1
             None,
             None,
             &failing,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         assert!(matches!(
@@ -4118,6 +4232,7 @@ exit 1
             None,
             None,
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         assert!(matches!(
@@ -4157,6 +4272,7 @@ exit 1
             Some(&package),
             Some(&package_output),
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap();
         assert_eq!(created["ok"], true, "sealed package generation");
@@ -4184,6 +4300,7 @@ exit 1
             Some(&package),
             Some(&package_output),
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap();
         assert_eq!(repeated["outcome"], "in-agreement", "sealed package rerun");
@@ -4202,6 +4319,7 @@ exit 1
             Some(&package),
             Some(&rerun_output),
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         assert!(matches!(
@@ -4223,6 +4341,7 @@ exit 1
             Some(&package),
             Some(&package_output),
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         assert!(matches!(
@@ -4243,6 +4362,7 @@ exit 1
             Some(&package),
             Some(&project_as_output),
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         assert!(matches!(
@@ -4262,6 +4382,7 @@ exit 1
             Some(&package),
             Some(&traversed_output),
             &bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         assert!(matches!(
@@ -4291,6 +4412,7 @@ exit 1
             Some(&mismatched_package),
             None,
             &mismatched_bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         let failure = error.downcast_ref::<ProviderAddFailure>().unwrap();
@@ -4310,6 +4432,7 @@ exit 1
             Some(&mismatched_package),
             Some(&refused_output),
             &mismatched_bregctl,
+            DEVELOPMENT_POSTURE,
         )
         .unwrap_err();
         let failure = error.downcast_ref::<ProviderAddFailure>().unwrap();

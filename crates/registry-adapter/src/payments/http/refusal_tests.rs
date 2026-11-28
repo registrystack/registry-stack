@@ -213,13 +213,22 @@ async fn every_payment_refusal_keeps_its_answer_and_is_counted_under_its_check()
     .development;
     let service = PaymentService::new(
         payments(),
-        PaymentStore::new(pool.clone(), deployment.clone()).with_development(development),
+        PaymentStore::new(
+            pool.clone(),
+            deployment.clone(),
+            registry_platform_config::Posture::Development,
+        )
+        .with_development(development),
         Arc::new(BregBridge::new(resolver.clone())),
         Arc::new(SyntheticProvider::new(resolver.clone(), None)),
     )
     .expect("the payment service");
     let g2p = G2pService::new(
-        G2pStore::new(pool, deployment),
+        G2pStore::new(
+            pool,
+            deployment,
+            registry_platform_config::Posture::Production,
+        ),
         Arc::new(BregG2pBridge::new(resolver.clone())),
         Arc::new(HttpG2pProvider::new(resolver)),
     );

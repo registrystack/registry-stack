@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use clap::{Args, Subcommand};
+use registry_platform_config::DeclaredPosture;
 use serde_json::{json, Value};
 
 use crate::{authoring, build, source_import, source_mock, suggest, OutputFormat};
@@ -49,6 +50,9 @@ pub(crate) struct SourceImportArgs {
     /// Complete target used by the compiler to compare actual definition revisions.
     #[arg(long)]
     pub(crate) target: Option<PathBuf>,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    pub(crate) posture: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -63,18 +67,26 @@ pub(crate) struct SourceDetachArgs {
     pub(crate) project: PathBuf,
 }
 
-pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
+pub(crate) fn run(
+    command: SourceCommand,
+    format: OutputFormat,
+    declared: Option<DeclaredPosture>,
+) -> Result<ExitCode> {
     match command {
         SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args), format),
         SourceCommand::Mock(command) => source_mock::run(command, format),
-        SourceCommand::Diff(args) => diff(args, format),
-        SourceCommand::Import(args) => apply(args, "source import", format),
-        SourceCommand::Update(args) => apply(args, "source update", format),
+        SourceCommand::Diff(args) => diff(args, format, declared),
+        SourceCommand::Import(args) => apply(args, "source import", format, declared),
+        SourceCommand::Update(args) => apply(args, "source update", format, declared),
         SourceCommand::Detach(args) => detach(args),
     }
 }
 
-fn diff(args: SourceImportArgs, format: OutputFormat) -> Result<ExitCode> {
+fn diff(
+    args: SourceImportArgs,
+    format: OutputFormat,
+    declared: Option<DeclaredPosture>,
+) -> Result<ExitCode> {
     review(
         args.into_import_args(),
         false,
@@ -82,16 +94,26 @@ fn diff(args: SourceImportArgs, format: OutputFormat) -> Result<ExitCode> {
         Emit {
             command: "source diff",
             format,
+            declared,
         },
     )
 }
 
-fn apply(args: SourceImportArgs, command: &'static str, format: OutputFormat) -> Result<ExitCode> {
+fn apply(
+    args: SourceImportArgs,
+    command: &'static str,
+    format: OutputFormat,
+    declared: Option<DeclaredPosture>,
+) -> Result<ExitCode> {
     review(
         args.into_import_args(),
         true,
         &mut std::io::stdout().lock(),
-        Emit { command, format },
+        Emit {
+            command,
+            format,
+            declared,
+        },
     )
 }
 
@@ -101,6 +123,7 @@ fn apply(args: SourceImportArgs, command: &'static str, format: OutputFormat) ->
 struct Emit {
     command: &'static str,
     format: OutputFormat,
+    declared: Option<DeclaredPosture>,
 }
 
 fn review(
@@ -109,13 +132,12 @@ fn review(
     output: &mut impl Write,
     emit: Emit,
 ) -> Result<ExitCode> {
-    review_with_revisions_in_format(
-        args,
-        apply,
-        output,
-        emit,
-        build::validated_question_revisions,
-    )
+    review_with_revisions_in_format(args, apply, output, emit, |project, target| {
+        let declared = emit
+            .declared
+            .context("source target validation requires a declared posture")?;
+        build::validated_question_revisions(project, target, declared)
+    })
 }
 
 fn review_with_revisions_in_format(
@@ -200,6 +222,7 @@ fn review_with_revisions(
         Emit {
             command: "source diff",
             format: OutputFormat::Human,
+            declared: None,
         },
         target_revisions,
     )
@@ -223,8 +246,12 @@ fn print_report(output: &mut impl Write, report: &Value, emit: Emit, status: &st
         OutputFormat::Human => write_pretty(output, report),
         OutputFormat::Json => {
             let report = crate::report::success(emit.command, status, report.clone());
-            writeln!(output, "{}", crate::report::render(&report))
-                .context("writing source comparison report")?;
+            writeln!(
+                output,
+                "{}",
+                crate::report::render_with_posture(&report, emit.declared)
+            )
+            .context("writing source comparison report")?;
             output.flush().context("flushing source comparison report")
         }
     }

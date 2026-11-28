@@ -91,7 +91,13 @@ fn require_success_payloads(schema: &mut Value) {
         }
         if matches!(
             command,
-            "check" | "generate-identity-facts" | "doctor" | "plan" | "apply" | "status"
+            "check"
+                | "generate-identity-facts"
+                | "doctor"
+                | "plan"
+                | "apply"
+                | "status"
+                | "provider-add"
         ) {
             variant["properties"]["posture"] = posture.clone();
         }

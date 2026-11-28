@@ -107,37 +107,8 @@ pub fn contract(config: &PaymentsConfig) -> serde_json::Value {
     })
 }
 
-pub fn load_config(path: &Path) -> Result<PaymentsConfig, ServeError> {
-    load_config_in_posture(
-        path,
-        registry_platform_config::DeclaredPosture {
-            posture: registry_platform_config::Posture::Production,
-            source: registry_platform_config::PostureSource::Default,
-        },
-    )
-    .map(|loaded| loaded.config)
-}
-
-fn load_config_in_posture(
-    path: &Path,
-    declared: registry_platform_config::DeclaredPosture,
-) -> Result<registry_platform_config::LoadedRuntimeConfig<PaymentsConfig>, ServeError> {
-    let absolute = std::fs::canonicalize(path)
-        .map_err(|_| refused("payment configuration could not be read"))?;
-    let loaded = RuntimeConfigLoader::new(
-        RuntimeEnvelope {
-            api_version: API_VERSION,
-            kind: KIND,
-        },
-        declared,
-    )
-    .load::<PaymentsConfig>(&absolute)
-    .map_err(|error| refused(&format!("payment configuration was refused: {error}")))?;
-    validate_payments(&loaded)?;
-    Ok(loaded)
-}
-
-pub(crate) fn check_config_in_posture(
+/// Read the payment file for the combined startup decision.
+pub(crate) fn load_config(
     path: &Path,
     declared: registry_platform_config::DeclaredPosture,
 ) -> registry_platform_config::RuntimeFileCheck<PaymentsConfig> {
@@ -277,6 +248,7 @@ pub(crate) struct PreparedPayments {
     authenticator: Authenticator,
     g2p_provider: HttpG2pProvider,
     peer_policy: registry_platform_httputil::PeerPolicy,
+    posture: registry_platform_config::Posture,
     development: Option<registry_platform_config::DevelopmentWitness>,
     deployment: String,
 }
@@ -287,7 +259,8 @@ impl PreparedPayments {
         loaded: registry_platform_config::LoadedRuntimeConfig<PaymentsConfig>,
         provider_pack_paths: &[PathBuf],
     ) -> Result<Self, ServeError> {
-        let peer_policy = match loaded.posture.posture() {
+        let posture = loaded.posture.posture();
+        let peer_policy = match posture {
             registry_platform_config::Posture::Production => {
                 registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
             }
@@ -408,6 +381,7 @@ impl PreparedPayments {
             authenticator,
             g2p_provider: g2p_provider.with_peer_policy(peer_policy),
             peer_policy,
+            posture,
             development,
             deployment: runtime.id.as_str().to_owned(),
         })
@@ -440,15 +414,16 @@ impl PreparedPayments {
             authenticator,
             g2p_provider,
             peer_policy,
+            posture,
             development,
             deployment,
         } = self;
-        let store =
-            PaymentStore::new(pool.clone(), deployment.clone()).with_development(development);
+        let store = PaymentStore::new(pool.clone(), deployment.clone(), posture)
+            .with_development(development);
         store.check_privileges().await.map_err(|_| {
             refused("payment runtime role lacks required table or sequence privileges")
         })?;
-        let g2p_store = G2pStore::new(pool.clone(), deployment.clone());
+        let g2p_store = G2pStore::new(pool.clone(), deployment.clone(), posture);
         if !config.disbursements.is_empty() {
             g2p_store.check_privileges().await.map_err(|_| {
                 refused("G2P runtime role lacks required table or sequence privileges")
@@ -470,6 +445,9 @@ impl PreparedPayments {
             store,
             Arc::new(BregBridge::new(resolver.clone())),
             Arc::new(
+                // The development-only simulator is the only admitted collection
+                // provider. Its connector applies no peer posture policy. A
+                // mapped collection provider uses the same policy as disbursement.
                 SyntheticProvider::new(resolver, packs.mapping)
                     .with_peer_policy(peer_policy)
                     .with_development(development),
@@ -532,14 +510,14 @@ pub async fn run_only(
     provider_pack_paths: &[PathBuf],
     declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(), ServeError> {
-    let (loaded, payments) =
+    let (loaded, payments, _) =
         crate::serve::load_serve_configuration(runtime_path, Some(payments_path), declared)?;
     let runtime = loaded.config;
     crate::serve::check_database(&runtime.database)?;
     let resolver = resolver(&runtime)?;
     let prepared = PreparedPayments::prepare(
         &runtime,
-        payments.expect("the supplied payments file was read"),
+        payments.ok_or_else(|| refused("the payment configuration could not be loaded"))?,
         provider_pack_paths,
     )
     .await?;

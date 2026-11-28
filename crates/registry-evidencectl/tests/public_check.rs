@@ -45,7 +45,9 @@ fn deployment_reference() -> PathBuf {
 }
 
 fn evidencectl() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
+    command
 }
 
 fn assert_success(output: &Output, label: &str) {
@@ -144,18 +146,26 @@ fn package_example(ports: Option<[u16; 3]>) -> Packaged {
         "source token",
     );
     let candidate = temporary.path().join("candidate");
-    assert_success(
-        &evidencectl()
-            .args(["package", "--posture", "development"])
-            .arg(&project)
-            .arg("--target")
-            .arg(&target)
-            .arg("--output")
-            .arg(&candidate)
-            .output()
-            .expect("package"),
-        "package",
-    );
+    let output = evidencectl()
+        .args(["package", "--posture", "development", "--format", "json"])
+        .arg(&project)
+        .arg("--target")
+        .arg(&target)
+        .arg("--output")
+        .arg(&candidate)
+        .output()
+        .expect("package");
+    assert_success(&output, "package");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["posture"]["value"], "development");
+    assert!(report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| {
+            diagnostic["code"] == "evidence.posture.local-assurance"
+                && diagnostic["path"] == "/assuranceProfile"
+        }));
     Packaged {
         _temporary: temporary,
         project,
@@ -467,6 +477,7 @@ fn the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_s
     }
     let runtime = packaged.candidate.join("runtime.yaml");
     let activated = Command::new(&evidence)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .args([
             "authority",
@@ -484,6 +495,7 @@ fn the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_s
 
     let log = fs::File::create(packaged.project.join("evidence.log")).expect("service log");
     let child = Command::new(&evidence)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .args(["serve", "--posture", "development", "--runtime-config"])
         .arg(&runtime)
@@ -562,8 +574,9 @@ fn the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_s
     let audit = fs::read_to_string(generated.join("audit/evidence.jsonl")).expect("audit file");
     assert_eq!(audit.lines().count(), 16, "{audit}");
     let view = Command::new(&evidence)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .arg("local-audit-last-operation")
+        .args(["local-audit-last-operation", "--posture", "development"])
         .arg("--runtime-config")
         .arg(&runtime)
         .output()

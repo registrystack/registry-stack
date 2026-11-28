@@ -94,7 +94,10 @@ rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-excerpt
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 ```
 
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, representations;

@@ -2142,11 +2142,27 @@ fn check_reports_explicit_anonymous_https() {
         std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
     });
     let runtime = root.path().join("minimal/runtime.yaml");
-    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    let (exit, report, _) = run_json(&[
+        "check",
+        &project,
+        "--runtime",
+        runtime.to_str().unwrap(),
+        "--deny-warnings",
+    ]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     assert_eq!(
-        diagnostic_path(&report, "adapter.posture.anonymous-https"),
-        "/endpoints/0/anonymousHttps",
+        report["explicitProductionSettings"],
+        serde_json::json!([{
+            "code": "adapter.posture.anonymous-https",
+            "pointer": "/endpoints/0/anonymousHttps"
+        }])
+    );
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|finding| { finding["code"] != "adapter.posture.anonymous-https" }),
         "{report}"
     );
 }
@@ -2168,6 +2184,14 @@ fn job_check_lists_private_transport_in_development_and_refuses_it_in_production
     ] {
         let (exit, report, _) = job_check_with("job-runtime.yaml", &runtime, flags);
         assert_eq!(exit, expected_exit, "{report}");
+        assert_eq!(
+            report["posture"],
+            serde_json::json!({
+                "value": flags.last().copied().unwrap_or("production"),
+                "source": if flags.is_empty() { "default" } else { "flag" }
+            }),
+            "{report}"
+        );
         let finding = report["diagnostics"]
             .as_array()
             .unwrap()
@@ -2184,6 +2208,42 @@ fn job_check_lists_private_transport_in_development_and_refuses_it_in_production
             assert!(
                 action.contains("REGISTRY_STACK_POSTURE=development"),
                 "{action}"
+            );
+        }
+    }
+}
+
+#[test]
+fn job_check_refuses_a_non_loopback_plaintext_postgres_source() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/adapter/examples/postgres-source");
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = directory.path().join("job-runtime.yaml");
+    let yaml = std::fs::read_to_string(fixture.join("job-runtime.example.yaml")).unwrap();
+    for (host, expected) in [
+        ("localhost", ExitCode::SUCCESS),
+        ("192.0.2.1", ExitCode::from(1)),
+    ] {
+        std::fs::write(
+            &runtime,
+            yaml.replace("source-db.example.invalid", host)
+                .replace("type: system-roots", "type: loopback-plaintext"),
+        )
+        .unwrap();
+        let (exit, report, _) = run_json(&[
+            "job",
+            "check",
+            fixture.join("pack.yaml").to_str().unwrap(),
+            fixture.join("job.yaml").to_str().unwrap(),
+            "--runtime",
+            runtime.to_str().unwrap(),
+        ]);
+        assert_eq!(exit, expected, "{report}");
+        if expected != ExitCode::SUCCESS {
+            assert_eq!(
+                diagnostic_path(&report, "platform.database.transport-host-mismatch"),
+                "/sources/postgres/households/tls",
+                "{report}"
             );
         }
     }

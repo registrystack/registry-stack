@@ -203,13 +203,20 @@ impl VerifierService {
             .filter_map(RequestIdentity::jwks_entry)
             .collect();
         let jwks = (!keys.is_empty()).then(|| json!({ "keys": keys }).to_string());
-        let applicants = TokenAuthenticator::build(&config.applicant_tokens, &resolver)
-            .await
-            .map_err(|error| issuer_unavailable("/applicantTokens", &error))?;
-        let evidence_credentials =
-            TokenAuthenticator::build(&config.evidence_credentials, &resolver)
-                .await
-                .map_err(|error| issuer_unavailable("/evidenceCredentials", &error))?;
+        let applicants = TokenAuthenticator::build(
+            &config.applicant_tokens,
+            &resolver,
+            config.posture.posture(),
+        )
+        .await
+        .map_err(|error| issuer_unavailable("/applicantTokens", &error))?;
+        let evidence_credentials = TokenAuthenticator::build(
+            &config.evidence_credentials,
+            &resolver,
+            config.posture.posture(),
+        )
+        .await
+        .map_err(|error| issuer_unavailable("/evidenceCredentials", &error))?;
 
         let audit_key = resolver
             .resolve_binary_reference(&config.audit.key.hash_key_ref)

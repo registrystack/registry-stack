@@ -165,7 +165,7 @@ pub async fn rebaseline_history_coverage(
         .map_err(|_| HistoryRebaselineError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
     lock_registry(&transaction, request.lock_key).await?;
-    verify_ready_identity(&transaction, request.expected).await?;
+    verify_ready_identity(&transaction, request.expected, request.lock_key.posture()).await?;
 
     let outcome = rebaseline_history_coverage_in_transaction(&transaction, &request).await?;
     let entry = history_rebaseline_entry(&request, &outcome, correlation)?;

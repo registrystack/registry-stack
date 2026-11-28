@@ -289,6 +289,118 @@ fn the_progressive_client_help_is_complete() {
     }
 }
 
+#[tokio::test]
+async fn progressive_remote_commands_apply_posture_to_discovery() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use axum::{http::StatusCode, routing::get, Json, Router};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let protected = json!({
+        "resource": origin,
+        "authorization_servers": [origin],
+        "jwks_uri": format!("{origin}/.well-known/jwks.json"),
+        "bearer_methods_supported": ["header"]
+    });
+    let later_requests = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&later_requests);
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(move || {
+                let protected = protected.clone();
+                async move { ([("registry-posture", "development")], Json(protected)) }
+            }),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let observed = Arc::clone(&observed);
+                async move {
+                    observed.fetch_add(1, Ordering::Relaxed);
+                    StatusCode::NOT_FOUND
+                }
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let directory = tempfile::tempdir().unwrap();
+    let profile = directory.path().join("client.json");
+    let key_file = directory.path().join("client.jwk");
+    let signing = p256::ecdsa::SigningKey::from_slice(&[7; 32]).unwrap();
+    let point = signing.verifying_key().to_sec1_point(false);
+    let key = json!({
+        "kty": "EC", "crv": "P-256", "alg": "ES256", "kid": "synthetic-client",
+        "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+        "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+        "d": URL_SAFE_NO_PAD.encode(signing.to_bytes()),
+    });
+    fs::write(&key_file, serde_json::to_vec(&key).unwrap()).unwrap();
+    fs::set_permissions(&key_file, fs::Permissions::from_mode(0o600)).unwrap();
+    let profile_document = json!({
+        "apiVersion": "id.registrystack.org/formats/evidence/client-profile/v1",
+        "kind": "EvidenceClientProfile",
+        "baseUrl": origin,
+        "clientId": "synthetic-client",
+        "privateKey": {"type": "file", "path": "client.jwk"},
+        "trust": {"type": "local-loopback-discovery"},
+        "oauth": {"clientAssertionAudience": origin}
+    });
+    fs::write(&profile, serde_json::to_vec(&profile_document).unwrap()).unwrap();
+    fs::set_permissions(&profile, fs::Permissions::from_mode(0o600)).unwrap();
+    let candidate = directory.path().join("contracts.json");
+    for args in [
+        vec![
+            "client",
+            "contracts",
+            "fetch",
+            "--output",
+            candidate.to_str().unwrap(),
+        ],
+        vec![
+            "request",
+            "prepare",
+            "--requirement",
+            "urn:example:requirement",
+            "--name",
+            "synthetic",
+            "--subject",
+            "id=synthetic",
+        ],
+    ] {
+        for (posture, expected_next_requests) in [("production", 0), ("development", 1)] {
+            later_requests.store(0, Ordering::Relaxed);
+            let output = tokio::process::Command::from(command())
+                .current_dir(directory.path())
+                .args(&args)
+                .arg("--profile")
+                .arg(&profile)
+                .args(["--posture", posture])
+                .env_remove("REGISTRY_STACK_POSTURE")
+                .output()
+                .await
+                .unwrap();
+            assert_eq!(
+                later_requests.load(Ordering::Relaxed),
+                expected_next_requests,
+                "{args:?} {posture}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                !output.status.success(),
+                "the authorization metadata is unavailable"
+            );
+            assert!(!candidate.exists());
+        }
+    }
+    server.abort();
+}
+
 #[test]
 fn unsafe_profile_permissions_fail_before_network_or_artifact_creation() {
     let directory = tempfile::tempdir().unwrap();

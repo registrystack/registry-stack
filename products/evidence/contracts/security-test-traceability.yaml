@@ -2,6 +2,7 @@ contract: registry.evidence.security-test-traceability/v1
 entries:
   - id: sec-target-authority-atomic-activation
     tests:
+      - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_requires_development_for_a_local_bundle}
       - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_is_atomic_refuses_a_repeat_and_keeps_durable_history}
       - {file: crates/registry-evidence/src/authority.rs, name: applied_activation_writes_a_correlated_request_and_response}
       - {file: crates/registry-evidence/src/authority.rs, name: invalid_operator_references_are_audited_without_values_or_mutation}
@@ -39,6 +40,7 @@ entries:
       - {file: crates/registry-evidence/tests/selector_conformance.rs, name: task_grant_context_is_bound_before_selector_or_source_access}
   - id: sec-oid4vci-offer-request-contract
     tests:
+      - {file: crates/registry-evidence-oid4vci/src/issuer.rs, name: response_posture_follows_the_delivery_declaration}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: selector_values_outside_the_published_contract_create_no_exchange}
   - id: sec-signed-evidence-source
     tests:
@@ -130,7 +132,8 @@ entries:
   - id: sec-issuer-key-transport
     tests:
       - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_uses_the_shared_declared_endpoint_rule}
-      - {file: crates/registry-evidence/src/config.rs, name: deployable_profiles_refuse_plain_http_and_the_insecure_http_opt_in}
+      - {file: crates/registry-evidence/src/config.rs, name: production_oidc_accepts_loopback_http_without_opt_in}
+      - {file: crates/registry-evidence/src/config.rs, name: deployable_profiles_refuse_non_loopback_http_and_the_insecure_http_opt_in}
   - id: sec-admission-clients-and-scopes
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: admission_gates_are_stated_and_a_list_is_nonempty_and_bounded}
@@ -157,7 +160,9 @@ entries:
   - id: sec-unsafe-definition-combination
     tests: [{file: crates/registry-evidence/src/config.rs, name: a_shared_disclosure_family_rejects_the_complete_bundle}]
   - id: sec-missing-principal-no-fallback
-    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: missing_principal_never_falls_back_to_client_id_or_azp}]
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: missing_principal_never_falls_back_to_client_id_or_azp}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: production_rejects_development_task_assertions_before_context}
   - id: sec-sender-constrained-token-denied
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: sender_constrained_tokens_are_denied_rather_than_downgraded}]
   - id: sec-telemetry-bounded-and-operator-private
@@ -702,6 +707,7 @@ entries:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: sd_jwt_vc_confirmation_is_accepted_and_carries_no_private_material}
   - id: sec-oid4vci-offer-requires-authorization
     tests:
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: ordinary_offer_token_posture_refuses_development_in_production}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_offer_without_authorization_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_unauthorized_offer_refusal_describes_nothing_this_deployment_offers}
       - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: an_ordinary_service_offer_with_purpose_but_no_grant_remains_supported}
@@ -861,6 +867,7 @@ entries:
       - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_presented_credential_without_issued_at_is_refused}
   - id: sec-oid4vp-verifier-negative-paths
     tests:
+      - {file: crates/registry-evidence-oid4vp/tests/endpoints.rs, name: applicant_token_posture_follows_the_verifier_declaration}
       - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_response_is_refused_for_the_wrong_state_session_key_or_encryption}
       - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_payload_that_repeats_a_member_is_refused}
       - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_vp_token_must_match_the_policy_query}

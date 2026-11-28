@@ -54,6 +54,12 @@ impl IdempotencyRetentionOperatorService {
             return Err(MutationError::InvalidRequest);
         }
         let config = load_runtime_config(path, posture).map_err(|_| MutationError::Unavailable)?;
+        Self::from_loaded_config(config).await
+    }
+
+    pub async fn from_loaded_config(
+        config: crate::runtime_config::RuntimeConfig,
+    ) -> Result<Self, MutationError> {
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => {
                 MutationError::PackagePinMismatch(mismatch)

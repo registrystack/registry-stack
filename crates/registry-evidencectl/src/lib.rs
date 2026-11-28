@@ -480,6 +480,14 @@ pub fn main_entry() -> ExitCode {
     code
 }
 
+fn evidence_peer_policy(posture: Posture) -> registry_evidence_client::PeerPolicy {
+    use registry_evidence_client::PeerPolicy;
+    match posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    }
+}
+
 const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
     posture: Posture::Production,
     source: PostureSource::Default,
@@ -576,9 +584,20 @@ fn run_entry() -> ExitCode {
         Command::Package(args) => Some(args.posture.as_deref()),
         Command::Test(args) => Some(args.posture.as_deref()),
         Command::Fixtures(fixtures::FixturesCommand::Run(args)) => Some(args.posture.as_deref()),
+        Command::Fixtures(fixtures::FixturesCommand::RecordFacts(args)) => {
+            Some(args.posture.as_deref())
+        }
+        Command::Source(
+            source_cli::SourceCommand::Diff(args)
+            | source_cli::SourceCommand::Import(args)
+            | source_cli::SourceCommand::Update(args),
+        ) => Some(args.posture.as_deref()),
         Command::Doctor(args) if args.runtime_config.is_some() => Some(args.posture.as_deref()),
         Command::Oid4vci(args) => args.posture_flag(),
         Command::Request(command) => command.posture_flag(),
+        Command::Client(client::ClientCommand::Contracts(client::ContractsCommand::Fetch(
+            args,
+        ))) => Some(args.posture.as_deref()),
         _ => None,
     };
     let production = matches!(&cli.command, Command::Check(args) if args.production);
@@ -751,7 +770,7 @@ fn run_entry() -> ExitCode {
                 "Correct the selected project, target, or client registrations and rerun generate identity-facts with a new output file.",
             )
         }
-        Command::Client(command) => client::run(command),
+        Command::Client(command) => client::run(command, posture),
         Command::Access(command) => access::run(command, format),
         Command::Keygen(command) => keygen::run(command, format),
         Command::Jwks(args) => jwks::run(args, format),
@@ -764,14 +783,14 @@ fn run_entry() -> ExitCode {
         Command::Fixtures(fixtures::FixturesCommand::RecordFacts(args)) => {
             let artifact = args.fixture.clone();
             safe_command(
-                fixture_record::run(args, format),
+                fixture_record::run(args, format, posture),
                 "evidence.fixtures-record-facts.failed",
                 artifact,
                 "Evidence could not record the selected fixture facts.",
                 "Correct the editable project, target, or fixture and rerun fixtures record-facts.",
             )
         }
-        Command::Source(command) => source_cli::run(command, format),
+        Command::Source(command) => source_cli::run(command, format, declared),
         Command::Target(command) => target::run(command, format),
         Command::Doctor(args) => safe_command(
             runtime::run(args, format, posture),

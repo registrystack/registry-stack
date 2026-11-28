@@ -213,6 +213,10 @@ fn check(
         Arc::clone(&resolver),
         workspace,
     )?;
+    #[cfg(feature = "job-postgres")]
+    for binding in program.postgres_source_bindings() {
+        binding.check_host().map_err(|error| error.render_human())?;
+    }
     check_hook_runtime(&program.job, &runtime_config)?;
     #[cfg(feature = "job-hook")]
     registry_adapter_job::hook_ingress::preflight(&program.job, &runtime_config, &resolver)
@@ -254,10 +258,19 @@ fn check(
         "projectionDigest": program.job.projection_digest(),
         "destination": destination,
     });
-    report
-        .as_object_mut()
-        .expect("a plain object")
-        .extend(runtime_config.posture.ready_member());
+    report["posture"] = registry_adapter_engine::load::posture_member(declared);
+    report["developmentSettings"] = runtime_config
+        .posture
+        .settings()
+        .iter()
+        .map(|finding| {
+            let mut member = serde_json::json!({"code": finding.setting.code});
+            if let Some(pointer) = &finding.pointer {
+                member["pointer"] = serde_json::json!(pointer);
+            }
+            member
+        })
+        .collect();
     report["explicitProductionSettings"] = runtime_config
         .posture
         .explicit_settings()
@@ -310,6 +323,14 @@ async fn pass(
         print_pass_report(&report, dry_run, show_values, &preview);
         return Ok(pass_exit_code(&report));
     }
+    let client = pool
+        .get()
+        .await
+        .map_err(|error| format!("the job store could not be reached: {error}"))?;
+    store::check_posture(&client, program.job.job.id.as_str(), declared.posture)
+        .await
+        .map_err(|error| format!("the job store refused: {error}"))?;
+    drop(client);
     let edits = source_edits(&program)?;
     let shutdown = shutdown_requests()?;
     if trigger::interval_trigger(&program.job).is_none() {
@@ -605,7 +626,7 @@ async fn rescan(
         store::ensure_state(&client, program.job.job.id.as_str())
             .await
             .map_err(|error| format!("the job store refused: {error}"))?;
-        store::mark_rescan_due(&client, program.job.job.id.as_str())
+        store::mark_rescan_due(&client, program.job.job.id.as_str(), declared.posture)
             .await
             .map_err(|error| format!("the job store refused: {error}"))?;
     }
@@ -927,9 +948,11 @@ async fn status(
         .filter(|recorded| *recorded != declared.posture)
         .map(|recorded| {
             serde_json::json!({
-                "code": "adapter.job.posture-mismatch",
+                "code": store::POSTURE_MISMATCH,
                 "recordedPosture": recorded.as_str(),
                 "declaredPosture": declared.posture.as_str(),
+                "message": "The last pass ran under a different posture.",
+                "suggestedAction": "Use a fresh store when changing the deployment posture.",
             })
         })
         .into_iter()

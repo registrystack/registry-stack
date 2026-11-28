@@ -298,9 +298,9 @@ pub async fn run_pass(
     // The dry run writes nothing: it reads the state to report what a
     // real pass would do from it, and skips the lease.
     let state = if options.dry_run {
-        read_pass_state(&mut client, job_id, program, &mut report).await
+        read_pass_state(&mut client, job_id, program, options.posture, &mut report).await
     } else {
-        take_pass_state(&mut client, job_id, program, &mut report).await
+        take_pass_state(&mut client, job_id, program, options.posture, &mut report).await
     };
     let Some(state) = state else {
         return report;
@@ -983,6 +983,12 @@ fn identity_stop_reason(error: &store::StoreError) -> StopReason {
 /// The stop reason for a store refusal: [`STORE_REFUSED`] with the
 /// store's closed cause token, value-free.
 fn store_refused_reason(error: &store::StoreError) -> StopReason {
+    if matches!(error, store::StoreError::PostureMismatch { .. }) {
+        return StopReason::PageFault {
+            code: store::POSTURE_MISMATCH.to_owned(),
+            record: None,
+        };
+    }
     store_refused_cause(&error.cause())
 }
 
@@ -1007,6 +1013,7 @@ async fn read_pass_state(
     client: &mut deadpool_postgres::Object,
     job_id: &str,
     program: &JobProgram,
+    posture: registry_platform_config::Posture,
     report: &mut PassReport,
 ) -> Option<PassState> {
     let row = match store::read_state(client, job_id).await {
@@ -1017,6 +1024,10 @@ async fn read_pass_state(
         }
     };
     let row = row.unwrap_or_default();
+    if let Err(error) = row.check_posture(posture) {
+        *report = store_refused(std::mem::take(report), &error);
+        return None;
+    }
     report.overdue = overdue(&row, program);
     Some(PassState {
         position: row.position,
@@ -1034,6 +1045,7 @@ async fn take_pass_state(
     client: &mut deadpool_postgres::Object,
     job_id: &str,
     program: &JobProgram,
+    posture: registry_platform_config::Posture,
     report: &mut PassReport,
 ) -> Option<PassState> {
     if let Err(error) = store::ensure_state(client, job_id).await {
@@ -1049,8 +1061,12 @@ async fn take_pass_state(
             return None;
         }
     };
+    if let Err(error) = before.check_posture(posture) {
+        *report = store_refused(std::mem::take(report), &error);
+        return None;
+    }
     report.overdue = overdue(&before, program);
-    let leased = match store::take_lease(client, job_id, lease_ttl(program)).await {
+    let leased = match store::take_lease(client, job_id, lease_ttl(program), posture).await {
         Ok(leased) => leased,
         Err(error) => {
             *report = store_refused(std::mem::take(report), &error);

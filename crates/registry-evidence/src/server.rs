@@ -1287,7 +1287,7 @@ fn answer(
     if let Some(check) = check {
         response.extensions_mut().insert(RefusalNote::new(check));
     }
-    if code == ProblemCode::AuthenticationFailed {
+    if code.status() == StatusCode::UNAUTHORIZED {
         response.headers_mut().insert(
             axum::http::header::WWW_AUTHENTICATE,
             HeaderValue::from_static(BEARER_AUTH_CHALLENGE),

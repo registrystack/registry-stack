@@ -24,15 +24,26 @@
   reports include it.
 - BREAKING: An undeclared posture is production. Runtime files that select
   development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development
-  for laptop and test runs; rstack dev sets it for you.
+  for laptop and test runs.
 - BREAKING: `caseworkctl check` reports development settings as errors under
   the default posture. Migration: Pass --posture development, or set
   REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: `caseworkctl provider add` accepts `--posture` and validates
+  runtime examples under the resolved posture. Use `--posture development`
+  to generate the development example. A production check of an existing
+  example requires an explicit client list.
+- Provider-add JSON reports include the resolved `posture` and its `source`.
+  Runtime configuration refusals exit 1 and include diagnostic codes and pointers.
+  This includes `casework.posture.unrestricted-clients` for production and
+  `casework.runtime.invalid-assertion-issuers` for an invalid assertion-issuer map.
 - BREAKING: `allowedClients: unrestricted` requires development on every
   listener. Migration: List the OAuth clients your production deployment admits.
-- BREAKING: The loopback listener setting restricts placement to loopback.
-  Migration: Write tlsTermination: loopback-plaintext; settings it used to
-  relax now follow the posture.
+- BREAKING: Write `tlsTermination: loopback-plaintext` in place of
+  `tlsTermination: development-loopback`. Both spellings restrict listener placement
+  to loopback. Settings that previously depended on the listener now follow the posture.
+- BREAKING: `caseworkctl plan`, `apply`, `status`, `doctor` and
+  `generate identity-facts` report all runtime loader diagnostics with JSON
+  pointers and source positions. Update scripts that match `runtime.yaml:<pointer>`.
 - BREAKING: `allowInsecureHttp: true` requires development. Migration: Delete
   allowInsecureHttp where the issuer is on loopback: no setting is needed in
   any posture.
@@ -53,8 +64,9 @@
 - BREAKING: Development task assertions carry `registry_posture`. Migration:
   No change for development consumers.
 - `--posture` is available on `casework` and on `caseworkctl` commands that
-  read runtime files. Casework command reports carry the resolved posture and
-  its source.
+  read runtime files. JSON reports from `check`, `generate identity-facts`,
+  `provider add`, `doctor`, `plan`, `apply` and `status` carry the resolved
+  posture and its source.
 
 - Casework counts every refused request by the check that refused it, in
   `casework_request_refusals_total{check}` on the metrics listener, published

@@ -97,6 +97,11 @@ fn job_store_reuses_the_shared_transport_rule() {
         )
         .unwrap_err();
         assert!(error.to_string().contains(code), "{error}");
+        assert!(error.to_string().contains("store.transport"), "{error}");
+        assert!(
+            !error.to_string().contains("write database.transport"),
+            "{error}"
+        );
     }
 }
 
@@ -108,7 +113,7 @@ fn job_check_enforces_and_lists_the_posture() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = directory.path().join("runtime.yaml");
     let yaml = std::fs::read_to_string(base.join("job-runtime.yaml")).unwrap();
-    let destination = "\ndestinations:\n  coordinator-test:\n    type: signed-coordinator-event\n    baseUrl: http://127.0.0.1:9/events\n    signingKeyRef: secret:env/JOB_EVENT_KEY\n    attemptTimeoutMilliseconds: 1000\n";
+    let destination = "\ndestinations:\n  coordinator-test:\n    type: signed-coordinator-event\n    baseUrl: http://127.0.0.1:9/events\n    hmacSha256KeyRef: secret:env/JOB_EVENT_KEY\n    attemptTimeoutMilliseconds: 1000\n";
     let run = |flag: Option<&str>, environment: Option<&str>| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_adapter-job"));
         command
@@ -151,7 +156,13 @@ fn job_check_enforces_and_lists_the_posture() {
             String::from_utf8_lossy(&output.stderr)
         );
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["posture"], "development");
+        assert_eq!(
+            report["posture"],
+            serde_json::json!({
+                "value": "development",
+                "source": if flag.is_some() { "flag" } else { "environment" }
+            })
+        );
         assert_eq!(
             report["developmentSettings"],
             serde_json::json!([{
@@ -167,6 +178,18 @@ fn job_check_enforces_and_lists_the_posture() {
             }])
         );
     }
+    std::fs::write(&runtime, format!("{yaml}{destination}store:\n  runtimeUrlRef: secret:env/JOB_DB\n  transport: loopback-plaintext\n")).unwrap();
+    let output = run(None, None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["posture"],
+        serde_json::json!({"value": "production", "source": "default"})
+    );
     std::fs::write(&runtime, format!("{yaml}{destination}store:\n  runtimeUrlRef: secret:env/JOB_DB\n  transport: loopback-plaintext\n  testOnlyPlaintext: true\n")).unwrap();
     let output = run(None, None);
     let stderr = String::from_utf8(output.stderr).unwrap();

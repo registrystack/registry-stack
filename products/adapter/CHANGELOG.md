@@ -20,14 +20,19 @@
   `hmacSha256KeyRef`. The job sends two `v1,<base64>` entries, current first.
   Remove the previous reference after Coordinator holds the new key.
 
+- In the `adapter-job check` JSON report, `posture` is an object with `value`
+  and `source`. Select `.posture.value` if your script compared `.posture`
+  with a string. Scripts already reading the object need no change.
+- A job pass refuses to use a store recorded under a different deployment
+  posture. This also applies to previews and operator rescans.
 - BREAKING: an undeclared posture is production.
   Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
 - BREAKING: `check` without a declared posture reports development settings as errors.
   Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
 - BREAKING: the payment simulator collection provider is development only.
   Migration: Collections run under development until a live collection provider is accepted.
-- BREAKING: `loopback-plaintext` is the listener spelling for loopback placement.
-  Migration: Write `tlsTermination: loopback-plaintext`. Both `development-loopback` and `loopback-plaintext` relax the hook-listener port rule in either posture for loopback placement.
+- Use `tlsTermination: loopback-plaintext` for new loopback listener configurations.
+  Both `development-loopback` and `loopback-plaintext` relax the hook-listener port rule in either posture for loopback placement.
 - BREAKING: issuer `allowInsecureHttp: true` is development only.
   Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
 - BREAKING: production refuses `oidc.jwksSource.type: test-issuer`.
@@ -43,6 +48,28 @@
 - The facade and job store accept loopback PostgreSQL plaintext in either posture.
   PostgreSQL job sources accept `tls.type: loopback-plaintext` for loopback hosts.
 - Adapter startup records each explicit `anonymousHttps: operator-approved` acknowledgement.
+
+- `adapterctl verify` and `adapterctl job check` accept `--posture` and read
+  `REGISTRY_STACK_POSTURE`. Their JSON reports include the declared posture and its source.
+- `adapter-job check` reports `posture`, `developmentSettings` and
+  `explicitProductionSettings`. The `posture` object includes its value and source.
+- `adapter-job status` reports `adapter.job.posture-mismatch` in `findings` when the
+  last pass was recorded under a different posture.
+- `adapter-job init-store` upgrades the job store to schema 105. Earlier binaries
+  refuse the upgraded store.
+- The facade journal upgrades to schema 600. Each new journal row carries the
+  declared posture.
+- New payment access and disbursement audit rows carry the declared posture.
+- A PostgreSQL job source using loopback plaintext with `localhost` requires
+  every resolved address to be loopback.
+- `adapterctl check` lists `anonymousHttps: operator-approved` in
+  `explicitProductionSettings`. The acknowledgement passes `--deny-warnings`.
+
+- BREAKING: the upgraded journal (schema 600) and payment audit tables
+  refuse writes from earlier Adapter releases. An earlier payment host starts
+  against an upgraded database and refuses every payment request.
+  Migration: Stop every earlier Adapter process before upgrading the same
+  database. Restore a backup before rolling back past this release.
 
 - A secret file the Adapter or an Adapter job refuses names the failed
   check and its fix. A link below the secret root now loads, so the hint

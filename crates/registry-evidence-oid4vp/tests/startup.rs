@@ -26,6 +26,22 @@ async fn startup_code(options: Options) -> String {
     diagnostic.code.clone()
 }
 
+#[test]
+fn openapi_write_failure_uses_the_operational_log() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_evidence-oid4vp"))
+        .args(["openapi", "--output"])
+        .arg(directory.path())
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let event: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(event["level"], "ERROR");
+    assert_eq!(event["target"], "registry_evidence_oid4vp");
+    assert!(output.stderr.is_empty());
+}
+
 #[tokio::test]
 async fn a_certificate_that_does_not_name_the_public_host_is_refused() {
     let code = startup_code(Options {
@@ -123,6 +139,55 @@ async fn posture_loopback_issuers_need_no_opt_in() {
         })
     );
     assert!(ready.maybe_header("registry-posture").is_none());
+    let token = harness.applicant_token("portal", "user-1");
+    server
+        .post("/v1/sessions")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({"policy": "national-id"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+
+    edit(
+        &harness,
+        "issuer: http://127.0.0.1:",
+        "issuer: http://local.example.invalid:",
+    );
+    assert!(!codes(&harness).is_empty());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
+}
+
+#[tokio::test]
+async fn development_audit_records_the_declared_posture() {
+    let harness = Harness::new(&Options::default()).await;
+    edit(
+        &harness,
+        "applicantTokens:\n",
+        "applicantTokens:\n  allowInsecureHttp: true\n",
+    );
+    let declared = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+    let config = Oid4vpConfig::load(&harness.config_path, declared).unwrap();
+    let service = registry_evidence_oid4vp::service::VerifierService::load_with_clock(
+        config,
+        harness.clock(),
+    )
+    .await
+    .unwrap();
+    let server = axum_test::TestServer::new(registry_evidence_oid4vp::service::build_app(
+        std::sync::Arc::new(service),
+    ));
+    let token = harness.applicant_token("portal", "user-1");
+    server
+        .post("/v1/sessions")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({"policy": "national-id"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    let audit = harness.audit_journal();
+    let entry: serde_json::Value = serde_json::from_str(audit.lines().next().unwrap()).unwrap();
+    assert_eq!(entry["posture"], "development");
 }
 
 #[tokio::test]
@@ -141,6 +206,25 @@ async fn posture_insecure_issuers_are_development_only() {
         .iter()
         .any(|code| code == "platform.posture.insecure-issuer-http"));
     assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
+    let binary = env!("CARGO_BIN_EXE_evidence-oid4vp");
+    let checked = std::process::Command::new(binary)
+        .args([
+            "check",
+            "--posture",
+            "development",
+            "--deny-warnings",
+            "--runtime-config",
+        ])
+        .arg(&harness.config_path)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    let warnings = String::from_utf8_lossy(&checked.stderr);
+    assert!(checked.status.success(), "{warnings}");
+    assert!(
+        warnings.contains("platform.posture.insecure-issuer-http"),
+        "{warnings}"
+    );
     let development = DeclaredPosture {
         posture: Posture::Development,
         source: PostureSource::Flag,
@@ -163,8 +247,9 @@ async fn posture_insecure_issuers_are_development_only() {
     let ready = server.get("/ready").await;
     ready.assert_status_ok();
     ready.assert_header("registry-posture", "development");
+    let ready = ready.json::<serde_json::Value>();
     assert_eq!(
-        ready.json::<serde_json::Value>(),
+        ready,
         serde_json::json!({
             "status": "ready",
             "posture": "development",
@@ -174,6 +259,29 @@ async fn posture_insecure_issuers_are_development_only() {
             }]
         })
     );
+    // The service above holds the writer lock, so the second process logs
+    // its posture and then exits without binding a listener.
+    let startup = std::process::Command::new(binary)
+        .args(["serve", "--posture", "development", "--runtime-config"])
+        .arg(&harness.config_path)
+        .env("RUST_LOG", "info")
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(!startup.status.success());
+    let listing = String::from_utf8_lossy(&startup.stdout);
+    let logs: Vec<serde_json::Value> = listing
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    for setting in ready["developmentSettings"].as_array().unwrap() {
+        assert!(
+            logs.iter()
+                .any(|entry| entry["fields"]["error_code"] == setting["code"]
+                    && entry["fields"]["pointer"] == setting["pointer"]),
+            "{listing}"
+        );
+    }
 }
 
 #[tokio::test]

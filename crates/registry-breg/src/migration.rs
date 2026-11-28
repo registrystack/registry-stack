@@ -573,6 +573,7 @@ impl ApplyTimeouts {
 /// whether maintenance is ready, read under the exclusive apply lock.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordedRegistryState {
+    pub posture: Posture,
     pub identity: ExpectedRegistryIdentity,
     pub ready: bool,
     /// Whether the ledger records the active activation as applied. It is
@@ -645,6 +646,7 @@ pub async fn read_recorded_registry_state(
             ready: snapshot.maintenance_status == "ready"
                 && snapshot.maintenance_target_package_digest.is_none(),
             identity: snapshot.identity,
+            posture: snapshot.posture,
             activation_applied,
         })),
         Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => Ok(None),
@@ -656,6 +658,7 @@ pub async fn read_recorded_registry_state(
 /// it. It names no value, SQL, credential, or operator reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivationStatus {
+    pub posture: Posture,
     pub identity: ExpectedRegistryIdentity,
     /// `ready`, `applying`, or `failed`.
     pub maintenance_status: String,
@@ -719,6 +722,7 @@ pub async fn read_activation_status(
     };
     Ok(Some(ActivationStatus {
         identity: recorded.snapshot.identity,
+        posture: recorded.snapshot.posture,
         maintenance_status: recorded.snapshot.maintenance_status,
         maintenance_target_package_digest: recorded.snapshot.maintenance_target_package_digest,
         ledger: recorded

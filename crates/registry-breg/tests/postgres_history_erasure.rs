@@ -1522,6 +1522,27 @@ async fn erasure_uses_migration_authority_without_runtime_journal_mutation_grant
         .await
         .expect("runtime-role inspection rolls back");
 
+    let wrong_posture = lock_key.for_posture(registry_platform_config::Posture::Development);
+    let refused = erase_record_history(
+        &mut migration,
+        HistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key: wrong_posture,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &database.audit(audit_profile.clone()),
+            operator_reference: "test-other-posture",
+            reason: "test retention request",
+            target: RecordHistoryErasureTarget::new(ENTITY, record_id, 1),
+        },
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(HistoryErasureError::Unavailable)),
+        "{refused:?}"
+    );
+
     erase_record_history(
         &mut migration,
         HistoryErasureRequest {

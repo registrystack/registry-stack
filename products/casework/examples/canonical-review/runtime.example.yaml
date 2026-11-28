@@ -1,4 +1,5 @@
 apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
+# Development example. Production requires an explicit list of admitted OAuth clients.
 kind: CaseworkRuntimeConfig
 identity:
   databaseId: casework-canonical-review

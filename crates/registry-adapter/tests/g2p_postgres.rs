@@ -395,7 +395,11 @@ async fn store() -> G2pStore {
     let mut client = pool.get().await.unwrap();
     migrate_g2p(&mut client).await.unwrap();
     drop(client);
-    G2pStore::new(pool, format!("g2p-test-{}", Uuid::new_v4()))
+    G2pStore::new(
+        pool,
+        format!("g2p-test-{}", Uuid::new_v4()),
+        registry_platform_config::Posture::Production,
+    )
 }
 
 fn attempt(record_id: Uuid, instruction_id: Uuid) -> G2pAttempt {

@@ -169,6 +169,24 @@ pub(crate) fn run(
     };
     match outcome {
         Ok(program) => {
+            let diagnostics: Vec<_> = program
+                .postgres_source_bindings()
+                .filter_map(|binding| {
+                    binding.check_host().err().map(|mut diagnostic| {
+                        diagnostic.artifact =
+                            Some(registry_adapter_core::ADAPTER_JOB_RUNTIME_KIND.to_owned());
+                        diagnostic.source = Some(registry_platform_yaml::Source {
+                            file: runtime.display().to_string(),
+                            line: None,
+                            column: None,
+                        });
+                        *diagnostic
+                    })
+                })
+                .collect();
+            if !diagnostics.is_empty() {
+                return Err(JobCheckFailure::Refused { diagnostics });
+            }
             let mut warnings = program.warnings.clone();
             warnings.extend(mapping_drift(&program.job, &args.job));
             let mut annotations = Vec::new();

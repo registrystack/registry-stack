@@ -663,13 +663,24 @@ fn start_issuer(
         assertion_scope: "casework:grants:assert".into(),
         ordinary_resource_permissions: Vec::new(),
     });
+    let posture_claim = registry_platform_oidc::POSTURE_CLAIM;
     description
-        .schema_attributes
-        .extend(["evidence_tags".into(), "evidence_audience".into()]);
+        .machine_clients
+        .iter_mut()
+        .find(|client| client.client_id == "task-agent")
+        .unwrap()
+        .token_attributes
+        .push(posture_claim.into());
+    description.schema_attributes.extend([
+        "evidence_tags".into(),
+        "evidence_audience".into(),
+        posture_claim.into(),
+    ]);
     description.schema_attributes.sort();
     description.schema_attributes.dedup();
+    let connection_id = Uuid::new_v4().to_string();
     description.exchange_issuers.push(ExchangeIssuer {
-        id: Uuid::new_v4().to_string(),
+        id: connection_id.clone(),
         name: "Casework task authority".into(),
         issuer: AUTHORITY.into(),
         jwks_endpoint: format!("http://host.docker.internal:{casework_port}/.well-known/jwks.json"),
@@ -683,7 +694,26 @@ fn start_issuer(
         std::fs::write(&path, Uuid::new_v4().to_string()).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
-    render::render(&description).unwrap();
+    let rendered = render::render(&description).unwrap();
+    // Project the signed posture claim on this fixture's institutional exchange.
+    let connection_path = rendered
+        .resources_dir
+        .join("connections")
+        .join(format!("{connection_id}.yaml"));
+    let mut connection = registry_platform_yaml::Reader::new("fixture connection")
+        .scan(&fs::read(&connection_path).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    connection["attributeConfiguration"]["user_type_attribute_mappings"][0]["attributes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"external_attribute": posture_claim, "local_attribute": posture_claim}));
+    fs::write(
+        &connection_path,
+        serde_norway::to_string(&connection).unwrap(),
+    )
+    .unwrap();
     let pin = registry_thunderid_tooling::version::ThunderIdPin::load().unwrap();
     let mut issuer = Issuer {
         description,
@@ -1093,6 +1123,7 @@ fn prove_scheduling_authentication(token: &str, issuer: &Issuer) {
 }
 struct Fixture {
     app: Router,
+    development_app: Router,
     review_task: Uuid,
     admin: tokio_postgres::Client,
     schema: String,
@@ -1297,13 +1328,19 @@ async fn fixture(
         registry_platform_config::Posture::Production,
     )
     .unwrap();
+    let development_authority = TaskAuthority::load(
+        runtime.task_authority.as_ref().unwrap(),
+        &secrets,
+        registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
+        registry_platform_config::Posture::Development,
+    )
+    .unwrap();
     let service = crate::CaseworkService::new(
         store,
         project.clone(),
         [Arc::new(Source) as Arc<dyn ReviewContextProvider>],
     )
-    .unwrap()
-    .with_task_authority(Some(authority));
+    .unwrap();
     let (verifier, keys) = runtime
         .oidc_verifier(&secrets, loaded.development.as_ref())
         .await
@@ -1314,18 +1351,29 @@ async fn fixture(
         keys,
         runtime.authentication.oidc.human_identity.clone(),
     );
-    Fixture {
-        app: crate::router(crate::HttpState {
+    let auth = Arc::new(auth);
+    let router = |posture, service| {
+        crate::router(crate::HttpState {
             posture: registry_platform_config::PostureReport::new(
                 registry_platform_config::DeclaredPosture {
-                    posture: registry_platform_config::Posture::Production,
+                    posture,
                     source: registry_platform_config::PostureSource::Flag,
                 },
             ),
             service,
-            authenticator: Arc::new(auth),
-            project: Arc::new(project),
-        }),
+            authenticator: Arc::clone(&auth),
+            project: Arc::new(project.clone()),
+        })
+    };
+    Fixture {
+        app: router(
+            registry_platform_config::Posture::Production,
+            service.clone().with_task_authority(Some(authority)),
+        ),
+        development_app: router(
+            registry_platform_config::Posture::Development,
+            service.with_task_authority(Some(development_authority)),
+        ),
         review_task,
         admin,
         schema,
@@ -1366,6 +1414,49 @@ async fn request(
         response.status(),
         serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap(),
     )
+}
+
+async fn assert_development_grant_refused(issuer: &Issuer, bearer: &str, grant_id: &str) {
+    use registry_platform_httputil::PeerPolicy;
+    use registry_platform_oidc::{
+        grant_claims, parse_static_jwks, ClaimNames, GrantContextError, JwksFetcher,
+        JwksFetcherConfig, TokenVerifier, TokenVerifierConfig,
+    };
+
+    let keys = parse_static_jwks(&serde_json::to_vec(&issuer.jwks).unwrap()).unwrap();
+    let profile = TokenVerifierConfig::access_token_profile(
+        issuer.url(),
+        vec![BREG_RESOURCE.into()],
+        vec![jsonwebtoken::Algorithm::RS256],
+        vec!["JWT".into(), "at+jwt".into(), "application/at+jwt".into()],
+    )
+    .with_allowed_clients(vec!["task-agent".into()]);
+    let verifier = TokenVerifier::new(
+        profile,
+        Arc::new(JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())),
+    );
+    let verified = verifier.verify(bearer).await.unwrap();
+    let grant = grant_claims(
+        &verified.claims,
+        &ClaimNames::default(),
+        now_seconds().unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(grant.id(), grant_id);
+    assert_eq!(grant.source_issuer(), AUTHORITY);
+    let refusal = grant
+        .verify_context(&verified, BREG_RESOURCE, PeerPolicy::RefuseDevelopmentPeer)
+        .unwrap_err();
+    assert_eq!(refusal, GrantContextError::DevelopmentAssertion);
+    assert_eq!(
+        refusal.code(),
+        Some("platform.task-grant.development-assertion")
+    );
+    assert_eq!(
+        grant.verify_context(&verified, BREG_RESOURCE, PeerPolicy::AcceptDevelopmentPeer),
+        Ok(())
+    );
 }
 
 #[ignore = "requires Docker, disposable CASEWORK_ASSIGNMENT_TEST_DATABASE_URL and BREG_TEST_DATABASE_URL, and absolute SCHEDULING_AUTH_PROBE_BIN"]
@@ -1497,6 +1588,29 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         BREG_RESOURCE,
         "records:get",
     );
+    let (status, development_assertion) = request(
+        &f.development_app,
+        "POST",
+        &format!("/v1/task-grants/{grant_id}/assertion"),
+        &bootstrap,
+        false,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let development_token = bearer(
+        &exchange
+            .exchange(development_assertion["assertion"].as_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        payload(&development_token)[registry_platform_oidc::POSTURE_CLAIM],
+        "development"
+    );
+    assert_development_grant_refused(&issuer, &development_token, grant_id).await;
+
     let connection_file = write_task_connection(
         root.path(),
         "breg-task",

@@ -851,9 +851,6 @@ impl StartupError {
         match self {
             Self::DatabaseConnection(cause) => Some(cause.code()),
             Self::PostureMismatch { .. } => Some(crate::migration::POSTURE_MISMATCH_CODE),
-            Self::PackageRefused(PackageError::DeploymentIdentity) => {
-                Some(crate::compiler::BREG_PLACEHOLDER_IDENTITY.code)
-            }
             _ => None,
         }
     }
@@ -864,9 +861,6 @@ impl StartupError {
             Self::PostureMismatch { recorded, .. } => crate::migration::posture_mismatch_message(*recorded),
             Self::PackageRefused(PackageError::RetiredApiVersion) => {
                 "the Registry package carries the retired apiVersion registry.registrystack.org/package/v2; rebuild it with this release's `bregctl package`, then run `bregctl apply --initial --package DIR` against a new database"
-            }
-            Self::PackageRefused(PackageError::DeploymentIdentity) => {
-                "the Registry package carries a development-only identity; replace canonicalBaseIri and rebuild the package, start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development"
             }
             Self::PackageRefused(PackageError::EngineFeatureUpgradeRequired) => {
                 "the Registry package was built before this release and predates the required Record timer store; it cannot be upgraded in place. Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`"
@@ -950,6 +944,7 @@ impl StartupError {
 /// Unforgeable listener gate produced only after package closure and database
 /// readiness verification. Listener construction must consume this object.
 pub struct VerifiedStartup {
+    recorded_posture: registry_platform_config::Posture,
     package: VerifiedPackage,
     expected: ExpectedRegistryIdentity,
     expected_catalog: ExpectedManagedCatalog,
@@ -981,6 +976,7 @@ impl VerifiedStartup {
 /// Fully verified server state. Fields are private so production listeners can
 /// only be created by consuming this value through [`serve`].
 pub struct PreparedServer {
+    recorded_posture: registry_platform_config::Posture,
     bind: SocketAddr,
     app: Router,
     shutdown_grace: Duration,
@@ -1078,6 +1074,7 @@ impl PreparedServer {
     #[must_use]
     pub fn from_parts_for_test(bind: SocketAddr, app: Router, shutdown_grace: Duration) -> Self {
         Self {
+            recorded_posture: registry_platform_config::Posture::Production,
             bind,
             app,
             shutdown_grace,
@@ -1123,6 +1120,7 @@ impl PreparedServer {
         hook_worker: HookWorker,
     ) -> Self {
         Self {
+            recorded_posture: registry_platform_config::Posture::Production,
             bind,
             app,
             shutdown_grace,
@@ -1230,24 +1228,35 @@ pub async fn prepare_loaded(config: RuntimeConfig) -> Result<PreparedServer> {
 /// state is built over a writer that refuses every entry, so nothing it holds
 /// can append.
 pub async fn check(config_path: &Path) -> Result<CheckedStartup> {
-    check_inputs(StartupInputs::load_mapped(
-        config_path,
-        default_startup_posture(),
-    )?)
+    check_inputs(
+        StartupInputs::load_mapped(config_path, default_startup_posture())?,
+        AuditOpening::CheckOnly,
+    )
     .await
 }
 
 /// Startup check over a runtime configuration the caller already loaded.
 pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
-    check_inputs(StartupInputs::from_loaded(config)?).await
+    check_inputs(StartupInputs::from_loaded(config)?, AuditOpening::CheckOnly).await
 }
 
-async fn check_inputs(inputs: StartupInputs) -> Result<CheckedStartup> {
+/// Inspect all startup dependencies and report the recorded posture even
+/// when it differs from the configuration. The prepared state is discarded.
+pub async fn check_loaded_observing_posture(config: RuntimeConfig) -> Result<CheckedStartup> {
+    check_inputs(
+        StartupInputs::from_loaded(config)?,
+        AuditOpening::ObservePosture,
+    )
+    .await
+}
+
+async fn check_inputs(inputs: StartupInputs, opening: AuditOpening) -> Result<CheckedStartup> {
     let StartupInputs { config, package } = inputs;
     let unbound_review_authorities = config.unbound_review_authorities(package.registry());
-    prepare_verified_package_with_connection(config, package, None, AuditOpening::CheckOnly)
+    prepare_verified_package_with_connection(config, package, None, opening)
         .await
         .map(|prepared| CheckedStartup {
+            recorded_posture: prepared.recorded_posture,
             postgres_advisories: prepared.postgres_advisories().to_vec(),
             role_mode: prepared.role_mode(),
             unbound_review_authorities,
@@ -1263,6 +1272,7 @@ async fn check_inputs(inputs: StartupInputs) -> Result<CheckedStartup> {
 /// of each projection it would serve.
 #[derive(Debug, Clone)]
 pub struct CheckedStartup {
+    pub recorded_posture: registry_platform_config::Posture,
     pub postgres_advisories: Vec<BaselineAdvisory>,
     pub role_mode: RoleMode,
     pub unbound_review_authorities: Vec<String>,
@@ -1540,6 +1550,7 @@ pub async fn prepare_with_connection_and_key_source_for_test(
 enum AuditOpening {
     Serve,
     CheckOnly,
+    ObservePosture,
 }
 
 async fn prepare_verified_package_with_connection(
@@ -1561,11 +1572,16 @@ async fn prepare_verified_package_with_connection(
         config.identity().database_id(),
         config.database().roles().migration(),
         config.database().roles().runtime(),
+        if opening == AuditOpening::ObservePosture {
+            StartupPurpose::ObservePosture
+        } else {
+            StartupPurpose::Serve
+        },
     )
     .await?;
     let audit = match opening {
         AuditOpening::Serve => open_registry_audit(&config).await?,
-        AuditOpening::CheckOnly => check_registry_audit(&config)?,
+        AuditOpening::CheckOnly | AuditOpening::ObservePosture => check_registry_audit(&config)?,
     };
     let cursor_codec = Arc::new(config.cursor_codec().map_err(|_| StartupError::Cursor)?);
     let key_source = config
@@ -1599,6 +1615,7 @@ async fn prepare_verified_package_with_key_source(
         config.identity().database_id(),
         config.database().roles().migration(),
         config.database().roles().runtime(),
+        StartupPurpose::Serve,
     )
     .await?;
     let audit = open_registry_audit(&config).await?;
@@ -1699,6 +1716,7 @@ async fn prepare_database_startup(
     database_id: &str,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
+    purpose: StartupPurpose,
 ) -> Result<(RuntimePool, VerifiedStartup, Vec<BaselineAdvisory>)> {
     let pool = connection
         .clone()
@@ -1717,7 +1735,7 @@ async fn prepare_database_startup(
         &mut client,
         migration_role,
         runtime_role,
-        StartupPurpose::Serve,
+        purpose,
     )
     .await?;
     let advisories = inspect_baseline(&client, pool.status().max_size).await;
@@ -1924,7 +1942,7 @@ async fn finish_prepared_server(
                 .await
                 .map_err(external_views_refused(ExternalViewsStage::RefreshRegister))?;
             unavailable_external_projections = external.unavailable_projections().clone();
-            if opening == AuditOpening::CheckOnly {
+            if opening != AuditOpening::Serve {
                 external_projection_status = external
                     .projection_status()
                     .await
@@ -2256,6 +2274,7 @@ async fn finish_prepared_server(
             app: metrics::metrics_app(registry, config.posture()),
         });
     Ok(PreparedServer {
+        recorded_posture: startup.recorded_posture,
         bind: config.listener().bind(),
         app,
         shutdown_grace: config.operational_timeouts().shutdown_grace,
@@ -2338,13 +2357,15 @@ async fn verify_attachment_storage(
             "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
          AND package_id=$1 AND database_id=$2 AND active_package_digest=$3
          AND active_activation_id::text=$4 AND schema_fingerprint=$5
-         AND maintenance_status='ready')",
+         AND maintenance_status='ready'
+         AND coalesce(to_jsonb(registry_state) ->> 'posture', 'production')=$6)",
             &[
                 &expected.package_id,
                 &expected.database_id,
                 &expected.package_digest,
                 &expected.activation_id,
                 &expected.schema_fingerprint,
+                &lock_key.posture().as_str(),
             ],
         )
         .await
@@ -2908,6 +2929,8 @@ enum StartupPurpose {
     /// Operator tooling, which must keep working on a copy so the copy can be
     /// inspected, verified, and adopted.
     Inspect,
+    /// Doctor checks dependencies and reports an activation posture mismatch.
+    ObservePosture,
 }
 
 async fn verify_opened_startup(
@@ -2988,13 +3011,13 @@ async fn verify_opened_startup(
     // The physical claim is checked before the recorded identity, so a
     // restored copy is named as a copy whatever package or database id it
     // records.
-    if purpose == StartupPurpose::Serve {
+    if purpose != StartupPurpose::Inspect {
         verify_instance_claim(&transaction).await?;
     }
     let (expected, recorded) =
         recorded_startup_identity(&transaction, &package, database_id).await?;
     let declared = package.posture();
-    if recorded != declared {
+    if recorded != declared && purpose != StartupPurpose::ObservePosture {
         return Err(StartupError::PostureMismatch { recorded, declared });
     }
     verify_single_role_activation(&transaction, &expected, migration_role, runtime_role).await?;
@@ -3021,10 +3044,11 @@ async fn verify_opened_startup(
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
     Ok(VerifiedStartup {
+        recorded_posture: recorded,
         package,
         expected,
         expected_catalog,
-        lock_key,
+        lock_key: lock_key.for_posture(recorded),
     })
 }
 

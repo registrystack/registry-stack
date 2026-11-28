@@ -848,6 +848,14 @@ fn verify_accepts_and_lists_insecure_issuer_http_only_in_development() {
             .unwrap();
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(output.status.code(), Some(expected_exit), "{report}");
+        assert_eq!(
+            report["posture"],
+            serde_json::json!({
+                "value": flags.last().copied().unwrap_or("production"),
+                "source": if flags.is_empty() { "default" } else { "flag" }
+            }),
+            "{report}"
+        );
         let finding = report["diagnostics"]
             .as_array()
             .unwrap()

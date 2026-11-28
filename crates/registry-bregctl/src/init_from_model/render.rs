@@ -1339,7 +1339,7 @@ fn readme(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "5. Package the unchanged project with `bregctl package --posture development`, or set \
-         `REGISTRY_STACK_POSTURE=development`. Both `bregctl dev` and `rstack dev` run it as is."
+         `REGISTRY_STACK_POSTURE=development`. Run it unchanged with `bregctl dev`."
     );
     out
 }

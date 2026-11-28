@@ -53,8 +53,7 @@ struct IsolatedStore {
 }
 
 async fn isolated_store_binding() -> IsolatedStore {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = crate::job_fixture::test_database_url();
     let schema = format!("adapter_job_native_{}", uuid::Uuid::new_v4().simple());
     let (admin, connection) = tokio_postgres::connect(&base, NoTls)
         .await
@@ -857,7 +856,7 @@ async fn configured_cli_pass_recovers_the_same_native_proposal_without_payload_s
             "destination-stop:adapter.job.breg-outcome-uncertain"
         ))
     );
-    assert!(first.stderr.is_empty(), "the stopped pass stays value-free");
+    job_fixture::assert_posture_logs(&first.stderr, "stopped pass", None);
     let client = store.pool.get().await.expect("a pooled store client");
     let pending = store::inspect_item(&client, "case-daily", "submissions/a")
         .await
@@ -878,10 +877,7 @@ async fn configured_cli_pass_recovers_the_same_native_proposal_without_payload_s
         serde_json::from_slice(&second.stdout).expect("the second pass report is JSON");
     assert_eq!(second_report["itemsRedelivered"], 1);
     assert_eq!(second_report["itemsAcknowledged"], 1);
-    assert!(
-        second.stderr.is_empty(),
-        "the recovered pass stays value-free"
-    );
+    job_fixture::assert_posture_logs(&second.stderr, "recovered pass", None);
 
     let proposal = proxy.proposal_id();
     assert_eq!(
@@ -1027,7 +1023,7 @@ async fn configured_cli_child_crash_reloads_credential_reference_and_recovers_th
         fenced_report.pointer("/stopped/code"),
         Some(&json!("lease-held"))
     );
-    assert!(fenced.stderr.is_empty(), "lease fencing stays value-free");
+    job_fixture::assert_posture_logs(&fenced.stderr, "lease fencing", None);
     assert_cli_output_redacted(&fenced, "fenced restart");
 
     wait_for_lease_expiry(&store.pool).await;
@@ -1046,8 +1042,14 @@ async fn configured_cli_child_crash_reloads_credential_reference_and_recovers_th
         refused.stdout, b"",
         "destination startup refusal emits no pass report"
     );
+    let mut stderr = refused.stderr.splitn(2, |byte| *byte == b'\n');
+    job_fixture::assert_posture_logs(
+        stderr.next().expect("the refusal logs startup posture"),
+        "credential refusal",
+        None,
+    );
     assert_eq!(
-        refused.stderr,
+        stderr.next().expect("the refusal emits one diagnostic"),
         b"adapter-job: adapter.job.breg-credential-refused: no bearer credential BReg accepts was obtained; check `destinations.breg-test` tokenEndpoint, clientAssertionAudience, clientId, privateKeyRef, scopes and resource, and that BReg trusts the issuer\n",
         "the unregistered key fails at the exact authenticated metadata boundary"
     );
@@ -1084,7 +1086,7 @@ async fn configured_cli_child_crash_reloads_credential_reference_and_recovers_th
         serde_json::from_slice(&recovered.stdout).expect("the recovered pass report is JSON");
     assert_eq!(recovered_report["itemsRedelivered"], 1);
     assert_eq!(recovered_report["itemsAcknowledged"], 1);
-    assert!(recovered.stderr.is_empty(), "recovery stays value-free");
+    job_fixture::assert_posture_logs(&recovered.stderr, "recovery", None);
     assert_cli_output_redacted(&recovered, "corrected credential material");
 
     assert_eq!(

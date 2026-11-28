@@ -26,6 +26,9 @@ pub mod schema;
 mod sinks;
 
 use anyhow::{ensure, Context, Result};
+use registry_platform_config::{
+    declared, DeclaredPosture, Posture, PostureError, PostureSource, DEVELOPMENT, POSTURE_ENV,
+};
 use registry_platform_yaml::{Diagnostic, Report};
 use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
@@ -524,6 +527,23 @@ fn startup_error(root: &Path, run_id: &str, error: anyhow::Error) -> anyhow::Err
     }
 }
 
+fn require_development(
+    declaration: Result<DeclaredPosture, PostureError>,
+) -> std::result::Result<(), (&'static str, &'static str, &'static str)> {
+    match declaration {
+        Err(error) => Err((error.code(), error.message(), error.suggested_action())),
+        Ok(DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Environment,
+        }) => Err((
+            "platform.posture.conflict",
+            "rstack dev runs development processes",
+            "Unset REGISTRY_STACK_POSTURE, or set it to development.",
+        )),
+        Ok(_) => Ok(()),
+    }
+}
+
 /// Run one `rstack-dev` entry inside its hosting product CLI.
 pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
     let (machine, outcome) = match args.entry {
@@ -549,6 +569,12 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
             deny_warnings,
             json,
         } => {
+            if let Err((code, message, action)) = require_development(declared(None)) {
+                let report = Report::new(vec![Diagnostic::error(code, "", message, action)]);
+                return ExitCode::from(write_check_report(
+                    report, USAGE_EXIT, json, stdout, stderr,
+                ));
+            }
             return ExitCode::from(check(&project, deny_warnings, json, stdout, stderr));
         }
         Entry::Start {
@@ -557,10 +583,16 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
             ttl,
             json,
         } => {
-            if let Some(notice) = live_run_notice(&live_run_ids(&state_dir())) {
-                let _ = writeln!(stderr, "{notice}");
-            }
-            let outcome = start(&project, application_root.as_deref(), ttl.as_deref());
+            let outcome = require_development(declared(None))
+                .map_err(|(code, message, action)| {
+                    Usage(format!("{code}: {message}. {action}")).into()
+                })
+                .and_then(|()| {
+                    if let Some(notice) = live_run_notice(&live_run_ids(&state_dir())) {
+                        let _ = writeln!(stderr, "{notice}");
+                    }
+                    start(&project, application_root.as_deref(), ttl.as_deref())
+                });
             let failed = outcome.as_ref().is_ok_and(|value| {
                 value["scenarios"].as_array().is_some_and(|scenarios| {
                     scenarios.iter().any(|item| item["result"] == "failed")
@@ -961,6 +993,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         write_private(&root.join(POSTGRES_IDENTITY), b"null")?;
         let supervisor_log = open_supervisor_log(&root)?;
         Command::new(env::current_exe()?)
+            .env(POSTURE_ENV, DEVELOPMENT)
             .arg(COMMAND)
             .arg("supervisor")
             .arg(&root)
@@ -1874,6 +1907,25 @@ fn clock() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dev_accepts_unset_and_development_and_refuses_other_declarations() {
+        use registry_platform_config::declared_from;
+        use std::ffi::OsStr;
+
+        let posture =
+            |value: Option<&str>| require_development(declared_from(None, value.map(OsStr::new)));
+        assert_eq!(posture(None), Ok(()));
+        assert_eq!(posture(Some(DEVELOPMENT)), Ok(()));
+        assert_eq!(
+            posture(Some("production")).unwrap_err().0,
+            "platform.posture.conflict"
+        );
+        assert_eq!(
+            posture(Some("staging")).unwrap_err().0,
+            "platform.posture.invalid-value"
+        );
+    }
 
     const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
 

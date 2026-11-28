@@ -432,13 +432,15 @@ impl Admission {
                 "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
              AND package_id=$1 AND database_id=$2 AND active_package_digest=$3
              AND active_activation_id::text=$4 AND schema_fingerprint=$5
-             AND maintenance_status='ready')",
+             AND maintenance_status='ready'
+             AND coalesce(to_jsonb(registry_state) ->> 'posture', 'production')=$6)",
                 &[
                     &expected.package_id,
                     &expected.database_id,
                     &expected.package_digest,
                     &expected.activation_id,
                     &expected.schema_fingerprint,
+                    &self.lock_key.posture().as_str(),
                 ],
             )
             .await

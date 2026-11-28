@@ -37,19 +37,41 @@
   settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
 - BREAKING: `bregctl package --local` is removed. Migration: Use bregctl package --posture development.
 - BREAKING: `bregctl apply` and `plan` refuse a database activated in the
-  other posture, and `status` and `doctor` report it. Migration: Recreate development databases: a fresh apply is the way.
-- Commands that read a runtime file accept `--posture`. Their JSON reports
-  include the declared `posture` and its source.
+  other posture, and `status` and `doctor` report it. Recreate development
+  databases and apply the package with development declared. For a retained session, run `bregctl dev stop --remove`, then `bregctl dev start`.
+- `bregctl check`, `test`, `plan`, `apply`, `status`, `doctor`, `verify`,
+  and the migration commands accept `--posture`. Their JSON reports include
+  the resolved posture and its source. `provision` accepts the declaration
+  and uses the shared provisioning report format.
+- `bregctl doctor` no longer reports `authentication.insecure-http`.
+  Development settings appear in its advisories and startup lists them.
+  A posture mismatch appears in the normal doctor report, including
+  `checked`, `roleMode`, and `advisories`, and doctor exits 0 if its other
+  checks pass. `status` and `doctor` locate the finding at `/database`.
+- `bregctl migration reconcile` and the timer operator report
+  `breg.activation.posture-mismatch` when the recorded posture differs.
+- `bregctl verify`, `migration explain`, runtime-bound `diff`, and runtime-backed
+  generation include accepted development settings in their success diagnostics.
+  Hook listing, Proposal retention, and idempotency retention preserve
+  runtime posture refusal codes, pointers, and remedies.
+- `bregctl generate odrl` refuses an incompatible `--runtime-config` selector
+  with `identity-facts.arguments` before writing output.
 - `bregctl dev` declares development for its child processes and marks the
   audit hash key it creates as `development-generated`. It refuses an
   explicit production declaration.
-- `bregctl data export` refuses a development peer when it runs in production.
+- `bregctl data import`, `data runs list`, `data runs cancel`,
+  `statistics publish`, and `statistics withdraw` now accept `--posture`.
+  These commands and `data export` accept development peers in development.
+  In production, export reports `data.export.development-peer` for a
+  development peer.
 
 - **Breaking.** Production is the default posture. It refuses
   `authentication.oidc.allowInsecureHttp: true` in place of the former startup
   warning. It also refuses `authentication.oidc.jwksSource.type: test-issuer`,
   `audit.hashKeyCustody: development-generated`, `fieldEncryption.provider.type: local-file`,
-  a placeholder `canonicalBaseIri` and an HTTP `/listener/publicOrigin`. Use production
+  a placeholder `canonicalBaseIri` and a loopback HTTP `/listener/publicOrigin`.
+  Non-loopback HTTP public origins are refused in either posture with
+  `breg.runtime.invalid-listener`. Use production
   settings for deployments and declare `REGISTRY_STACK_POSTURE=development`
   or `--posture development` for local runs that need these settings.
 - **Breaking.** Delete the retired `identity.databaseInitializationEnvironment`
@@ -72,7 +94,7 @@
 - Development responses carry `Registry-Posture: development`. A development
   runtime accepts a development task-grant peer.
 - BReg omits HSTS on development loopback listeners. Production keeps HSTS
-  on every listener, including a loopback bind behind a TLS proxy.
+  on every API listener, including a loopback bind behind a TLS proxy.
 - PostgreSQL supports `database.transport: loopback-plaintext` in either posture
   and `private-network-plaintext` in development.
 

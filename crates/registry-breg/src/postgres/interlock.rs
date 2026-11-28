@@ -89,6 +89,7 @@ pub(crate) struct MaintenanceTransition<'a> {
 /// under the exclusive apply lock.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MaintenanceSnapshot {
+    pub posture: registry_platform_config::Posture,
     pub identity: ExpectedRegistryIdentity,
     pub maintenance_status: String,
     pub maintenance_target_package_digest: Option<String>,
@@ -2524,7 +2525,8 @@ impl DedicatedApplyConnection {
             .query_opt(
                 "SELECT package_id, database_id, active_package_digest,
                         active_activation_id::text, schema_fingerprint,
-                        maintenance_status, maintenance_target_package_digest
+                        maintenance_status, maintenance_target_package_digest,
+                        coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
                  FROM registry_internal.registry_state
                  WHERE singleton",
                 &[],
@@ -2553,6 +2555,7 @@ impl DedicatedApplyConnection {
             },
             maintenance_status: row.try_get(5)?,
             maintenance_target_package_digest: row.try_get(6)?,
+            posture: super::catalog::recorded_posture(row.try_get(7)?)?,
         })
     }
 
@@ -4904,7 +4907,8 @@ async fn read_activation_status_in(
         .query_opt(
             "SELECT package_id, database_id, active_package_digest,
                     active_activation_id::text, schema_fingerprint,
-                    maintenance_status, maintenance_target_package_digest
+                    maintenance_status, maintenance_target_package_digest,
+                        coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -4923,6 +4927,7 @@ async fn read_activation_status_in(
         },
         maintenance_status: row.try_get(5)?,
         maintenance_target_package_digest: row.try_get(6)?,
+        posture: super::catalog::recorded_posture(row.try_get(7)?)?,
     };
     let rows = transaction
         .query(

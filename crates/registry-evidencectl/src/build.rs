@@ -158,6 +158,7 @@ fn run_inner(
                     "authority": args.output.join("compiled-authority.yaml"),
                     "packageDigest": checked.package_digest,
                     "requirements": checked.requirements,
+                    "diagnostics": checked.diagnostics,
                     "revision": args.revision,
                     "requiredSecrets": secret_references,
                     "proofBoundary": "offline deployment candidate compilation and fixture validation"
@@ -196,6 +197,7 @@ fn run_inner(
 pub(crate) fn validated_question_revisions(
     project: &Path,
     target: &Path,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<BTreeMap<String, String>> {
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
     let interruption = BuildInterruption::passive();
@@ -210,7 +212,7 @@ pub(crate) fn validated_question_revisions(
             fixtures: &compiled.fixture_paths,
         },
         &interruption,
-        crate::DEFAULT_POSTURE,
+        declared,
     )?;
     for fixture in &compiled.fixture_paths {
         run_bundle_fixture(
@@ -219,6 +221,7 @@ pub(crate) fn validated_question_revisions(
             fixture,
             project,
             &interruption,
+            declared,
         )?;
     }
     Ok(report
@@ -457,6 +460,7 @@ fn prepare_candidate(
             fixture,
             project,
             interruption,
+            declared,
         )?;
     }
     // Secret references are collected only after the delegated bundle check
@@ -534,7 +538,7 @@ fn run_bundle_check_report(
     let output = run_evidence(command, interruption, true, true)?;
     if !output.status.success() {
         if let Some(report) = crate::authored::runtime_refusal(&output.stdout) {
-            let report = crate::authored::runtime_target_refusal(report, runtime, target);
+            let report = crate::authored::runtime_target_refusal(report, runtime, bundle, target);
             return Err(
                 crate::authored::runtime_bundle_refusal(report, bundle, project, fixtures).into(),
             );
@@ -545,7 +549,15 @@ fn run_bundle_check_report(
             bounded_diagnostic(&output.stderr).as_deref(),
         );
     }
-    parse_bundle_check_report(&output.stdout)
+    let mut checked = parse_bundle_check_report(&output.stdout)?;
+    checked.diagnostics = crate::authored::runtime_target_refusal(
+        registry_platform_yaml::Report::new(checked.diagnostics),
+        runtime,
+        bundle,
+        target,
+    )
+    .into_diagnostics();
+    Ok(checked)
 }
 
 #[derive(Debug, Deserialize)]
@@ -637,10 +649,12 @@ fn run_bundle_fixture(
     fixture: &str,
     project: &Path,
     interruption: &BuildInterruption,
+    declared: DeclaredPosture,
 ) -> Result<()> {
     let mut command = Command::new(evidence_bin);
     command
         .arg("bundle-evaluate")
+        .args(["--posture", declared.posture.as_str()])
         .arg("--bundle")
         .arg(bundle)
         .arg("--fixture")

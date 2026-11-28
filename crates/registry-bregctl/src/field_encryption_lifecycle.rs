@@ -157,6 +157,7 @@ pub(crate) fn run_preflight(
         .block_on(preflight_field_encryption_backfill_with_connection(
             &connection,
             FieldEncryptionBackfillPreflightRequest {
+                posture: config.posture(),
                 expected: &expected,
                 migration_role: config.database().roles().migration(),
                 timeouts,
@@ -228,7 +229,8 @@ pub(crate) fn run_erase_history(
         .audit_profile()
         .map_err(FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig)?;
     let lock_key = RegistryLockKey::derive(&package.manifest().package_id)
-        .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration)?;
+        .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration)?
+        .for_posture(config.posture());
     let timeouts = FieldEncryptionBackfillTimeouts::new(
         bounded_erase_timeout(config.operational_timeouts().migration_lock)?,
         bounded_erase_timeout(config.operational_timeouts().migration_statement)?,

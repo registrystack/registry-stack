@@ -122,7 +122,7 @@ pub(crate) fn run(
         )
         .into());
     }
-    let baseline = inspect_baseline_package(request.baseline_package)
+    let baseline = inspect_baseline_package(posture, request.baseline_package)
         .map_err(|error| baseline_package_failure(COMMAND, error))?;
     if baseline.package_id() != compiled.registry_id() {
         return Err(candidate_failure(
@@ -153,7 +153,8 @@ pub(crate) fn run(
         },
         COMMAND,
         false,
-        None,
+        posture,
+        false,
     )?;
     if candidate.registry().revision() != compiled.revision() {
         return Err(candidate_failure(

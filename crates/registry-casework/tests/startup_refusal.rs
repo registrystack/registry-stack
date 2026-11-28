@@ -444,3 +444,24 @@ fn development_startup_logs_the_settings_before_opening_dependencies() {
         );
     }
 }
+
+#[test]
+fn invalid_posture_is_a_usage_error_before_runtime_loading() {
+    let output = Command::new(env!("CARGO_BIN_EXE_casework"))
+        .args([
+            "--posture",
+            "bogus",
+            "--runtime-config",
+            "/unused/runtime.yaml",
+            "serve",
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "casework: [platform.posture.invalid-value] --posture was given a value that is not a posture\n  next: Pass --posture development or --posture production.\n"
+    );
+}

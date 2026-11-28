@@ -281,21 +281,7 @@ pub struct JournalEvent {
 /// Append one event row, stamped `occurred_at` from the runtime clock at
 /// the event. The caller journals before answering, so the stamp is the
 /// event's instant, not the response's.
-pub async fn append(
-    client: &impl GenericClient,
-    event: JournalEvent,
-    occurred_at: SystemTime,
-) -> Result<(), JournalError> {
-    append_in_posture(
-        client,
-        event,
-        occurred_at,
-        registry_platform_config::Posture::Production,
-    )
-    .await
-}
-
-pub(crate) async fn append_in_posture(
+pub async fn append_in_posture(
     client: &impl GenericClient,
     event: JournalEvent,
     occurred_at: SystemTime,

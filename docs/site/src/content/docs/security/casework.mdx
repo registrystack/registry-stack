@@ -239,7 +239,10 @@ The residuals refer to these obligations by number.
 8. Use an HTTPS issuer and list the admitted OAuth clients. Production refuses `authentication.oidc.allowInsecureHttp: true` and `allowedClients: unrestricted`.
    Declare only issuer and JWKS addresses you intend Casework to reach (`CASEWORK-RES-08`).
    {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http,
-       insecure_http_startup_diagnostic. */}
+       unrestricted_clients_setting;
+       crates/registry-platform-config/src/posture.rs, log_startup;
+       crates/registry-casework/tests/startup_refusal.rs,
+       development_startup_logs_the_settings_before_opening_dependencies. */}
 9. When a signing key is compromised or retiring, list its `kid` in
    `authentication.oidc.revokedKeyIds`, and list the `kid` of any republished copy of that key too.
    Restart every instance, because the list is read at startup.
@@ -385,7 +388,10 @@ identifiers.
 - Related: `CASEWORK-SEC-01`.
 
 {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http,
-    insecure_http_startup_diagnostic;
+    unrestricted_clients_setting;
+    crates/registry-platform-config/src/posture.rs, log_startup;
+    crates/registry-casework/tests/startup_refusal.rs,
+    development_startup_logs_the_settings_before_opening_dependencies;
     crates/registry-casework/tests/human_identity_auth.rs,
     same_role_profiles_on_one_principal_claim_are_selected_by_their_own_scope and
     same_role_profiles_require_distinct_scopes. */}
@@ -430,19 +436,6 @@ identifiers.
     crates/registry-casework/tests/review_acceptance_postgres.rs,
     reference_selection_conceals_before_sort_and_rejects_stale_continuation. */}
 
-## Report a vulnerability
-
-Report a suspected vulnerability through the process in
-[Report a vulnerability](../report-a-vulnerability/).
-
-## Next
-
-- [Security](../)
-- [Deploy Registry Casework](../../operate/casework/)
-- [Registry Casework runtime configuration reference](../../reference/casework-configuration/)
-- [Registry Casework task grants](../../reference/casework-task-grants/)
-- [Report a vulnerability](../report-a-vulnerability/)
-
 ## Development posture
 
 Development Casework marks HTTP responses with `Registry-Posture: development`,
@@ -456,3 +449,16 @@ Production signing uses Transit.
     crates/registry-casework/src/runtime.rs open_audit;
     crates/registry-casework/src/task_grants.rs POSTURE_CLAIM;
     crates/registry-platform-httputil/src/lib.rs RefuseDevelopmentPeer */}
+
+## Report a vulnerability
+
+Report a suspected vulnerability through the process in
+[Report a vulnerability](../report-a-vulnerability/).
+
+## Next
+
+- [Security](../)
+- [Deploy Registry Casework](../../operate/casework/)
+- [Registry Casework runtime configuration reference](../../reference/casework-configuration/)
+- [Registry Casework task grants](../../reference/casework-task-grants/)
+- [Report a vulnerability](../report-a-vulnerability/)

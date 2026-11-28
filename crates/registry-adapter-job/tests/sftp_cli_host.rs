@@ -6,6 +6,9 @@
 
 #![cfg(all(feature = "job-sftp", feature = "postgres-test"))]
 
+#[path = "support/job_fixture.rs"]
+mod job_fixture;
+
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr as _;
@@ -185,8 +188,7 @@ fn runtime_json(server: &SftpSourceServer) -> Vec<u8> {
 }
 
 async fn isolated_store_url() -> String {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = crate::job_fixture::test_database_url();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("test clock")
@@ -244,7 +246,11 @@ fn report(output: &std::process::Output) -> Value {
         "SFTP pass failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stderr.is_empty(), "the pass stays value-free");
+    job_fixture::assert_posture_logs(
+        &output.stderr,
+        "SFTP pass",
+        Some("/endpoints/0/anonymousHttps"),
+    );
     serde_json::from_slice(&output.stdout).expect("pass report JSON")
 }
 

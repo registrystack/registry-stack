@@ -242,6 +242,29 @@ fn check_file(loader: &RuntimeConfigLoader, text: &str) -> crate::RuntimeFileChe
 }
 
 #[test]
+fn checking_captured_bytes_matches_a_file_check_without_refusing_production() {
+    let loader = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Production));
+    let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let path = directory.path().join("runtime.yaml");
+    let bytes = every_setting();
+    fs::write(&path, &bytes).unwrap();
+    let file = loader.check_offline::<Example>(&path, true, |_| DEFAULT_STAND_IN);
+    fs::remove_file(&path).unwrap();
+    let captured =
+        loader.check_offline_bytes::<Example>(&path, bytes.as_bytes(), true, |_| DEFAULT_STAND_IN);
+    assert_eq!(captured.diagnostics, file.diagnostics);
+    assert!(captured.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "platform.posture.insecure-issuer-http"
+            && diagnostic.severity == Severity::Error
+    }));
+    let loaded = captured
+        .loaded
+        .expect("reporting-only inspection decodes production");
+    assert!(loaded.development.is_none());
+    assert_eq!(loaded.posture.posture(), Posture::Production);
+}
+
+#[test]
 fn the_offline_check_in_production_decodes_the_file_and_reports_each_setting_as_an_error() {
     let loader = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Production));
     let check = check_file(&loader, &every_setting());

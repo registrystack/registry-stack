@@ -207,6 +207,13 @@ impl HookOperatorService {
     ) -> Result<Self, HookOperatorError> {
         let config =
             load_runtime_config(path, posture).map_err(|_| HookOperatorError::Unavailable)?;
+        Self::from_loaded_config(config, execute_local_hooks).await
+    }
+
+    pub async fn from_loaded_config(
+        config: crate::runtime_config::RuntimeConfig,
+        execute_local_hooks: bool,
+    ) -> Result<Self, HookOperatorError> {
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => {
                 HookOperatorError::PackagePinMismatch(mismatch)

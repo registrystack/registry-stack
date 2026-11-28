@@ -81,7 +81,7 @@ const HOLDER_KEY_COORDINATE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 /// What a caller must send as `requestNonce`, stated on the property so an
 /// OpenAPI reader sees it beside the pattern rather than only in a comment.
 const REQUEST_NONCE_DESCRIPTION: &str = "32 bytes from a cryptographically secure random source, encoded as unpadded base64url (43 characters), generated anew for each request. Registry Evidence echoes it as requestNonce in the signed payload; compare that echo with the value you sent. A value in any other form is refused with request.nonce-invalid.";
-const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 11] = [
+const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 12] = [
     (
         "evidence.invalid-request",
         400,
@@ -105,6 +105,12 @@ const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 11] = [
         401,
         "Bearer access token is invalid",
         "bearer access token validation failed",
+    ),
+    (
+        "platform.task-grant.development-assertion",
+        401,
+        "Development task assertion refused",
+        "task grant was issued in the development posture",
     ),
     (
         "evidence.denied",
@@ -833,6 +839,7 @@ fn problem_schema() -> Value {
                     "https://id.registrystack.org/problems/registry-evidence/request/nonce-invalid",
                     "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid",
                     "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
+                    "https://id.registrystack.org/problems/registry-evidence/platform/task-grant/development-assertion",
                     "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
                     "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
                     "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
@@ -844,7 +851,7 @@ fn problem_schema() -> Value {
             },
             "title": {"type": "string", "enum": [
                 "Evidence request is invalid", "Request nonce is invalid", "Selector is invalid",
-                "Bearer access token is invalid",
+                "Bearer access token is invalid", "Development task assertion refused",
                 "Evidence request is not permitted", "Requested format is not supported",
                 "Evidence could not be produced", "Evidence request rate is exhausted",
                 "Authoritative source is unavailable", "Service is unavailable", "Requested resource was not found"
@@ -852,14 +859,15 @@ fn problem_schema() -> Value {
             "status": {"type": "integer", "enum": [400, 401, 403, 404, 406, 422, 429, 503]},
             "code": {"type": "string", "enum": [
                 "evidence.invalid-request", "request.nonce-invalid", "request.selector-invalid",
-                "auth.invalid-credential", "evidence.denied", "format.unsupported", "evidence.unavailable",
+                "auth.invalid-credential", "platform.task-grant.development-assertion", "evidence.denied", "format.unsupported", "evidence.unavailable",
                 "evidence.rate-limited", "source.unavailable", "service.unavailable", "resource.not-found"
             ]},
             "detail": {"type": "string", "enum": [
                 "the Evidence request is invalid",
                 "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request",
                 "selector does not match an available request profile",
-                "bearer access token validation failed", "the Evidence request is not permitted",
+                "bearer access token validation failed",
+                "task grant was issued in the development posture", "the Evidence request is not permitted",
                 "the requested format is not supported", "evidence could not be produced for this request",
                 "the Evidence request rate is exhausted", "the authoritative source is unavailable",
                 "the request could not be served", "the requested resource was not found"
@@ -1438,7 +1446,7 @@ fn openapi_document(
                 "status": {"type": "string", "enum": ["ready"]},
                 "posture": {"type": "string", "enum": ["development", "production"]},
                 "developmentSettings": {"type": "array", "items": {
-                    "type": "object", "additionalProperties": false, "required": ["code", "pointer"],
+                    "type": "object", "additionalProperties": false, "required": ["code"],
                     "properties": {"code": {"type": "string"}, "pointer": {"type": "string"}}
                 }}
             }
@@ -1482,7 +1490,7 @@ fn openapi_document(
                         "401": {
                             "description": "Authentication failed",
                             "headers": evidence_response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
-                            "content": problem_content(&["auth.invalid-credential"])
+                            "content": problem_content(&["auth.invalid-credential", "platform.task-grant.development-assertion"])
                         },
                         "403": {
                             "description": "Request is not authorized, including a recognized response format the bundle or matched grant does not permit",
@@ -1540,7 +1548,7 @@ fn openapi_document(
                         "401": {
                             "description": "Authentication failed",
                             "headers": evidence_response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
-                            "content": problem_content(&["auth.invalid-credential"])
+                            "content": problem_content(&["auth.invalid-credential", "platform.task-grant.development-assertion"])
                         },
                         "403": {
                             "description": "At least one batch item is not authorized for signed audience-scoped evidence",
@@ -1586,7 +1594,7 @@ fn openapi_document(
                         "401": {
                             "description": "Authentication failed",
                             "headers": response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
-                            "content": problem_content(&["auth.invalid-credential"])
+                            "content": problem_content(&["auth.invalid-credential", "platform.task-grant.development-assertion"])
                         },
                         "429": {
                             "description": "Request rate exceeded",
@@ -2160,9 +2168,11 @@ mod tests {
         }
 
         assert_eq!(
-            document["paths"]["/v1/evidence"]["post"]["responses"]["401"]["content"]
-                ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
-            json!(["auth.invalid-credential"])
+            problem_codes(&document["paths"]["/v1/evidence"]["post"]["responses"]["401"]),
+            [
+                "auth.invalid-credential",
+                "platform.task-grant.development-assertion"
+            ]
         );
         assert_eq!(
             document["paths"]["/ready"]["get"]["responses"]["503"]["content"]

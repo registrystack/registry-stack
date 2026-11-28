@@ -343,7 +343,7 @@ fn schemas() -> Value {
                 "posture": {"enum": ["development", "production"]},
                 "developmentSettings": {
                     "type": "array",
-                    "items": {"type": "object", "required": ["code", "pointer"], "additionalProperties": false,
+                    "items": {"type": "object", "required": ["code"], "additionalProperties": false,
                         "properties": {"code": {"type": "string"}, "pointer": {"type": "string"}}}
                 }
             },

@@ -300,7 +300,7 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
             destination.join(crate::FIXTURE_JOURNEYS_PATH).display()
         ),
         format!(
-            "replace canonicalBaseIri in {} before you build a production package. The derived value is a reserved .invalid name. Package the unchanged project with 'bregctl package --posture development', or set REGISTRY_STACK_POSTURE=development. Both 'bregctl dev' and 'rstack dev' run it as is",
+            "replace canonicalBaseIri in {} before you build a production package. The derived value is a reserved .invalid name. Package the unchanged project with 'bregctl package --posture development', or set REGISTRY_STACK_POSTURE=development. Run it unchanged with 'bregctl dev'",
             destination.join("registry.yaml").display()
         ),
         format!(
@@ -465,6 +465,13 @@ mod tests {
         )
         .map_err(tool_failure)
         .unwrap_or_else(|failure| panic!("{}", serde_json::to_string_pretty(&failure).unwrap()));
+        assert!(report.next_steps.iter().any(|step| {
+            step.contains("bregctl package --posture development")
+                && step.contains("REGISTRY_STACK_POSTURE=development")
+        }));
+        let readme = std::fs::read_to_string(destination.join("README.md")).unwrap();
+        assert!(readme.contains("`bregctl package --posture development`"));
+        assert!(readme.contains("`REGISTRY_STACK_POSTURE=development`"));
         let step = &report.next_steps[1];
         assert!(
             step.contains("required scopes and purposes bound whole-collection access"),

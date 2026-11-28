@@ -41,6 +41,7 @@ fn check(path: &Path, extra: &[&str]) -> Output {
         .arg("--runtime-config")
         .arg(path)
         .args(extra)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("EVIDENCE_OID4VCI_CONFIG")
         .env_remove("EVIDENCE_OID4VCI_RUNTIME_CONFIG")
         .output()
@@ -87,6 +88,33 @@ fn the_committed_example_passes_in_both_formats() {
         String::from_utf8(output.stderr).unwrap(),
         "0 errors, 0 warnings in 1 file\n"
     );
+}
+
+#[test]
+fn supervised_validation_listing_does_not_fail_deny_warnings() {
+    let text = example().replace(
+        "credentialIssuer: https://wallet.example.org",
+        "credentialIssuer: http://127.0.0.1:8090\nvalidationMode: supervised-local-development",
+    );
+    let (_root, path) = write(&text);
+    let output = check(
+        &path,
+        &[
+            "--posture",
+            "development",
+            "--deny-warnings",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(codes(&json(&output))
+        .iter()
+        .any(|code| code == "evidence.posture.supervised-validation"));
 }
 
 #[test]

@@ -7,13 +7,12 @@
 - BREAKING: Evidence runs local assurance in development and production or evidence-grade assurance in production. Migration: Use `assuranceProfile: local` under development, and build a production bundle for production.
 - BREAKING: Credential-free Evidence source bindings require development. Migration: Bind an `mtlsIdentity` or an authenticated endpoint for production sources.
 - BREAKING: OID4VCI supervised validation requires development. Migration: Declare development for `validationMode: supervised-local-development`.
-- BREAKING: OID4VCI `offers.allowInsecureHttp: true` and unrestricted offer gates require development. The former `evidence.oid4vci.offer-gate-unrestricted` and `evidence.oid4vci.supervised-endpoint` codes have been removed. Migration: Delete `allowInsecureHttp` where the issuer is on loopback, which requires no setting in any posture. Update scripts that match the old codes.
+- BREAKING: OID4VCI `offers.allowInsecureHttp: true` and unrestricted offer gates require development. Migration: Match `evidence.posture.unrestricted-offer-gate` in place of `evidence.oid4vci.offer-gate-unrestricted`. For a called origin using HTTP beyond loopback, match `evidence.oid4vci.https-required` in place of `evidence.oid4vci.supervised-endpoint`. Loopback HTTP called origins need no opt-in.
 - BREAKING: Successful `/ready` responses include `posture` and `developmentSettings`. Migration: No change for probes that read the status code.
 - BREAKING: Audit lines include `posture`. Migration: Audit readers with a closed line parser accept the posture member.
-- BREAKING: Development responses carry `Registry-Posture: development`. Production runtimes refuse development task assertions, and production peers refuse marked development responses where peer policy is configured. Migration: Point production runtimes at production peers.
+- BREAKING: Development responses carry `Registry-Posture: development`. Production runtimes refuse development task assertions with `platform.task-grant.development-assertion`, and production peers refuse marked development responses where peer policy is configured. Migration: Point production runtimes at production peers.
 - Added `--posture` to the runtime configuration commands and to the corresponding `evidencectl` commands. Tool reports include the declared posture.
-- OID4VCI called origins and OID4VP issuers permit loopback HTTP in either posture.
-
+- OID4VCI called origins and OID4VP issuers permit loopback HTTP in either posture. Strict OID4VCI requires HTTPS for `tokenClient.clientAssertionAudience`.
 
 - `evidence doctor` judges secret files with the runtime's rule. It no
   longer demands exactly `0400` or `0600`, and it accepts a link chain that

@@ -2319,6 +2319,7 @@ formats:
     syntax: json
     audience: generated
     stability: unpromised
+    buildArtifact: true
     current:
       apiVersion: id.registrystack.org/formats/discovery/index/v1alpha1
       kind: DiscoveryIndex
@@ -2335,7 +2336,7 @@ formats:
       differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
     reader:
       crate: registry-discovery
-      file: crates/registry-discovery/src/startup.rs
+      file: crates/registry-discovery/src/package.rs
       function: load_index
       type: DiscoveryIndex
     check: discoveryctl check --index {file}

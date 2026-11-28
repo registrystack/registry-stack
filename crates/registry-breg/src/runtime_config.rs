@@ -173,7 +173,7 @@ const REMOVED_KEYS: &[RemovedKey] = &[
     },
     RemovedKey {
         path: "identity.databaseInitializationEnvironment",
-        replacement: "Delete identity.databaseInitializationEnvironment; if it said local, declare development.",
+        replacement: "Delete identity.databaseInitializationEnvironment. If it said local, recreate the development database and apply the package with development declared.",
     },
     RemovedKey {
         path: "database.url",
@@ -315,7 +315,7 @@ impl ReaderRefusal {
             ReaderRefusalKind::Diagnostics(diagnostics) => diagnostics
                 .iter()
                 .find(|diagnostic| diagnostic.severity == Severity::Error)
-                .unwrap_or(&diagnostics[0]),
+                .unwrap_or_else(|| diagnostics.first().expect("a refusal has a diagnostic")),
         }
     }
 }
@@ -677,8 +677,17 @@ impl RuntimeConfigError {
     /// then the summary line.
     #[must_use]
     pub fn render_human(&self, file: Option<&Path>) -> String {
-        let mut report = Report::new(self.diagnostics(file));
-        report.set_files_checked(1);
+        let diagnostics = self.diagnostics(file);
+        let runtime_file = file.map(Path::to_string_lossy);
+        let files = diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.source.as_ref())
+            .map(|source| source.file.as_str())
+            .chain(runtime_file.as_deref())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let mut report = Report::new(diagnostics);
+        report.set_files_checked(files.max(1));
         report.render_human()
     }
 }
@@ -755,28 +764,64 @@ pub(crate) fn load_verified_startup_config(
         Err(error) if !pending_refusal => return Err(StartupError::RuntimeConfig(error)),
         config => config,
     };
-    package
-        .check()
-        .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidPackage))?;
-    validate_existing_directory(
-        &package.root,
-        RuntimeConfigError::UnsafePackageRoot,
-        RuntimeConfigError::PackageRootUnavailable,
-    )
-    .map_err(StartupError::RuntimeConfig)?;
-    let shared = package
-        .verify_package(&crate::package::shared_package_limits(), "bregctl package")
-        .map_err(|error| {
-            StartupError::PackageEnvelopeRefused(error.naming_root_as("package.root").to_string())
-        })?;
-    let verified = crate::package::load_verified_package_for_startup(
-        &package.root,
-        &PackageLoadContext {
-            posture: declared.posture,
-        },
-        &shared,
-    )
-    .map_err(StartupError::PackageRefused)?;
+    let verify_package = || {
+        package
+            .check()
+            .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidPackage))?;
+        validate_existing_directory(
+            &package.root,
+            RuntimeConfigError::UnsafePackageRoot,
+            RuntimeConfigError::PackageRootUnavailable,
+        )
+        .map_err(StartupError::RuntimeConfig)?;
+        let shared = package
+            .verify_package(&crate::package::shared_package_limits(), "bregctl package")
+            .map_err(|error| {
+                StartupError::PackageEnvelopeRefused(
+                    error.naming_root_as("package.root").to_string(),
+                )
+            })?;
+        crate::package::load_verified_package_for_startup(
+            &package.root,
+            &PackageLoadContext {
+                posture: declared.posture,
+            },
+            &shared,
+        )
+        .map_err(StartupError::PackageRefused)
+    };
+    let verified = match verify_package() {
+        Ok(verified) => verified,
+        Err(error) if pending_refusal => {
+            let mut diagnostics = report.diagnostics(path);
+            match error {
+                StartupError::RuntimeConfig(cause) => {
+                    diagnostics.extend(cause.diagnostics(Some(path)))
+                }
+                StartupError::PackageEnvelopeRefused(message) => {
+                    diagnostics.push(Diagnostic::error(
+                        "startup.package.refused",
+                        "/package/root",
+                        message,
+                        "Verify package.root and deploy the complete reviewed package.",
+                    ))
+                }
+                StartupError::PackageRefused(cause) => diagnostics.push(Diagnostic::error(
+                    "startup.package.refused",
+                    "/package/root",
+                    cause.to_string(),
+                    "Verify package.root and deploy the complete reviewed package.",
+                )),
+                _ => unreachable!(
+                    "verifying the package returns only package configuration or closure errors"
+                ),
+            }
+            return Err(StartupError::RuntimeConfig(RuntimeConfigError::Reader(
+                ReaderRefusal(ReaderRefusalKind::Diagnostics(diagnostics)),
+            )));
+        }
+        Err(error) => return Err(error),
+    };
     decide_startup_posture(&mut report, &verified, path, &package.root)
         .map_err(StartupError::RuntimeConfig)?;
     let mut config = config.map_err(StartupError::RuntimeConfig)?;
@@ -879,11 +924,30 @@ pub fn check_runtime_config(
     registry: Option<&CompiledRegistry>,
     declared: DeclaredPosture,
 ) -> RuntimeConfigCheck {
-    let mut check = runtime_config_loader(declared).check_offline::<RawRuntimeConfig>(
+    // Decode gated values for offline validation only. The declared posture
+    // still decides the reported severity, and this configuration never runs.
+    let validation_posture = DeclaredPosture {
+        posture: Posture::Development,
+        source: declared.source,
+    };
+    let mut check = runtime_config_loader(validation_posture).check_offline::<RawRuntimeConfig>(
         path,
         substitute,
         runtime_stand_in,
     );
+    if declared.posture == Posture::Production {
+        if let Some(loaded) = &mut check.loaded {
+            let mut report = PostureReport::new(declared);
+            for setting in loaded.posture.settings() {
+                report.record(setting.clone());
+            }
+            for setting in loaded.posture.explicit_settings() {
+                report.record_explicit(setting.clone());
+            }
+            check.diagnostics = report.diagnostics(path);
+            loaded.posture = report;
+        }
+    }
     let id_collisions = check
         .loaded
         .as_ref()
@@ -3569,10 +3633,15 @@ impl registry_platform_config::DevelopmentClass for RawPublicOrigin {
         &[&BREG_HTTP_PUBLIC_ORIGIN];
 
     fn development_setting(&self) -> Option<&'static registry_platform_config::DevelopmentSetting> {
-        self.0
-            .split_once(':')
-            .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("http"))
-            .then_some(&BREG_HTTP_PUBLIC_ORIGIN)
+        let uri: axum::http::Uri = self.0.parse().ok()?;
+        let host = uri
+            .authority()?
+            .host()
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        (uri.scheme() == Some(&axum::http::uri::Scheme::HTTP)
+            && registry_platform_httputil::loopback::loopback_host(host).is_some())
+        .then_some(&BREG_HTTP_PUBLIC_ORIGIN)
     }
 }
 

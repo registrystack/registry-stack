@@ -156,6 +156,11 @@ Job commands default to production and accept `--posture development` or
 The job store defaults to verified TLS. Set `store.transport: loopback-plaintext`
 for a Unix socket, numeric loopback address or `localhost`.
 In development the job store also accepts `private-network-plaintext`.
+If the last pass recorded a different posture, the job refuses to run or preview with `adapter.job.posture-mismatch`.
+Use a fresh store when you change posture.
+Run `adapter-job status` to see both the recorded and declared posture.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs status_reports_a_pass_recorded_in_a_different_posture. */}
 A PostgreSQL source on a Unix socket, numeric loopback or `localhost` can use
 `tls: {type: loopback-plaintext}` in either posture.
 

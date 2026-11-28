@@ -408,6 +408,120 @@ fn source_recipe_harness_refuses_missing_assembly_inputs() {
 
 #[test]
 #[ignore = "exact gate: needs the real Evidence binary in EVIDENCE_BIN"]
+fn source_review_commands_accept_a_local_target_only_under_development() {
+    source_review_commands_use_local_target(false);
+}
+
+#[test]
+fn source_review_commands_forward_posture_to_every_delegated_validation() {
+    source_review_commands_use_local_target(true);
+}
+
+fn source_review_commands_use_local_target(recording: bool) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let recipe = recipe_root("dhis2-tracker");
+
+    for name in ["import", "diff", "update"] {
+        for (mode, posture) in [
+            ("flag", "development"),
+            ("environment", "development"),
+            ("default", "production"),
+        ] {
+            let workspace = tempfile::tempdir().unwrap();
+            let project = workspace.path().join("project");
+            copy_tree(&recipe.join("fixture-validation"), &project);
+            let target = project.join("local-target.yaml");
+            assert_success(&evidencectl([
+                OsStr::new("source"),
+                OsStr::new("import"),
+                recipe.as_os_str(),
+                OsStr::new("--project"),
+                project.as_os_str(),
+            ]));
+            let definition =
+                fs::read_to_string(project.join("assertion-definitions.yaml")).unwrap();
+            let authored = project.join("evidence.yaml");
+            let seed = fs::read_to_string(&authored).unwrap();
+            assert!(seed.contains("assertionDefinitions:\n"));
+            fs::write(
+                &authored,
+                seed.replacen(
+                    "assertionDefinitions:\n",
+                    &format!("assertionDefinitions:\n{definition}"),
+                    1,
+                ),
+            )
+            .unwrap();
+            let log = workspace.path().join("calls");
+            let evidence = if recording {
+                let executable = workspace.path().join("evidence");
+                let digest = format!("sha256:{}", "0".repeat(64));
+                fs::write(&executable, format!(
+                    r#"#!/bin/sh
+printf '%s\n' "$*" >> "$EVIDENCE_RECORDED_CALLS"
+case "$1" in
+    --version) printf 'evidence %s\n' '{}' ;;
+    render-discovery-description) printf '{{}}\n' ;;
+    bundle-check) printf '%s\n' '{{"packageDigest":"{digest}","requirements":[{{"id":"record-active","configurationRevision":"{digest}"}}]}}' ;;
+    bundle-evaluate) printf 'Evidence fixture passed (1 evaluated cases)\n' ;;
+esac
+"#, registry_platform_buildinfo::DISPLAY_VERSION,
+                )).unwrap();
+                fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+                executable.into_os_string()
+            } else {
+                std::env::var_os("EVIDENCE_BIN").expect("real Evidence binary")
+            };
+            let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+            command
+                .args(["source", name])
+                .arg(&recipe)
+                .arg("--project")
+                .arg(&project)
+                .arg("--target")
+                .arg(&target)
+                .env("EVIDENCE_BIN", &evidence)
+                .env("EVIDENCE_RECORDED_CALLS", &log)
+                .env_remove("REGISTRY_STACK_POSTURE");
+            if mode == "flag" {
+                command.args(["--posture", posture]);
+            } else if mode == "environment" {
+                command.env("REGISTRY_STACK_POSTURE", posture);
+            }
+            let output = command.output().unwrap();
+            if recording {
+                let calls = fs::read_to_string(&log).unwrap_or_default();
+                let mut delegated = calls
+                    .lines()
+                    .filter(|line| line.starts_with("bundle-check "));
+                let matches = |line: &str| {
+                    line.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .any(|args| args == ["--posture", posture])
+                };
+                assert!(
+                    delegated.next().is_some_and(matches) && delegated.all(matches),
+                    "{name}, {mode}: {calls} {}",
+                    printed(&output)
+                );
+            } else if posture == "development" {
+                assert_success(&output);
+            } else {
+                assert!(!output.status.success(), "{name}: {}", printed(&output));
+                assert!(
+                    printed(&output).contains("evidence.posture.local-assurance"),
+                    "{name}: {}",
+                    printed(&output)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "exact gate: needs the real Evidence binary in EVIDENCE_BIN"]
 fn curated_source_recipes_import_check_and_run_the_existing_evaluator() {
     let evidence = std::env::var_os("EVIDENCE_BIN")
         .expect("set EVIDENCE_BIN to the Evidence binary built from this source");

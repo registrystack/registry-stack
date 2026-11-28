@@ -49,6 +49,9 @@ pub async fn migrate(client: &mut Client) -> Result<(), Error> {
     tx.batch_execute(SCHEMA)
         .await
         .map_err(|_| Error::Unavailable)?;
+    tx.batch_execute(include_str!("migrations/declared_posture.sql"))
+        .await
+        .map_err(|_| Error::Unavailable)?;
     tx.commit().await.map_err(|_| Error::Unavailable)
 }
 
@@ -56,6 +59,7 @@ pub async fn migrate(client: &mut Client) -> Result<(), Error> {
 pub struct PaymentStore {
     pub(crate) pool: Pool,
     pub(crate) deployment: String,
+    posture: registry_platform_config::Posture,
     pub(crate) development: Option<registry_platform_config::DevelopmentWitness>,
 }
 
@@ -72,10 +76,11 @@ pub const RUNTIME_GRANTS: [(&str, &[&str]); 3] = [
 pub const RUNTIME_SEQUENCE: &str = "adapter_payment_events_sequence_seq";
 
 impl PaymentStore {
-    pub fn new(pool: Pool, deployment: String) -> Self {
+    pub fn new(pool: Pool, deployment: String, posture: registry_platform_config::Posture) -> Self {
         Self {
             pool,
             deployment,
+            posture,
             development: None,
         }
     }
@@ -94,9 +99,8 @@ impl PaymentStore {
         id: Option<Uuid>,
     ) -> Result<(), Error> {
         let client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        client.execute("INSERT INTO adapter_payment_events (deployment,attempt_id,principal,kind) VALUES ($1,$2,$3,$4)",
-            &[&self.deployment,&id.unwrap_or(Uuid::nil()),&principal,&kind]).await.map_err(|_| Error::Unavailable)?;
-        Ok(())
+        self.event(&**client, id.unwrap_or(Uuid::nil()), principal, kind)
+            .await
     }
 
     pub async fn check_privileges(&self) -> Result<(), Error> {
@@ -205,7 +209,8 @@ impl PaymentStore {
         )
         .await?;
         if inserted == 1 {
-            event(&*tx, &self.deployment, &saved, "attempt.reserved").await?;
+            self.event(&*tx, saved.id, &saved.principal, "attempt.reserved")
+                .await?;
         }
         saved.validate_integrity(self.development.as_ref())?;
         tx.commit().await.map_err(|_| Error::Unavailable)?;
@@ -251,8 +256,27 @@ impl PaymentStore {
         if count != 1 {
             return Err(Error::Unavailable);
         }
-        event(&*tx, &self.deployment, attempt, kind).await?;
+        self.event(&*tx, attempt.id, &attempt.principal, kind)
+            .await?;
         tx.commit().await.map_err(|_| Error::Unavailable)
+    }
+
+    async fn event(
+        &self,
+        client: &impl GenericClient,
+        id: Uuid,
+        principal: &str,
+        kind: &str,
+    ) -> Result<(), Error> {
+        client
+            .execute(
+                "INSERT INTO adapter_payment_events (deployment, attempt_id, principal, kind, posture)
+                 VALUES ($1, $2, $3, $4, $5)",
+                &[&self.deployment, &id, &principal, &kind, &self.posture.as_str()],
+            )
+            .await
+            .map_err(|_| Error::Unavailable)?;
+        Ok(())
     }
 }
 
@@ -302,14 +326,5 @@ async fn claim(
     {
         return Err(Error::Conflict);
     }
-    Ok(())
-}
-async fn event(
-    client: &impl GenericClient,
-    deployment: &str,
-    attempt: &Attempt,
-    kind: &str,
-) -> Result<(), Error> {
-    client.execute("INSERT INTO adapter_payment_events (deployment,attempt_id,principal,kind) VALUES ($1,$2,$3,$4)",&[&deployment,&attempt.id,&attempt.principal,&kind]).await.map_err(|_| Error::Unavailable)?;
     Ok(())
 }

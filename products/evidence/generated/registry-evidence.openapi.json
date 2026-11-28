@@ -1509,6 +1509,40 @@
             "properties": {
               "code": {
                 "enum": [
+                  "platform.task-grant.development-assertion"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "task grant was issued in the development posture"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  401
+                ],
+                "type": "integer"
+              },
+              "title": {
+                "enum": [
+                  "Development task assertion refused"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "https://id.registrystack.org/problems/registry-evidence/platform/task-grant/development-assertion"
+                ],
+                "type": "string"
+              }
+            }
+          },
+          {
+            "properties": {
+              "code": {
+                "enum": [
                   "evidence.denied"
                 ],
                 "type": "string"
@@ -1751,6 +1785,7 @@
               "request.nonce-invalid",
               "request.selector-invalid",
               "auth.invalid-credential",
+              "platform.task-grant.development-assertion",
               "evidence.denied",
               "format.unsupported",
               "evidence.unavailable",
@@ -1767,6 +1802,7 @@
               "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request",
               "selector does not match an available request profile",
               "bearer access token validation failed",
+              "task grant was issued in the development posture",
               "the Evidence request is not permitted",
               "the requested format is not supported",
               "evidence could not be produced for this request",
@@ -1796,6 +1832,7 @@
               "Request nonce is invalid",
               "Selector is invalid",
               "Bearer access token is invalid",
+              "Development task assertion refused",
               "Evidence request is not permitted",
               "Requested format is not supported",
               "Evidence could not be produced",
@@ -1816,6 +1853,7 @@
               "https://id.registrystack.org/problems/registry-evidence/request/nonce-invalid",
               "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid",
               "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
+              "https://id.registrystack.org/problems/registry-evidence/platform/task-grant/development-assertion",
               "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
               "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
               "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
@@ -2000,8 +2038,7 @@
                 }
               },
               "required": [
-                "code",
-                "pointer"
+                "code"
               ],
               "type": "object"
             },
@@ -2994,44 +3031,90 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "auth.invalid-credential"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "bearer access token validation failed"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                401
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Bearer access token is invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
                     },
                     {
-                      "properties": {
-                        "code": {
-                          "enum": [
-                            "auth.invalid-credential"
-                          ],
-                          "type": "string"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
                         },
-                        "detail": {
-                          "enum": [
-                            "bearer access token validation failed"
-                          ],
-                          "type": "string"
-                        },
-                        "status": {
-                          "enum": [
-                            401
-                          ],
-                          "type": "integer"
-                        },
-                        "title": {
-                          "enum": [
-                            "Bearer access token is invalid"
-                          ],
-                          "type": "string"
-                        },
-                        "type": {
-                          "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
-                          ],
-                          "type": "string"
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "platform.task-grant.development-assertion"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "task grant was issued in the development posture"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                401
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Development task assertion refused"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/platform/task-grant/development-assertion"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
                         }
-                      },
-                      "type": "object"
+                      ]
                     }
                   ]
                 }
@@ -3618,44 +3701,90 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "auth.invalid-credential"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "bearer access token validation failed"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                401
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Bearer access token is invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
                     },
                     {
-                      "properties": {
-                        "code": {
-                          "enum": [
-                            "auth.invalid-credential"
-                          ],
-                          "type": "string"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
                         },
-                        "detail": {
-                          "enum": [
-                            "bearer access token validation failed"
-                          ],
-                          "type": "string"
-                        },
-                        "status": {
-                          "enum": [
-                            401
-                          ],
-                          "type": "integer"
-                        },
-                        "title": {
-                          "enum": [
-                            "Bearer access token is invalid"
-                          ],
-                          "type": "string"
-                        },
-                        "type": {
-                          "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
-                          ],
-                          "type": "string"
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "platform.task-grant.development-assertion"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "task grant was issued in the development posture"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                401
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Development task assertion refused"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/platform/task-grant/development-assertion"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
                         }
-                      },
-                      "type": "object"
+                      ]
                     }
                   ]
                 }
@@ -4058,44 +4187,90 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "auth.invalid-credential"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "bearer access token validation failed"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                401
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Bearer access token is invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
                     },
                     {
-                      "properties": {
-                        "code": {
-                          "enum": [
-                            "auth.invalid-credential"
-                          ],
-                          "type": "string"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
                         },
-                        "detail": {
-                          "enum": [
-                            "bearer access token validation failed"
-                          ],
-                          "type": "string"
-                        },
-                        "status": {
-                          "enum": [
-                            401
-                          ],
-                          "type": "integer"
-                        },
-                        "title": {
-                          "enum": [
-                            "Bearer access token is invalid"
-                          ],
-                          "type": "string"
-                        },
-                        "type": {
-                          "enum": [
-                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential"
-                          ],
-                          "type": "string"
+                        {
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "platform.task-grant.development-assertion"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "task grant was issued in the development posture"
+                              ],
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                401
+                              ],
+                              "type": "integer"
+                            },
+                            "title": {
+                              "enum": [
+                                "Development task assertion refused"
+                              ],
+                              "type": "string"
+                            },
+                            "type": {
+                              "enum": [
+                                "https://id.registrystack.org/problems/registry-evidence/platform/task-grant/development-assertion"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
                         }
-                      },
-                      "type": "object"
+                      ]
                     }
                   ]
                 }

@@ -814,6 +814,7 @@ async fn operator_services_preserve_a_posture_mismatch() {
             declared: Production,
         }
     );
+    assert_eq!(timers.problem_code(), "breg.activation.posture-mismatch");
     assert_eq!(
         timers,
         TimerOperatorError::PostureMismatch {

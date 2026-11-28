@@ -18,7 +18,9 @@ mod executable;
 use executable::{output_waiting_for_busy_binary, retry_while_busy, wait_until_executable};
 
 fn evidencectl() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
+    command
 }
 
 #[test]
@@ -211,6 +213,10 @@ if [ "$explain_json" = "true" ]; then
   exit 0
 fi
 
+if [ "$step" = "check" ] && [ -n "${{STUB_CHECK_OUTPUT:-}}" ]; then
+  printf '%s\n' "$STUB_CHECK_OUTPUT"
+  exit 0
+fi
 printf 'stub ok for %s\n' "$step"
 if [ -n "$fixture" ] && [ -n "${{CASES:-}}" ]; then
   printf 'Evidence fixture passed (%s evaluated cases)\n' "$CASES"
@@ -304,6 +310,75 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
         ],
         "unexpected evidence invocations"
     );
+}
+
+#[test]
+fn failed_development_fixture_reports_failure_before_check_warnings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let warning = registry_platform_yaml::Diagnostic::warning(
+        "evidence.posture.local-assurance",
+        "/assuranceProfile",
+        "local assurance permits locally held signing keys",
+        "Build a production package.",
+    );
+    let output = evidencectl()
+        .args([
+            "fixtures",
+            "run",
+            "--posture",
+            "development",
+            "--format",
+            "json",
+        ])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .env("ARGV_LOG", dir.path().join("argv.log"))
+        .env("FAIL_STEP", "evaluate:fixtures/a.yaml")
+        .env(
+            "STUB_CHECK_OUTPUT",
+            serde_json::json!({"diagnostics": [warning]}).to_string(),
+        )
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidencectl.fixtures.failed"
+    );
+    assert_eq!(
+        report["diagnostics"][1]["code"],
+        "evidence.posture.local-assurance"
+    );
+}
+
+#[test]
+fn successful_check_with_malformed_diagnostics_is_a_protocol_fault() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+    let output = evidencectl()
+        .args(["fixtures", "run", "--format", "json"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "1")
+        .env("STUB_CHECK_OUTPUT", r#"{"diagnostics":"malformed"}"#)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["check"]["stderr"],
+        "Evidence check returned malformed diagnostics"
+    );
+    assert_eq!(read_argv_log(&argv_log).len(), 1);
 }
 
 #[test]
@@ -455,18 +530,20 @@ fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
     assert_eq!(invocations[2][0], "bundle-evaluate");
     assert_eq!(invocations[2][1], "--bundle");
     assert_eq!(
-        invocations[2][3..9],
+        invocations[2][3..11],
         [
             "--fixture",
             "fixtures/record-status.yaml",
             "--explain",
             "--explain-format",
             "json",
+            "--posture",
+            "production",
             "--authority-document"
         ]
     );
     assert!(
-        invocations[2][9].ends_with("/compiled-authority.yaml"),
+        invocations[2][11].ends_with("/compiled-authority.yaml"),
         "the delegated fixture evaluation must receive the compiled complete authority: {:?}",
         invocations[2]
     );

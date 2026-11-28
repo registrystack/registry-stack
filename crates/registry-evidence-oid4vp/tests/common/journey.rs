@@ -25,7 +25,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_evidence_client::{
     ChannelKind, ChannelPolicy, EvidenceClient, EvidenceClientConfig, EvidenceClientError,
     EvidenceDefinitionsDocument, EvidenceRequestSpec, EvidenceResponseFormat, JwksDocument,
-    StaticToken, SubjectExpectations, SubjectRequest, VerifiedEvidence,
+    PeerPolicy, StaticToken, SubjectExpectations, SubjectRequest, VerifiedEvidence,
 };
 use registry_platform_crypto::{
     generate_private_jwk,
@@ -525,7 +525,8 @@ impl Deployment {
         command
             .args(["serve", "--runtime-config"])
             .arg(&runtime_path)
-            .env_remove("EVIDENCE_OID4VP_CONFIG");
+            .env_remove("EVIDENCE_OID4VP_CONFIG")
+            .env_remove("REGISTRY_STACK_POSTURE");
         let verifier_service = Service::spawn(
             "evidence-oid4vp",
             command,
@@ -561,6 +562,7 @@ impl Deployment {
             command
                 .args(args)
                 .env("EVIDENCE_BIN", &evidence_bin)
+                .env_remove("REGISTRY_STACK_POSTURE")
                 .current_dir(&project);
             run(command, what)
         };
@@ -593,6 +595,8 @@ impl Deployment {
             &[
                 "package",
                 ".",
+                "--posture",
+                "development",
                 "--target",
                 "wallet-target.yaml",
                 "--output",
@@ -609,15 +613,23 @@ impl Deployment {
         let runtime_path = candidate.join("runtime.yaml");
         let mut command = Command::new(&evidence_bin);
         command
-            .args(["authority", "activate", "--runtime-config"])
+            .args([
+                "authority",
+                "activate",
+                "--posture",
+                "development",
+                "--runtime-config",
+            ])
             .arg(&runtime_path)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("--document")
             .arg(candidate.join("compiled-authority.yaml"));
         run(command, "evidence authority activate");
         let mut command = Command::new(&evidence_bin);
         command
-            .args(["serve", "--runtime-config"])
-            .arg(&runtime_path);
+            .args(["serve", "--posture", "development", "--runtime-config"])
+            .arg(&runtime_path)
+            .env_remove("REGISTRY_STACK_POSTURE");
         let evidence_service =
             Service::spawn("evidence", command, directory.path().join("evidence.log"));
         wait_healthy(&http, &verifier, &verifier_service).await;
@@ -643,11 +655,12 @@ impl Deployment {
             .into_iter()
             .collect(),
         );
-        let client = EvidenceClient::new(EvidenceClientConfig::new_without_peer_policy(
+        let client = EvidenceClient::new(EvidenceClientConfig::new(
             evidence.parse().expect("the Evidence origin parses"),
             Arc::new(StaticToken::new(&relying_token).expect("the credential is header-safe")),
             jwks,
             Vec::new(),
+            PeerPolicy::AcceptDevelopmentPeer,
         ))
         .expect("the client configuration is usable");
 

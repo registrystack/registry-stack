@@ -440,6 +440,7 @@ pub(crate) fn runtime_bundle_refusal(
 pub(crate) fn runtime_target_refusal(
     report: Report,
     runtime: &Path,
+    bundle: &Path,
     target: Option<&Path>,
 ) -> Report {
     let Some(target) = target else {
@@ -452,15 +453,19 @@ pub(crate) fn runtime_target_refusal(
             .and_then(|name| name.to_str())
             .unwrap_or(""),
     );
+    let package_document = bundle.join("evidence.yaml");
     Report::new(
         report
             .into_diagnostics()
             .into_iter()
             .map(|mut diagnostic| {
-                let generated = diagnostic
-                    .source
-                    .as_ref()
-                    .is_some_and(|source| Path::new(&source.file) == runtime);
+                let generated = diagnostic.source.as_ref().is_some_and(|source| {
+                    let file = Path::new(&source.file);
+                    file == runtime
+                        || (file == package_document
+                            && (diagnostic.code.starts_with("evidence.posture.")
+                                || diagnostic.code.starts_with("platform.posture.")))
+                });
                 if !generated {
                     return diagnostic;
                 }
@@ -549,6 +554,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn package_posture_diagnostics_name_the_authored_target_in_both_postures() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.yaml");
+        std::fs::write(&target, "assuranceProfile: local\n").unwrap();
+        let bundle = dir.path().join("staged/bundle");
+        let runtime = dir.path().join("staged/runtime.yaml");
+        for severity in ["error", "warning"] {
+            let diagnostic: Diagnostic = serde_json::from_value(serde_json::json!({
+                "severity": severity,
+                "code": "evidence.posture.local-assurance",
+                "path": "/assuranceProfile",
+                "message": "local assurance",
+                "suggestedAction": "Declare development for a local target.",
+                "source": {"file": bundle.join("evidence.yaml")}
+            }))
+            .unwrap();
+            let report = runtime_target_refusal(
+                Report::new(vec![diagnostic]),
+                &runtime,
+                &bundle,
+                Some(&target),
+            );
+            let source = report.diagnostics()[0].source.as_ref().unwrap();
+            assert_eq!(Path::new(&source.file), target);
+            assert_eq!(source.line, Some(1));
+        }
+    }
+
+    #[test]
     fn an_unbound_extract_names_the_authored_extracts_key_in_path_and_action() {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("target.yaml");
@@ -561,8 +595,12 @@ mod tests {
             "source":{"file":"/staged/runtime.yaml","line":null,"column":null}
         }))
         .unwrap();
-        let report =
-            runtime_target_refusal(Report::new(vec![unbound]), runtime, Some(target.as_path()));
+        let report = runtime_target_refusal(
+            Report::new(vec![unbound]),
+            runtime,
+            target.parent().unwrap(),
+            Some(target.as_path()),
+        );
         let refusal = &report.diagnostics()[0];
         assert_eq!(refusal.path, "/extracts");
         assert!(

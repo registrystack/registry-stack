@@ -29,6 +29,12 @@ It needs no checkout, Python launcher, shell script, or OpenSSL installation.
 `audit.hashKeyCustody: development-generated` because it generates the audit
 hash key for the session. An explicit production declaration refuses the
 command before it writes anything.
+With no declaration, `bregctl dev` runs in development and its report shows
+`default` as the posture source. If doctor reports a posture mismatch, run
+`bregctl dev stop --remove` to discard the retained development database,
+then run `bregctl dev start` to recreate it.
+{/* Evidence: crates/registry-bregctl/src/lib.rs, DEV_POSTURE;
+    crates/registry-bregctl/src/dev/tests.rs, activation_preflight_refuses_a_successful_doctor_posture_finding. */}
 
 {/* Evidence: crates/registry-bregctl/src/dev/mod.rs development_command;
     crates/registry-bregctl/src/dev/config.rs development-generated. */}
