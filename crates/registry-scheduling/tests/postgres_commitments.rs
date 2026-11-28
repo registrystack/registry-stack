@@ -12869,16 +12869,21 @@ mod queue_depth {
             .await;
         assert_eq!(status, StatusCode::CREATED, "{appointment}");
         let claim = Uuid::parse_str(appointment["appointmentId"].as_str().unwrap()).unwrap();
-        let earliest: DateTime<Utc> = fx
+        let now: DateTime<Utc> = fx
             .admin
-            .query_one(
-                "SELECT min(next_attempt_at) FROM scheduling_outbox WHERE state='pending'",
-                &[],
-            )
+            .query_one("SELECT transaction_timestamp()", &[])
             .await
             .unwrap()
             .get(0);
-        let now = earliest + TimeDelta::seconds(120);
+        let earliest = now - TimeDelta::seconds(120);
+        fx.admin
+            .execute(
+                "UPDATE scheduling_outbox SET next_attempt_at=$2 \
+                 WHERE claim_id=$1 AND purpose='confirmation'",
+                &[&claim, &earliest],
+            )
+            .await
+            .unwrap();
         fx.admin
             .execute(
                 "INSERT INTO scheduling_outbox
@@ -12934,7 +12939,7 @@ mod queue_depth {
             .unwrap();
         let outbox = fx
             .store
-            .outbox_depth(now, deadline())
+            .outbox_depth(deadline())
             .await
             .expect("sample the outbox");
         let count = |state: &str| {
@@ -12946,7 +12951,11 @@ mod queue_depth {
         };
         assert_eq!(count("dead-lettered"), 1);
         assert!(count("pending") >= 1);
-        assert_eq!(outbox.oldest_pending_age_seconds, 120);
+        assert!(
+            (120..=125).contains(&outbox.oldest_pending_age_seconds),
+            "expected ~120s oldest pending age, got {}",
+            outbox.oldest_pending_age_seconds
+        );
 
         let hooks = fx
             .store
@@ -13128,5 +13137,109 @@ mod queue_depth {
             .await
             .unwrap();
         assert_eq!(other.status(), StatusCode::NOT_FOUND);
+    }
+
+    fn gauge_value(exposition: &str, metric: &str) -> i64 {
+        let prefix = format!("{metric} ");
+        exposition
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("missing gauge {metric} in:\n{exposition}"))
+            .parse::<i64>()
+            .unwrap_or_else(|error| panic!("invalid gauge {metric}: {error}"))
+    }
+
+    #[tokio::test]
+    async fn outbox_depth_uses_the_database_clock_regardless_of_application_clock_skew() {
+        let fx = hook_fixture().await;
+        let database_now: DateTime<Utc> = fx
+            .admin
+            .query_one("SELECT transaction_timestamp()", &[])
+            .await
+            .expect("read database clock")
+            .get(0);
+        assert!(
+            pinned_now() > database_now,
+            "fixture application clock must run ahead of the database clock"
+        );
+
+        let slot = first_slot(&fx, OFFERING, 90, 200).await;
+        let booking = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+        let (status, appointment) = fx
+            .post(
+                "/v1/appointments",
+                &fx.agent,
+                "queue-depth-clock-skew",
+                booking,
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{appointment}");
+        let claim = Uuid::parse_str(appointment["appointmentId"].as_str().unwrap()).unwrap();
+
+        let metrics = registry_scheduling::metrics::Metrics::default();
+
+        // Application clock deliberately behind database time: a pending intent
+        // already due on the database clock is still counted and aged on the
+        // database clock rather than hidden by the filter.
+        fx.admin
+            .execute(
+                "UPDATE scheduling_outbox \
+                 SET next_attempt_at = transaction_timestamp() - interval '90 seconds' \
+                 WHERE claim_id = $1 AND purpose = 'confirmation'",
+                &[&claim],
+            )
+            .await
+            .unwrap();
+        let behind = database_now - TimeDelta::hours(1);
+        fx.store.pin_clock(Arc::new(move || behind));
+        let behind_text =
+            registry_scheduling::metrics::scrape(&metrics, &fx.store, deadline()).await;
+        let behind_age = gauge_value(&behind_text, "scheduling_outbox_oldest_pending_age_seconds");
+        assert!(
+            (90..=105).contains(&behind_age),
+            "expected ~90s age on database clock when application clock is behind, got {behind_age}s:\n{behind_text}"
+        );
+
+        // Application clock ahead of database time: a freshly due immediate
+        // intent is not inflated by the skew.
+        fx.store.pin_clock(Arc::new(pinned_now));
+        fx.admin
+            .execute(
+                "UPDATE scheduling_outbox \
+                 SET next_attempt_at = transaction_timestamp() \
+                 WHERE claim_id = $1 AND purpose = 'confirmation'",
+                &[&claim],
+            )
+            .await
+            .unwrap();
+        let ahead_text =
+            registry_scheduling::metrics::scrape(&metrics, &fx.store, deadline()).await;
+        let ahead_age = gauge_value(&ahead_text, "scheduling_outbox_oldest_pending_age_seconds");
+        assert!(
+            (0..=10).contains(&ahead_age),
+            "expected ~0s age for immediate intent when application clock is ahead, got {ahead_age}s:\n{ahead_text}"
+        );
+
+        // An intent still waiting out retry back-off on the database clock is
+        // excluded even when the application clock has already passed it.
+        fx.admin
+            .execute(
+                "UPDATE scheduling_outbox \
+                 SET next_attempt_at = transaction_timestamp() + interval '1 hour' \
+                 WHERE claim_id = $1 AND purpose = 'confirmation'",
+                &[&claim],
+            )
+            .await
+            .unwrap();
+        let backoff_text =
+            registry_scheduling::metrics::scrape(&metrics, &fx.store, deadline()).await;
+        let backoff_age = gauge_value(
+            &backoff_text,
+            "scheduling_outbox_oldest_pending_age_seconds",
+        );
+        assert_eq!(
+            backoff_age, 0,
+            "expected future back-off intent to be excluded despite application clock ahead:\n{backoff_text}"
+        );
     }
 }
