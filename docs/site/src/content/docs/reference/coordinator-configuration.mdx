@@ -76,12 +76,15 @@ errors in production. `check --production` declares production.
 Use `listener.tlsTermination: loopback-plaintext` for a loopback bind. Configure
 PostgreSQL separately with `database.transport`. Its default is `verified-tls`.
 Use `loopback-plaintext` for a socket or a loopback host, or
-`private-network-plaintext` in development for a private-network host. A
-loopback HTTP issuer needs no exception. `allowInsecureHttp: true` and
+`private-network-plaintext` in development for a private-network host.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+A loopback HTTP issuer needs no exception. `allowInsecureHttp: true` and
 `jwksSource.type: test-issuer` require development.
 
 {/* Evidence: crates/registry-platform-posture/src/lib.rs declared_from;
-    crates/registry-platform-config/src/blocks.rs DatabaseTransport, plaintext_permitted, OidcIssuerConfig;
+    crates/registry-platform-config/src/blocks.rs DatabaseTransport, permitted_transport, OidcIssuerConfig;
+    crates/registry-platform-postgres/src/lib.rs postgres_connection;
     crates/registry-coordinator/src/runtime.rs loader_with_posture, findings. */}
 
 ## Host operations

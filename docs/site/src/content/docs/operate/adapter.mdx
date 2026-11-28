@@ -124,7 +124,10 @@ The facade journals every request and, when it serves a write, keeps idempotency
 PostgreSQL.
 The database transport defaults to `verified-tls`. Use `database.transport: loopback-plaintext`
 for a Unix socket, numeric loopback address or `localhost`.
-Use `private-network-plaintext` only in development. The runtime refuses
+Use `private-network-plaintext` only in development.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+The runtime refuses
 `database.testOnlyPlaintext` outside test builds.
 Without a configured root, the system roots verify the server.
 When the certificate comes from a private CA, name that CA with

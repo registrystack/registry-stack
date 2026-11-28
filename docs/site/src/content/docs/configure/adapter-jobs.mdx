@@ -156,6 +156,8 @@ Job commands default to production and accept `--posture development` or
 The job store defaults to verified TLS. Set `store.transport: loopback-plaintext`
 for a Unix socket, numeric loopback address or `localhost`.
 In development the job store also accepts `private-network-plaintext`.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the job host starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
 A job pass records its posture when it takes the store lease.
 A pass, preview, rescan or identity rebind fails with `adapter.job.posture-mismatch` if the store records a different posture.
 Use the recorded posture or use a fresh store when you change posture.

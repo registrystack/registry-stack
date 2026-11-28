@@ -55,7 +55,7 @@ pub fn activate_postgres_sources(
 fn loopback_plaintext_config(
     mut postgres: tokio_postgres::Config,
     binding: &PostgresSourceBinding,
-    lookup: impl FnOnce(&str, u16) -> std::io::Result<Vec<IpAddr>>,
+    lookup: impl Fn(&str, u16) -> std::io::Result<Vec<IpAddr>>,
 ) -> Result<tokio_postgres::Config, String> {
     match binding
         .loopback_addresses(lookup)
@@ -201,7 +201,7 @@ impl PooledPostgresSource {
     fn build_with_lookup(
         binding: PostgresSourceBinding,
         resolver: &SecretResolver,
-        lookup: impl FnOnce(&str, u16) -> std::io::Result<Vec<IpAddr>>,
+        lookup: impl Fn(&str, u16) -> std::io::Result<Vec<IpAddr>>,
     ) -> Result<Self, String> {
         let endpoint = binding.endpoint.clone();
         let member = |name: &str| format!("sources.postgres.{endpoint}.{name}");
@@ -728,10 +728,11 @@ mod activation_tests {
         ] {
             let mut binding = binding("secret:env/PATH", PostgresSourceTls::LoopbackPlaintext);
             binding.host = "localhost".to_owned();
+            let answer = std::cell::Cell::new(Some(addresses));
             let result =
                 loopback_plaintext_config(tokio_postgres::Config::new(), &binding, |host, port| {
                     assert_eq!((host, port), ("localhost", 5432));
-                    addresses
+                    answer.take().expect("the name is looked up once")
                 });
             if accepted {
                 let config = result.unwrap();

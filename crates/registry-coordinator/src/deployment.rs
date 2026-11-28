@@ -12,9 +12,8 @@ use registry_platform_activation::{self as activation, Layout, NewActivation, Ro
 use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter, FileDestination};
 use registry_platform_config::{
     package::{write_package, PackageLimits},
-    DatabaseConfig, DatabaseHost, DatabaseTransport, ListenerNetworkExposure,
-    MetricsListenerConfig, PackageConfig, Posture, PrivateListenerConfig, SecretProvidersConfig,
-    SecretReference,
+    DatabaseConfig, DatabaseTransport, ListenerNetworkExposure, MetricsListenerConfig,
+    PackageConfig, Posture, PrivateListenerConfig, SecretProvidersConfig, SecretReference,
 };
 use registry_platform_yaml::{Diagnostic, Document, Source};
 use serde::{Deserialize, Serialize};
@@ -556,46 +555,17 @@ async fn open_named(
     };
     let url = std::str::from_utf8(raw.expose_secret())
         .map_err(|_| fail("database reference must resolve to UTF-8"))?;
-    let mut postgres: tokio_postgres::Config = url
-        .parse()
-        .map_err(|_| fail("supply a valid PostgreSQL connection URL"))?;
-    let mut hosts: Vec<_> = postgres
-        .get_hosts()
-        .iter()
-        .map(|host| match host {
-            tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
-            #[cfg(unix)]
-            tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
-        })
-        .collect();
-    runtime
-        .database
-        .check(cfg!(feature = "postgres-test"))
-        .map_err(|error| runtime.database_transport_error(error))?;
-    hosts.extend(
-        postgres
-            .get_hostaddrs()
-            .iter()
-            .map(|address| DatabaseHost::Tcp(address.to_string())),
-    );
-    let transport = runtime
-        .database
-        .plaintext_permitted(&hosts, runtime.development.as_ref())
-        .map_err(|error| runtime.database_transport_error(error))?;
-    let tls = if runtime.database.test_only_plaintext || transport != DatabaseTransport::VerifiedTls
-    {
-        postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-        None
-    } else {
-        if postgres.get_ssl_mode() != tokio_postgres::config::SslMode::Require {
-            return Err(CoordinatorError::new(
-                "database-tls-required",
-                "verified TLS requires sslmode=require in the database URL",
-            )
-            .at("runtime.yaml", "database.runtimeUrlRef")
-            .suggest("Add sslmode=require for a TLS database, or set database.transport: loopback-plaintext for PostgreSQL on this host."));
-        }
+    let (postgres, verified_tls) = driver_config(
+        &runtime.database,
+        url,
+        runtime.development.as_ref(),
+        &|error| runtime.database_transport_error(error),
+        &registry_platform_config::resolve_database_host,
+    )?;
+    let tls = if verified_tls {
         Some(tls(&runtime.database, &secrets)?)
+    } else {
+        None
     };
     let store = Store::open_config(postgres, &runtime.namespace, security, tls).await?;
     let store = if migration {
@@ -604,6 +574,40 @@ async fn open_named(
         store.with_workflows_digest(workflows_digest(d)?)
     };
     Ok(Arc::new(store))
+}
+/// The driver configuration the store is opened with, and whether it requires
+/// verified TLS. Under a plaintext transport every TCP host is replaced by
+/// the numeric addresses its check accepted, so the driver never resolves a
+/// name again.
+fn driver_config(
+    database: &DatabaseConfig,
+    url: &str,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+    transport_error: &dyn Fn(registry_platform_config::DatabaseTransportError) -> CoordinatorError,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(tokio_postgres::Config, bool)> {
+    let postgres: tokio_postgres::Config = url
+        .parse()
+        .map_err(|_| fail("supply a valid PostgreSQL connection URL"))?;
+    database
+        .check(cfg!(feature = "postgres-test"))
+        .map_err(transport_error)?;
+    let (transport, mut postgres) =
+        registry_platform_postgres::postgres_connection(database, postgres, development, resolve)
+            .map_err(transport_error)?;
+    if database.test_only_plaintext || transport != DatabaseTransport::VerifiedTls {
+        postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
+        return Ok((postgres, false));
+    }
+    if postgres.get_ssl_mode() != tokio_postgres::config::SslMode::Require {
+        return Err(CoordinatorError::new(
+            "database-tls-required",
+            "verified TLS requires sslmode=require in the database URL",
+        )
+        .at("runtime.yaml", "database.runtimeUrlRef")
+        .suggest("Add sslmode=require for a TLS database, or set database.transport: loopback-plaintext for PostgreSQL on this host."));
+    }
+    Ok((postgres, true))
 }
 fn tls(
     database: &DatabaseConfig,
@@ -1115,6 +1119,45 @@ mod tests {
     };
     use crate::definition::Definition;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_loopback_name_reaches_the_store_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        use registry_platform_config::{DatabaseConfig, DatabaseTransport, Gated};
+        let database = DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let (postgres, verified_tls) = super::driver_config(
+            &database,
+            "postgresql://app@localhost:5433/coordinator",
+            None,
+            &|error| panic!("the loopback name is refused: {error}"),
+            &fixed,
+        )
+        .unwrap();
+        assert!(!verified_tls);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
+    }
 
     /// The wording is shared with the Document Store, Scheduling and Messaging.
     #[test]

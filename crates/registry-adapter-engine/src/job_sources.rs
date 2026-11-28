@@ -566,33 +566,29 @@ pub struct PostgresSourceBinding {
 #[cfg(feature = "job-postgres")]
 impl PostgresSourceBinding {
     /// Resolve a loopback-plaintext source to the addresses the driver may
-    /// use. A Unix socket does not need an address.
+    /// use, with the shared database host rule. A Unix socket does not need
+    /// an address.
     pub fn loopback_addresses(
         &self,
-        lookup: impl FnOnce(&str, u16) -> std::io::Result<Vec<std::net::IpAddr>>,
+        lookup: impl Fn(&str, u16) -> std::io::Result<Vec<std::net::IpAddr>>,
     ) -> Result<Option<Vec<std::net::IpAddr>>, Box<registry_platform_yaml::Diagnostic>> {
-        use registry_platform_httputil::loopback::{loopback_host, LoopbackHost};
-
-        let refused = || {
+        if cfg!(unix) && std::path::Path::new(&self.host).is_absolute() {
+            return Ok(None);
+        }
+        registry_platform_config::plaintext_host_addresses(
+            registry_platform_config::DatabaseTransport::LoopbackPlaintext,
+            &self.host,
+            &|name| lookup(name, self.port),
+        )
+        .map(Some)
+        .ok_or_else(|| {
             Box::new(registry_platform_yaml::Diagnostic::error(
                 "platform.database.transport-host-mismatch",
                 format!("/sources/postgres/{}/tls", self.endpoint),
                 "loopback-plaintext requires a loopback host",
                 "Use a loopback address, localhost, or a Unix socket, or configure verified TLS.",
             ))
-        };
-        match loopback_host(&self.host) {
-            Some(LoopbackHost::Literal(address)) => Ok(Some(vec![address])),
-            Some(host @ LoopbackHost::LocalhostName) => {
-                let addresses = lookup(&self.host, self.port).map_err(|_| refused())?;
-                if !host.pinned_by(&addresses) {
-                    return Err(refused());
-                }
-                Ok(Some(addresses))
-            }
-            None if cfg!(unix) && std::path::Path::new(&self.host).is_absolute() => Ok(None),
-            None => Err(refused()),
-        }
+        })
     }
 
     /// Apply the plaintext host rule during an offline job check. Verified TLS
@@ -849,6 +845,10 @@ pub fn job_store_transport_diagnostic(
         DatabaseTransportError::HostMismatch(_) => (
             "a job store host is not one the configured plaintext transport permits",
             "Name a Unix socket, a loopback address or localhost, or write store.transport: verified-tls.",
+        ),
+        DatabaseTransportError::BracketedHost(_) => (
+            "a job store host is an IP address written in brackets in a keyword connection string",
+            "Write the IP address host without brackets in a keyword connection string, such as host=::1; brackets belong only in a URL authority.",
         ),
     }
 }

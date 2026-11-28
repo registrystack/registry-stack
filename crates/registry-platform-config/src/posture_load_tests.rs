@@ -9,8 +9,9 @@ use registry_platform_yaml::Severity;
 use serde::Deserialize;
 
 use crate::blocks::{
-    plaintext_permitted_with, AuditKeyConfig, AuditKeyCustody, DatabaseConfig, DatabaseHost,
-    DatabaseTransport, DatabaseTransportError, JwksSource, OidcIssuerConfig,
+    permitted_transport_with, AuditKeyConfig, AuditKeyCustody, CheckedHost, DatabaseConfig,
+    DatabaseHost, DatabaseTransport, DatabaseTransportError, JwksSource, OidcIssuerConfig,
+    PermittedTransport,
 };
 use crate::{
     DeclaredPosture, Gated, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
@@ -332,7 +333,7 @@ fn a_decode_failure_in_a_check_carries_the_settings_found_before_it() {
 // The issuer check
 
 /// One shared block read alone, through the shared reader.
-fn read_block<T: serde::de::DeserializeOwned>(text: &str) -> T {
+pub(crate) fn read_block<T: serde::de::DeserializeOwned>(text: &str) -> T {
     use registry_platform_yaml::{EnvelopeRule, Expect, FormatSpec, Reader};
     const BLOCK: FormatSpec = FormatSpec {
         kind: "SharedRuntimeBlock",
@@ -421,8 +422,179 @@ fn tcp(host: &str) -> Vec<DatabaseHost> {
     vec![DatabaseHost::Tcp(host.to_owned())]
 }
 
+/// The transport alone, for the tests that ask only which transport a host
+/// list is permitted.
+fn transport_with(
+    config: &DatabaseConfig,
+    hosts: &[DatabaseHost],
+    witness: Option<&crate::DevelopmentWitness>,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<DatabaseTransport, DatabaseTransportError> {
+    permitted_transport_with(config, hosts, witness, resolve).map(|permitted| permitted.transport)
+}
+
 #[test]
-fn plaintext_permitted_answers_each_host_for_each_transport() {
+fn a_loopback_name_yields_exactly_the_addresses_it_was_checked_as() {
+    let config = database(Some("loopback-plaintext"), false);
+    assert_eq!(
+        permitted_transport_with(&config, &tcp("localhost"), None, &resolve),
+        Ok(PermittedTransport {
+            transport: DatabaseTransport::LoopbackPlaintext,
+            checked: Some(vec![CheckedHost::Tcp(vec![
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            ])]),
+        })
+    );
+    // A literal is its own checked address, bracketed or not.
+    for literal in ["127.0.0.1", "[::1]"] {
+        let answer = permitted_transport_with(&config, &tcp(literal), None, &resolve).unwrap();
+        let address = literal.trim_matches(['[', ']']).parse::<IpAddr>().unwrap();
+        assert_eq!(
+            answer.checked,
+            Some(vec![CheckedHost::Tcp(vec![address])]),
+            "{literal}"
+        );
+    }
+}
+
+#[test]
+fn a_loopback_transport_refuses_a_name_with_any_other_answer_and_an_authored_address() {
+    let config = database(Some("loopback-plaintext"), false);
+    let partly_elsewhere = |_: &str| -> std::io::Result<Vec<IpAddr>> {
+        Ok(vec![
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
+        ])
+    };
+    assert_eq!(
+        permitted_transport_with(&config, &tcp("localhost"), None, &partly_elsewhere),
+        Err(DatabaseTransportError::HostMismatch(
+            DatabaseTransport::LoopbackPlaintext
+        ))
+    );
+    // An authored hostaddr reaches the check as a TCP literal beside the host
+    // it pairs with; a non-loopback one is refused even beside a socket.
+    let hosts = [DatabaseHost::Unix, DatabaseHost::Tcp("10.0.0.5".to_owned())];
+    assert_eq!(
+        permitted_transport_with(&config, &hosts, None, &resolve),
+        Err(DatabaseTransportError::HostMismatch(
+            DatabaseTransport::LoopbackPlaintext
+        ))
+    );
+}
+
+#[test]
+fn a_mixed_socket_and_tcp_list_keeps_the_socket_in_its_place() {
+    let config = database(Some("loopback-plaintext"), false);
+    let hosts = [
+        DatabaseHost::Unix,
+        DatabaseHost::Tcp("localhost".to_owned()),
+        DatabaseHost::Tcp("127.0.0.2".to_owned()),
+    ];
+    let answer = permitted_transport_with(&config, &hosts, None, &resolve).unwrap();
+    assert_eq!(
+        answer.checked,
+        Some(vec![
+            CheckedHost::Unix,
+            CheckedHost::Tcp(vec![
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            ]),
+            CheckedHost::Tcp(vec![IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2))]),
+        ])
+    );
+}
+
+#[test]
+fn a_private_network_name_yields_the_private_addresses_it_resolved_to() {
+    let witness_holder = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Development))
+        .parse_str::<Example>(&every_setting(), |_| None)
+        .unwrap();
+    let config = database(Some("private-network-plaintext"), false);
+    let answer = permitted_transport_with(
+        &config,
+        &tcp("db.internal"),
+        witness_holder.development.as_ref(),
+        &resolve,
+    )
+    .unwrap();
+    assert_eq!(
+        answer.checked,
+        Some(vec![CheckedHost::Tcp(vec![IpAddr::V4(Ipv4Addr::new(
+            10, 1, 2, 3
+        ))])])
+    );
+}
+
+#[test]
+fn verified_tls_resolves_nothing_and_carries_no_address() {
+    let never = |name: &str| -> std::io::Result<Vec<IpAddr>> {
+        panic!("verified-tls looked up {name}");
+    };
+    for transport in [Some("verified-tls"), None] {
+        let config = database(transport, false);
+        assert_eq!(
+            permitted_transport_with(&config, &tcp("db.example.com"), None, &never),
+            Ok(PermittedTransport {
+                transport: DatabaseTransport::VerifiedTls,
+                checked: None,
+            }),
+            "{transport:?}"
+        );
+    }
+}
+
+#[test]
+fn a_host_is_looked_up_once_and_its_answer_judged_under_the_transport_rule() {
+    let witness_holder = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Development))
+        .parse_str::<Example>(&every_setting(), |_| None)
+        .unwrap();
+    let witness = witness_holder.development.as_ref();
+    let private = IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3));
+    let mapped_loopback: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+    // (transport, the answer for `localhost`, the accepted addresses)
+    let cases = [
+        (
+            "private-network-plaintext",
+            vec![private],
+            Some(vec![private]),
+        ),
+        ("loopback-plaintext", vec![private], None),
+        (
+            "private-network-plaintext",
+            vec![mapped_loopback],
+            Some(vec![mapped_loopback]),
+        ),
+        (
+            "loopback-plaintext",
+            vec![mapped_loopback],
+            Some(vec![mapped_loopback]),
+        ),
+    ];
+    for (transport, answer, accepted) in cases {
+        let lookups = std::cell::Cell::new(0);
+        let counted = |_: &str| -> std::io::Result<Vec<IpAddr>> {
+            lookups.set(lookups.get() + 1);
+            Ok(answer.clone())
+        };
+        let config = database(Some(transport), false);
+        let result = permitted_transport_with(&config, &tcp("localhost"), witness, &counted);
+        assert_eq!(
+            result.ok().and_then(|permitted| permitted.checked),
+            accepted.map(|addresses| vec![CheckedHost::Tcp(addresses)]),
+            "localhost answering {answer:?} under {transport}"
+        );
+        assert_eq!(
+            lookups.get(),
+            1,
+            "localhost answering {answer:?} under {transport}"
+        );
+    }
+}
+
+#[test]
+fn the_transport_check_answers_each_host_for_each_transport() {
     use DatabaseTransport::{LoopbackPlaintext, PrivateNetworkPlaintext, VerifiedTls};
     let witness_holder = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Development))
         .parse_str::<Example>(&every_setting(), |_| None)
@@ -473,7 +645,7 @@ fn plaintext_permitted_answers_each_host_for_each_transport() {
             ("private-network-plaintext", private),
         ] {
             let config = database(Some(transport), false);
-            let answer = plaintext_permitted_with(&config, hosts, witness, &resolve);
+            let answer = transport_with(&config, hosts, witness, &resolve);
             assert_eq!(answer.is_ok(), permitted, "{name} under {transport}");
             if !permitted {
                 assert!(
@@ -486,7 +658,7 @@ fn plaintext_permitted_answers_each_host_for_each_transport() {
         for transport in [Some("verified-tls"), None] {
             let config = database(transport, false);
             assert_eq!(
-                plaintext_permitted_with(&config, hosts, witness, &resolve),
+                transport_with(&config, hosts, witness, &resolve),
                 Ok(VerifiedTls),
                 "{name}"
             );
@@ -494,12 +666,12 @@ fn plaintext_permitted_answers_each_host_for_each_transport() {
     }
     let config = database(Some("loopback-plaintext"), false);
     assert_eq!(
-        plaintext_permitted_with(&config, &[DatabaseHost::Unix], None, &resolve),
+        transport_with(&config, &[DatabaseHost::Unix], None, &resolve),
         Ok(LoopbackPlaintext)
     );
     let config = database(Some("private-network-plaintext"), false);
     assert_eq!(
-        plaintext_permitted_with(&config, &tcp("10.0.0.5"), witness, &resolve),
+        transport_with(&config, &tcp("10.0.0.5"), witness, &resolve),
         Ok(PrivateNetworkPlaintext)
     );
 }
@@ -515,7 +687,7 @@ fn localhost_is_a_plaintext_loopback_host_only_when_it_resolves_only_to_loopback
         ])
     };
     assert_eq!(
-        plaintext_permitted_with(&config, &tcp("localhost"), None, &loopback_only),
+        transport_with(&config, &tcp("localhost"), None, &loopback_only),
         Ok(LoopbackPlaintext)
     );
     let elsewhere = |_: &str| -> std::io::Result<Vec<IpAddr>> {
@@ -537,14 +709,14 @@ fn localhost_is_a_plaintext_loopback_host_only_when_it_resolves_only_to_loopback
         ("a failed lookup", &failing),
     ] {
         assert_eq!(
-            plaintext_permitted_with(&config, &tcp("localhost"), None, resolver),
+            transport_with(&config, &tcp("localhost"), None, resolver),
             Err(DatabaseTransportError::HostMismatch(LoopbackPlaintext)),
             "localhost resolving to {label}"
         );
     }
     // An address literal is never looked up.
     assert_eq!(
-        plaintext_permitted_with(&config, &tcp("127.0.0.1"), None, &failing),
+        transport_with(&config, &tcp("127.0.0.1"), None, &failing),
         Ok(LoopbackPlaintext)
     );
 }
@@ -552,7 +724,7 @@ fn localhost_is_a_plaintext_loopback_host_only_when_it_resolves_only_to_loopback
 #[test]
 fn a_private_network_transport_is_unreadable_without_the_witness() {
     let config = database(Some("private-network-plaintext"), false);
-    let answer = plaintext_permitted_with(&config, &tcp("10.0.0.5"), None, &resolve);
+    let answer = transport_with(&config, &tcp("10.0.0.5"), None, &resolve);
     assert!(
         matches!(answer, Err(DatabaseTransportError::DevelopmentOnly(_))),
         "{answer:?}"

@@ -65,11 +65,14 @@ Use `--posture development` for a development runtime file.
 The listener's `tlsTermination: loopback-plaintext` restricts its bind address to loopback in either posture.
 `database.transport: loopback-plaintext` allows a PostgreSQL socket, a loopback IP, or `localhost`.
 `database.transport: private-network-plaintext` requires development.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
 A non-loopback HTTP issuer requires development and `allowInsecureHttp: true` in its entry under `authentication.oidc.issuers`.
 A loopback HTTP issuer needs no opt-in.
 
 {/* Evidence: crates/registry-messaging/src/config.rs finish_load, check_database, check_oidc;
-    crates/registry-platform-config/src/blocks.rs plaintext_permitted. */}
+    crates/registry-platform-config/src/blocks.rs permitted_transport;
+    crates/registry-platform-postgres/src/lib.rs postgres_connection. */}
 
 ## The runtime file
 

@@ -356,7 +356,8 @@ pub enum DatabaseHost {
 }
 
 /// Why a database transport was refused. No variant repeats a configured
-/// value.
+/// value, except that `BracketedHost` names the IP address literal it
+/// refuses: never a name, a port or a credential.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DatabaseTransportError {
     /// A host is not one the plaintext transport permits.
@@ -367,6 +368,11 @@ pub enum DatabaseTransportError {
     Conflict,
     /// `testOnlyPlaintext` in a build that is not a test build.
     TestOnlyPlaintext,
+    /// A keyword connection string writes every host the driver dials as an
+    /// IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`.
+    /// The driver would look the bracketed text up as a name and never
+    /// connect. The first such address is named.
+    BracketedHost(IpAddr),
 }
 
 impl DatabaseTransportError {
@@ -378,6 +384,7 @@ impl DatabaseTransportError {
             Self::DevelopmentOnly(refused) => refused.setting.code,
             Self::Conflict => "platform.database.transport-conflict",
             Self::TestOnlyPlaintext => "platform.database.test-only-plaintext",
+            Self::BracketedHost(_) => "platform.database.bracketed-host",
         }
     }
 
@@ -396,13 +403,16 @@ impl DatabaseTransportError {
             Self::TestOnlyPlaintext => {
                 "Remove it, and set database.transport for a plaintext connection on the same host."
             }
+            Self::BracketedHost(_) => {
+                "Write the IP address host without brackets in a keyword connection string, such as host=::1; brackets belong only in a URL authority."
+            }
         }
     }
 }
 
 impl fmt::Display for DatabaseTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
+        let text = match self {
             Self::HostMismatch(_) => {
                 "a database host is not one the configured plaintext transport permits"
             }
@@ -411,7 +421,14 @@ impl fmt::Display for DatabaseTransportError {
             }
             Self::Conflict => "database.transport and database.testOnlyPlaintext are both set",
             Self::TestOnlyPlaintext => "database.testOnlyPlaintext is accepted only by test builds",
-        })
+            Self::BracketedHost(address) => {
+                return write!(
+                    formatter,
+                    "the database host [{address}] is written in brackets in a keyword connection string"
+                );
+            }
+        };
+        formatter.write_str(text)
     }
 }
 
@@ -432,93 +449,174 @@ impl DatabaseConfig {
         Ok(())
     }
 
-    /// The transport the connection uses, once `hosts` are known: a plaintext
-    /// transport is returned only when every host is one it permits. A
-    /// development-only transport is readable with `witness` alone. A name,
-    /// `localhost` included, is resolved here, once, so a later re-resolution
-    /// by the driver is outside the check; a name that does not resolve is
-    /// refused.
-    pub fn plaintext_permitted(
+    /// The transport the connection uses, once `hosts` are known, and under a
+    /// plaintext transport the numeric addresses each host was checked as. A
+    /// plaintext transport is returned only when every host is one it
+    /// permits. A development-only transport is readable with `witness`
+    /// alone. A name, `localhost` included, is resolved here, once, and a name
+    /// that does not resolve is refused. The pool dials the checked addresses,
+    /// never the name, so a second answer for the name cannot reach an
+    /// address that was not checked.
+    pub fn permitted_transport(
         &self,
         hosts: &[DatabaseHost],
         witness: Option<&DevelopmentWitness>,
-    ) -> Result<DatabaseTransport, DatabaseTransportError> {
-        plaintext_permitted_with(self, hosts, witness, &resolve_host)
+    ) -> Result<PermittedTransport, DatabaseTransportError> {
+        permitted_transport_with(self, hosts, witness, &resolve_database_host)
+    }
+
+    /// [`DatabaseConfig::permitted_transport`] with the host names looked up
+    /// by `resolve`, which a runtime sets to [`resolve_database_host`].
+    pub fn permitted_transport_with_resolver(
+        &self,
+        hosts: &[DatabaseHost],
+        witness: Option<&DevelopmentWitness>,
+        resolve: &HostResolver,
+    ) -> Result<PermittedTransport, DatabaseTransportError> {
+        permitted_transport_with(self, hosts, witness, resolve)
     }
 }
 
-fn resolve_host(name: &str) -> std::io::Result<Vec<IpAddr>> {
+/// A database transport and what its host check accepted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PermittedTransport {
+    /// The transport the connection uses.
+    pub transport: DatabaseTransport,
+    /// Under a plaintext transport, one entry for each host given to the
+    /// check, in the same order. `None` under `verified-tls`: certificate
+    /// verification needs the name, and nothing is resolved.
+    pub checked: Option<Vec<CheckedHost>>,
+}
+
+/// One host as a plaintext transport's check accepted it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CheckedHost {
+    /// A Unix socket directory, which no lookup reaches.
+    Unix,
+    /// The numeric addresses the host was checked as: the literal itself, or
+    /// every answer the name resolved to, in the resolver's order.
+    Tcp(Vec<IpAddr>),
+}
+
+/// Looks a database host name up: every address it resolves to, in order.
+pub type HostResolver = dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>;
+
+/// The system resolver, as the PostgreSQL driver itself would ask it. Every
+/// runtime passes this; tests pass a fixed answer instead.
+pub fn resolve_database_host(name: &str) -> std::io::Result<Vec<IpAddr>> {
     use std::net::ToSocketAddrs;
     (name, 0)
         .to_socket_addrs()
         .map(|addresses| addresses.map(|address| address.ip()).collect())
 }
 
-pub(crate) fn plaintext_permitted_with(
+pub(crate) fn permitted_transport_with(
     config: &DatabaseConfig,
     hosts: &[DatabaseHost],
     witness: Option<&DevelopmentWitness>,
     resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
-) -> Result<DatabaseTransport, DatabaseTransportError> {
+) -> Result<PermittedTransport, DatabaseTransportError> {
     let transport = match &config.transport {
         None => DatabaseTransport::VerifiedTls,
         Some(gated) => *gated
             .get(witness)
             .map_err(DatabaseTransportError::DevelopmentOnly)?,
     };
-    let permitted = |host: &DatabaseHost| match (transport, host) {
-        (DatabaseTransport::VerifiedTls, _) | (_, DatabaseHost::Unix) => true,
-        (DatabaseTransport::LoopbackPlaintext, DatabaseHost::Tcp(name)) => {
-            loopback_database_host(name, resolve)
+    check_database_hosts(transport, hosts, resolve)
+}
+
+/// Check `hosts` against a `transport` already read from its gate, as
+/// [`DatabaseConfig::permitted_transport`] does. For a caller that holds no
+/// database block and permits one transport only.
+pub fn check_database_hosts(
+    transport: DatabaseTransport,
+    hosts: &[DatabaseHost],
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<PermittedTransport, DatabaseTransportError> {
+    if transport == DatabaseTransport::VerifiedTls {
+        return Ok(PermittedTransport {
+            transport,
+            checked: None,
+        });
+    }
+    let checked = hosts
+        .iter()
+        .map(|host| match host {
+            DatabaseHost::Unix => Some(CheckedHost::Unix),
+            DatabaseHost::Tcp(name) => {
+                plaintext_host_addresses(transport, name, resolve).map(CheckedHost::Tcp)
+            }
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(DatabaseTransportError::HostMismatch(transport))?;
+    Ok(PermittedTransport {
+        transport,
+        checked: Some(checked),
+    })
+}
+
+/// The numeric addresses a plaintext `transport` permits a TCP host `name`
+/// to reach, looked up once with `resolve`, or `None` when the transport
+/// refuses the host. `verified-tls` checks no address and answers `None`.
+///
+/// Under `loopback-plaintext` that is a loopback literal, or the name
+/// `localhost` resolving, and resolving only, to loopback addresses. Under
+/// `private-network-plaintext` it is also a private IPv4 address, an IPv6
+/// unique local address, or a name that resolves, and resolves only, to such
+/// addresses. A caller dials the returned addresses, never the name.
+pub fn plaintext_host_addresses(
+    transport: DatabaseTransport,
+    name: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Option<Vec<IpAddr>> {
+    match transport {
+        DatabaseTransport::VerifiedTls => None,
+        DatabaseTransport::LoopbackPlaintext => loopback_database_addresses(name, resolve),
+        DatabaseTransport::PrivateNetworkPlaintext => private_network_addresses(name, resolve),
+    }
+}
+
+/// The addresses of a loopback address literal, or of the name `localhost`
+/// when it resolves, and resolves only, to loopback addresses. `localhost` is
+/// looked up rather than trusted by its spelling.
+fn loopback_database_addresses(
+    name: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Option<Vec<IpAddr>> {
+    match registry_platform_loopback::loopback_host(name)? {
+        registry_platform_loopback::LoopbackHost::Literal(address) => Some(vec![address]),
+        host @ registry_platform_loopback::LoopbackHost::LocalhostName => resolve(name)
+            .ok()
+            .filter(|addresses| host.pinned_by(addresses)),
+    }
+}
+
+/// The addresses of a loopback host, a private IPv4 address, an IPv6 unique
+/// local address, or a name that resolves, and resolves only, to such
+/// addresses. A name is looked up once, and its answer is judged first as
+/// `localhost` resolving only to loopback addresses, then as private.
+fn private_network_addresses(
+    name: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Option<Vec<IpAddr>> {
+    let localhost = match registry_platform_loopback::loopback_host(name) {
+        Some(registry_platform_loopback::LoopbackHost::Literal(address)) => {
+            return Some(vec![address]);
         }
-        (DatabaseTransport::PrivateNetworkPlaintext, DatabaseHost::Tcp(name)) => {
-            private_network_host(name, resolve)
-        }
+        Some(host @ registry_platform_loopback::LoopbackHost::LocalhostName) => Some(host),
+        None => None,
     };
-    if hosts.iter().all(permitted) {
-        Ok(transport)
-    } else {
-        Err(DatabaseTransportError::HostMismatch(transport))
-    }
-}
-
-/// Whether `name` is a loopback address literal, or the name `localhost`
-/// resolving, and resolving only, to loopback addresses. The PostgreSQL
-/// driver resolves a name itself, so `localhost` is looked up here with the
-/// same resolver rather than trusted by its spelling.
-fn loopback_database_host(
-    name: &str,
-    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
-) -> bool {
-    match registry_platform_loopback::loopback_host(name) {
-        Some(host @ registry_platform_loopback::LoopbackHost::LocalhostName) => {
-            resolve(name).is_ok_and(|addresses| host.pinned_by(&addresses))
-        }
-        Some(_) => true,
-        None => false,
-    }
-}
-
-/// Whether `name` is loopback, a private IPv4 address, an IPv6 unique local
-/// address, or a name that resolves, and resolves only, to such addresses.
-fn private_network_host(
-    name: &str,
-    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
-) -> bool {
-    if loopback_database_host(name, resolve) {
-        return true;
-    }
     let literal = name
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(name);
     if let Ok(address) = literal.parse::<IpAddr>() {
-        return private_address(address);
+        return private_address(address).then(|| vec![address]);
     }
-    match resolve(name) {
-        Ok(addresses) => !addresses.is_empty() && addresses.into_iter().all(private_address),
-        Err(_) => false,
-    }
+    let addresses = resolve(name).ok()?;
+    let loopback = localhost.is_some_and(|host| host.pinned_by(&addresses));
+    let private = !addresses.is_empty() && addresses.iter().copied().all(private_address);
+    (loopback || private).then_some(addresses)
 }
 
 fn private_address(address: IpAddr) -> bool {

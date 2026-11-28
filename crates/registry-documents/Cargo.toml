@@ -93,6 +93,7 @@ registry-platform-authcommon = { workspace = true, features = ["refusal-recorder
 registry-platform-buildinfo.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
+registry-platform-postgres.workspace = true
 registry-platform-dispatch = { workspace = true, features = ["postgres"] }
 registry-platform-objectstore.workspace = true
 registry-platform-hooks = { workspace = true, features = ["postgres"] }

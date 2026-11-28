@@ -413,54 +413,80 @@ pub fn build_pool_in_posture(
     resolver: &SecretResolver,
     development: Option<&registry_platform_config::DevelopmentWitness>,
 ) -> Result<Pool, StoreError> {
-    use registry_platform_config::{DatabaseHost, DatabaseTransport};
     let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
-    let database = config.database_config();
-    let transport_error = |error: registry_platform_config::DatabaseTransportError| {
-        let (message, action) =
-            registry_adapter_engine::job_sources::job_store_transport_diagnostic(&error);
-        invalid(&format!("{}: {message}; next: {action}", error.code()))
-    };
-    database
-        .check(cfg!(feature = "postgres-test"))
-        .map_err(transport_error)?;
     let reference = &config.runtime_url_ref;
+    config
+        .database_config()
+        .check(cfg!(feature = "postgres-test"))
+        .map_err(job_store_transport_error)?;
     let protected = resolver
         .resolve(reference.as_str())
         .map_err(|_| invalid("a connection reference could not be resolved"))?;
     let url = std::str::from_utf8(protected.expose_secret())
         .map_err(|_| invalid("the connection url is not text"))?;
-    let mut postgres = tokio_postgres::Config::from_str(url)
+    let (postgres, verified_tls) = driver_config(
+        config,
+        url,
+        development,
+        &registry_platform_config::resolve_database_host,
+    )?;
+    let pool = if verified_tls {
+        build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
+    } else {
+        build_verified_pool(postgres, tokio_postgres::NoTls, 4)
+    };
+    pool.map_err(|error| invalid(&error))
+}
+
+fn job_store_transport_error(
+    error: registry_platform_config::DatabaseTransportError,
+) -> StoreError {
+    let (message, action) =
+        registry_adapter_engine::job_sources::job_store_transport_diagnostic(&error);
+    // The bracketed host is an address literal, never a name or a credential.
+    let message = match error {
+        registry_platform_config::DatabaseTransportError::BracketedHost(address) => {
+            format!("{message}: [{address}]")
+        }
+        _ => message.to_owned(),
+    };
+    StoreError::Pool(format!(
+        "store: {}: {message}; next: {action}",
+        error.code()
+    ))
+}
+
+/// The driver configuration the pool is built from, and whether it requires
+/// verified TLS. Under a plaintext transport every TCP host is replaced by
+/// the numeric addresses its check accepted, so the driver never resolves a
+/// name again.
+fn driver_config(
+    config: &JobStoreConfig,
+    url: &str,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(tokio_postgres::Config, bool), StoreError> {
+    let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
+    let postgres = tokio_postgres::Config::from_str(url)
         .map_err(|_| invalid("the connection url is invalid"))?;
     if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
         return Err(invalid("the connection url names no user or database"));
     }
-    let hosts: Vec<_> = postgres
-        .get_hosts()
-        .iter()
-        .map(|host| match host {
-            tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
-            #[cfg(unix)]
-            tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
-        })
-        .chain(
-            postgres
-                .get_hostaddrs()
-                .iter()
-                .map(|ip| DatabaseHost::Tcp(ip.to_string())),
-        )
-        .collect();
-    let transport = database
-        .plaintext_permitted(&hosts, development)
-        .map_err(transport_error)?;
-    let pool = if config.test_only_plaintext || transport != DatabaseTransport::VerifiedTls {
-        postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-        build_verified_pool(postgres, tokio_postgres::NoTls, 4)
+    let (transport, mut postgres) = registry_platform_postgres::postgres_connection(
+        &config.database_config(),
+        postgres,
+        development,
+        resolve,
+    )
+    .map_err(job_store_transport_error)?;
+    let verified_tls = !config.test_only_plaintext
+        && transport == registry_platform_config::DatabaseTransport::VerifiedTls;
+    postgres.ssl_mode(if verified_tls {
+        tokio_postgres::config::SslMode::Require
     } else {
-        postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-        build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
-    };
-    pool.map_err(|error| invalid(&error))
+        tokio_postgres::config::SslMode::Disable
+    });
+    Ok((postgres, verified_tls))
 }
 
 /// Build one finite verified PostgreSQL pool. The store and every source pool
@@ -2066,5 +2092,45 @@ mod storage_time_tests {
         );
         let exact = base + Duration::from_micros(56_268);
         assert_eq!(storage_time(exact), exact);
+    }
+}
+
+#[cfg(test)]
+mod driver_config_tests {
+    use super::*;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        let config: JobStoreConfig = serde_json::from_value(serde_json::json!({
+            "runtimeUrlRef": "secret:env/JOB_STORE_URL",
+            "transport": "loopback-plaintext",
+        }))
+        .unwrap();
+        let (postgres, verified_tls) = driver_config(
+            &config,
+            "postgresql://app@localhost:5433/adapter_job",
+            None,
+            &fixed,
+        )
+        .unwrap();
+        assert!(!verified_tls);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
     }
 }
