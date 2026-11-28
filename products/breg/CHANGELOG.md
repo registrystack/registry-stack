@@ -4,6 +4,8 @@
 
 - The published runtime schema types each `authentication.oidc.issuers` key as a local identifier (`propertyNames: {$ref: LocalId}`), as the other products' issuer maps do.
 
+- The BReg client reports a refused development hook delivery as `development-peer`.
+
 - BReg accepts development attachment storage and verifier responses when the runtime declares development.
 
 - Production BReg returns HTTP 401 with `platform.task-grant.development-assertion`

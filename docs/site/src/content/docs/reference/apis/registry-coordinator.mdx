@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: 2026-11-28
 doc_type: reference
 locale: en
 standards_referenced:
@@ -36,7 +36,7 @@ to an exact client keyed in `authentication.policies`, with a lifetime of at mos
 are read from `registry_scopes` unless the deployment sets `scopeClaim`. A missing, malformed, or
 unverified token answers `401 authentication.refused` with `WWW-Authenticate: Bearer`.
 
-{/* Evidence: crates/registry-coordinator/src/access.rs, access_token_typ_set, scopeClaim and
+{/* Evidence: crates/registry-coordinator/src/access.rs, AccessTokenType, scopeClaim and
     with_max_token_lifetime. */}
 
 Each exact verified client identity resolves its keyed caller policy, which lists the token subjects
@@ -124,7 +124,7 @@ An authenticated malformed envelope answers `400 event.invalid`.
 The event grants no authority for the calls the run then makes.
 
 {/* Evidence: crates/registry-coordinator/src/event_trigger.rs, MAXIMUM_EVENT_BYTES,
-    verify_hook_delivery, verify_delivery, receive;
+    verify_hook_delivery_with_posture, verify_delivery, receive;
     crates/registry-coordinator/src/http/admission_contracts.rs, event_path;
     crates/registry-coordinator/src/http.rs, router, http_edge. */}
 

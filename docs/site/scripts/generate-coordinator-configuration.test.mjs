@@ -88,7 +88,7 @@ test('Coordinator map keys state the bound written beside the shared identifier'
     'propertyNames.pattern: ^[1-9][0-9]*$',
     'propertyNames.pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]+$',
   ]);
-  for (const keyPath of ['deployment.authentication.policies.*', 'deployment.authentication.assertionIssuers.*']) {
+  for (const keyPath of ['deployment.authentication.policies.*', 'deployment.authentication.issuers.*.assertionIssuers.*']) {
     assert.ok(constraints(keyPath).includes('propertyNames.maxLength: 128'), keyPath);
     assert.ok(!constraints(keyPath).includes('propertyNames.maxLength: 512'), keyPath);
   }

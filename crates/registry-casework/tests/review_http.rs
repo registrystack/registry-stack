@@ -523,6 +523,7 @@ async fn app_with_project_options(
             posture: Posture::Production,
             source: PostureSource::Flag,
         }),
+        other_issuer,
     )
     .await
 }
@@ -534,6 +535,7 @@ async fn app_with_posture(
     strict_delegation_client: bool,
     runtime_audit: Option<CaseworkAudit>,
     posture: PostureReport,
+    other_issuer: Option<&MockIdp>,
 ) -> (
     axum::Router,
     CaseworkService,
@@ -1031,6 +1033,7 @@ async fn development_ready_lists_the_settings_and_marks_each_http_response() {
         false,
         None,
         loaded.posture,
+        None,
     )
     .await;
     for path in [READY_PATH, HEALTH_PATH, "/absent"] {

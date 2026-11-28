@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -47,7 +47,7 @@ The factories live in a generated file for each service, as [Construct a client]
 It also exports `RegistryError`, `describeError`, `pages`, `allPages`, `DeliveryError`, `verifyDelivery` and `verifyRequest`.
 A function that only receives deliveries imports `webhook.ts` instead, so it does not load every client.
 
-The BReg and service examples under `@registrystack/client/products/...` are generated from this repository’s sample registers. Use them as examples when generating clients for your own registers.
+The BReg and service examples under `@registrystack/client/products/...` are generated from this repository's sample registers. Use them as examples when generating clients for your own registers.
 Your project has its own Records, Actions and access profiles, so generate a client for it.
 
 {/* Evidence: clients/typescript/generate-all.ts; clients/typescript/browser.ts;
@@ -487,7 +487,7 @@ Wallet exchanges and discovery metadata use the OID4VCI protocol directly.
 ## Read BReg Records
 
 A BReg list operation publishes a query profile for each access profile in `x-registry-queryProfiles`, or one in `x-registry-queryProfile`.
-Use `list(recordType, options)` for the register’s top-level list of a record type.
+Use `list(recordType, options)` for the register's top-level list of a record type.
 The generated method types its options from those profiles.
 A field the profile does not allow is a type error.
 

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -137,8 +137,9 @@ error config.invalid-value /authentication/oidc/issuers/main/revokedKeyIds
 expected at least one key identifier; next: List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key.
 ```
 
-The runtime trusts one issuer, read at startup, so changing it is a coordinated restart with no
-overlap. First resolve every write whose response was lost: idempotency keys are bound to issuer and
+The runtime reads the issuer set under `authentication.oidc.issuers.<id>` at startup.
+Restart the instances to apply changes to the set. Before switching a caller to a new issuer,
+resolve every write whose response was lost. Idempotency keys are bound to issuer and
 principal, so a retry under the new issuer is a fresh request and can write twice, as
 [idempotency](../../reference/breg-api/#idempotency) explains. Restart paginated queries from the
 first page.
@@ -546,7 +547,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
     crates/registry-bregctl/src/lib.rs, apply.package.already-active;
     crates/registry-breg/src/postgres/catalog.rs, pre_1_0_attachment_verification_present();
     crates/registry-bregctl/src/lib.rs, PRE_1_0_SCHEMA_RECOVERY and apply.database.pre-1-0-schema;
-    crates/registry-breg/src/package.rs, validate_deployment_identity();
+    crates/registry-breg/src/startup.rs, recorded_startup_identity();
     crates/registry-bregctl/src/lib.rs, apply.package.deployment-identity-refused;
     crates/registry-breg/src/postgres/config.rs, DatabaseConnectionCause;
     crates/registry-bregctl/src/lib.rs, data command failures, import_authority_failure(),

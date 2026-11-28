@@ -27,7 +27,7 @@ test('Messaging reference carries the keys the author and operator pages name', 
     template: ['channel', 'locales', 'parts'],
     provider: ['prepareScript', 'capabilities.receipts', 'capabilities.ratePerSecond'],
     runtime: ['identity.databaseId', 'listener.bind', 'package.root', 'package.expectedDigest',
-      'retention.receiptRetentionDays', 'authentication.oidc.allowedClients'],
+      'retention.receiptRetentionDays', 'authentication.oidc.issuers.*.allowedClients'],
   };
   for (const [id, keys] of Object.entries(expected)) {
     const known = paths(id);

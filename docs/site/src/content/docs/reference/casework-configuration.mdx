@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -243,7 +243,7 @@ It never covers a cross-origin `jwks_uri` named by discovery, which must use `ht
 
 The removed `jwksUri` key is refused with a diagnostic naming `jwksSource` `type: uri` as its replacement.
 
-{/* Evidence: crates/registry-casework/src/config.rs jwks_source, REMOVED_OIDC_JWKS_URI */}
+{/* Evidence: crates/registry-casework/src/config.rs jwks_source; crates/registry-platform-config/src/loader.rs REMOVED_OIDC_JWKS_URI */}
 
 ### Admitted clients and claims
 
@@ -261,7 +261,7 @@ A person is a caller whose actor kind resolves to `human`: the kind the issuer e
 The removed field `authentication.oidc.humanIdentity` is refused with that replacement.
 Principal selection belongs exclusively to each authored `accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`.
 The removed runtime field `authentication.oidc.principalClaim` is refused with that replacement.
-Casework trusts one issuer, so every access profile a person uses (staff, supervisor, administrator, an initiator profile and any other requester profile) must name the same `principalClaim`; `casework.yaml` is refused with `casework.access-profile.mixed-principal-claims` otherwise.
+You configure the trusted issuers under `authentication.oidc.issuers.<id>`. Across that set, every access profile a person uses must name the same `principalClaim`. Casework refuses a project with mixed human principal claims with `casework.access-profile.mixed-principal-claims`.
 Profiles a trusted producer uses are services and share one claim among themselves, which may differ from the people's.
 A service requester profile must be named by a trusted producer's `profile` to be compared apart from people; no Casework route serves a service through any other requester profile.
 

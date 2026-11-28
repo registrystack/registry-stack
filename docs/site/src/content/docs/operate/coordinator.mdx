@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -362,7 +362,8 @@ Token signing-key rotation preserves the registered downstream client identity, 
 
 {/* Evidence: products/coordinator/generated/runtime/runtime.schema.json namespace, SecretProvidersConfig,
     EventSourceConfig, PrivateListenerConfig, TlsTermination;
-    crates/registry-coordinator/src/deployment.rs DevelopmentLoopback, MAX_WORKFLOWS, tls;
+    crates/registry-coordinator/src/deployment.rs MAX_WORKFLOWS, tls;
+    crates/registry-platform-config/src/blocks.rs DevelopmentLoopback;
     crates/registry-coordinator/src/runtime.rs RuntimeConfig. */}
 
 ### Expose the metrics listener
@@ -417,7 +418,7 @@ A run belongs to its starting token's exact verified `iss` and `sub`, never to a
 The subject decides who owns the run, never which record the start input names.
 Coordinator does not check that a record, subject, or recipient identifier in the input belongs to anyone, so the calling backend must already have authorised every identifier it passes for the person it acts for.
 
-{/* Evidence: crates/registry-coordinator/src/access.rs ClientPolicy, subjects, authenticate, scope_claim, registry_scopes;
+{/* Evidence: crates/registry-coordinator/src/access.rs ClientPolicy, subjects, authenticate, scope_claim;
     crates/registry-coordinator/tests/deployment_surface.rs scope_claim;
     products/coordinator/generated/runtime/runtime.schema.json ClientPolicy. */}
 
@@ -522,6 +523,7 @@ coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml check
     crates/registry-coordinator/src/http.rs review-completions. */}
 
 ## Apply and start
+
 Use the same declared posture for `plan`, `apply` and startup. The activation
 ledger records that posture, and existing activation rows read as production.
 Startup, `plan` and `apply` refuse a database activated under the other
@@ -529,7 +531,6 @@ posture. To change postures, apply to a fresh database.
 `coordinatorctl deployment-status` reports a mismatch and returns the deployment status.
 
 {/* Evidence: crates/registry-coordinator/src/deployment.rs plan, check_status, apply, check_deployment. */}
-
 
 ```sh
 coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml plan

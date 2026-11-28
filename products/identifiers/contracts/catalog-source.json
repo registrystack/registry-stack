@@ -671,6 +671,38 @@
   ],
   "records": [
     {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/expired",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "platform",
+      "title": "Session expired",
+      "description": "The session service requires the caller to sign in again.",
+      "sourcePath": "clients/typescript/core.ts",
+      "problem": {
+        "code": "session.expired",
+        "httpStatuses": [
+          401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-platform/session/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "platform",
+      "title": "Session unavailable",
+      "description": "The session service could not determine the session state.",
+      "sourcePath": "clients/typescript/core.ts",
+      "problem": {
+        "code": "session.unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/profiles/breg-odrl/v1",
       "kind": "profile",
       "status": "active",

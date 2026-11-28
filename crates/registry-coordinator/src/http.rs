@@ -2140,7 +2140,9 @@ pub fn openapi() -> Value {
 pub(crate) mod refusal_recording_tests {
     use super::*;
     use registry_platform_metrics::Exposition;
+    use registry_platform_testing::CapturedDiagnosticLogs;
     use std::sync::Mutex;
+    use tracing::instrument::WithSubscriber;
 
     #[tokio::test]
     async fn development_marks_route_refusals_and_fallbacks() {
@@ -2175,18 +2177,6 @@ pub(crate) mod refusal_recording_tests {
     /// A value no refusal may carry into the counter or the log.
     const CANARY: &str = "canary-subject-7f3a91";
 
-    #[derive(Clone, Default)]
-    struct Captured(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Captured {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     fn exposition(recorder: &RefusalRecorder) -> String {
         let mut out = Exposition::new();
         recorder.counter().write(&mut out).unwrap();
@@ -2216,13 +2206,7 @@ pub(crate) mod refusal_recording_tests {
             posture,
             false,
         );
-        let captured = Captured::default();
-        let writer = captured.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(move || writer.clone())
-            .with_ansi(false)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let captured = CapturedDiagnosticLogs::default();
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -2234,6 +2218,7 @@ pub(crate) mod refusal_recording_tests {
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
+            .with_subscriber(captured.subscriber())
             .await
             .unwrap();
         let status = response.status();
@@ -2241,7 +2226,7 @@ pub(crate) mod refusal_recording_tests {
             .await
             .unwrap();
         let body = serde_json::from_slice(&bytes).unwrap();
-        let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        let log = captured.text();
         (status, body, exposition(&recorder), log)
     }
 
@@ -2331,15 +2316,16 @@ pub(crate) mod refusal_recording_tests {
                 1,
                 "{check}: {log}"
             );
-            for field in [
-                "request refused",
-                "decision=\"refused\"",
-                &format!("failed_check=\"{check}\""),
-                "suppressed=0",
-                "trace_id=0af7651916cd43dd8448eb211c80319c",
-            ] {
-                assert!(log.contains(field), "{check}: {field} in {log}");
-            }
+            let line = log
+                .lines()
+                .find(|line| line.contains("request refused"))
+                .unwrap();
+            let event: Value = serde_json::from_str(line).unwrap();
+            let fields = &event["fields"];
+            assert_eq!(fields["decision"], "refused");
+            assert_eq!(fields["failed_check"], check);
+            assert_eq!(fields["suppressed"], 0);
+            assert_eq!(fields["trace_id"], "0af7651916cd43dd8448eb211c80319c");
             assert!(!log.contains(CANARY), "{check}: {log}");
             assert!(!body.to_string().contains(CANARY), "{check}");
         }
@@ -2354,9 +2340,9 @@ pub(crate) mod refusal_recording_tests {
         )
         .await;
         assert_eq!(answered.as_u16(), 403);
-        for field in ["scope_claim=\"scp\"", "required_scope=\"coordinator:run\""] {
-            assert!(log.contains(field), "{field} in {log}");
-        }
+        let event: Value = serde_json::from_str(&log).unwrap();
+        assert_eq!(event["fields"]["scope_claim"], "scp");
+        assert_eq!(event["fields"]["required_scope"], "coordinator:run");
         assert!(!log.contains("access_profile"), "{log}");
         assert!(!body.to_string().contains("coordinator:run"), "{body}");
         // A refusal that is not a scope refusal names no declared value.

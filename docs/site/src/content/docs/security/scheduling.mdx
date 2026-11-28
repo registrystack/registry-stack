@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -90,7 +90,6 @@ A refused `request` entry opens no transaction; a refused `response` entry after
     crates/registry-scheduling/src/http.rs ready and readyz;
     crates/registry-scheduling/src/service.rs audit_ready. */}
 
-
 ## Deployment posture
 
 Production is the default.
@@ -154,7 +153,7 @@ The guarantees hold only when you meet these obligations.
     crates/registry-scheduling/src/config.rs plaintext_postgres_is_refused_outside_the_test_suite,
     listener_requires_a_private_address_or_explicit_container_network, task_grant_status_refused,
     retention_days, default_claim_owner_retention_days, DEFAULT_RECEIPT_RETENTION_DAYS,
-    insecure_http_startup_diagnostic;
+    runtime_reads_the_explicit_http_issuer_opt_in;
     crates/registry-scheduling/tests/plaintext_config.rs
     the_default_feature_runtime_refuses_test_only_plaintext;
     crates/registry-scheduling/src/http.rs request_body_limit_default, without_hsts, no-store;
@@ -341,7 +340,7 @@ it is listed with them.
   static `jwksSource`.
 - Related: SCHEDULING-SEC-04, SCHEDULING-SEC-16.
 
-{/* Evidence: crates/registry-scheduling/src/config.rs insecure_http_startup_diagnostic,
+{/* Evidence: crates/registry-scheduling/src/config.rs runtime_reads_the_explicit_http_issuer_opt_in,
     static_jwks_requires_unique_named_asymmetric_keys;
     crates/registry-platform-oidc/src/lib.rs
     a_cross_origin_jwks_must_use_https_even_under_the_http_opt_in,

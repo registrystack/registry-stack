@@ -70,6 +70,8 @@ formats:
   # The normalized example ships without private key material. Generate a
   # disposable signer for the complete local target before fixture evaluation.
   evidence/fixture:
+    postureWarningArtifacts:
+      evidence.posture.local-assurance: EvidenceBundle
     project: products/evidence/examples/standalone
     prepare:
       - evidencectl keygen signing --output-dir {project}/.generated/secrets

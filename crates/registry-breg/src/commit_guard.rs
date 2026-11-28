@@ -85,20 +85,17 @@ fn registry_today(
         .local_date_at(now)
         .ok()
         .and_then(|date| shift_date(date, offset_days, offset_months));
-    match shifted {
-        Some(date) => Some(date),
-        None => {
-            // Only the runtime feature links `tracing`; test builds without it
-            // still fail the guard closed.
-            #[cfg(feature = "runtime")]
-            tracing::error!(
-                offset_days,
-                offset_months,
-                "a currentDate guard could not resolve the registry's offset date and fails closed"
-            );
-            None
-        }
+    // Only the runtime feature links `tracing`; test builds without it
+    // still fail the guard closed.
+    #[cfg(feature = "runtime")]
+    if shifted.is_none() {
+        tracing::error!(
+            offset_days,
+            offset_months,
+            "a currentDate guard could not resolve the registry's offset date and fails closed"
+        );
     }
+    shifted
 }
 
 /// Shift a date by whole days, or by whole calendar months that clamp to the

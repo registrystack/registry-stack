@@ -1584,7 +1584,7 @@ formats:
       file: crates/registry-casework/src/config.rs
       function: load
       type: RuntimeConfig
-    check: caseworkctl check {project} --runtime-config {file}
+    check: caseworkctl check {project} --runtime-config {file} --posture development
     example: products/casework/examples/canonical-review/runtime.example.yaml
     conformance:
       requiredText: /authentication/oidc/issuers/main/audience
@@ -2745,7 +2745,7 @@ formats:
       function: read_fixture
       # The registered example is coequal; read_fixture also decodes ReferenceFixture for reference-mode files.
       type: CoequalFixture
-    check: evidencectl test {project}
+    check: evidencectl test {project} --posture development
     example: products/evidence/examples/standalone/fixtures/adult-status.yaml
     conformance:
       requiredText: none
@@ -2834,7 +2834,7 @@ formats:
       file: crates/registry-evidence-authoring/src/target.rs
       function: read_target
       type: EvidenceTarget
-    check: evidencectl check {project} --target {file}
+    check: evidencectl check {project} --target {file} --posture development
     example: products/evidence/examples/standalone/local-target.yaml
     conformance:
       requiredText: /id
@@ -2883,7 +2883,7 @@ formats:
       file: crates/registry-evidence-authoring/src/target.rs
       function: read_authority
       type: EvidenceTargetAuthority
-    check: evidencectl check {project} --target {project}/local-target.yaml
+    check: evidencectl check {project} --target {project}/local-target.yaml --posture development
     example: products/evidence/examples/standalone/dev-authority.yaml
     conformance:
       requiredText: /project
@@ -4596,7 +4596,7 @@ formats:
       file: crates/registry-adapterctl/src/payment_fixtures.rs
       function: read_fixture
       type: FixtureDocument
-    check: adapterctl payments check {payments} --provider-pack {pack} --fixtures {file}
+    check: adapterctl payments check {payments} --provider-pack {pack} --fixtures {file} --posture development
     example: products/adapter/examples/payment-provider-fixture.yaml
     conformance:
       # The shared type and direction fields use tag and enum diagnostics.

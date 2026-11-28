@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-21"
+last_reviewed: "2026-11-28"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -42,10 +42,11 @@ replay, use [bind webhook receivers](../../operate/breg-webhooks/). For every YA
 ## Authentication and profile selection
 
 Every request except `/health`, `/healthz`, and `/ready` carries `Authorization: Bearer <token>`.
-The token is a JWT from the configured issuer that carries `iss`, `aud`, and `exp`. Its scopes come
-from the claim named by `scopeClaim`, split on `scopeSeparator`; the principal and purpose claims are
-the ones named under `authorityClaims`. A missing or rejected token answers
-`401 authentication.refused` before any profile is selected.
+The token is a JWT from a configured issuer and carries `iss`, `aud`, and `exp`.
+Its scopes come from the claim named by `scopeClaim`, split on `scopeSeparator`.
+The principal and purpose claims are the ones named under `authorityClaims`.
+A missing or rejected token usually returns `401 authentication.refused` before profile selection.
+Production returns `401 platform.task-grant.development-assertion` for a task assertion issued in development.
 
 Each route has one default access profile; select another with the `accessProfile` query option. A
 profile admits the caller when the token satisfies its `requiredScopes`, `requiredPurposes`, and

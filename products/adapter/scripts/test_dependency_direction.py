@@ -47,6 +47,7 @@ NAMES = {
     "cli-report": "registry-cli-report",
     "platform-config": "registry-platform-config",
     "thunderid-tooling": "registry-thunderid-tooling",
+    "rstack-dev": "registry-rstack-dev",
     "evidence": "registry-evidence",
     "casework": "registry-casework",
     "caseworkctl": "registry-caseworkctl",
@@ -228,6 +229,25 @@ class EngineTests(unittest.TestCase):
                     NAMES["cli-report"],
                     failures(**{owner: [*INTENDED[owner], "cli-report"]}),
                 )
+
+    def test_only_authoring_may_reach_the_development_run_helper(self):
+        self.assertEqual(MODULE.violations(metadata(ctl=[*INTENDED["ctl"], "rstack-dev"])), [])
+        for owner in ("core", "shared-engine", "engine", "job"):
+            with self.subTest(owner=owner):
+                self.assertIn(
+                    NAMES["rstack-dev"],
+                    failures(**{owner: [*INTENDED[owner], "rstack-dev"]}),
+                )
+
+    def test_authoring_refuses_a_product_runtime_behind_the_development_run_helper(self):
+        graph = metadata(ctl=[*INTENDED["ctl"], "rstack-dev"], **{"rstack-dev": ["breg"]})
+        self.assertTrue(
+            any(
+                finding.startswith("registry-adapterctl reaches") and "registry-breg" in finding
+                for finding in MODULE.violations(graph)
+            ),
+            MODULE.violations(graph),
+        )
 
     def test_only_the_payment_host_reaches_the_payment_contract_and_breg_client(self):
         graph = metadata(engine=[*INTENDED["engine"], "payment-protocol", "payment-provider", "breg-client"])

@@ -102,7 +102,7 @@ test('a product answer carrying a session code is a product answer, in page and 
   const lookalikes: Array<(kind: 'expired' | 'unavailable') => SessionShape> = [
     () => ({ header: null }), () => ({ header: '0' }), () => ({ header: 'yes' }),
     () => ({ type: null }),
-    () => ({ type: 'https://id.registrystack.org/problems/registry-casework/session/expired' }),
+    () => ({ type: 'https://example.invalid/problems/session/expired' }),
     kind => ({ type: sessionType + (kind === 'expired' ? 'unavailable' : 'expired') }),
     kind => ({ type: sessionType + kind + '/' }),
     kind => ({ problemStatus: kind === 'expired' ? 403 : 500 }),

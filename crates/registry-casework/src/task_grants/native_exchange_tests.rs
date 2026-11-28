@@ -2000,8 +2000,10 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     )
     .await;
     assert_eq!(development_read.status, StatusCode::UNAUTHORIZED);
-    // The distinct development-assertion problem code arrives with the BReg change.
-    assert_eq!(development_read.body["code"], "authentication.refused");
+    assert_eq!(
+        development_read.body["code"],
+        "platform.task-grant.development-assertion"
+    );
     let adjacent_read = resource::send(
         &app,
         axum::http::Method::GET,

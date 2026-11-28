@@ -858,6 +858,17 @@ class ReportTest(unittest.TestCase):
             [],
         )
 
+    def test_cfg_diag_1_warning_acceptance_metadata(self) -> None:
+        warning = diagnostic(
+            severity="warning", scope={"file": "runtime.yaml", "path": "/setting"},
+            acceptedReason="Accepted for this project.",
+        )
+        self.assertEqual(runner.shape_problems(warning, None), [])
+        self.assertIn(
+            "scope.file is not a project-relative path",
+            runner.shape_problems(dict(warning, scope={"file": "../runtime.yaml", "path": "/setting"}), None),
+        )
+
     def test_cfg_diag_1_shape_problems(self) -> None:
         cases = [
             (diagnostic(severity="fatal"), "severity is not error or warning"),

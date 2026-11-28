@@ -71,6 +71,7 @@
   columns: [Code, Status, When]
   rows:
     - ['`authentication.refused`', '401', 'A bearer token is missing or rejected: bad signature, wrong issuer or audience, expired, denied key, or a claim outside policy.']
+    - ['`platform.task-grant.development-assertion`', '401', 'Production refuses a task assertion issued in the development posture.']
     - ['`resource.not_found`', '404', 'A verified token that does not satisfy the profile, a route the profile cannot reach, or a record outside the caller''s row boundary. The server does not distinguish these cases.']
     - ['`lookup.unresolved`', '404', 'A lookup matched zero records or more than one.']
     - ['`request.invalid`', '400', 'The body, headers, or path did not match the compiled contract. `fieldPath` names the body member or header at fault when one is, and never a field name the grant does not admit. A lookup against a selector whose values come from a verified claim answers `fieldPath` `/values` when the body sends `values`.']

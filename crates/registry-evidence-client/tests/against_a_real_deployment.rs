@@ -621,7 +621,7 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     let client = EvidenceClient::from_profile_path_with_key(
         &profile_path,
         issuer.client_key.clone(),
-        PeerPolicy::RefuseDevelopmentPeer,
+        PeerPolicy::AcceptDevelopmentPeer,
     )
     .expect("the local profile and in-memory registered key configure the client");
     let request = || {
@@ -797,7 +797,7 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     let reviewed_client = EvidenceClient::from_profile_path_with_key(
         &reviewed_profile_path,
         issuer.client_key.clone(),
-        PeerPolicy::RefuseDevelopmentPeer,
+        PeerPolicy::AcceptDevelopmentPeer,
     )
     .expect("the reviewed profile configures the client");
     let fresh_candidate = reviewed_client
@@ -823,7 +823,7 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     let pinned_client = EvidenceClient::from_profile_path_with_key(
         &profile_path,
         issuer.client_key.clone(),
-        PeerPolicy::RefuseDevelopmentPeer,
+        PeerPolicy::AcceptDevelopmentPeer,
     )
     .expect("a definition pin configures the client independently of service identity");
     pinned_client
@@ -836,7 +836,7 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     let drifted_client = EvidenceClient::from_profile_path_with_key(
         &profile_path,
         issuer.client_key.clone(),
-        PeerPolicy::RefuseDevelopmentPeer,
+        PeerPolicy::AcceptDevelopmentPeer,
     )
     .expect("the older pin is valid configuration");
     assert!(
@@ -980,7 +980,7 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
         EvidenceClient::from_profile_with_authorization(
             unpinned,
             exchange(TOKEN_AUDIENCE),
-            PeerPolicy::RefuseDevelopmentPeer,
+            PeerPolicy::AcceptDevelopmentPeer,
         ),
         Err(EvidenceClientError::Configuration { .. })
     ));
@@ -988,7 +988,7 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
     let mismatched = EvidenceClient::from_profile_with_authorization(
         profile.clone(),
         exchange("urn:registry:other"),
-        PeerPolicy::RefuseDevelopmentPeer,
+        PeerPolicy::AcceptDevelopmentPeer,
     )
     .expect("the mismatch is checked against discovery, not guessed at construction");
     assert!(matches!(
@@ -1004,7 +1004,7 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
     let client = EvidenceClient::from_profile_with_authorization(
         profile,
         exchange(TOKEN_AUDIENCE),
-        PeerPolicy::RefuseDevelopmentPeer,
+        PeerPolicy::AcceptDevelopmentPeer,
     )
     .expect("the exchange-backed profile constructs");
     let verified = client
@@ -1448,11 +1448,12 @@ impl Deployment {
     /// A client that acquires its credential from a provider rather than
     /// presenting one this suite signed.
     fn client_using(&self, token_provider: Arc<dyn TokenProvider>) -> EvidenceClient {
-        EvidenceClient::new(EvidenceClientConfig::new_without_peer_policy(
+        EvidenceClient::new(EvidenceClientConfig::new(
             self.base_url.clone(),
             token_provider,
             self.runtime.jwks().clone(),
             Vec::new(),
+            PeerPolicy::AcceptDevelopmentPeer,
         ))
         .expect("the client configuration is usable")
     }
@@ -1462,11 +1463,12 @@ impl Deployment {
         access_token: &str,
         maximum_response_bytes: Option<u64>,
     ) -> EvidenceClient {
-        let mut config = EvidenceClientConfig::new_without_peer_policy(
+        let mut config = EvidenceClientConfig::new(
             self.base_url.clone(),
             Arc::new(StaticToken::new(access_token).expect("the credential is header-safe")),
             self.runtime.jwks().clone(),
             Vec::new(),
+            PeerPolicy::AcceptDevelopmentPeer,
         );
         if let Some(maximum_response_bytes) = maximum_response_bytes {
             config = config.with_maximum_response_bytes(maximum_response_bytes);
@@ -1519,6 +1521,23 @@ impl Drop for Deployment {
         let _ = fs::set_permissions(&self.runtime_path, fs::Permissions::from_mode(0o644));
         unseal(&self.bundle_root);
     }
+}
+
+#[tokio::test]
+async fn the_default_client_refuses_the_development_deployment() {
+    let deployment = start(resolved_source_answer()).await;
+    let client = EvidenceClient::new(EvidenceClientConfig::new_without_peer_policy(
+        deployment.base_url.clone(),
+        Arc::new(StaticToken::new(deployment.token()).unwrap()),
+        deployment.runtime.jwks().clone(),
+        Vec::new(),
+    ))
+    .unwrap();
+
+    assert!(matches!(
+        client.discover().await,
+        Err(EvidenceClientError::DevelopmentPeer)
+    ));
 }
 
 /// Stage, seal, load, and serve one deployment whose fixed source answers with

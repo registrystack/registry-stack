@@ -570,9 +570,10 @@ async fn development_runtime_marks_probes_audit_and_task_assertions() {
             "database": {"runtimeUrlRef": "secret:file/url", "migrationUrlRef": "secret:file/url",
                          "testOnlyPlaintext": true},
             "secretProviders": {"file": {"root": secrets}},
-            "authentication": {"oidc": {"issuer": ISSUER, "audience": "urn:casework:test", "scopeClaim": "scope",
+            "authentication": {"oidc": {"issuers": {"main": {
+              "issuer": ISSUER, "audience": "urn:casework:test", "scopeClaim": "scope",
               "allowedClients": ["human-client", "agent-client"],
-              "jwksSource": {"type": "static", "documentRef": "secret:file/issuer"}}},
+              "jwksSource": {"type": "static", "documentRef": "secret:file/issuer"}}}}},
             "audit": {"path": audit, "hashKeyRef": "secret:file/audit"},
             "taskAuthority": {"issuer": "https://authority.test", "exchangeAudience": ISSUER,
                               "signingKeyRef": "secret:file/authority", "statusClients": {}}

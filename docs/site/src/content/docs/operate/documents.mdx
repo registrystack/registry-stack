@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -199,7 +199,7 @@ the runtime does not know, such as `x5c`, `x5t` or `ext`, are ignored. The set i
 startup and never rotates, so to change keys, replace the secret and restart `serve`.
 
 {/* Evidence: products/documents/generated/runtime/runtime.schema.json;
-    crates/registry-documents/src/config.rs, verifier_profile and DOCUMENTS_ACCESS_TOKEN_TYPE;
+    crates/registry-documents/src/config.rs, verifier_profile and AccessTokenType;
     crates/registry-documents/src/auth.rs, authenticate;
     crates/registry-documents-core/src/access.rs, AccessProfiles::resolve;
     crates/registry-platform-oidc/src/lib.rs, verify_access_token, match_client, and
@@ -250,9 +250,10 @@ checks the secret reference and its provider. Startup also reads and validates t
     crates/registry-platform-crypto/src/delivery_signature.rs, DeliveryKey::new;
     crates/registry-platform-hooks/src/delivery/url_binding.rs, activate_url_hook_destinations;
     crates/registry-documents/src/config.rs, check_runtime_file;
-    crates/registry-documents/src/runtime.rs, connect_migration only in apply. */}
+    crates/registry-documents/src/runtime.rs, connect_migration_with_posture only in apply. */}
 
 ## Check, apply, and start
+
 Use the same declared posture for `plan`, `apply` and startup. The activation
 ledger records that posture, and existing activation rows read as production.
 Startup, `plan` and `apply` refuse a database activated under the other
@@ -260,7 +261,6 @@ posture. To change postures, apply to a fresh database.
 `documentsctl status` reports a mismatch and returns the ledger.
 
 {/* Evidence: crates/registry-documents/src/activation.rs plan, status, apply, check_runtime. */}
-
 
 Check the file and the package before you deploy them:
 

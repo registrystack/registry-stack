@@ -17,12 +17,13 @@
 //! `coordinatorctl` owns them.
 //!
 //! Every Coordinator refusal is an RFC 9457 `application/problem+json`
-//! document with exactly `type`, `title`, `status`, `detail`, `code` and
-//! `traceId`. The client accepts one as `CoordinatorClientError::Problem` only
+//! document with required `type`, `title`, `status`, `detail`, `code` and
+//! `traceId` members and an optional `pointer`. The client accepts one as
+//! `CoordinatorClientError::Problem` only
 //! when its status equals the answer's, its `traceId` equals the answer's
 //! `traceparent` trace, and its `type` is its `family.reason` code under
 //! `https://id.registrystack.org/problems/registry-coordinator/`; anything else
-//! is a protocol failure. The client discards the title and detail. Redirects
+//! is a protocol failure. The client discards the title, detail and pointer. Redirects
 //! and ambient proxies are disabled by the shared transport, and
 //! JSON/header/body bounds are enforced on every response.
 
