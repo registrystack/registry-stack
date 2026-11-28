@@ -2096,7 +2096,12 @@ fn problem_response(code: BRegProblemCode) -> MockResponse {
     });
     if code == BRegProblemCode::ActionRefused {
         body["refusalCode"] = json!(REFUSAL_CODE);
-    } else if code == BRegProblemCode::AttachmentRequired {
+    } else if matches!(
+        code,
+        BRegProblemCode::AttachmentRequired
+            | BRegProblemCode::AttachmentVerificationPending
+            | BRegProblemCode::AttachmentVerificationRejected
+    ) {
         body["fieldPath"] = json!("/attachments/support");
     } else if code == BRegProblemCode::StatisticalDatasetReleaseRefused {
         body["refusalCode"] = json!("period-not-ended");
@@ -2150,6 +2155,8 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
             "The supporting document slot has reached its file limit."
         }
         Code::AttachmentRequired => "The required attachment slot is empty.",
+        Code::AttachmentVerificationPending => "The attachment is awaiting verification. Refresh the Proposal before submitting.",
+        Code::AttachmentVerificationRejected => "The attachment was rejected by verification. Replace or remove the file before submitting.",
         Code::AttachmentSlotWriteOnce => {
             "The record attachment slot already holds a file and is write-once."
         }

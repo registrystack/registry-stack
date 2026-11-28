@@ -608,6 +608,13 @@ Before Submit, follow the Proposal's attachment upload links to fill its require
 An empty required slot makes Submit unavailable with `attachment-required` and recovery `correct-input`.
 A direct Submit answers `422 attachment.required`, with `fieldPath` naming `/attachments/<slotId>`.
 After an upload, the updated Submit link reflects the stored file even if your profile cannot read the slot's value.
+A required file rejected by verification counts as empty.
+Pending verification makes Submit unavailable with `attachment-pending` and recovery `refresh`.
+A direct Submit answers `409 attachment.verification-pending`.
+A rejected optional file gives `invalid-input` with recovery `correct-input`, and `422 attachment.verification-rejected` on Submit.
+Each problem names only the slot location, including for a caller who cannot read file metadata.
+Filling and submitting can use different profiles: Submit does not require permission to write the slot.
+Slot uploads answer `413 attachment.too-large` and `415 attachment.content-type` for size and media-type refusals.
 
 The generated OpenAPI declares `application/problem+json` bodies for every documented error response on Proposal routes.
 These include lifecycle commands, submission reads, review and task-grant context, and file routes.
@@ -616,7 +623,7 @@ The shared problem schema includes the problem code and optional field location.
 {/* Evidence: crates/registry-breg/tests/proposal_status_contract.rs every_proposal_error_response_declares_its_problem_body;
     crates/registry-breg/tests/support/proposal_required_attachment.rs;
     crates/registry-breg/src/proposal_artifacts.rs append_problem_codes;
-    crates/registry-breg/src/problem.rs AttachmentRequired. */}
+    crates/registry-breg/src/problem.rs AttachmentRequired, AttachmentVerificationPending, AttachmentVerificationRejected. */}
 
 ### Proposal additions
 

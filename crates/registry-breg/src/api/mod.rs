@@ -599,12 +599,16 @@ async fn openapi(
         &mut paths,
         &mut schemas,
     );
-    crate::artifacts::append_proposal_openapi(
+    if crate::artifacts::append_proposal_openapi(
         &mut paths,
         service.registry.actions(),
         service.registry.entities(),
         Some(&visible_proposals),
-    );
+    )
+    .is_err()
+    {
+        return unavailable();
+    }
     statistics::append_openapi(&service, &claims, &options, &mut paths, &mut schemas);
     if service.external_views.is_some() {
         crate::external_view_artifacts::append(
@@ -5777,6 +5781,19 @@ fn precondition_failed() -> Response {
     fixed_problem(ProblemCode::PreconditionFailed)
 }
 
+fn attachment_slot_problem(problem: ProblemCode, slot: &str) -> Response {
+    crate::correlation::problem_response_with_field_path(
+        StatusCode::from_u16(problem.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        problem.title(),
+        problem.description(),
+        problem.code(),
+        format!(
+            "/attachments/{}",
+            slot.replace('~', "~0").replace('/', "~1")
+        ),
+    )
+}
+
 fn mutation_problem(error: MutationError) -> Response {
     let check = error.failed_check();
     let response = mutation_problem_response(error);
@@ -5811,17 +5828,13 @@ fn mutation_problem_response(error: MutationError) -> Response {
         MutationError::AttachmentTooLarge => fixed_problem(ProblemCode::AttachmentTooLarge),
         MutationError::AttachmentLimitReached => fixed_problem(ProblemCode::AttachmentLimitReached),
         MutationError::AttachmentRequired { slot } => {
-            let problem = ProblemCode::AttachmentRequired;
-            crate::correlation::problem_response_with_field_path(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                problem.title(),
-                problem.description(),
-                problem.code(),
-                format!(
-                    "/attachments/{}",
-                    slot.replace('~', "~0").replace('/', "~1")
-                ),
-            )
+            attachment_slot_problem(ProblemCode::AttachmentRequired, &slot)
+        }
+        MutationError::AttachmentVerificationPending { slot } => {
+            attachment_slot_problem(ProblemCode::AttachmentVerificationPending, &slot)
+        }
+        MutationError::AttachmentVerificationRejected { slot } => {
+            attachment_slot_problem(ProblemCode::AttachmentVerificationRejected, &slot)
         }
         MutationError::AttachmentContentType => fixed_problem(ProblemCode::AttachmentContentType),
         MutationError::AttachmentDigestMismatch => {

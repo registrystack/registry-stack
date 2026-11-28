@@ -305,7 +305,7 @@ pub(crate) fn generate_artifacts(
         schemas: &schemas,
         statistical_datasets,
         external_views,
-    });
+    })?;
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
         let projected = project_manifest_artifacts(registry_id, projection, entities)?;
@@ -1920,6 +1920,12 @@ fn action_operation_responses(
         ("200", success)
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
+    if route.operation == Operation::Start {
+        let mut document = json!({"operationId":route.id,"responses":responses});
+        proposal_artifacts::append_operation_problems(&mut document, "post");
+        return document["responses"].take();
+    }
+
     for (status, problems) in action_problem_responses(route.kind, action, may_refuse_write) {
         let mut examples = problems
             .iter()
@@ -2304,7 +2310,7 @@ struct OpenApiDocumentInput<'a> {
     external_views: &'a crate::external_views::CompiledExternalViews,
 }
 
-fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
+fn openapi_document(input: OpenApiDocumentInput<'_>) -> Result<Value, Diagnostic> {
     let OpenApiDocumentInput {
         registry_id,
         version,
@@ -2449,7 +2455,7 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
             openapi_action_operation(route, action, entities, OpenApiAccessProfiles::All),
         );
     }
-    append_proposal_openapi(&mut paths, actions, entities, None);
+    append_proposal_openapi(&mut paths, actions, entities, None)?;
     crate::external_view_artifacts::append(
         &mut paths,
         external_views,
@@ -2479,12 +2485,12 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
         statistical_datasets,
         false,
     );
-    json!({
+    Ok(json!({
         "openapi": "3.1.0",
         "info": {"title": registry_id, "version": version},
         "paths": paths,
         "components": openapi_components(component_schemas, has_immediate_actions)
-    })
+    }))
 }
 
 pub(crate) const ACCESS_LOG_RESPONSE_SCHEMA_ID: &str = "SubjectAccessLogPage";
@@ -4566,13 +4572,18 @@ fn problem_schema() -> Value {
         },
         "allOf": [
             {
-                "if": {"properties": {"code": {"const": "attachment.required"}}},
+                "if": {"properties": {"code": {"enum": ["attachment.required","attachment.verification-pending","attachment.verification-rejected"]}}},
                 "then": {
                     "required": ["fieldPath"],
+                    "propertyNames": {"enum":["type","title","status","detail","code","traceId","fieldPath"]},
                     "properties": {
-                        "status": {"const": 422},
                         "fieldPath": {"type":"string","pattern":"^/attachments/[a-z][a-z0-9_-]{0,63}$"}
-                    }
+                    },
+                    "allOf":[{
+                        "if":{"properties":{"code":{"const":"attachment.verification-pending"}}},
+                        "then":{"properties":{"status":{"const":409}}},
+                        "else":{"properties":{"status":{"const":422}}}
+                    }]
                 }
             },
             {
@@ -5061,22 +5072,34 @@ mod problem_contract_tests {
             .with_draft(jsonschema::Draft::Draft202012)
             .compile(&schema)
             .unwrap();
-        let code = crate::problem::ProblemCode::AttachmentRequired;
-        let mut body = problem_example("422", code.code(), code.description());
-        assert!(
-            !validator.is_valid(&body),
-            "a required slot refusal must identify the slot"
-        );
-        body["fieldPath"] = json!("/attachments/support");
-        assert!(validator.is_valid(&body));
-        for invalid in [
-            "/input/support",
-            "/attachments",
-            "/attachments/support/bytes",
-            "/attachments/UPPER",
+        for code in [
+            crate::problem::ProblemCode::AttachmentRequired,
+            crate::problem::ProblemCode::AttachmentVerificationPending,
+            crate::problem::ProblemCode::AttachmentVerificationRejected,
         ] {
-            body["fieldPath"] = json!(invalid);
-            assert!(!validator.is_valid(&body), "{invalid}");
+            let mut body =
+                problem_example(&code.status().to_string(), code.code(), code.description());
+            assert!(
+                !validator.is_valid(&body),
+                "a required slot refusal must identify the slot"
+            );
+            body["fieldPath"] = json!("/attachments/support");
+            assert!(validator.is_valid(&body));
+            for invalid in [
+                "/input/support",
+                "/attachments",
+                "/attachments/support/bytes",
+                "/attachments/UPPER",
+            ] {
+                body["fieldPath"] = json!(invalid);
+                assert!(!validator.is_valid(&body), "{invalid}");
+            }
+            body["fieldPath"] = json!("/attachments/support");
+            body["recordType"] = json!("private-record");
+            assert!(
+                !validator.is_valid(&body),
+                "a slot problem permits no record metadata"
+            );
         }
     }
 

@@ -685,6 +685,57 @@ pub(crate) async fn require_frozen_reference(
     Ok(())
 }
 
+/// Submit and its link use this same stored-file decision, before any plan
+/// evaluation. Rejected required files count as empty, then other files must
+/// finish verification before their descriptors can enter the frozen manifest.
+pub(crate) async fn submission_manifest(
+    client: &impl GenericClient,
+    action: &str,
+    id: Uuid,
+    version: i64,
+    slots: &BTreeMap<String, crate::model::CompiledAttachmentSlot>,
+) -> Result<BTreeMap<String, AttachmentManifestEntry>, MutationError> {
+    let policy = persisted_verification_policy(client).await?;
+    let files = metadata(client, action, id, version).await?;
+    for (slot, definition) in slots {
+        if definition.required
+            && files.get(slot).is_none_or(|file| {
+                file.verification_status == AttachmentVerificationStatus::Rejected
+            })
+        {
+            return Err(MutationError::AttachmentRequired { slot: slot.clone() });
+        }
+    }
+    for (slot, file) in &files {
+        if !slots.contains_key(slot) {
+            return Err(MutationError::PreconditionFailed);
+        }
+        match file.verification_status {
+            AttachmentVerificationStatus::Pending => {
+                return Err(MutationError::AttachmentVerificationPending { slot: slot.clone() })
+            }
+            AttachmentVerificationStatus::Rejected => {
+                return Err(MutationError::AttachmentVerificationRejected { slot: slot.clone() })
+            }
+            AttachmentVerificationStatus::NotRequired | AttachmentVerificationStatus::Approved => {}
+        }
+    }
+    Ok(files
+        .into_iter()
+        .map(|(slot, file)| {
+            (
+                slot,
+                AttachmentManifestEntry {
+                    sha256: file.sha256,
+                    content_type: file.content_type,
+                    byte_size: file.byte_size,
+                    verification_policy: (policy != "disabled").then(|| policy.clone()),
+                },
+            )
+        })
+        .collect())
+}
+
 pub(crate) async fn manifest(
     client: &impl GenericClient,
     entity: &str,

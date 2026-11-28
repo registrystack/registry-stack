@@ -479,6 +479,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
         ("limit-reached", "receipt-only"),
         ("application-pending", "refresh"),
         ("attachment-required", "correct-input"),
+        ("attachment-pending", "refresh"),
     ];
     let reads = |state: &str, availability: Value| {
         let mut value = proposal(state);
@@ -499,6 +500,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
         "limit-reached",
         "application-pending",
         "attachment-required",
+        "attachment-pending",
     ] {
         for recovery in [
             "refresh",
@@ -511,7 +513,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
             let state = match (reason, recovery) {
                 ("already-applied", _) => "applied",
                 ("review-rejected", "receipt-only") => "rejected",
-                ("attachment-required", _) => "draft",
+                ("attachment-required" | "attachment-pending", _) => "draft",
                 _ => "submitted",
             };
             let (current, list) = reads(

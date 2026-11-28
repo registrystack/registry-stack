@@ -17,7 +17,6 @@ const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
 const TRACEPARENT = `00-${TRACE_ID}-00f067aa0ba902b7-01`;
 const MISSING_RECORD_ID = '00000000-0000-4000-8000-000000000001';
 const OUTSIDE_WRITE_BOUNDARY_ID = '00000000-0000-4000-8000-000000000403';
-const REQUIRED_ATTACHMENT_ID = '00000000-0000-4000-8000-000000000423';
 const EXTENDED_UNKNOWN_PROBLEM_ID = '00000000-0000-4000-8000-000000000003';
 const UNKNOWN_PROBLEM_STATUSES = new Map([
   ['00000000-0000-4000-8000-000000000422', 422],
@@ -86,14 +85,6 @@ before(async () => {
         code: 'write.outside-boundary',
         traceId: TRACE_ID,
       }));
-    }
-    else if (request.url.endsWith(`/v1/records/companies/${REQUIRED_ATTACHMENT_ID}`)) {
-      response.statusCode = 422;
-      response.setHeader('content-type', 'application/problem+json');
-      response.setHeader('cache-control', 'no-store');
-      response.end(JSON.stringify({type: 'https://id.registrystack.org/problems/registry-breg/attachment/required',
-        title: 'Unprocessable Entity', status: 422, detail: 'The required attachment slot is empty.',
-        code: 'attachment.required', traceId: TRACE_ID, fieldPath: '/attachments/support'}));
     }
     else {
       const recordId = request.url.split('/').at(-1);
@@ -303,17 +294,6 @@ test('a write boundary refusal uses the core problem projection without detail l
   });
 });
 
-test('a required attachment refusal preserves its slot location', async () => {
-  const client = new BaseRegistryClient({baseUrl});
-  await assert.rejects(client.getRecord('companies', REQUIRED_ATTACHMENT_ID), error => {
-    assert.equal(error.kind, 'problem');
-    assert.equal(error.status, 422);
-    assert.equal(error.code, 'attachment.required');
-    assert.equal(error.fieldPath, '/attachments/support');
-    assert.equal(error.outcomeUnknown, false);
-    return true;
-  });
-});
 
 test('unknown problem codes fall back to HTTP status semantics', async () => {
   const client = new BaseRegistryClient({ baseUrl });

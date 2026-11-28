@@ -147,6 +147,8 @@ pub enum BRegProblemCode {
     AttachmentSlotWriteOnce,
     AttachmentLimitReached,
     AttachmentRequired,
+    AttachmentVerificationPending,
+    AttachmentVerificationRejected,
     AttachmentTooLarge,
     AuthenticationRefused,
     ExternalViewIncomplete,
@@ -185,7 +187,7 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 46] = [
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
@@ -195,6 +197,8 @@ impl BRegProblemCode {
         Self::AttachmentSlotWriteOnce,
         Self::AttachmentLimitReached,
         Self::AttachmentRequired,
+        Self::AttachmentVerificationPending,
+        Self::AttachmentVerificationRejected,
         Self::AttachmentTooLarge,
         Self::AuthenticationRefused,
         Self::ExternalViewIncomplete,
@@ -244,6 +248,8 @@ impl BRegProblemCode {
             Self::AttachmentSlotWriteOnce => "attachment.slot-write-once",
             Self::AttachmentLimitReached => "attachment.limit-reached",
             Self::AttachmentRequired => "attachment.required",
+            Self::AttachmentVerificationPending => "attachment.verification-pending",
+            Self::AttachmentVerificationRejected => "attachment.verification-rejected",
             Self::AttachmentTooLarge => "attachment.too-large",
             Self::AuthenticationRefused => "authentication.refused",
             Self::ExternalViewIncomplete => "external_view.incomplete",
@@ -297,6 +303,7 @@ impl BRegProblemCode {
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::AttachmentSlotWriteOnce
             | Self::AttachmentLimitReached
+            | Self::AttachmentVerificationPending
             | Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
@@ -316,6 +323,7 @@ impl BRegProblemCode {
             Self::ActionRefused
             | Self::AttachmentDigestMismatch
             | Self::AttachmentRequired
+            | Self::AttachmentVerificationRejected
             | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
             Self::StatisticalDatasetDomainViolation => 500,
@@ -386,6 +394,8 @@ impl BRegProblemCode {
             Self::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
             Self::AttachmentLimitReached => "The supporting document slot has reached its file limit.",
             Self::AttachmentRequired => "The required attachment slot is empty.",
+            Self::AttachmentVerificationPending => "The attachment is awaiting verification. Refresh the Proposal before submitting.",
+            Self::AttachmentVerificationRejected => "The attachment was rejected by verification. Replace or remove the file before submitting.",
             Self::AuthenticationRefused => "The bearer token or delivery signature was not accepted.",
             Self::ExternalViewIncomplete => {
                 "The external view's indexed coverage is incomplete for this request."

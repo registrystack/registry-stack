@@ -2472,6 +2472,10 @@ pub enum MutationError {
     AttachmentLimitReached,
     #[error("the required attachment slot is empty")]
     AttachmentRequired { slot: String },
+    #[error("the attachment is awaiting verification")]
+    AttachmentVerificationPending { slot: String },
+    #[error("the attachment was rejected by verification")]
+    AttachmentVerificationRejected { slot: String },
     /// A file is larger than its attachment slot's `maximumBytes`.
     #[error("the file is larger than the attachment slot accepts")]
     AttachmentTooLarge,
@@ -2561,6 +2565,8 @@ impl MutationError {
             | Self::AttachmentTooLarge
             | Self::AttachmentLimitReached
             | Self::AttachmentRequired { .. }
+            | Self::AttachmentVerificationPending { .. }
+            | Self::AttachmentVerificationRejected { .. }
             | Self::AttachmentContentType
             | Self::AttachmentDigestMismatch
             | Self::IdempotencyConflict

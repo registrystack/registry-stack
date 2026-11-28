@@ -123,6 +123,7 @@ proposal_wire_values!(ProposalAvailabilityReason {
     LimitReached => "limit-reached",
     ApplicationPending => "application-pending",
     AttachmentRequired => "attachment-required",
+    AttachmentPending => "attachment-pending",
 });
 
 proposal_wire_values!(ProposalLinkRecovery {
@@ -152,6 +153,7 @@ pub enum ProposalLinkRefusal {
     LimitReached,
     ApplicationPending,
     AttachmentRequired,
+    AttachmentPending,
 }
 
 impl ProposalLinkRefusal {
@@ -171,6 +173,7 @@ impl ProposalLinkRefusal {
         Self::LimitReached,
         Self::ApplicationPending,
         Self::AttachmentRequired,
+        Self::AttachmentPending,
     ];
 
     pub const fn pair(self) -> (ProposalAvailabilityReason, ProposalLinkRecovery) {
@@ -192,6 +195,7 @@ impl ProposalLinkRefusal {
             Self::LimitReached => (Reason::LimitReached, Recovery::ReceiptOnly),
             Self::ApplicationPending => (Reason::ApplicationPending, Recovery::Refresh),
             Self::AttachmentRequired => (Reason::AttachmentRequired, Recovery::CorrectInput),
+            Self::AttachmentPending => (Reason::AttachmentPending, Recovery::Refresh),
         }
     }
 }

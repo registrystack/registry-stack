@@ -51,11 +51,22 @@
   refused. To migrate, write the store's or verifier's own IPv4 or native
   IPv6 address, or a name that answers one.
 
+- BREAKING: Proposal slot uploads now answer `413 attachment.too-large` and
+  `415 attachment.content-type`, matching supporting-document additions.
+  They previously used generic request and media-type codes.
+- Submit and its link share the stored-file check before planning or identifier
+  reservation. Pending verification answers `409 attachment.verification-pending`
+  with `attachment-pending` / `refresh`; a rejected optional file answers
+  `422 attachment.verification-rejected` with `invalid-input` / `correct-input`.
+  A rejected required file counts as empty. Problems disclose only the slot
+  location, including to a caller who cannot read the file metadata.
+
 - Proposal routes declare problem bodies in generated OpenAPI. Submit with an
   empty required attachment slot answers `422 attachment.required`, naming the
   slot in `fieldPath`. Its link is unavailable with `attachment-required` and
-  recovery `correct-input`, including for write-only slots. Uploading the file
-  enables Submit. Update BReg clients for the added code and availability reason.
+  recovery `correct-input`, including for write-only slots. An uploaded file
+  enables Submit once it passes any configured verification. Update BReg clients
+  for the added codes and availability reasons.
 
 - BREAKING: Proposal documents serve the closed display `status` from the same rule as
   `turn`. Revise and Rebase preserve approved and processing submissions:

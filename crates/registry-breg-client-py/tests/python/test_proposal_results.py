@@ -41,6 +41,35 @@ def status_document(state):
 
 
 class ProposalResultTests(unittest.TestCase):
+    def test_submit_attachment_problems_preserve_only_the_slot_location(self):
+        self.value = document()
+        self.value['state'] = 'draft'
+        del self.value['application']
+        del self.value['effectDigest']
+        self.value['links']['submit'] = {'method': 'POST', 'path': f'/v1/proposals/{ID}/submit',
+                                        'accessProfile': 'reader', 'operation': 'submit', 'ifMatch': '"attachment-condition"'}
+        draft = self.client.get_proposal(self.binding, ID)
+        for code, status, detail in [
+            ('attachment.required', 422, 'The required attachment slot is empty.'),
+            ('attachment.verification-pending', 409, 'The attachment is awaiting verification. Refresh the Proposal before submitting.'),
+            ('attachment.verification-rejected', 422, 'The attachment was rejected by verification. Replace or remove the file before submitting.'),
+        ]:
+            with self.subTest(code=code):
+                attempt = self.client.prepare_proposal(draft, 'submit', {}, f'attachment-{code}')
+                self.reply_status = status
+                self.content_type = 'application/problem+json'
+                self.value = {'type': 'https://id.registrystack.org/problems/registry-breg/' + code.replace('.', '/'),
+                              'title': 'Conflict' if status == 409 else 'Unprocessable Entity', 'status': status,
+                              'detail': detail, 'code': code, 'traceId': '4bf92f3577b34da6a3ce929d0e0e4736',
+                              'fieldPath': '/attachments/support'}
+                with self.assertRaises(BaseRegistryClientError) as raised:
+                    self.client.execute_proposal(attempt)
+                error = raised.exception
+                self.assertEqual((error.kind, error.code, error.status, error.field_path), ('problem', code, status, '/attachments/support'))
+                self.assertFalse(error.outcome_unknown)
+                self.assertEqual(self.methods[-1], 'POST')
+                self.assertTrue(self.requests[-1][0].endswith('/submit?accessProfile=reader'))
+
     def test_application_refusals_preserve_rebase_and_revise_recovery(self):
         for reason, recovery in [('stale-revision', 'rebase'), ('invalid-input', 'revise')]:
             with self.subTest(recovery=recovery):
@@ -61,6 +90,7 @@ class ProposalResultTests(unittest.TestCase):
         self.content_type = 'application/json'
         self.metadata = copy.deepcopy(METADATA)
         self.requests = []
+        self.methods = []
         self.download_bytes = None
         owner = self
 
@@ -78,6 +108,7 @@ class ProposalResultTests(unittest.TestCase):
                 self.respond()
 
             def respond(self):
+                owner.methods.append(self.command)
                 body = self.rfile.read(int(self.headers.get('content-length', '0')))
                 owner.requests.append((self.path, dict(self.headers), body))
                 if owner.download_bytes is not None and self.command == 'GET' and '/attachments/' in self.path:

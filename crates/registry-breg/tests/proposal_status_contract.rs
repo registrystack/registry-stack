@@ -6,6 +6,89 @@
 mod model;
 
 #[test]
+fn shipped_required_attachment_example_reproduces_its_openapi() {
+    let source =
+        include_bytes!("../../../products/breg/examples/required-attachment/registry.yaml");
+    let registry = registry_breg::compiler::compile_project(
+        &registry_breg::contract::parse_project_yaml(source).unwrap(),
+        &[],
+        registry_breg::compiler::CompileProfile::Authoring,
+    )
+    .unwrap();
+    let generated = &registry.artifacts().entries()["generated/openapi.json"].bytes;
+    let committed =
+        include_bytes!("../../../products/breg/examples/required-attachment/openapi.json");
+    assert!(
+        generated.as_slice() == committed,
+        "regenerate the required-attachment example's OpenAPI with example-artifacts"
+    );
+    let api: serde_json::Value = serde_json::from_slice(generated).unwrap();
+    assert_eq!(
+        api["paths"]["/v1/proposals/{proposal_id}/submit"]["post"]["responses"]["422"]["content"]
+            ["application/problem+json"]["examples"]["attachment.required"]["value"]["fieldPath"],
+        "/attachments/support"
+    );
+}
+
+#[test]
+fn shipped_submit_examples_use_problem_code_keys() {
+    let api: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../products/breg/generated/facility/generated/openapi.json"
+    ))
+    .unwrap();
+    let examples = api["paths"]["/v1/proposals/{proposal_id}/submit"]["post"]["responses"]["422"]
+        ["content"]["application/problem+json"]["examples"]
+        .as_object()
+        .unwrap();
+    let mut refusals = 0;
+    for (key, example) in examples {
+        let code = example["value"]["code"].as_str().unwrap();
+        if code == "action.refused" {
+            refusals += 1;
+        }
+        assert!(
+            key == code
+                || key
+                    .strip_prefix(code)
+                    .is_some_and(|suffix| suffix.starts_with('/')),
+            "example {key} must be keyed by problem code {code}"
+        );
+    }
+    assert!(
+        refusals > 0,
+        "the example must exercise declared planner refusals"
+    );
+}
+
+#[test]
+fn apply_declares_encryption_failure_for_an_encrypted_write() {
+    let mut source = model::source(serde_json::json!([]));
+    source["recordTypes"]["target"]["fields"][0]["encrypted"] = serde_json::json!(true);
+    let registry = registry_breg::compiler::compile_project(
+        &registry_breg::contract::parse_project_json(&serde_json::to_vec(&source).unwrap())
+            .unwrap(),
+        &[],
+        registry_breg::compiler::CompileProfile::Authoring,
+    )
+    .unwrap();
+    let api: serde_json::Value =
+        serde_json::from_slice(&registry.artifacts().entries()["generated/openapi.json"].bytes)
+            .unwrap();
+    assert_eq!(
+        api["paths"]["/v1/proposals/{proposal_id}/apply"]["post"]["responses"]["503"]["content"]
+            ["application/problem+json"]["examples"]["runtime.field_encryption.unavailable"]
+            ["value"]["code"],
+        "runtime.field_encryption.unavailable"
+    );
+    assert!(
+        api["paths"]["/v1/proposals/{proposal_id}/submit"]["post"]["responses"]["503"]["content"]
+            ["application/problem+json"]["examples"]
+            .get("runtime.field_encryption.unavailable")
+            .is_none()
+    );
+}
+
+#[test]
 fn proposal_availability_objects_use_a_typed_constructor() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mutation");
     let mut files = vec![root.join("proposal.rs")];
@@ -52,6 +135,10 @@ fn every_proposal_error_response_declares_its_problem_body() {
         json!({"local-review":{"protocol":"id.registrystack.org/protocols/review/v1"}});
     let policy = &mut source["actions"]["correct-name"]["execution"]["proposal"];
     policy["attachments"][0]["required"] = json!(true);
+    let mut optional = policy["attachments"][0].clone();
+    optional["id"] = json!("supplement");
+    optional["required"] = json!(false);
+    policy["attachments"].as_array_mut().unwrap().push(optional);
     policy["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test",
         "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
     policy["additions"] = json!({"id":"other","maximumBytes":32,"maximumCount":2,"contentTypes":["text/plain"],"classification":"restricted"});
@@ -112,7 +199,98 @@ fn every_proposal_error_response_declares_its_problem_body() {
                 continue;
             }
             routes.push(format!("{method} {path}"));
+            // Pin handler-level codes, independently of the schema generator:
+            // read handlers conceal malformed inputs and failed preconditions;
+            // raw slot bodies have their own media/size problems.
+            use registry_breg::problem::ProblemCode as Code;
+            let mut expected = std::collections::BTreeSet::from([
+                Code::AuthenticationRefused,
+                Code::ResourceNotFound,
+                Code::ServiceUnavailable,
+                Code::SourceUnavailable,
+                Code::RequestTimeout,
+            ]);
+            if id == "proposals.list" {
+                expected.insert(Code::QueryInvalid);
+            } else if id == "proposals.get-task-grant-context" {
+                expected.extend([Code::RequestInvalid, Code::UnsupportedMediaType]);
+            } else if method != "get" {
+                expected.extend([
+                    Code::RequestInvalid,
+                    Code::PreconditionFailed,
+                    Code::MutationConflict,
+                    Code::IdempotencyConflict,
+                    Code::IdempotencyExpired,
+                ]);
+                if !id.ends_with(".start") {
+                    expected.extend([Code::PreconditionRequired, Code::ProposalRejected]);
+                }
+                if method == "patch" || id.starts_with("proposals.additions.") {
+                    expected.extend([Code::AttachmentContentType, Code::AttachmentTooLarge]);
+                    if method == "post" {
+                        expected.insert(Code::AttachmentLimitReached);
+                    }
+                } else if method != "delete" {
+                    expected.insert(Code::UnsupportedMediaType);
+                }
+                if id == "proposals.submit" {
+                    expected.extend([
+                        Code::AttachmentRequired,
+                        Code::AttachmentVerificationPending,
+                        Code::AttachmentVerificationRejected,
+                    ]);
+                }
+                if id == "proposals.apply" {
+                    expected.insert(Code::ProposalReviewResultMismatch);
+                }
+            }
+            if id == "proposals.get-submission" {
+                expected.insert(Code::ProposalSubmissionExpired);
+            }
+            let actual = operation["responses"]
+                .as_object()
+                .unwrap()
+                .values()
+                .filter_map(|response| {
+                    response["content"]["application/problem+json"]["examples"].as_object()
+                })
+                .flat_map(|examples| {
+                    examples
+                        .values()
+                        .map(|example| example["value"]["code"].as_str().unwrap().to_owned())
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected = expected
+                .iter()
+                .map(|code| code.code().to_owned())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                actual, expected,
+                "problem code set for {id} ({method} {path})"
+            );
             for (status, response) in operation["responses"].as_object().unwrap() {
+                if !status.starts_with('2') {
+                    let problem = &response["content"]["application/problem+json"];
+                    let examples = problem["examples"]
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .map(|example| example["value"]["code"].as_str().unwrap().to_owned())
+                        .collect::<std::collections::BTreeSet<_>>();
+                    let declared = problem["schema"]["allOf"][1]["properties"]["code"]["enum"]
+                        .as_array()
+                        .map(|codes| {
+                            codes
+                                .iter()
+                                .map(|code| code.as_str().unwrap().to_owned())
+                                .collect::<std::collections::BTreeSet<_>>()
+                        })
+                        .unwrap_or_default();
+                    assert_eq!(
+                        declared, examples,
+                        "{id} {status} must constrain its own problem codes"
+                    );
+                }
                 if !status.starts_with('2')
                     && response["content"]["application/problem+json"]["schema"].is_null()
                 {
@@ -164,6 +342,51 @@ fn every_proposal_error_response_declares_its_problem_body() {
 #[test]
 fn every_proposal_availability_reason_is_in_the_served_schema() {
     let served = registry_breg::artifacts::availability_schema();
+    let registry = registry_breg::compiler::compile_project(
+        &registry_breg::contract::parse_project_json(
+            &serde_json::to_vec(&model::source(serde_json::json!([]))).unwrap(),
+        )
+        .unwrap(),
+        &[],
+        registry_breg::compiler::CompileProfile::Authoring,
+    )
+    .unwrap();
+    for path in ["generated/sdk/project.ts", "generated/sdk/project.py"] {
+        let source = std::str::from_utf8(&registry.artifacts().entries()[path].bytes).unwrap();
+        for (name, expected) in [
+            (
+                "EngineReason",
+                registry_breg::lifecycle::ProposalAvailabilityReason::ALL
+                    .iter()
+                    .map(|value| value.as_str())
+                    .collect::<std::collections::BTreeSet<_>>(),
+            ),
+            (
+                "RecoveryHint",
+                registry_breg::lifecycle::ProposalLinkRecovery::ALL
+                    .iter()
+                    .map(|value| value.as_str())
+                    .collect::<std::collections::BTreeSet<_>>(),
+            ),
+        ] {
+            let declaration = source
+                .lines()
+                .find(|line| {
+                    line.starts_with(&format!("export type {name} ="))
+                        || line.starts_with(&format!("{name} ="))
+                })
+                .unwrap();
+            let actual = declaration
+                .split('\'')
+                .enumerate()
+                .filter_map(|(index, value)| (index % 2 == 1).then_some(value))
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                actual, expected,
+                "{path} {name} must use the served vocabulary"
+            );
+        }
+    }
     for reason in registry_breg::lifecycle::ProposalAvailabilityReason::ALL {
         let wire = serde_json::to_value(reason).unwrap();
         assert!(

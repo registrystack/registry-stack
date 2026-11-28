@@ -366,16 +366,38 @@ Upload a file into each required attachment slot before submitting the Proposal.
 BReg makes the Submit link unavailable while any required slot is empty.
 The link names `attachment-required` with recovery `correct-input`.
 BReg checks storage even when your profile may upload to a slot but cannot read its value.
+A profile can hold Submit without permission to write a required slot.
+Different people can fill the slot and submit the Proposal. A missing-file
+problem tells the submitter only the slot's ID, without file metadata.
 
 A direct Submit request with an empty required slot answers `422 attachment.required`.
 Its `fieldPath` names the slot, such as `/attachments/supporting-document`.
-Upload the missing file and follow the available Submit link in the updated Proposal.
+Upload the missing file and read the updated Proposal.
+Follow the Submit link when it becomes available.
 You do not need to infer availability from attachment values.
+An upload with the wrong media type answers `415 attachment.content-type`.
+A file larger than its slot's limit answers `413 attachment.too-large`.
+
+A required file rejected by verification counts as empty.
+While verification is pending, Submit is unavailable with `attachment-pending`
+and recovery `refresh`. A direct call answers `409 attachment.verification-pending`.
+Refresh the Proposal until verification finishes.
+A rejected file in an optional slot makes Submit unavailable with `invalid-input`
+and recovery `correct-input`. A direct call answers `422 attachment.verification-rejected`.
+Replace or remove that file before submitting. These problems identify only
+the slot in `fieldPath`, including when you cannot read its metadata.
+With several empty required slots, the response identifies the first in
+compiled slot order. Correct that slot and read the Proposal again.
 
 {/* Evidence: crates/registry-breg/tests/support/proposal_required_attachment.rs
     submit_names_an_empty_required_attachment_and_recovers_after_upload,
-    submit_checks_required_attachments_the_writer_cannot_read;
-    crates/registry-breg/src/problem.rs AttachmentRequired. */}
+    submit_checks_required_attachments_the_writer_cannot_read,
+    submit_and_link_agree_for_pending_verification,
+    submit_and_link_treat_a_rejected_required_file_as_empty,
+    submit_and_link_name_a_rejected_optional_file_without_metadata,
+    submit_without_slot_write_authority_names_the_first_empty_slot_only,
+    required_file_precedes_plan_evaluation, slot_upload_names_media_and_size_refusals;
+    crates/registry-breg/src/problem.rs AttachmentRequired, AttachmentVerificationPending, AttachmentVerificationRejected. */}
 
 ### Whose turn it is
 

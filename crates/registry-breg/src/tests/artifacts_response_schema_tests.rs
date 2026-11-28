@@ -1067,7 +1067,8 @@ fn a_caller_document_declares_the_workflow_write_refusal_only_to_a_bound_writer(
             registry.actions(),
             registry.entities(),
             Some(&visible),
-        );
+        )
+        .unwrap();
         assert_eq!(
             paths["/v1/proposals/{proposal_id}/apply"]["post"]["responses"]["403"].is_object(),
             declared,
@@ -1168,7 +1169,8 @@ fn a_caller_document_declares_a_record_condition_write_refusal_to_a_bound_writer
                 registry.actions(),
                 registry.entities(),
                 Some(&visible),
-            );
+            )
+            .unwrap();
             assert_eq!(
                 paths["/v1/proposals/{proposal_id}/apply"]["post"]["responses"]["403"].is_object(),
                 declared,

@@ -306,23 +306,18 @@ async fn mutate(
                 &authority,
                 mutation_method(removal, addition),
                 &correlation,
-                if addition {
-                    fixed_problem(ProblemCode::AttachmentContentType)
-                } else {
-                    unsupported_media_type()
-                },
+                fixed_problem(ProblemCode::AttachmentContentType),
             )
             .await;
         };
         let bytes = match super::actions::read_action_body(body, maximum_bytes as usize).await {
             Ok(bytes) => bytes,
             Err(error) => {
-                let problem =
-                    if addition && matches!(error, super::actions::ActionBodyError::TooLarge) {
-                        fixed_problem(ProblemCode::AttachmentTooLarge)
-                    } else {
-                        invalid_request()
-                    };
+                let problem = if matches!(error, super::actions::ActionBodyError::TooLarge) {
+                    fixed_problem(ProblemCode::AttachmentTooLarge)
+                } else {
+                    invalid_request()
+                };
                 return super::proposals::admitted_http_refusal(
                     mutations,
                     &authority,

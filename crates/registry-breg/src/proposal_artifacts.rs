@@ -9,7 +9,7 @@ pub(crate) fn append_proposal_openapi(
     actions: &CompiledActionInventory,
     entities: &BTreeMap<String, CompiledEntity>,
     visible: Option<&BTreeSet<(String, String, ProposalOperation)>>,
-) {
+) -> Result<(), Diagnostic> {
     let additions_enabled = actions.actions.iter().any(|action| {
         matches!(&action.execution,
         CompiledActionExecution::Proposal { proposal } if proposal.additions.is_some())
@@ -25,6 +25,8 @@ pub(crate) fn append_proposal_openapi(
     let mut apply_may_fill_written_slot = false;
     let mut submit_problems = BTreeSet::new();
     let mut submit_refusals = BTreeMap::new();
+    let mut submit_attachment_examples = BTreeMap::new();
+    let mut apply_problems = BTreeSet::new();
     for action in &actions.actions {
         let CompiledActionExecution::Proposal { proposal } = &action.execution else {
             continue;
@@ -62,7 +64,64 @@ pub(crate) fn append_proposal_openapi(
                 && action_may_refuse_write(action, entities, &grant.profile_id);
             apply_may_fill_written_slot |=
                 permitted(ProposalOperation::Apply) && !proposal.promotions.is_empty();
+            let field_guard = action.requires.iter().any(|guard| !guard.field.is_empty());
+            if permitted(ProposalOperation::Apply) {
+                if field_guard {
+                    apply_problems.insert(ProblemCode::ActionGuardFailed);
+                }
+                if matches!(
+                    proposal.review,
+                    crate::model::CompiledProposalReview::Required { .. }
+                ) {
+                    apply_problems.insert(ProblemCode::ProposalReviewResultMismatch);
+                }
+                if !action.evidence.is_empty() || !action.commit_evidence.is_empty() {
+                    apply_problems.insert(ProblemCode::ActionEvidenceFailed);
+                }
+                if action
+                    .target_uses
+                    .iter()
+                    .filter(|target| {
+                        matches!(target.operation, Operation::Create | Operation::Patch)
+                    })
+                    .any(|target| {
+                        entities.get(&target.entity_id).is_some_and(|entity| {
+                            target.fields.iter().any(|field| {
+                                entity
+                                    .fields
+                                    .get(field)
+                                    .is_some_and(|field| field.encryption.is_some())
+                            })
+                        })
+                    })
+                {
+                    apply_problems.insert(ProblemCode::RuntimeFieldEncryptionUnavailable);
+                }
+            }
             if permitted(ProposalOperation::Submit) {
+                for (slot, definition) in &proposal.attachments {
+                    submit_attachment_examples
+                        .entry(ProblemCode::AttachmentVerificationPending)
+                        .or_insert_with(|| slot.clone());
+                    let code = if definition.required {
+                        ProblemCode::AttachmentRequired
+                    } else {
+                        ProblemCode::AttachmentVerificationRejected
+                    };
+                    submit_attachment_examples
+                        .entry(code)
+                        .or_insert_with(|| slot.clone());
+                }
+                if field_guard {
+                    submit_problems.insert(ProblemCode::ActionGuardFailed);
+                }
+                if !proposal.attachments.is_empty() {
+                    submit_problems.insert(ProblemCode::AttachmentVerificationPending);
+                }
+                if proposal.attachments.values().any(|slot| !slot.required) {
+                    submit_problems.insert(ProblemCode::AttachmentVerificationRejected);
+                }
+
                 if proposal.attachments.values().any(|slot| slot.required) {
                     submit_problems.insert(ProblemCode::AttachmentRequired);
                 }
@@ -72,9 +131,6 @@ pub(crate) fn append_proposal_openapi(
                         submit_problems.insert(ProblemCode::ActionRefused);
                         submit_refusals.extend(handler.refusals.clone());
                     }
-                }
-                if !action.evidence.is_empty() || !action.commit_evidence.is_empty() {
-                    submit_problems.insert(ProblemCode::ActionEvidenceFailed);
                 }
             }
             let document_fields = proposal
@@ -158,7 +214,7 @@ pub(crate) fn append_proposal_openapi(
                         let content=slot.content_types.iter().map(|mime|(mime.clone(),json!({"schema":{"type":"string","format":"binary","maxLength":slot.maximum_bytes}}))).collect::<Map<_,_>>();
                         operation["requestBody"] = json!({"required":true,"content":content});
                     }
-                    merge_operation(paths, path.clone(), method, operation);
+                    merge_operation(paths, path.clone(), method, operation)?;
                 }
             }
             if let Some(slot) = &proposal.additions {
@@ -181,7 +237,7 @@ pub(crate) fn append_proposal_openapi(
                     document["responses"]["409"] = json!({"description":"The slot count limit was reached (`attachment.limit-reached`), the Proposal was rejected (`proposal.rejected`), or the idempotency key is bound to different bytes (`idempotency.key-reused`)"});
                     document["responses"]["413"] = json!({"description":"The file exceeds maximumBytes (`attachment.too-large`)"});
                     document["responses"]["415"] = json!({"description":"The slot does not accept this media type (`attachment.content-type`)"});
-                    merge_operation(paths, path, "post", document);
+                    merge_operation(paths, path, "post", document)?;
                 }
                 let reviewer = permitted(ProposalOperation::GetReviewContext) && proposal.review_context.as_ref().is_some_and(|context|
                     context.fields.iter().any(|(name, field)| grant.readable_context_fields.contains(name)
@@ -190,7 +246,7 @@ pub(crate) fn append_proposal_openapi(
                     && grant.readable_attachments.contains(&slot.id))
                     || reviewer
                 {
-                    append_addition_download_path(paths, &profiles);
+                    append_addition_download_path(paths, &profiles)?;
                 }
             }
         }
@@ -284,6 +340,12 @@ pub(crate) fn append_proposal_openapi(
                 .expect("operation responses")
                 .remove("409");
         } else if method == "post" {
+            if operation == ProposalOperation::Apply {
+                append_problem_codes(
+                    &mut document,
+                    &apply_problems.iter().copied().collect::<Vec<_>>(),
+                );
+            }
             if operation == ProposalOperation::Apply && apply_may_refuse_write {
                 document["responses"]["403"] = json!({"description":"The application writes outside what the selected access profile may write: a disclosure condition binds it on a record type the plan patches (`write.outside-boundary`)"});
                 append_problem_codes(&mut document, &[ProblemCode::WriteOutsideBoundary]);
@@ -309,6 +371,11 @@ pub(crate) fn append_proposal_openapi(
                     &mut document,
                     &submit_problems.iter().copied().collect::<Vec<_>>(),
                 );
+                for (code, slot) in &submit_attachment_examples {
+                    document["responses"][code.status().to_string()]["content"]
+                        ["application/problem+json"]["examples"][code.code()]["value"]
+                        ["fieldPath"] = json!(format!("/attachments/{slot}"));
+                }
                 if !submit_refusals.is_empty() {
                     let examples = &mut document["responses"]["422"]["content"]
                         ["application/problem+json"]["examples"];
@@ -316,7 +383,7 @@ pub(crate) fn append_proposal_openapi(
                         let mut example =
                             problem_example("422", ProblemCode::ActionRefused.code(), label);
                         example["refusalCode"] = json!(code);
-                        examples[code] = json!({"value":example});
+                        examples[format!("action.refused/{code}")] = json!({"value":example});
                     }
                 }
             }
@@ -338,7 +405,7 @@ pub(crate) fn append_proposal_openapi(
                 "/v1/proposals/{proposal_id}/submissions/{submission_version}".to_owned(),
                 "get",
                 submission,
-            );
+            )?;
         }
         if operation == ProposalOperation::GetReviewContext {
             let mut batch = operation_document(
@@ -365,10 +432,11 @@ pub(crate) fn append_proposal_openapi(
                 "/v1/proposals/review-context".to_owned(),
                 "get",
                 batch,
-            );
+            )?;
         }
-        merge_operation(paths, path, method, document);
+        merge_operation(paths, path, method, document)?;
     }
+    Ok(())
 }
 
 fn task_context_request_schema() -> Value {
@@ -429,20 +497,33 @@ fn append_application_actor_schema(application: &mut Value) {
     application["dependentRequired"] = json!({"appliedBy":["appliedAt"],"appliedAt":["appliedBy"]});
 }
 
+fn openapi_merge_error() -> Diagnostic {
+    Diagnostic::error(
+        "breg.artifact.openapi-merge-failed",
+        "artifacts.openapi",
+        "the generated Proposal OpenAPI operations could not be merged",
+    )
+}
+
 fn merge_operation(
     paths: &mut Map<String, Value>,
     path: String,
     method: &str,
     mut operation: Value,
-) {
+) -> Result<(), Diagnostic> {
     append_operation_problems(&mut operation, method);
     let entry = paths.entry(path).or_insert_with(|| json!({}));
+    let entry = entry.as_object_mut().ok_or_else(openapi_merge_error)?;
     if let Some(current) = entry.get(method) {
         let profiles = current["x-registry-accessProfiles"]
             .as_array()
-            .unwrap()
+            .ok_or_else(openapi_merge_error)?
             .iter()
-            .chain(operation["x-registry-accessProfiles"].as_array().unwrap())
+            .chain(
+                operation["x-registry-accessProfiles"]
+                    .as_array()
+                    .ok_or_else(openapi_merge_error)?,
+            )
             .cloned()
             .collect::<Vec<_>>();
         let mut profiles = profiles
@@ -471,18 +552,23 @@ fn merge_operation(
         }
         // Profile-specific Actions can contribute different refusal codes.
         // Preserve every response and example when the shared route is merged.
-        for (status, previous) in current["responses"].as_object().expect("responses") {
+        for (status, previous) in current["responses"]
+            .as_object()
+            .ok_or_else(openapi_merge_error)?
+        {
             if status.starts_with('2') {
                 continue;
             }
-            let responses = operation["responses"].as_object_mut().expect("responses");
+            let responses = operation["responses"]
+                .as_object_mut()
+                .ok_or_else(openapi_merge_error)?;
             if let Some(next) = responses.get_mut(status) {
                 if let Some(examples) =
                     previous["content"]["application/problem+json"]["examples"].as_object()
                 {
                     next["content"]["application/problem+json"]["examples"]
                         .as_object_mut()
-                        .expect("problem examples")
+                        .ok_or_else(openapi_merge_error)?
                         .extend(examples.clone());
                 }
             } else {
@@ -490,7 +576,37 @@ fn merge_operation(
             }
         }
     }
-    entry[method] = operation;
+    for (status, response) in operation["responses"]
+        .as_object_mut()
+        .ok_or_else(openapi_merge_error)?
+    {
+        if status.starts_with('2') {
+            continue;
+        }
+        let problem = &mut response["content"]["application/problem+json"];
+        let codes = problem["examples"]
+            .as_object()
+            .ok_or_else(openapi_merge_error)?
+            .values()
+            .map(|example| {
+                example["value"]["code"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(openapi_merge_error)
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if codes.is_empty() {
+            return Err(openapi_merge_error());
+        }
+        problem["schema"] = problem_code_schema(&codes);
+    }
+    entry.insert(method.to_owned(), operation);
+    Ok(())
+}
+
+fn problem_code_schema(codes: &BTreeSet<String>) -> Value {
+    json!({"allOf":[{"$ref":"#/components/schemas/Problem"},
+        {"type":"object","properties":{"code":{"enum":codes}}}]})
 }
 
 fn append_problem_codes(operation: &mut Value, codes: &[ProblemCode]) {
@@ -515,7 +631,20 @@ fn append_problem_codes(operation: &mut Value, codes: &[ProblemCode]) {
                 || json!({"schema":{"$ref":"#/components/schemas/Problem"},"examples":{}}),
             );
         let mut example = problem_example(&status, code.code(), code.description());
-        if *code == ProblemCode::AttachmentRequired {
+        let mut allowed = problem["schema"]["allOf"][1]["properties"]["code"]["enum"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect::<BTreeSet<_>>();
+        allowed.insert(code.code().to_owned());
+        problem["schema"] = problem_code_schema(&allowed);
+        if matches!(
+            code,
+            ProblemCode::AttachmentRequired
+                | ProblemCode::AttachmentVerificationPending
+                | ProblemCode::AttachmentVerificationRejected
+        ) {
             example["fieldPath"] = json!("/attachments/file");
         } else if *code == ProblemCode::ActionRefused {
             // The caller adds examples using the Action's declared codes and labels.
@@ -525,50 +654,69 @@ fn append_problem_codes(operation: &mut Value, codes: &[ProblemCode]) {
     }
 }
 
-fn append_operation_problems(operation: &mut Value, method: &str) {
-    let id = operation["operationId"].as_str().expect("operation id");
-    let attachment = id.starts_with("proposals.attachments.");
-    let addition = id.starts_with("proposals.additions.");
-    let mutation = method != "get" && id != "proposals.get-task-grant-context";
+pub(super) fn append_operation_problems(operation: &mut Value, method: &str) {
+    let id = operation["operationId"]
+        .as_str()
+        .expect("operation id")
+        .to_owned();
+    let upload = method == "patch" && id.starts_with("proposals.attachments.")
+        || method == "post" && id.starts_with("proposals.additions.");
+    let addition = method == "post" && id.starts_with("proposals.additions.");
+    let start = id.ends_with(".start");
+    let read_body = id == "proposals.get-task-grant-context";
+    let mutation = method != "get" && !read_body;
     let mut codes = vec![
-        ProblemCode::RequestInvalid,
         ProblemCode::AuthenticationRefused,
         ProblemCode::ResourceNotFound,
-        ProblemCode::PreconditionFailed,
         ProblemCode::ServiceUnavailable,
+        ProblemCode::SourceUnavailable,
         ProblemCode::RequestTimeout,
     ];
-    if method != "get" {
-        codes.push(ProblemCode::UnsupportedMediaType);
+    if id == "proposals.list" {
+        codes.push(ProblemCode::QueryInvalid);
+    }
+    if read_body {
+        codes.extend([
+            ProblemCode::RequestInvalid,
+            ProblemCode::UnsupportedMediaType,
+        ]);
     }
     if mutation {
         codes.extend([
+            ProblemCode::RequestInvalid,
+            ProblemCode::PreconditionFailed,
             ProblemCode::MutationConflict,
             ProblemCode::IdempotencyConflict,
             ProblemCode::IdempotencyExpired,
-            ProblemCode::ProposalRejected,
-            ProblemCode::PreconditionRequired,
         ]);
+        if !start {
+            codes.extend([
+                ProblemCode::ProposalRejected,
+                ProblemCode::PreconditionRequired,
+            ]);
+        }
+        if upload {
+            codes.extend([
+                ProblemCode::AttachmentTooLarge,
+                ProblemCode::AttachmentContentType,
+            ]);
+        } else if method != "delete" {
+            codes.push(ProblemCode::UnsupportedMediaType);
+        }
+        if addition {
+            codes.push(ProblemCode::AttachmentLimitReached);
+        }
     }
     if id == "proposals.get-submission" {
         codes.push(ProblemCode::ProposalSubmissionExpired);
     }
-    if id == "proposals.submit" || id == "proposals.apply" {
-        codes.push(ProblemCode::ActionGuardFailed);
-    }
-    if method == "patch" && attachment || method == "post" && addition {
-        codes.extend([
-            ProblemCode::AttachmentTooLarge,
-            ProblemCode::AttachmentContentType,
-        ]);
-    }
-    if method == "post" && addition {
-        codes.push(ProblemCode::AttachmentLimitReached);
-    }
     append_problem_codes(operation, &codes);
 }
 
-fn append_addition_download_path(paths: &mut Map<String, Value>, profiles: &BTreeSet<String>) {
+fn append_addition_download_path(
+    paths: &mut Map<String, Value>,
+    profiles: &BTreeSet<String>,
+) -> Result<(), Diagnostic> {
     let mut operation =
         operation_document("proposals.additions.download", "get", profiles, false, true);
     operation["parameters"].as_array_mut().expect("parameters").push(json!({"name":"addition_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}));
@@ -596,7 +744,8 @@ fn append_addition_download_path(paths: &mut Map<String, Value>, profiles: &BTre
         "/v1/proposals/{proposal_id}/additions/{addition_id}".to_owned(),
         "get",
         operation,
-    );
+    )?;
+    Ok(())
 }
 
 fn operation_document(
@@ -627,7 +776,11 @@ fn operation_document(
         append_proposal_additions_schema(&mut response_schema);
     }
     let mut document = json!({"operationId":id,"x-registry-accessProfiles":profiles,"parameters":parameters,
-        "responses":{"200":{"description":"Authorized Proposal operation","content":{"application/json":{"schema":response_schema}}},"404":{"description":"Resource unavailable to this caller"},"412":{"description":"Observed authority or lifecycle condition changed"}}});
+        "responses":{"200":{"description":"Authorized Proposal operation","content":{"application/json":{"schema":response_schema}}},"404":{"description":"Resource unavailable to this caller"}}});
+    if method != "get" && id != "proposals.get-task-grant-context" {
+        document["responses"]["412"] =
+            json!({"description":"Observed authority or lifecycle condition changed"});
+    }
     if matches!(id, "proposals.submit" | "proposals.apply") {
         document["responses"]["412"]["description"] = json!("Observed authority or lifecycle condition changed, or a Record revision guard failed (`precondition.failed`); a failed field commit guard answers `action.guard_failed` when the selected profile can read it");
     }
@@ -671,6 +824,36 @@ fn review_document_schema(context: bool) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_problem_example_merge_returns_without_panicking() {
+        let mut paths = Map::new();
+        paths.insert(
+            "/test".into(),
+            json!({"post":{
+                "x-registry-accessProfiles":["clerk"],
+                "requestBody":{},"responses":{"422":{"content":{"application/problem+json":{
+                    "examples":{"action.refused":{"value":{"code":"action.refused"}}}
+                }}}}
+            }}),
+        );
+        let mut incoming = operation_document(
+            "proposals.edit",
+            "post",
+            &BTreeSet::from(["officer".into()]),
+            false,
+            false,
+        );
+        incoming["responses"]["422"] = json!({"description":"missing examples"});
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            merge_operation(&mut paths, "/test".into(), "post", incoming)
+        }));
+        assert!(
+            result.is_ok(),
+            "a malformed merge must return an error instead of panicking"
+        );
+        assert!(result.unwrap().is_err());
+    }
 
     fn application_actor_document() -> Value {
         let digest = format!("sha256:{}", "a".repeat(64));

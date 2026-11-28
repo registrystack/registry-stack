@@ -2079,6 +2079,8 @@ impl PostgresRecordMutationService {
                     | MutationError::AttachmentTooLarge
                     | MutationError::AttachmentLimitReached
                     | MutationError::AttachmentRequired { .. }
+                    | MutationError::AttachmentVerificationPending { .. }
+                    | MutationError::AttachmentVerificationRejected { .. }
                     | MutationError::AttachmentContentType
                     | MutationError::AttachmentDigestMismatch => {
                         (IngestionAttemptOutcome::Unavailable, None)

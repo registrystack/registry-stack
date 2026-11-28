@@ -1,0 +1,66 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: required-attachment
+  version: '1'
+  defaultLanguage: en
+  canonicalBaseIri: https://documents.example.test
+datasets:
+  directory: {}
+recordTypes:
+  target:
+    primaryDataset: directory
+    route: targets
+    mutationMode: mutable
+    mutationPolicy: {patch: proposal-required}
+    fields:
+      - {id: name, type: string, required: true, maximumLength: 64, classification: internal}
+      - {id: jurisdiction, type: string, required: true, maximumLength: 64, classification: internal}
+actions:
+  correct-name:
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        application: {mode: manual}
+        retention: {mode: operator-erase}
+        attachments:
+          - {id: support, required: true, maximumBytes: 4096, contentTypes: [text/plain], classification: restricted}
+    inputs:
+      - {id: target, type: reference, target: target, required: true, classification: internal}
+      - {id: value, type: string, required: true, maximumLength: 64, classification: internal}
+    commitGuards:
+      targets:
+        - {input: target, revision: unchanged}
+    plan:
+      type: fixed
+      effects:
+        - id: name
+          target: {fromInput: target}
+          operation: patch
+          set: {name: {fromInput: value}}
+accessProfiles:
+  clerk:
+    default: true
+    principalClaim: sub
+    requiredScopes: [proposal:manage]
+    requiredPurposes: [registry-administration]
+    permissions:
+      records:
+        - recordType: target
+          operations: [create, get, list]
+          readableFields: [name, jurisdiction]
+          writableFields: [name, jurisdiction]
+          rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]
+      actions:
+        - action: correct-name
+          operations: [start]
+          targets: [{recordType: target, rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]}]
+      proposals:
+        - action: correct-name
+          operations: [get, list, edit, submit, revise, rebase, cancel, apply]
+          ownership: caller
+          readableInputs: [target, value]
+          readableAttachments: [support]
+          writableAttachments: [support]
+          targets: [{recordType: target, rowBoundaries: [{field: jurisdiction, claim: jurisdiction, operator: equals}]}]

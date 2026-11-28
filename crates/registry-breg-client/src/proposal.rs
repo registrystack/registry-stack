@@ -44,6 +44,7 @@ pub enum BRegAvailabilityReason {
     LimitReached,
     ApplicationPending,
     AttachmentRequired,
+    AttachmentPending,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2335,6 +2336,7 @@ fn valid_availability(
                         Recovery::Revise | Recovery::CorrectInput
                     )
                     | (Reason::AttachmentRequired, Recovery::CorrectInput)
+                    | (Reason::AttachmentPending, Recovery::Refresh)
             ),
             (false, _, _) => false,
         }
@@ -2342,7 +2344,9 @@ fn valid_availability(
             || match (availability.reason, availability.recovery) {
                 (Some(Reason::AlreadyApplied), _) => state == State::Applied,
                 (Some(Reason::ApplicationPending), _) => state == State::Submitted,
-                (Some(Reason::AttachmentRequired), _) => state == State::Draft,
+                (Some(Reason::AttachmentRequired | Reason::AttachmentPending), _) => {
+                    state == State::Draft
+                }
                 (Some(Reason::ReviewRejected), Some(Recovery::ReceiptOnly)) => {
                     state == State::Rejected
                 }
@@ -2499,6 +2503,12 @@ fn unavailable(availability: &BRegAvailability) -> BaseRegistryClientError {
         (Some(Reason::InvalidInput), Some(Recovery::Revise)) => named!("invalid-input", "revise"),
         (Some(Reason::InvalidInput), Some(Recovery::CorrectInput)) => {
             named!("invalid-input", "correct-input")
+        }
+        (Some(Reason::AttachmentRequired), Some(Recovery::CorrectInput)) => {
+            named!("attachment-required", "correct-input")
+        }
+        (Some(Reason::AttachmentPending), Some(Recovery::Refresh)) => {
+            named!("attachment-pending", "refresh")
         }
         _ => return refusal(),
     })

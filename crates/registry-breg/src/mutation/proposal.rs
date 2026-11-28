@@ -1456,11 +1456,29 @@ impl MutationTransaction {
                         (workflow, "added")
                     }
                     ProposalOperation::Submit => {
+                        if workflow.state() != ProposalState::Draft {
+                            return Err(MutationError::PreconditionFailed);
+                        }
                         let values = document
                             .input
                             .as_ref()
                             .ok_or(MutationError::PreconditionFailed)?;
                         proposal_prepare::validate_inputs(action, values)?;
+                        let CompiledActionExecution::Proposal { proposal: policy } =
+                            &action.execution
+                        else {
+                            return Err(MutationError::InvalidRequest);
+                        };
+                        self.verify_proposal_attachment_binding(tx).await?;
+                        let attachments = crate::attachment_store::submission_manifest(
+                            tx,
+                            &action.id,
+                            id,
+                            document.header.submission_version,
+                            &policy.attachments,
+                        )
+                        .await?;
+
                         let values = values.clone();
                         let trusted_now = time::OffsetDateTime::now_utc();
                         let evaluation_date = crate::action_handler::trusted_evaluation_date(
@@ -1552,32 +1570,6 @@ impl MutationTransaction {
                             bases,
                             guards,
                         )?;
-                        let CompiledActionExecution::Proposal { proposal: policy } =
-                            &action.execution
-                        else {
-                            return Err(MutationError::InvalidRequest);
-                        };
-                        self.verify_proposal_attachment_binding(tx).await?;
-                        let attachments = crate::attachment_store::manifest(
-                            tx,
-                            &action.id,
-                            id,
-                            document.header.submission_version,
-                        )
-                        .await?;
-                        if let Some((slot, _)) =
-                            policy.attachments.iter().find(|(slot, definition)| {
-                                definition.required && !attachments.contains_key(slot.as_str())
-                            })
-                        {
-                            return Err(MutationError::AttachmentRequired { slot: slot.clone() });
-                        }
-                        if attachments
-                            .keys()
-                            .any(|slot| !policy.attachments.contains_key(slot))
-                        {
-                            return Err(MutationError::PreconditionFailed);
-                        }
                         prepared.proposal = prepared
                             .proposal
                             .with_attachments(attachments)
@@ -3660,29 +3652,39 @@ impl MutationTransaction {
             },
             _ => false,
         };
-        let required_attachment_missing = if document.header.state == "draft" {
+        let attachment_refusal = if document.header.state == "draft"
+            && document.blocked_reason.is_none()
+            && document.action_revision == action.definition_revision
+        {
             let CompiledActionExecution::Proposal { proposal } = &action.execution else {
                 return Err(MutationError::Unavailable);
             };
-            if proposal.attachments.values().any(|slot| slot.required) {
-                // Storage decides whether a slot is empty, including when this
-                // caller may write the slot without reading its metadata.
-                let metadata = crate::attachment_store::metadata(
-                    tx,
-                    &document.action_id,
-                    document.proposal_id,
-                    document.header.submission_version,
-                )
-                .await?;
-                proposal
-                    .attachments
-                    .iter()
-                    .any(|(id, slot)| slot.required && !metadata.contains_key(id))
-            } else {
-                false
+            match crate::attachment_store::submission_manifest(
+                tx,
+                &document.action_id,
+                document.proposal_id,
+                document.header.submission_version,
+                &proposal.attachments,
+            )
+            .await
+            {
+                Ok(_) => None,
+                Err(MutationError::AttachmentRequired { .. }) => {
+                    Some(LinkRefusal::AttachmentRequired)
+                }
+                Err(MutationError::AttachmentVerificationPending { .. }) => {
+                    Some(LinkRefusal::AttachmentPending)
+                }
+                Err(MutationError::AttachmentVerificationRejected { .. }) => {
+                    Some(LinkRefusal::InvalidInput)
+                }
+                // A retained reference outside the current slot policy refuses
+                // Submit, without concealing the otherwise readable Proposal.
+                Err(MutationError::PreconditionFailed) => Some(LinkRefusal::WrongState),
+                Err(error) => return Err(error),
             }
         } else {
-            false
+            None
         };
         let retry_available = document.header.state == "submitted"
             && crate::review_store::submission_work_is_retryable(
@@ -3751,7 +3753,7 @@ impl MutationTransaction {
                     document.header.state == "draft"
                         && document.blocked_reason.is_none()
                         && review_available
-                        && !required_attachment_missing
+                        && attachment_refusal.is_none()
                 }
                 ProposalOperation::Revise => {
                     document.header.state == "submitted"
@@ -3868,8 +3870,8 @@ impl MutationTransaction {
                         .filter(|refusal| refusal.pair().1 == LinkRecovery::Revise)
                         .unwrap_or(LinkRefusal::InvalidInput);
                     Some(refusal)
-                } else if operation == ProposalOperation::Submit && required_attachment_missing {
-                    Some(LinkRefusal::AttachmentRequired)
+                } else if operation == ProposalOperation::Submit && attachment_refusal.is_some() {
+                    attachment_refusal
                 } else if !review_available {
                     Some(LinkRefusal::DependencyOutage)
                 } else if let Some(refusal) = review_refusal {

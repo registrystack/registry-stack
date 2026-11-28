@@ -7370,16 +7370,18 @@ async fn retained_attachment_download_survives_tighter_current_upload_policy() {
         .await
         .unwrap()
         .value;
-    for (content_type, upload, expected) in [
+    for (content_type, upload, expected, code) in [
         (
             "application/octet-stream",
             bytes.as_slice(),
-            reqwest::StatusCode::BAD_REQUEST,
+            reqwest::StatusCode::PAYLOAD_TOO_LARGE,
+            "attachment.too-large",
         ),
         (
             "text/plain",
             b"ok".as_slice(),
             reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "attachment.content-type",
         ),
     ] {
         assert!(current
@@ -7413,6 +7415,7 @@ async fn retained_attachment_download_survives_tighter_current_upload_policy() {
             .await
             .unwrap();
         assert_eq!(response.status(), expected);
+        assert_eq!(response.json::<Value>().await.unwrap()["code"], code);
     }
     current
         .client

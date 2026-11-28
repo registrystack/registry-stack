@@ -2884,7 +2884,12 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         || extensions.reason_code.is_some()
             != (code == BRegProblemCode::StatisticalDatasetVersionWithdrawn)
         || extensions.guard_reason.is_some() && code != BRegProblemCode::ActionGuardFailed
-        || code == BRegProblemCode::AttachmentRequired && extensions.field_path.is_none()
+        || matches!(
+            code,
+            BRegProblemCode::AttachmentRequired
+                | BRegProblemCode::AttachmentVerificationPending
+                | BRegProblemCode::AttachmentVerificationRejected
+        ) && extensions.field_path.is_none()
         || code == BRegProblemCode::ActionRefused
             && !crate::error::bounded_refusal_label(&document.detail)
         || (code == BRegProblemCode::StatisticalDatasetReleaseRefused
@@ -2972,7 +2977,12 @@ enum BRegProblemPath {
 impl BRegProblemPath {
     fn permits(self, code: BRegProblemCode) -> bool {
         match self {
-            Self::AttachmentSlot => code == BRegProblemCode::AttachmentRequired,
+            Self::AttachmentSlot => matches!(
+                code,
+                BRegProblemCode::AttachmentRequired
+                    | BRegProblemCode::AttachmentVerificationPending
+                    | BRegProblemCode::AttachmentVerificationRejected
+            ),
             Self::EvidenceAlias => code == BRegProblemCode::ActionEvidenceFailed,
             Self::ActionInputField => matches!(
                 code,
