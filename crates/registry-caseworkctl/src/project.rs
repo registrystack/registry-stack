@@ -1127,14 +1127,7 @@ pub(super) fn check_runtime_config(
     let explicit_settings = runtime
         .explicit_settings
         .iter()
-        .map(|setting| registry_cli_report::ExplicitSettingLine {
-            code: setting.setting.code.to_owned(),
-            file: None,
-            pointer: setting.pointer.clone(),
-            line: setting.position.map(|position| position.line),
-            column: setting.position.map(|position| position.column),
-            summary: setting.setting.summary.to_owned(),
-        })
+        .map(|setting| registry_cli_report::ExplicitSettingLine::from_found(setting, None))
         .collect::<Vec<_>>();
     let runtime = Report::new(runtime.diagnostics);
     let (mut combined, mut checked) = match checked {

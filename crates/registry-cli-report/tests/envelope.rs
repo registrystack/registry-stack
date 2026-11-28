@@ -275,3 +275,79 @@ fn an_empty_explicit_list_is_written_so_a_reader_can_tell_none_from_unreported()
     let rendered = serde_json::to_value(&report).unwrap();
     assert_eq!(rendered["explicitProductionSettings"], json!([]));
 }
+
+#[test]
+fn an_explicit_setting_becomes_the_report_line_for_its_file() {
+    use registry_platform_config::{
+        collect_posture_settings, ExplicitClass, ExplicitProductionSetting, FoundExplicitSetting,
+        RuntimeConfigLoader, RuntimeEnvelope, Stated,
+    };
+    use serde::Deserialize;
+
+    static LENIENT: ExplicitProductionSetting = ExplicitProductionSetting {
+        code: "platform.posture.example-lenient",
+        key: "format",
+        summary: "admits a lenient format",
+    };
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    enum Format {
+        Strict,
+        Lenient,
+    }
+
+    impl ExplicitClass for Format {
+        const SETTINGS: &'static [&'static ExplicitProductionSetting] = &[&LENIENT];
+
+        fn explicit_setting(&self) -> Option<&'static ExplicitProductionSetting> {
+            match self {
+                Format::Strict => None,
+                Format::Lenient => Some(&LENIENT),
+            }
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Tokens {
+        format: Stated<Format>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct StatedExample {
+        direct: Tokens,
+    }
+
+    const ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
+        api_version: "example/v1",
+        kind: "ExampleRuntimeConfig",
+    };
+
+    let text = "apiVersion: example/v1\nkind: ExampleRuntimeConfig\ndirect:\n  format: lenient\n";
+    let (result, collected) = collect_posture_settings(|| {
+        RuntimeConfigLoader::new_without_posture(ENVELOPE)
+            .parse_str::<StatedExample>(text, |_| None)
+    });
+    result.expect("an explicit setting never refuses");
+    let found = &collected.explicit[0];
+    let line = ExplicitSettingLine::from_found(found, Some("runtime.yaml"));
+    assert_eq!(line.code, "platform.posture.example-lenient");
+    assert_eq!(line.file.as_deref(), Some("runtime.yaml"));
+    assert_eq!(line.pointer.as_deref(), Some("/direct/format"));
+    assert_eq!(line.line, Some(4));
+    assert_eq!(line.column, found.position.map(|position| position.column));
+    assert!(line.column.is_some());
+    assert_eq!(line.summary, found.setting.summary);
+    let unplaced = FoundExplicitSetting {
+        pointer: None,
+        position: None,
+        ..found.clone()
+    };
+    let line = ExplicitSettingLine::from_found(&unplaced, None);
+    assert_eq!(
+        (line.file, line.pointer, line.line, line.column),
+        (None, None, None, None)
+    );
+}

@@ -105,13 +105,11 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
                 diagnostics: report.to_json_value(),
                 explicit_production_settings: serde_json::json!(explicit_settings
                     .iter()
-                    .map(|found| registry_cli_report::ExplicitSettingLine {
-                        code: found.setting.code.to_owned(),
-                        file: request.runtime.to_str().map(ToOwned::to_owned),
-                        pointer: found.pointer.clone(),
-                        line: found.position.map(|position| position.line),
-                        column: found.position.map(|position| position.column),
-                        summary: found.setting.summary.to_owned(),
+                    .map(|found| {
+                        registry_cli_report::ExplicitSettingLine::from_found(
+                            found,
+                            request.runtime.to_str(),
+                        )
                     })
                     .collect::<Vec<_>>()),
                 posture: serde_json::json!({
