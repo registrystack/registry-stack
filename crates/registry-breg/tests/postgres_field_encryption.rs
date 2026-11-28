@@ -670,6 +670,7 @@ async fn assert_development_task_assertion_is_authenticated(prepared: &PreparedS
         "registry_principal": "operator",
         "azp": "grant-client",
         "registry_actor_kind": "agent",
+        // Any non-OIDC scope, so the token is not refused as identity-only.
         "scope": "registry:field-encryption:operate",
         "registry_purpose": "case-management",
         "registry_grant_id": "00000000-0000-4000-8000-0000000000bf",
@@ -1126,6 +1127,7 @@ fn token_for(principal: &str, jurisdiction: &str) -> String {
             "exp": now + 600,
             "registry_actor_kind": "service",
             "registry_principal": principal,
+            // Any non-OIDC scope, so the token is not refused as identity-only.
             "scope": "registry:field-encryption:operate",
             "jurisdiction": jurisdiction,
             "purpose": "case-management",
