@@ -327,7 +327,14 @@ pub(crate) fn run(
                             })
                         })
                     })
-                    .map(|setting| setting.report_line(Some(&file)))
+                    .map(|setting| registry_cli_report::ExplicitSettingLine {
+                        code: setting.setting.code.to_owned(),
+                        file: Some(file.to_string()),
+                        pointer: setting.pointer.clone(),
+                        line: setting.position.map(|position| position.line),
+                        column: setting.position.map(|position| position.column),
+                        summary: setting.setting.summary.to_owned(),
+                    })
                     .collect()
             })
             .unwrap_or_default()

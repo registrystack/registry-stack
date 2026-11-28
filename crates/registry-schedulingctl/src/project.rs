@@ -731,7 +731,14 @@ pub(super) fn check_runtime_config(
     let explicit_settings = runtime.explicit_settings.as_ref().map(|settings| {
         settings
             .iter()
-            .map(|found| found.report_line(Some(&given)))
+            .map(|found| registry_cli_report::ExplicitSettingLine {
+                code: found.setting.code.to_owned(),
+                file: Some(given.clone()),
+                pointer: found.pointer.clone(),
+                line: found.position.map(|position| position.line),
+                column: found.position.map(|position| position.column),
+                summary: found.setting.summary.to_owned(),
+            })
             .collect::<Vec<_>>()
     });
     let mut runtime_report = Report::new(runtime.diagnostics.into_iter().map(named).collect());

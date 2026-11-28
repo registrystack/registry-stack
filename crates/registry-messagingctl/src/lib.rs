@@ -1407,7 +1407,14 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
         runtime
             .explicit_settings()
             .iter()
-            .map(|found| found.report_line(Some(&named)))
+            .map(|found| registry_cli_report::ExplicitSettingLine {
+                code: found.setting.code.to_owned(),
+                file: Some(named.clone()),
+                pointer: found.pointer.clone(),
+                line: found.position.map(|position| position.line),
+                column: found.position.map(|position| position.column),
+                summary: found.setting.summary.to_owned(),
+            })
             .collect::<Vec<_>>()
     });
     let mut report = runtime_report(path, &absolute, &runtime);

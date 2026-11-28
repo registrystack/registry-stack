@@ -32,6 +32,7 @@ workspace = true
 [dependencies]
 registry-rstack-dev.workspace = true
 clap.workspace = true
+registry-cli-report.workspace = true
 registry-documents.workspace = true
 registry-documents-core.workspace = true
 registry-platform-buildinfo.workspace = true
