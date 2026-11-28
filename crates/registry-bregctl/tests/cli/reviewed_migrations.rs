@@ -331,6 +331,7 @@ fn apply_reports_an_unchanged_successor_as_nothing_to_apply() {
     // The refusal precedes any connection, so the migration URL names a
     // closed port.
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",

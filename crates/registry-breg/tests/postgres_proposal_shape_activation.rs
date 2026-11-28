@@ -346,7 +346,39 @@ async fn shape_journey(change: Change) {
                 json!({"purpose":"domain","group":"Directory"});
         }
     }
-    let candidate = shape_package::candidate(&fixture, &source).await;
+    use registry_platform_config::Posture;
+    let candidate = shape_package::candidate(&fixture, &source, Posture::Production).await;
+    if matches!(change, Change::DisplayOnly) {
+        let development = shape_package::candidate(&fixture, &source, Posture::Development).await;
+        let prepare = |candidate| {
+            registry_breg::proposal_retention::prepare_proposal_activation_compatibility(
+                &fixture.pool,
+                &fixture.identity,
+                candidate,
+                &authority.registry,
+                Duration::from_secs(2),
+            )
+        };
+        assert!(matches!(
+            prepare(&development).await,
+            Err(registry_breg::mutation::MutationError::Unavailable)
+        ));
+        fixture.database.admin.execute(
+            "UPDATE registry_internal.registry_state SET posture = 'development' WHERE singleton",
+            &[],
+        ).await.unwrap();
+        assert!(matches!(
+            prepare(&candidate).await,
+            Err(registry_breg::mutation::MutationError::Unavailable)
+        ));
+        prepare(&development).await.expect(
+            "development successor can inspect retained reviews on a development activation",
+        );
+        fixture.database.admin.execute(
+            "UPDATE registry_internal.registry_state SET posture = 'production' WHERE singleton",
+            &[],
+        ).await.unwrap();
+    }
     if matches!(change, Change::EventRecordOnly) {
         assert!(fixture.registry.entities()["target"].event_record.is_none());
         assert!(candidate.registry().entities()["target"]
@@ -785,6 +817,7 @@ mod shape_package {
     pub async fn candidate(
         fixture: &client_http::ClientFixture,
         source: &Value,
+        posture: registry_platform_config::Posture,
     ) -> VerifiedPackage {
         let prepared = prepare(fixture, source, &fixture.identity.schema_fingerprint);
         let (mut migration, task) = fixture.database.connect_migration().await;
@@ -845,13 +878,7 @@ mod shape_package {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().canonicalize().unwrap().join("package");
         prepared.publish_to_directory(&path).unwrap();
-        load_package(
-            &path,
-            &PackageLoadContext {
-                posture: registry_platform_config::Posture::Production,
-            },
-        )
-        .unwrap()
+        load_package(&path, &PackageLoadContext { posture }).unwrap()
     }
     pub fn backup(
         directory: &std::path::Path,

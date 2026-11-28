@@ -25,6 +25,7 @@ struct Session {
 impl Session {
     fn ctl(&self, args: &[&str]) -> std::process::Output {
         Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .env("PATH", &self.path)
             .env("SSL_CERT_FILE", self.project.join(".breg/dev/tls/ca.pem"))
             .args(["--format", "json"])
@@ -149,6 +150,7 @@ fn free_ports() -> [u16; 3] {
 
 fn docker_line(args: &[&str]) -> String {
     let output = Command::new("docker")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(args)
         .output()
         .expect("docker command launches");
@@ -605,6 +607,7 @@ seed:
     };
     let delivered = || {
         let output = Command::new(&session.docker)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args([
                 "exec",
                 state["containerId"].as_str().unwrap(),
@@ -1453,6 +1456,7 @@ seed:
     write(&password_file, format!("127.0.0.1:5432:breg_dev:breg_dev_migration:{password}\n127.0.0.1:5432:breg_dev:postgres:{password}\n").as_bytes());
     let container = state["containerId"].as_str().unwrap();
     assert!(Command::new("docker")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "cp",
             password_file.to_str().unwrap(),
@@ -1464,6 +1468,7 @@ seed:
         .success());
     for role in ["breg_dev_migration", "postgres"] {
         assert!(!Command::new("docker")
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args([
                 "exec",
                 "--env",
@@ -1690,6 +1695,7 @@ seed:
     let container = state["containerId"].as_str().unwrap();
     let owner = state["owner"].as_str().unwrap();
     let inspected = Command::new("docker")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["inspect", container])
         .output()
         .unwrap();
@@ -1700,6 +1706,7 @@ seed:
     );
 
     assert!(Command::new("docker")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["start", container])
         .output()
         .unwrap()
@@ -1707,6 +1714,7 @@ seed:
         .success());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !Command::new("docker")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["exec", container, "pg_isready", "-U", "postgres"])
         .output()
         .unwrap()
@@ -1761,6 +1769,7 @@ seed:
     assert_eq!(recreated["outcome"], "ready");
     session.stop();
     assert!(Command::new("docker")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["rm", "--force", &owned])
         .output()
         .unwrap()
@@ -1980,6 +1989,7 @@ seed:
 /// before any service starts, so the built bregctl is the only prerequisite.
 fn plain_bregctl(binary: &Path, json: bool, args: &[&str]) -> std::process::Output {
     let mut invocation = Command::new(binary);
+    invocation.env_remove("REGISTRY_STACK_POSTURE");
     if json {
         invocation.arg("--format").arg("json");
     }

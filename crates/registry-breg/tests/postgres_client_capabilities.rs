@@ -82,6 +82,7 @@ async fn installed_node_package_completes_real_client_journey() {
         std::env::var("BREG_TEST_NODE_PACKAGE").expect("set installed public Node package path");
     let fixture = client_http::ClientFixture::start(registry(), claims()).await;
     let status = std::process::Command::new("node")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/client-capabilities-node.cjs"
@@ -101,6 +102,7 @@ async fn installed_python_package_completes_real_client_journey() {
         .expect("set isolated installed public Python interpreter");
     let fixture = client_http::ClientFixture::start(registry(), claims()).await;
     let status = std::process::Command::new(python)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/client-capabilities-python.py"

@@ -1486,8 +1486,9 @@ fn accept_stored_envelope(
 ) -> Result<(), MaterialLoadError> {
     let maximum = usize::try_from(expected.maximum_payload_bytes)
         .map_err(|_| MaterialLoadError::PayloadRefused)?;
-    let envelope = HookEnvelope::from_canonical_bytes(body, &EnvelopeLimits::tightened_to(maximum))
-        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let envelope =
+        HookEnvelope::from_stored_canonical_bytes(body, &EnvelopeLimits::tightened_to(maximum))
+            .map_err(|_| MaterialLoadError::PayloadRefused)?;
     if expected.payload_digest.len() != 32
         || expected.payload_digest != Sha256::digest(body).as_slice()
     {

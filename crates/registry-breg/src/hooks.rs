@@ -191,8 +191,18 @@ impl HookOperatorService {
         timeout: Duration,
         posture: registry_platform_config::DeclaredPosture,
     ) -> Result<HookDrainReport, HookOperatorError> {
+        let config =
+            load_runtime_config(path, posture).map_err(|_| HookOperatorError::Unavailable)?;
+        Self::drain_loaded_config(config, max_attempts, timeout).await
+    }
+
+    pub async fn drain_loaded_config(
+        config: crate::runtime_config::RuntimeConfig,
+        max_attempts: u16,
+        timeout: Duration,
+    ) -> Result<HookDrainReport, HookOperatorError> {
         validate_drain_budget(max_attempts, timeout).map_err(|_| HookOperatorError::Unavailable)?;
-        let service = Self::from_runtime_config_with_execution(path, true, posture).await?;
+        let service = Self::from_loaded_config(config, true).await?;
         service
             .delivery
             .drain_local(max_attempts, timeout)

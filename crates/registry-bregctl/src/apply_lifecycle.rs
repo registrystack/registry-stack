@@ -12,8 +12,7 @@ use registry_breg::migration::{
     ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, RecordedRegistryState,
 };
 use registry_breg::package::{
-    load_package, MigrationInspectionSummary, PackageError, VerifiedPackage,
-    VerifiedPredecessorPackage,
+    MigrationInspectionSummary, PackageError, VerifiedPackage, VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::{ConnectionConfig, ExpectedRegistryIdentity};
 use registry_breg::proposal_retention::ProposalActivationCompatibilityInventory;
@@ -217,11 +216,21 @@ fn execute(
             MigrationError::OperatorReference,
         ));
     }
-    let config = load_runtime_config(request.runtime_config, posture)
-        .map_err(ApplyLifecycleError::RuntimeConfig)?;
-
-    let target = load_package(request.package, &config.package_load_context())
-        .map_err(ApplyLifecycleError::TargetPackage)?;
+    let (config, target) = registry_breg::startup::StartupInputs::load_for_activation(
+        request.runtime_config,
+        posture,
+        request.package,
+    )
+    .map_err(|error| match error {
+        registry_breg::startup::StartupError::RuntimeConfig(error) => {
+            ApplyLifecycleError::RuntimeConfig(error)
+        }
+        registry_breg::startup::StartupError::PackageRefused(error) => {
+            ApplyLifecycleError::TargetPackage(error)
+        }
+        _ => unreachable!("activation inputs verify only configuration and the selected package"),
+    })?
+    .into_parts();
     // The operator's reviewed digest binds the command to one package before
     // any database authority is resolved, so a mismatch changes nothing.
     if let Some(expected) = request.expected_digest {

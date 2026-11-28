@@ -1154,7 +1154,7 @@ pub struct StartupInputs {
 
 impl StartupInputs {
     pub fn load(path: &Path, declared: registry_platform_config::DeclaredPosture) -> Result<Self> {
-        let (config, package) = load_verified_startup_config(path, declared)?;
+        let (config, package) = load_verified_startup_config(path, declared, None)?;
         Ok(Self { config, package })
     }
 
@@ -1172,12 +1172,41 @@ impl StartupInputs {
         &self.config
     }
 
+    /// Load a candidate selected by an activation command. The runtime's
+    /// package pin continues to bind the configured active package.
+    pub fn load_for_activation(
+        path: &Path,
+        declared: registry_platform_config::DeclaredPosture,
+        selected_package: &Path,
+    ) -> Result<Self> {
+        let (config, package) =
+            load_verified_startup_config(path, declared, Some(selected_package))?;
+        Ok(Self { config, package })
+    }
+
+    pub fn package(&self) -> &VerifiedPackage {
+        &self.package
+    }
+
+    pub fn into_parts(self) -> (RuntimeConfig, VerifiedPackage) {
+        (self.config, self.package)
+    }
+
+    /// Inspect startup and retain the database posture when later checks refuse.
+    pub async fn check_observing_posture(
+        self,
+        recorded_posture: &mut Option<registry_platform_config::Posture>,
+    ) -> Result<CheckedStartup> {
+        check_inputs(self, AuditOpening::ObservePosture, Some(recorded_posture)).await
+    }
+
     pub async fn prepare(self) -> Result<PreparedServer> {
         prepare_verified_package_with_connection(
             self.config,
             self.package,
             None,
             AuditOpening::Serve,
+            None,
         )
         .await
     }
@@ -1231,13 +1260,19 @@ pub async fn check(config_path: &Path) -> Result<CheckedStartup> {
     check_inputs(
         StartupInputs::load_mapped(config_path, default_startup_posture())?,
         AuditOpening::CheckOnly,
+        None,
     )
     .await
 }
 
 /// Startup check over a runtime configuration the caller already loaded.
 pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
-    check_inputs(StartupInputs::from_loaded(config)?, AuditOpening::CheckOnly).await
+    check_inputs(
+        StartupInputs::from_loaded(config)?,
+        AuditOpening::CheckOnly,
+        None,
+    )
+    .await
 }
 
 /// Inspect all startup dependencies and report the recorded posture even
@@ -1246,14 +1281,19 @@ pub async fn check_loaded_observing_posture(config: RuntimeConfig) -> Result<Che
     check_inputs(
         StartupInputs::from_loaded(config)?,
         AuditOpening::ObservePosture,
+        None,
     )
     .await
 }
 
-async fn check_inputs(inputs: StartupInputs, opening: AuditOpening) -> Result<CheckedStartup> {
+async fn check_inputs(
+    inputs: StartupInputs,
+    opening: AuditOpening,
+    recorded_posture: Option<&mut Option<registry_platform_config::Posture>>,
+) -> Result<CheckedStartup> {
     let StartupInputs { config, package } = inputs;
     let unbound_review_authorities = config.unbound_review_authorities(package.registry());
-    prepare_verified_package_with_connection(config, package, None, opening)
+    prepare_verified_package_with_connection(config, package, None, opening, recorded_posture)
         .await
         .map(|prepared| CheckedStartup {
             recorded_posture: prepared.recorded_posture,
@@ -1510,8 +1550,14 @@ pub async fn prepare_with_connection_config_for_test(
     declared: registry_platform_config::DeclaredPosture,
 ) -> Result<PreparedServer> {
     let StartupInputs { config, package } = StartupInputs::load_mapped(config_path, declared)?;
-    prepare_verified_package_with_connection(config, package, Some(connection), AuditOpening::Serve)
-        .await
+    prepare_verified_package_with_connection(
+        config,
+        package,
+        Some(connection),
+        AuditOpening::Serve,
+        None,
+    )
+    .await
 }
 
 #[cfg(feature = "postgres-test")]
@@ -1527,6 +1573,7 @@ pub async fn check_with_connection_config_for_test(
         package,
         Some(connection),
         AuditOpening::CheckOnly,
+        None,
     )
     .await
     .map(drop)
@@ -1558,6 +1605,7 @@ async fn prepare_verified_package_with_connection(
     package: VerifiedPackage,
     connection: Option<crate::postgres::ConnectionConfig>,
     opening: AuditOpening,
+    recorded_posture: Option<&mut Option<registry_platform_config::Posture>>,
 ) -> Result<PreparedServer> {
     config.posture_report().log_startup();
     let connection = match connection {
@@ -1573,7 +1621,7 @@ async fn prepare_verified_package_with_connection(
         config.database().roles().migration(),
         config.database().roles().runtime(),
         if opening == AuditOpening::ObservePosture {
-            StartupPurpose::ObservePosture
+            StartupPurpose::ObservePosture(recorded_posture)
         } else {
             StartupPurpose::Serve
         },
@@ -1716,7 +1764,7 @@ async fn prepare_database_startup(
     database_id: &str,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
-    purpose: StartupPurpose,
+    purpose: StartupPurpose<'_>,
 ) -> Result<(RuntimePool, VerifiedStartup, Vec<BaselineAdvisory>)> {
     let pool = connection
         .clone()
@@ -2922,15 +2970,14 @@ pub(crate) async fn prepare_loaded_startup(
 
 /// Who opens the verified startup, which decides whether the instance claim
 /// is checked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartupPurpose {
+enum StartupPurpose<'a> {
     /// The serving runtime, which refuses a database its claim does not name.
     Serve,
     /// Operator tooling, which must keep working on a copy so the copy can be
     /// inspected, verified, and adopted.
     Inspect,
     /// Doctor checks dependencies and reports an activation posture mismatch.
-    ObservePosture,
+    ObservePosture(Option<&'a mut Option<registry_platform_config::Posture>>),
 }
 
 async fn verify_opened_startup(
@@ -2939,7 +2986,7 @@ async fn verify_opened_startup(
     client: &mut Client,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
-    purpose: StartupPurpose,
+    purpose: StartupPurpose<'_>,
 ) -> Result<VerifiedStartup> {
     let manifest = package.manifest();
     let lock_key = RegistryLockKey::derive(&manifest.package_id)
@@ -3011,14 +3058,19 @@ async fn verify_opened_startup(
     // The physical claim is checked before the recorded identity, so a
     // restored copy is named as a copy whatever package or database id it
     // records.
-    if purpose != StartupPurpose::Inspect {
+    if !matches!(purpose, StartupPurpose::Inspect) {
         verify_instance_claim(&transaction).await?;
     }
     let (expected, recorded) =
         recorded_startup_identity(&transaction, &package, database_id).await?;
     let declared = package.posture();
-    if recorded != declared && purpose != StartupPurpose::ObservePosture {
-        return Err(StartupError::PostureMismatch { recorded, declared });
+    match purpose {
+        StartupPurpose::ObservePosture(Some(observer)) => *observer = Some(recorded),
+        StartupPurpose::ObservePosture(None) => {}
+        _ if recorded != declared => {
+            return Err(StartupError::PostureMismatch { recorded, declared });
+        }
+        _ => {}
     }
     verify_single_role_activation(&transaction, &expected, migration_role, runtime_role).await?;
     if verify_catalog_identity_for_catalog(

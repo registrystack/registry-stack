@@ -719,6 +719,40 @@ async fn build(
     posture: &PostureReport,
     development: Option<&registry_platform_config::DevelopmentWitness>,
 ) -> Result<Router, RuntimeError> {
+    let loopback_listener = config.loopback_listener();
+    let app = prepare_app(config, writer, posture, development).await?;
+    let posture = app.posture.posture();
+    let csp = CspBuilder::deny_by_default()
+        .with_style_src(&["'self'"])
+        .with_form_action(&["'self'"]);
+    let mut headers = security_headers(csp, posture);
+    if loopback_listener && posture == Posture::Development {
+        headers = headers.without_hsts();
+    }
+    Ok(Router::new()
+        .route("/health", guarded(get(health)))
+        .route("/ready", guarded(get(ready)))
+        .route("/review.css", guarded(get(stylesheet)))
+        .route("/signin", guarded(get(signin::start)))
+        .route("/signin/callback", guarded(get(signin::callback)))
+        .route("/signout", guarded(post(pages::sign_out)))
+        .route("/proposals/{request_id}", guarded(get(pages::review)))
+        .route(
+            "/proposals/{request_id}/submit",
+            guarded(post(pages::submit)),
+        )
+        .fallback(not_found)
+        .with_state(app)
+        .layer(middleware::map_response(no_store))
+        .layer(headers))
+}
+
+async fn prepare_app(
+    config: RuntimeConfig,
+    writer: Option<AuditWriter>,
+    posture: &PostureReport,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+) -> Result<Arc<App>, RuntimeError> {
     if development.is_some() != (posture.posture() == Posture::Development) {
         return Err(RuntimeError::Posture(
             "the development witness does not match the declared posture. Use the \
@@ -750,7 +784,6 @@ async fn build(
         per_citizen,
         global_sign_in,
     } = offline(&config, redirect_uri, posture.posture())?;
-    let loopback_listener = config.loopback_listener();
     let issuer = config.sign_in.issuer.as_str().to_owned();
     // Sign-in sends client credentials to the token endpoint, so the page
     // never opts in to plain HTTP beyond loopback.
@@ -838,8 +871,8 @@ async fn build(
     )
     .map_err(|_| RuntimeError::Audit("the client pseudonym could not be derived".to_owned()))?;
 
-    let app = Arc::new(App {
-        posture: posture.clone(),
+    Ok(Arc::new(App {
+        posture,
         issuer,
         client_id: config.sign_in.client_id.as_str().to_owned(),
         scopes: scopes(&config),
@@ -861,31 +894,7 @@ async fn build(
         cookies: Cookies::for_mode(plaintext_origin),
         maximum_session: Duration::from_secs(config.session.maximum_lifetime_seconds.get()),
         sign_in_lifetime: Duration::from_secs(config.session.sign_in_lifetime_seconds.get()),
-    });
-
-    let csp = CspBuilder::deny_by_default()
-        .with_style_src(&["'self'"])
-        .with_form_action(&["'self'"]);
-    let mut headers = security_headers(csp, posture.posture());
-    if loopback_listener && posture.posture() == Posture::Development {
-        headers = headers.without_hsts();
-    }
-    Ok(Router::new()
-        .route("/health", guarded(get(health)))
-        .route("/ready", guarded(get(ready)))
-        .route("/review.css", guarded(get(stylesheet)))
-        .route("/signin", guarded(get(signin::start)))
-        .route("/signin/callback", guarded(get(signin::callback)))
-        .route("/signout", guarded(post(pages::sign_out)))
-        .route("/proposals/{request_id}", guarded(get(pages::review)))
-        .route(
-            "/proposals/{request_id}/submit",
-            guarded(post(pages::submit)),
-        )
-        .fallback(not_found)
-        .with_state(app)
-        .layer(middleware::map_response(no_store))
-        .layer(headers))
+    }))
 }
 
 /// Answer every method a route does not serve with the HTML refusal.
@@ -1014,25 +1023,76 @@ mod tests {
     async fn the_review_client_accepts_a_marked_registry_only_in_development() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-        let app = Router::new().fallback(|| async {
-            (
-                [
-                    ("Registry-Posture", "development"),
-                    (
-                        "traceparent",
-                        "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
-                    ),
-                    ("cache-control", "no-store"),
-                ],
-                axum::Json(serde_json::json!({})),
-            )
+        let issuer = origin.as_str().trim_end_matches('/').to_owned();
+        let discovery = serde_json::json!({
+            "issuer": issuer,
+            "jwks_uri": origin.join("jwks").unwrap().as_str(),
+            "authorization_endpoint": "https://review-issuer.example/authorize",
+            "token_endpoint": origin.join("token").unwrap().as_str(),
         });
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                get(move || async move { axum::Json(discovery) }),
+            )
+            .fallback(|| async {
+                (
+                    [
+                        ("Registry-Posture", "development"),
+                        (
+                            "traceparent",
+                            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                        ),
+                        ("cache-control", "no-store"),
+                    ],
+                    axum::Json(serde_json::json!({})),
+                )
+            });
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let secrets = root.path().join("secrets");
+        std::fs::create_dir(&secrets).unwrap();
+        std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for (name, bytes) in [
+            (
+                "client-key.jwk",
+                registry_platform_testing::fixtures::ED25519_PRIVATE_JWK.as_bytes(),
+            ),
+            ("audit-key", &[0x5a; 32]),
+        ] {
+            let path = secrets.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let path = root.path().join("runtime.yaml");
+        let runtime = config::tests::document()
+            .replace(
+                "root: /run/secrets",
+                &format!("root: {}", secrets.display()),
+            )
+            .replace("secret:env/BREG_REVIEW_AUDIT_KEY", "secret:file/audit-key")
+            .replace("issuer: https://id.example", &format!("issuer: {issuer}"))
+            .replace(
+                "baseUrl: https://registry.example/base",
+                &format!("baseUrl: {origin}"),
+            );
+        std::fs::write(&path, runtime).unwrap();
         for (posture, accepted) in [(Posture::Production, false), (Posture::Development, true)] {
-            let result = registry_client(origin.clone(), posture)
-                .unwrap()
-                .registry_metadata(None)
-                .await;
+            let declared =
+                registry_platform_config::declared_from(Some(posture.as_str()), None).unwrap();
+            let loaded = RuntimeConfig::load_with_posture(&path, declared).unwrap();
+            let writer = AuditWriter::from_line_sink(Box::new(Vec::<u8>::new()), posture);
+            let startup = prepare_app(
+                loaded.config,
+                Some(writer),
+                &loaded.posture,
+                loaded.development.as_ref(),
+            )
+            .await
+            .unwrap();
+            let result = startup.registry.registry_metadata(None).await;
             if accepted {
                 assert!(result.is_ok(), "{:?}", result.err());
             } else {

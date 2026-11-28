@@ -25,14 +25,19 @@ fn dev_help_states_the_default_and_refuses_production() {
 #[test]
 fn dev_refuses_explicit_production_before_writing() {
     let project = tempfile::tempdir().unwrap();
-    for via_flag in [true, false] {
+    for (via_flag, via_environment, action) in [
+        (true, false, FLAG_ACTION),
+        (false, true, ENVIRONMENT_ACTION),
+        (true, true, "Drop --posture production and unset REGISTRY_STACK_POSTURE, or run the runtime in production with messagingctl serve."),
+    ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_messagingctl"));
         command
             .env_remove("REGISTRY_STACK_POSTURE")
             .args(["--format", "json", "dev"]);
         if via_flag {
             command.args(["--posture", "production"]);
-        } else {
+        }
+        if via_environment {
             command.env("REGISTRY_STACK_POSTURE", "production");
         }
         let output = command.arg(project.path()).output().unwrap();
@@ -46,11 +51,6 @@ fn dev_refuses_explicit_production_before_writing() {
             "messagingctl dev runs under the development posture, but production was declared",
             "{report}"
         );
-        let action = if via_flag {
-            FLAG_ACTION
-        } else {
-            ENVIRONMENT_ACTION
-        };
         assert_eq!(finding["suggestedAction"], action, "{report}");
     }
 }

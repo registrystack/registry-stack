@@ -164,9 +164,9 @@ error[render.runtime.public-bind] /etc/registry-render/runtime.yaml:4:9 /listene
 1 error, 0 warnings in 1 file
 ```
 
-When `package.root` exists, check verifies the package and checks its seals against the runtime.
-If the package is absent, check can still assess the runtime file. An unreadable package makes check
-exit 3. Pass `--bundle` to check a different bundle with the same runtime.
+When the package path is resolved and the runtime file passes its structural checks, check verifies the configured package and reports its seal posture findings alongside the runtime findings.
+If the package is absent, check can still assess the runtime file. An invalid package or digest mismatch makes check exit 1, and an unreadable package makes it exit 3.
+Pass `--bundle` to check a different bundle with the same runtime.
 
 A runtime that admits every OIDC client is accepted in production. Check lists it as an explicit
 production setting under `explicitProductionSettings` in the JSON report and in a note after the

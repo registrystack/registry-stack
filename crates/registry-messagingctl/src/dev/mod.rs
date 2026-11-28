@@ -191,14 +191,21 @@ pub(crate) fn run(
             finish(&outcome, "dev token", format, stdout, stderr)
         }
         None => {
-            let declared = match registry_platform_config::declared(args.start.posture.as_deref()) {
+            let environment = std::env::var_os(registry_platform_config::POSTURE_ENV);
+            let declared = match registry_platform_config::declared_from(
+                args.start.posture.as_deref(),
+                environment.as_deref(),
+            ) {
                 Ok(declared) if declared.source == PostureSource::Default => DeclaredPosture {
                     posture: Posture::Development,
                     source: PostureSource::Default,
                 },
                 Ok(declared) if declared.posture == Posture::Development => declared,
                 Ok(declared) => {
-                    let action = if declared.source == PostureSource::Flag {
+                    let action = if declared.source == PostureSource::Flag && environment.is_some()
+                    {
+                        "Drop --posture production and unset REGISTRY_STACK_POSTURE, or run the runtime in production with messagingctl serve."
+                    } else if declared.source == PostureSource::Flag {
                         "Drop --posture production, or run the runtime in production with messagingctl serve."
                     } else {
                         "Unset REGISTRY_STACK_POSTURE, or run the runtime in production with messagingctl serve."

@@ -62,6 +62,7 @@ fn run_without_blocking(command: &mut Command, context: &[String]) -> Output {
 fn api_and_connection_are_product_scoped_commands() {
     for command in ["api", "connection"] {
         let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args([command, "--help"])
             .output()
             .expect("run bregctl");
@@ -77,6 +78,7 @@ fn api_and_connection_are_product_scoped_commands() {
 fn raw_api_rejects_the_global_report_format() {
     for format in ["human", "json"] {
         let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(["api", "/health", "--format", format])
             .output()
             .expect("run bregctl");
@@ -108,6 +110,7 @@ fn raw_api_response_bypasses_the_ctl_report_envelope() {
     });
 
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["api", "/raw", "--url", &format!("http://{address}")])
         .output()
         .expect("run bregctl");
@@ -123,6 +126,7 @@ fn raw_api_refuses_fifo_file_inputs_without_blocking() {
     let temporary = tempfile::tempdir().unwrap();
     let fifo = temporary.path().join("blocking-input");
     assert!(Command::new("mkfifo")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg(&fifo)
         .status()
         .unwrap()
@@ -136,6 +140,7 @@ fn raw_api_refuses_fifo_file_inputs_without_blocking() {
     ] {
         let output = run_without_blocking(
             Command::new(env!("CARGO_BIN_EXE_bregctl"))
+                .env_remove("REGISTRY_STACK_POSTURE")
                 .args(["api", "/raw", "--url", "http://127.0.0.1:9"])
                 .args(&arguments),
             &arguments,
@@ -153,6 +158,7 @@ fn connection_commands_refuse_fifo_stores_without_blocking() {
     let temporary = tempfile::tempdir().unwrap();
     let checked_fifo = temporary.path().join("checked-connections");
     assert!(Command::new("mkfifo")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg(&checked_fifo)
         .status()
         .unwrap()
@@ -162,6 +168,7 @@ fn connection_commands_refuse_fifo_stores_without_blocking() {
     let saved_fifo = config_root.join("registrystack/connections.yaml");
     std::fs::create_dir_all(saved_fifo.parent().unwrap()).unwrap();
     assert!(Command::new("mkfifo")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg(&saved_fifo)
         .status()
         .unwrap()
@@ -183,6 +190,7 @@ fn connection_commands_refuse_fifo_stores_without_blocking() {
         ),
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+        command.env_remove("REGISTRY_STACK_POSTURE");
         command
             .args(&arguments)
             .stdin(Stdio::null())
@@ -232,6 +240,7 @@ fn raw_api_accepts_a_regular_token_file_and_request_body_from_standard_input() {
     #[cfg(not(unix))]
     let token = token_target;
     let mut child = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["api", "/raw", "--url", &format!("http://{address}")])
         .args(["--token-file", token.to_str().unwrap(), "--input", "-"])
         .stdin(Stdio::piped())
@@ -262,6 +271,7 @@ fn connection_check_reports_positioned_configuration_errors_as_json() {
     )
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["connection", "check", "--file"])
         .arg(&path)
         .args(["--format", "json"])

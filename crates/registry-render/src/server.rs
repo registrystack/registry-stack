@@ -128,6 +128,7 @@ pub(crate) async fn load_service(
         runtime_path,
         &mut loaded.posture,
     );
+    // The one posture block, before authentication reaches any network or secret.
     loaded.posture.log_startup();
     loaded.posture.decide(runtime_path).map_err(|error| {
         let mut diagnostics = error.diagnostics().to_vec();

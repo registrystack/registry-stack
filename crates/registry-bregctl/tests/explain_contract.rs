@@ -74,6 +74,7 @@ fn repo_root() -> PathBuf {
 
 fn bregctl(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(arguments)
         .output()
         .expect("bregctl starts")

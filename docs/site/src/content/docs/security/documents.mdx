@@ -119,6 +119,15 @@ Use one posture across a deployment. Development responses carry
 `Registry-Posture: development`, which the Document Store Rust client refuses. Development can
 approve finalized versions with `contentVerification: {type: disabled}`.
 Loopback HTTP storage, verifier and hook URLs are valid in either posture.
+A development hook capture includes `"posture":"development"` inside the signed canonical body.
+The shared Standard Webhooks verifier refuses that mark with `development-peer`.
+A replay sends the captured bytes, so envelopes stored before the mark was introduced retain their original form.
+
+{/* Evidence: crates/registry-documents/tests/postgres_hooks.rs
+    a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection,
+    a_failing_destination_is_retried_then_dead_lettered_without_touching_the_transition;
+    crates/registry-platform-hooks/src/receiver.rs
+    verify_hook_delivery_refuses_a_signed_development_envelope. */}
 
 {/* Evidence: crates/registry-documents/src/config.rs
     disabled_content_verification_requires_declared_development, check_hook_destinations;

@@ -214,6 +214,7 @@ async fn generated_typescript_and_python_consoles_use_live_http_and_rls() {
                     "live.py"
                 });
         let mut command = std::process::Command::new(language);
+        command.env_remove("REGISTRY_STACK_POSTURE");
         command
             .arg(script)
             .current_dir(&root)

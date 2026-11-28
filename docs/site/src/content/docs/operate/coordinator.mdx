@@ -682,6 +682,9 @@ The retained live-binding scan is coalesced and cached for 30 seconds, including
 A cache miss still waits for that scan, so the cache bounds frequency rather than latency.
 Startup, explicit deployment status, admissions, and worker transactions keep their fresh authoritative checks.
 Keep health endpoints on the private service listener, and pass a token by file path, never by value.
+Before a typed remote mutation, the CLI sends an unauthenticated `GET /v1/doctor` to the `--url` origin to check the response's posture.
+Forward this request through the same proxy routes as the mutation. The probe needs no access to the health endpoints.
+If the mutation's response declares development and you ran the command in production posture, inspect the run before repeating the command.
 
 In the doctor report:
 

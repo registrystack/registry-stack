@@ -1477,6 +1477,28 @@ fn production_startup_reports_runtime_and_package_posture_together() {
         stderr.contains("render.posture.seals-not-served"),
         "{stderr}"
     );
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["check", "--runtime-config"])
+        .arg(&fixture.runtime_path)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    for (code, path) in [
+        ("render.posture.local-assurance", "/assuranceProfile"),
+        ("render.posture.seals-not-served", "/signing"),
+    ] {
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == code && diagnostic["path"] == path),
+            "{report}"
+        );
+    }
 }
 
 #[test]
@@ -1510,8 +1532,39 @@ fn runtime_check_reports_the_configured_packages_seals_without_bundle_flag() {
     assert_eq!(exit, Some(0), "{report}");
 
     std::fs::create_dir(&package).unwrap();
+    let runtime_only = registry_render::runtime::check_runtime(&fixture.runtime_path, false, None);
+    assert!(
+        runtime_only.diagnostics.is_empty(),
+        "{:?}",
+        runtime_only.diagnostics
+    );
     let (exit, report) = check();
     assert_eq!(exit, Some(1), "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "render.runtime.package-refused"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/package/root");
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_check_reports_an_unreadable_configured_package() {
+    let fixture = deployment(None);
+    let package = fixture.home.join("package");
+    std::fs::rename(&package, fixture.home.join("other-package")).unwrap();
+    std::os::unix::fs::symlink(&package, &package).unwrap();
+    assert!(package.try_exists().is_err());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["check", "--runtime-config"])
+        .arg(&fixture.runtime_path)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{report}");
     assert_eq!(
         report["diagnostics"][0]["code"],
         "render.runtime.package-refused"

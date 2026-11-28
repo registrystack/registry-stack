@@ -757,7 +757,8 @@ fn activate_hooks(
         Duration::from_secs(
             u64::from(config.retention.hook_payload_retention_days.get()) * 24 * 60 * 60,
         ),
-    )?)
+    )?
+    .with_development_witness(config.development.as_ref()))
 }
 
 /// The logical database id the runtime document names. A document without

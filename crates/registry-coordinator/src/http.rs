@@ -2115,6 +2115,36 @@ mod refusal_recording_tests {
     use registry_platform_metrics::Exposition;
     use std::sync::Mutex;
 
+    #[tokio::test]
+    async fn development_marks_route_refusals_and_fallbacks() {
+        use tower::ServiceExt as _;
+
+        let app = http_edge(
+            Router::new().route("/v1/doctor", get(|| async { StatusCode::UNAUTHORIZED })),
+            Router::new(),
+            Arc::new(RefusalRecorder::new("coordinator").unwrap()),
+            registry_platform_config::Posture::Development,
+            false,
+        );
+        for (path, status) in [
+            ("/v1/doctor", StatusCode::UNAUTHORIZED),
+            ("/v1/unknown", StatusCode::NOT_FOUND),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()["registry-posture"], "development");
+        }
+    }
+
     /// A value no refusal may carry into the counter or the log.
     const CANARY: &str = "canary-subject-7f3a91";
 

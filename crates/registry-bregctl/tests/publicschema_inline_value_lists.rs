@@ -42,6 +42,7 @@ fn derived_publicschema_inline_value_lists_roundtrip_through_the_runtime() {
     let project = ProjectFixture::write(&database, &idp);
 
     let init = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -66,6 +67,7 @@ fn derived_publicschema_inline_value_lists_roundtrip_through_the_runtime() {
     set_private(&project.credentials);
 
     let tested = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",

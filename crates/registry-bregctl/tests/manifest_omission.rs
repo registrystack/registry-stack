@@ -286,6 +286,7 @@ fn one_finding<'a>(report: &'a Value, member: &str) -> &'a Value {
 
 fn bregctl(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(arguments)
         .output()
         .expect("bregctl starts")

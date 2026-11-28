@@ -221,6 +221,8 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
   # shard only, so parallel shards do not each rebuild the Evidence tree.
   # This proof must start the real Evidence service, never silently skip it.
   if ((shard_index == 1)); then
+    cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
+      --lib postgres_posture_
     cargo test --locked -p registry-bregctl --features postgres-test --test cli \
       posture_tests::opposite_activation_posture_refuses_planning_and_apply_and_reports_findings -- --exact
 

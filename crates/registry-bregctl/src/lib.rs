@@ -372,6 +372,9 @@ enum SupportingServiceCommand {
 
 #[derive(Debug, Args)]
 struct SupportingServiceCheckArgs {
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Runtime configuration file to check.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -387,6 +390,9 @@ struct SupportingServiceCheckArgs {
 
 #[derive(Debug, Args)]
 struct SupportingServiceServeArgs {
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Runtime configuration file for the service.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -2802,6 +2808,8 @@ struct AttachmentCleanupSuccessReport {
     command: &'static str,
     #[serde(flatten)]
     outcome: registry_breg::proposal_retention::AttachmentCleanup,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostics: Vec<ToolDiagnostic>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -3173,10 +3181,14 @@ where
         Command::Timer(args) => Some(args.posture_flag()),
         Command::Dev(args) => Some(args.posture_flag()),
         Command::DevSupervisor(_) => Some(None),
+        Command::Mcp(McpArgs { command, .. }) | Command::Review(ReviewArgs { command, .. }) => {
+            Some(match command {
+                SupportingServiceCommand::Check(args) => args.posture.flag.as_deref(),
+                SupportingServiceCommand::Serve(args) => args.posture.flag.as_deref(),
+            })
+        }
         Command::Api(_)
         | Command::Connection { .. }
-        | Command::Mcp(_)
-        | Command::Review(_)
         | Command::Init(_)
         | Command::Project(_)
         | Command::Module(_)
@@ -3295,6 +3307,7 @@ where
         }
         Command::Mcp(args) => {
             return supporting_service(
+                posture,
                 SupportingServiceInvocation {
                     command: "mcp",
                     spec: selected_binary::BREG_MCP,
@@ -3309,6 +3322,7 @@ where
         }
         Command::Review(args) => {
             return supporting_service(
+                posture,
                 SupportingServiceInvocation {
                     command: "review",
                     spec: selected_binary::BREG_REVIEW,
@@ -3919,11 +3933,12 @@ where
                 }
                 ProposalRetentionCommand::CleanupAttachments(args) => {
                     match proposal_retention::cleanup_attachments(posture, &args.runtime_config) {
-                        Ok(outcome) => write_attachment_cleanup_success(
+                        Ok((outcome, diagnostics)) => write_attachment_cleanup_success(
                             &AttachmentCleanupSuccessReport {
                                 ok: true,
                                 command: "proposal-retention cleanup-attachments",
                                 outcome,
+                                diagnostics,
                             },
                             format,
                             stdout,
@@ -4148,6 +4163,7 @@ struct SupportingServiceInvocation {
 }
 
 fn supporting_service(
+    posture: DeclaredPosture,
     invocation: SupportingServiceInvocation,
     format: OutputFormat,
     format_explicit: bool,
@@ -4176,6 +4192,7 @@ fn supporting_service(
         }
     };
     let mut command = ProcessCommand::new(binary);
+    command.env("REGISTRY_STACK_POSTURE", posture.posture.as_str());
     match invocation.action {
         SupportingServiceCommand::Serve(args) => {
             command
@@ -4477,7 +4494,8 @@ fn external_projection_failure(
             "external-projection.migration-authority.refused",
             "external projection maintenance requires the configured migration authority: database.migrationUrlRef must connect as database.roles.migration, without administrative authority, owning the registry schemas",
         ),
-        Error::NotReady | Error::PostureMismatch { .. } => migration(
+        Error::PostureMismatch { recorded, .. } => posture_mismatch_failure(command, recorded),
+        Error::NotReady => migration(
             "external-projection.not-ready",
             "the database is not ready for the active package, or its activation changed after the command opened it. Nothing was changed. Run `bregctl doctor` to name the cause, then rerun the command",
         ),
@@ -4726,7 +4744,10 @@ fn import_authority_failure(
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
-        ImportAuthorityCliError::Authority(ImportAuthorityError::Unavailable | ImportAuthorityError::PostureMismatch { .. }) => (
+        ImportAuthorityCliError::Authority(ImportAuthorityError::PostureMismatch { recorded, .. }) => {
+            return posture_mismatch_failure(command, recorded);
+        }
+        ImportAuthorityCliError::Authority(ImportAuthorityError::Unavailable) => (
             diagnostic(
                 "import-authority.unavailable",
                 "importAuthority",
@@ -4771,7 +4792,10 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
         ),
-        InstanceClaimCliError::Claim(InstanceClaimError::Unavailable | InstanceClaimError::PostureMismatch { .. }) => (
+        InstanceClaimCliError::Claim(InstanceClaimError::PostureMismatch { recorded, .. }) => {
+            return posture_mismatch_failure(command, recorded);
+        }
+        InstanceClaimCliError::Claim(InstanceClaimError::Unavailable) => (
             diagnostic(
                 "instance-claim.unavailable",
                 "instanceClaim",
@@ -5927,6 +5951,9 @@ fn unavailable_hook_event(compiled: &CompiledRegistry) -> FailureReport {
 fn hook_lifecycle_failure(command: &'static str, error: HookLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
         HookLifecycleError::RuntimeConfig(error) => return runtime_config_failure(command, error),
+        HookLifecycleError::PostureMismatch(recorded) => {
+            return posture_mismatch_failure(command, recorded);
+        }
         HookLifecycleError::PackagePinMismatch(mismatch) => {
             return package_pin_failure(command, "hook.package.refused", "package", &mismatch);
         }
@@ -6194,13 +6221,18 @@ fn statistics_lifecycle_failure(
         ),
         StatisticsLifecycleError::Client(error) => statistics_client_diagnostic(&error),
     };
+    let action = if code == "statistics.development-peer" {
+        SuggestedAction::PostureRecovery("Point this command at a production peer, or declare development with --posture development.")
+    } else {
+        SuggestedAction::VerifyStatisticsOperation
+    };
     FailureReport {
         ok: false,
         command,
         diagnostics: vec![tool_diagnostic(
             diagnostic(code, path, message),
             DiagnosticArtifact::StatisticsOperation,
-            SuggestedAction::VerifyStatisticsOperation,
+            action,
         )],
     }
 }
@@ -6273,7 +6305,12 @@ fn statistics_client_diagnostic(
             "statistics",
             "the statistical request does not satisfy the client contract",
         ),
-        BaseRegistryClientError::Protocol { .. } | BaseRegistryClientError::DevelopmentPeer => (
+        BaseRegistryClientError::DevelopmentPeer => (
+            "statistics.development-peer",
+            "--breg-url",
+            "the Base Registry Engine peer declared development",
+        ),
+        BaseRegistryClientError::Protocol { .. } => (
             "statistics.response.invalid",
             "statistics",
             "the Registry response does not satisfy its wire contract",
@@ -8921,6 +8958,21 @@ fn package_pin_failure(
     }
 }
 
+fn posture_mismatch_failure(command: &'static str, recorded: Posture) -> FailureReport {
+    source_failure(
+        command,
+        diagnostic(
+            registry_breg::migration::POSTURE_MISMATCH_CODE,
+            "/database",
+            registry_breg::migration::posture_mismatch_message(recorded),
+        ),
+        DiagnosticArtifact::DatabaseMigration,
+        SuggestedAction::PostureRecovery(registry_breg::migration::posture_mismatch_action(
+            recorded,
+        )),
+    )
+}
+
 /// A lifecycle that could not bind the configured active package to the
 /// identity the database records. Each refusal names the next command.
 fn active_registry_failure(
@@ -8929,6 +8981,9 @@ fn active_registry_failure(
     error: ActiveRegistryError,
 ) -> FailureReport {
     let (suffix, path, message, artifact, action) = match error {
+        ActiveRegistryError::PostureMismatch(recorded) => {
+            return posture_mismatch_failure(command, recorded);
+        }
         ActiveRegistryError::Unavailable => (
             "unavailable",
             "database",
@@ -9586,7 +9641,7 @@ fn generate_requested(
         return Err(source_failure(
             "generate",
             diagnostic(
-                "identity-facts.arguments",
+                "generate.arguments",
                 "arguments",
                 "--runtime-config applies to generate identity-facts or external-source-facts",
             ),
@@ -15618,6 +15673,13 @@ fn write_hook_list_success(
                 stdout.write_all(lines.finish().as_bytes())
             })
     };
+    let result = result.and_then(|()| {
+        if format.is_json() || report.outcome.diagnostics.is_empty() {
+            Ok(())
+        } else {
+            write_runtime_findings(&report.outcome.diagnostics, stdout)
+        }
+    });
     write_result(result, stderr)
 }
 
@@ -15747,6 +15809,13 @@ fn write_proposal_retention_list_success(
                 stdout.write_all(lines.finish().as_bytes())
             })
     };
+    let result = result.and_then(|()| {
+        if format.is_json() || report.outcome.diagnostics.is_empty() {
+            Ok(())
+        } else {
+            write_runtime_findings(&report.outcome.diagnostics, stdout)
+        }
+    });
     write_result(result, stderr)
 }
 
@@ -15792,6 +15861,13 @@ fn write_proposal_retention_dry_run_success(
                 })
         }
     };
+    let result = result.and_then(|()| {
+        if format.is_json() || report.outcome.diagnostics.is_empty() {
+            Ok(())
+        } else {
+            write_runtime_findings(&report.outcome.diagnostics, stdout)
+        }
+    });
     write_result(result, stderr)
 }
 
@@ -15821,6 +15897,13 @@ fn write_attachment_cleanup_success(
             stdout,
         )
     };
+    let result = result.and_then(|()| {
+        if format.is_json() || report.diagnostics.is_empty() {
+            Ok(())
+        } else {
+            write_runtime_findings(&report.diagnostics, stdout)
+        }
+    });
     write_result(result, stderr)
 }
 
@@ -15854,6 +15937,13 @@ fn write_proposal_retention_erase_success(
                 })
         }
     };
+    let result = result.and_then(|()| {
+        if format.is_json() || report.outcome.diagnostics.is_empty() {
+            Ok(())
+        } else {
+            write_runtime_findings(&report.outcome.diagnostics, stdout)
+        }
+    });
     write_result(result, stderr)
 }
 
@@ -16279,11 +16369,11 @@ mod tests {
     }
 
     #[test]
-    fn statistics_diagnostic_reports_a_development_peer_as_an_invalid_response() {
+    fn statistics_diagnostic_keeps_the_development_peer_refusal_kind() {
         let (code, ..) = statistics_client_diagnostic(
             &registry_breg_client::BaseRegistryClientError::DevelopmentPeer,
         );
-        assert_eq!(code, "statistics.response.invalid");
+        assert_eq!(code, "statistics.development-peer");
     }
 
     #[test]
@@ -17444,6 +17534,7 @@ mod tests {
         let report = AttachmentCleanupSuccessReport {
             ok: true,
             command: "proposal-retention cleanup-attachments",
+            diagnostics: Vec::new(),
             outcome: registry_breg::proposal_retention::AttachmentCleanup {
                 pending_external_deletions: 2,
                 external_deletion_tombstones: 3,

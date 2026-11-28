@@ -404,15 +404,25 @@ fn a_runtime_file_the_service_would_refuse_is_refused_with_its_own_diagnostic() 
 
 #[test]
 fn provision_refuses_conflicting_global_and_local_posture_flags() {
+    assert_provision_posture_refusal("production", "development", "platform.posture.conflict");
+}
+
+#[test]
+fn provision_reports_an_invalid_global_posture_even_with_a_valid_local_flag() {
+    assert_provision_posture_refusal("Production", "production", "platform.posture.invalid-value");
+}
+
+fn assert_provision_posture_refusal(global: &str, local: &str, code: &str) {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
             "--posture",
-            "production",
+            global,
             "provision",
             "--posture",
-            "development",
+            local,
             "--runtime-config=unused.yaml",
             "--print-sql",
         ])
@@ -420,8 +430,5 @@ fn provision_refuses_conflicting_global_and_local_posture_flags() {
         .unwrap();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(2), "{report}");
-    assert_eq!(
-        report["diagnostics"][0]["code"], "platform.posture.conflict",
-        "{report}"
-    );
+    assert_eq!(report["diagnostics"][0]["code"], code, "{report}");
 }

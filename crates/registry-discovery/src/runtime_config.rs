@@ -254,32 +254,39 @@ fn read_runtime(
     };
     let mut config = check.loaded.take().filter(|_| !has_errors(&diagnostics));
     let mut unavailable = check.unavailable;
-    if let (Some(loaded), true) = (config.as_mut(), inspect_package) {
-        if package_fields_resolved && loaded.config.package.root.exists() {
-            let index_path = loaded.config.package.root.join(crate::INDEX_FILE);
-            match crate::package::load_runtime_package(&loaded.config.package) {
-                Ok((index, _)) => {
-                    crate::record_index_posture(&index, &mut loaded.posture, |host| {
-                        registry_platform_loopback::loopback_host(host).is_some()
-                    });
-                    diagnostics.extend(loaded.posture.diagnostics(&index_path));
-                }
-                Err(error) => {
-                    // A file that could not be read says nothing about the
-                    // package, so it is an unavailable input, not a refusal.
-                    unavailable |= matches!(
+    if let (Some(loaded), true) = (config.as_mut(), inspect_package && package_fields_resolved) {
+        let root = &loaded.config.package.root;
+        let package = match root.try_exists() {
+            Ok(true) => crate::package::load_runtime_package(&loaded.config.package)
+                .map(Some)
+                .map_err(|error| {
+                    let unreadable = matches!(
                         &error,
                         crate::StartupError::Package(package)
                             if matches!(package.kind(), PackageErrorKind::Io { .. })
                     );
-                    diagnostics.push(check.error_at(
-                        RUNTIME_KIND,
-                        "discovery.runtime.package-refused",
-                        "/package/root",
-                        error.to_string(),
-                        "Verify the deployed package and its expected digest, or rebuild it with discoveryctl package.",
-                    ));
-                }
+                    (error.to_string(), unreadable)
+                }),
+            Ok(false) => Ok(None),
+            Err(error) => Err((format!("Could not look up the package root: {error}"), true)),
+        };
+        match package {
+            Ok(Some((index, _))) => {
+                crate::record_index_posture(&index, &mut loaded.posture, |host| {
+                    registry_platform_loopback::loopback_host(host).is_some()
+                });
+                diagnostics.extend(loaded.posture.diagnostics(&root.join(crate::INDEX_FILE)));
+            }
+            Ok(None) => {}
+            Err((message, unreadable)) => {
+                unavailable |= unreadable;
+                diagnostics.push(check.error_at(
+                    RUNTIME_KIND,
+                    "discovery.runtime.package-refused",
+                    "/package/root",
+                    message,
+                    "Verify the deployed package and its expected digest, or rebuild it with discoveryctl package.",
+                ));
             }
         }
     }

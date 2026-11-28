@@ -3234,6 +3234,63 @@ fn map_statement_error(error: tokio_postgres::Error) -> StatisticsServiceError {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "postgres-test")]
+    #[tokio::test]
+    async fn postgres_posture_statistics_transactions_require_a_match() {
+        use crate::postgres::posture_test_support::*;
+
+        let database = TestDatabase::create(2).await;
+        let expected = install_ready_identity(&database).await;
+        let pool = database.migration_config.build_pool().unwrap();
+        let mut client = pool.get().await.unwrap();
+        let key = RegistryLockKey::derive(&expected.package_id).unwrap();
+        let lock_timeout = Duration::from_secs(2);
+        for (recorded, declared) in MISMATCHES {
+            record_posture(&database, recorded).await;
+            assert_eq!(
+                active_identity_matches(&client, &expected, declared)
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert!(
+                matches!(
+                    begin_release_transaction(
+                        &mut client,
+                        key.for_posture(declared),
+                        lock_timeout,
+                        &expected,
+                        tokio::time::Instant::now() + lock_timeout
+                    )
+                    .await,
+                    Err(StatisticsServiceError::Unavailable)
+                ),
+                "{recorded:?} / {declared:?}"
+            );
+        }
+        assert_eq!(
+            active_identity_matches(&client, &expected, key.posture())
+                .await
+                .unwrap(),
+            Some(true)
+        );
+        begin_release_transaction(
+            &mut client,
+            key,
+            lock_timeout,
+            &expected,
+            tokio::time::Instant::now() + lock_timeout,
+        )
+        .await
+        .unwrap()
+        .rollback()
+        .await
+        .unwrap();
+        drop(client);
+        drop(pool);
+        database.cleanup().await;
+    }
+
     #[tokio::test]
     async fn a_write_deadline_is_a_timeout_only_before_the_commit_is_reached() {
         let commit = CommitReach::default();

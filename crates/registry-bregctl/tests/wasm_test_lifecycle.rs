@@ -80,6 +80,7 @@ fn public_bregctl_test_fingerprint_only_measures_the_schema_the_full_run_binds()
     let project = ProjectFixture::write(&database, &idp, FixtureAudit::File);
 
     let measured = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -95,6 +96,7 @@ fn public_bregctl_test_fingerprint_only_measures_the_schema_the_full_run_binds()
     // The full run installs on the same database, so it also proves the
     // measurement left nothing behind.
     let full = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -142,6 +144,7 @@ fn run_schema_test(audit: FixtureAudit) -> (Output, Option<Value>) {
     let project = ProjectFixture::write(&database, &idp, audit);
 
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",

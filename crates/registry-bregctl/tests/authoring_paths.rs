@@ -53,6 +53,7 @@ fn ctl(arguments: &[&str]) -> Output {
 
 fn ctl_from(directory: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .current_dir(directory)
         .args(["--format", "json"])
         .args(arguments)

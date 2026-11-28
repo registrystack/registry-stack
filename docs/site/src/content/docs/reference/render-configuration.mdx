@@ -160,8 +160,10 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.seal-not-bound` | A document type names a seal `signing.seals` does not bind (error). |
 | `render.runtime.seal-unused` | A runtime seal is named by no document type (warning). |
 | `render.posture.seals-not-served` | Document types name seals and the runtime has no `signing` block. Production refuses the combination. Development warns and renders the documents unsealed. |
-| `render.posture.test-signing` | `test-seal` requires development. Pass `--posture development` or set `REGISTRY_STACK_POSTURE=development` to test signing. |
 | `render.posture.unrestricted-oidc-clients` | `authentication.oidc.allowedClients` is empty, so OIDC admits every client the issuer verifies. Production accepts it as an explicit setting: `serve` logs it and `check --format json` lists it under `explicitProductionSettings`. `/ready` does not report it. |
+
+`test-seal` reports `render.posture.test-signing` when you run it in production.
+Pass `--posture development` or set `REGISTRY_STACK_POSTURE=development` to test signing.
 
 `check --environment` and `serve` read the chain file and report:
 

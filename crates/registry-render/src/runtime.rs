@@ -850,9 +850,7 @@ pub fn check_runtime_with_bundle(
     manifest: Option<&Manifest>,
     declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    let package = manifest.map_or(CheckPackage::Configured, |manifest| {
-        CheckPackage::Explicit(Some(manifest))
-    });
+    let package = CheckPackage::Explicit(manifest);
     check_runtime_package(path, substitute, audit_root, package, declared)
 }
 
@@ -968,8 +966,8 @@ fn read_runtime(
         runtime_loader(declared).check_offline::<RenderRuntime>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
     // With a decoded file, the shared loader's diagnostics are its posture
-    // findings. Keep them in check output while letting serve decide them
-    // together with the package's findings.
+    // findings. Keep them in check output and inspect the package so both
+    // check and serve can report the runtime and package findings together.
     let runtime_posture_findings = diagnostics.len();
     let mut unavailable = check.unavailable;
     let mut seal_capacities = BTreeMap::new();
@@ -1019,7 +1017,7 @@ fn read_runtime(
         let configured_bundle = if matches!(package, CheckPackage::Configured)
             && !check.defers("/package/root")
             && !check.defers("/package/expectedDigest")
-            && !diagnostics
+            && !diagnostics[runtime_posture_findings..]
                 .iter()
                 .any(|finding| finding.severity == Severity::Error)
         {

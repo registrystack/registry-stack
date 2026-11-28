@@ -4706,28 +4706,52 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     let predecessor_baseline =
         CompiledRegistryMigrationBaseline::from_compiled(&active.package_digest, &prior);
     let (mut migration, migration_task) = database.connect_migration().await;
-    let report = preflight_field_encryption_backfill(
-        &mut migration,
-        FieldEncryptionBackfillPreflightRequest {
-            posture: package.posture(),
-            expected: &active,
-            migration_role: &database.migration_role,
-            timeouts: FieldEncryptionBackfillTimeouts::new(
-                Duration::from_secs(5),
-                Duration::from_secs(5),
+    use registry_platform_config::Posture;
+    let preflight = |posture| FieldEncryptionBackfillPreflightRequest {
+        posture,
+        expected: &active,
+        migration_role: &database.migration_role,
+        timeouts: FieldEncryptionBackfillTimeouts::new(
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .expect("preflight timeouts are bounded"),
+        registry: &candidate,
+        plan: package
+            .reviewed_migration_plan()
+            .expect("the successor carries its reviewed plan"),
+        predecessor_baseline: Some(&predecessor_baseline),
+        target_package_revision: package.package_digest(),
+        field_encryption: None,
+    };
+    for (recorded, declared) in [
+        ("production", Posture::Development),
+        ("development", Posture::Production),
+    ] {
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_state SET posture = $1 WHERE singleton",
+                &[&recorded],
             )
-            .expect("preflight timeouts are bounded"),
-            registry: &candidate,
-            plan: package
-                .reviewed_migration_plan()
-                .expect("the successor carries its reviewed plan"),
-            predecessor_baseline: Some(&predecessor_baseline),
-            target_package_revision: package.package_digest(),
-            field_encryption: None,
-        },
-    )
-    .await
-    .expect("the operator preflight counts stored copies and normalized collisions");
+            .await
+            .unwrap();
+        let refused = preflight_field_encryption_backfill(&mut migration, preflight(declared))
+            .await
+            .expect_err("a different posture is the only mismatch");
+        assert_eq!(refused, FieldEncryptionBackfillPreflightError::Unavailable);
+    }
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state SET posture = $1 WHERE singleton",
+            &[&initial.posture().as_str()],
+        )
+        .await
+        .unwrap();
+    let report = preflight_field_encryption_backfill(&mut migration, preflight(package.posture()))
+        .await
+        .expect("the operator preflight counts stored copies and normalized collisions");
     migration_task.abort();
     assert_eq!(report.steps.len(), 1);
     assert_eq!(report.steps[0].fields.len(), 1);

@@ -883,6 +883,7 @@ fn rewrite_runtime_config(
 
 fn run(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(arguments)
         .output()
         .expect("bregctl starts")

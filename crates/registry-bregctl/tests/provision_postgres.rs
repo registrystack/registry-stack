@@ -33,6 +33,7 @@ fn private_file(path: &Path, contents: &[u8]) {
 /// report.
 fn ctl(arguments: &[&std::ffi::OsStr]) -> (i32, Value) {
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["--format", "json"])
         .args(arguments)
         .output()

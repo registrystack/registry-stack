@@ -278,6 +278,7 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     impl OwnedRun {
         fn command(&self, operation: &str, subject: &Path) -> Command {
             let mut command = Command::new(&self.rstack);
+            command.env_remove("REGISTRY_STACK_POSTURE");
             command
                 .args(["--install-root"])
                 .arg(&self.install)
@@ -511,6 +512,7 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     )
     .unwrap();
     let deployment = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("package")
         .arg(&project)
         .arg("--test-receipt")
@@ -550,6 +552,7 @@ fn local_package_public_command_keeps_reserved_identity_refusal() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
     let initialized = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("init")
         .arg(&project)
         .args(["--format", "json"])
@@ -569,6 +572,7 @@ fn local_package_public_command_keeps_reserved_identity_refusal() {
     fs::write(&path, &source).unwrap();
     let output = root.path().join("deployment-build");
     let refused = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("package")
         .arg(&project)
         .arg("--schema-fingerprint")
@@ -599,6 +603,7 @@ fn native_schema_test_runtime_path_refusal_has_closed_report_envelope() {
     let scratch = tempfile::tempdir().unwrap();
     fixture_project(scratch.path(), "");
     let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("test")
         .arg(scratch.path())
         .args([

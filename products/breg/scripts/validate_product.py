@@ -86,8 +86,12 @@ POSTGRES_POSTURE_TEST_COMMAND = (
     "cargo test --locked -p registry-bregctl --features postgres-test --test cli "
     "posture_tests::opposite_activation_posture_refuses_planning_and_apply_and_reports_findings -- --exact"
 )
-POSTGRES_TEST_COMMANDS = (
+POSTGRES_POSTURE_COMMANDS = (
     POSTGRES_POSTURE_TEST_COMMAND,
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --lib postgres_posture_",
+)
+POSTGRES_TEST_COMMANDS = (
+    *POSTGRES_POSTURE_COMMANDS,
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test http_auth",
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test http_read_only",
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test runtime_config",
@@ -576,8 +580,9 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
             except ValueError:
                 errors.append("PostgreSQL entrypoint: invalid Cargo command quoting")
                 continue
-            if arguments == shlex.split(POSTGRES_POSTURE_TEST_COMMAND):
-                cargo_commands.append(POSTGRES_POSTURE_TEST_COMMAND)
+            command = " ".join(arguments)
+            if command in POSTGRES_POSTURE_COMMANDS:
+                cargo_commands.append(command)
                 continue
             if arguments == serial_record_timers_arguments:
                 serial_record_timers_invocations += 1
