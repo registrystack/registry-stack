@@ -106,8 +106,8 @@ Next:
   2. review the generated access profiles; their required scopes and purposes bound
      whole-collection access, and household-registry/README.md says where to add row
      boundaries when callers need row-level separation
-  3. write a dev.yaml for household-registry and run 'rstack dev start
-     household-registry' to serve the registry locally
+  3. review household-registry/dev.yaml and run 'rstack dev start household-registry' to
+     serve the registry locally
   4. replace canonicalBaseIri in household-registry/registry.yaml before you build a
      production package. The derived value is a reserved .invalid name. Package the
      unchanged project with 'bregctl package --posture development', or set
@@ -283,6 +283,8 @@ rstack dev start household-registry --ttl 4h | tee household-registry/dev-run.tx
 Run <run-id> ready
   Development data is kept after stop in <data-directory>; start this project with --clean to clear it.
   breg http://127.0.0.1:<port>
+  Created kept key <data-directory>/breg-audit-key
+  Created kept key <data-directory>/breg-cursor-key
   Runtime config breg <runtime-config>
   Scenario reader-lists-people passed
   Logs <logs-directory>
