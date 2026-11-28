@@ -339,6 +339,7 @@ pub(super) struct ProductRunner<'a> {
     messaging_providers: Option<Value>,
     /// The runtime configuration the run wrote for each product.
     runtime_configs: BTreeMap<Product, PathBuf>,
+    retained_volume: bool,
 }
 
 impl<'a> ProductRunner<'a> {
@@ -371,7 +372,21 @@ impl<'a> ProductRunner<'a> {
             sinks: BTreeMap::new(),
             messaging_providers: None,
             runtime_configs: BTreeMap::new(),
+            retained_volume: false,
         })
+    }
+
+    pub(super) fn set_retained_volume(&mut self, retained: bool) {
+        self.retained_volume = retained;
+    }
+
+    fn require_fresh_secret(&self, path: &Path) -> Result<()> {
+        ensure!(
+            !self.retained_volume,
+            "Retained key {} is missing. Start with --clean",
+            path.display()
+        );
+        Ok(())
     }
 
     /// Hands over the run issuer's listener to serve Evidence's key set.
@@ -461,17 +476,7 @@ impl<'a> ProductRunner<'a> {
                 product_root(&self.input.project, &self.input.plan, Product::Coordinator)?
                     .context("missing Coordinator project")?;
             let runtime = authored_document(&coordinator.root.join("runtime.yaml"))?;
-            let needs_stable_issuer =
-                runtime["connections"]
-                    .as_object()
-                    .is_some_and(|connections| {
-                        connections.values().any(|connection| {
-                            ["authorization", "observationAuthorization"]
-                                .iter()
-                                .any(|field| connection[*field].is_object())
-                        })
-                    });
-            let state = needs_stable_issuer
+            let state = needs_stable_issuer(&runtime, self.input.plan.jwks_uri())
                 .then(|| self.product_state("coordinator"))
                 .flatten();
             let listener = coordinator_issuer_listener(state.as_deref())?;
@@ -804,7 +809,7 @@ impl<'a> ProductRunner<'a> {
             )?;
             ensure!(
                 status.success(),
-                "bregctl diff refused the retained package or project: {}",
+                "bregctl diff refused the retained package or project: {}. Start with --clean",
                 report_codes(serde_json::to_vec(&diff)?.as_slice())?
             );
             if diff["changes"].as_array().is_some_and(Vec::is_empty) {
@@ -816,6 +821,7 @@ impl<'a> ProductRunner<'a> {
                 )?;
                 return Ok((config, baseline.clone()));
             }
+            let change_count = diff["changes"].as_array().map_or(0, Vec::len);
             retained_changes.extend(
                 diff["changes"]
                     .as_array()
@@ -835,6 +841,10 @@ impl<'a> ProductRunner<'a> {
                     })
                     .take(6),
             );
+            let remaining = change_count.saturating_sub(retained_changes.len());
+            if remaining > 0 {
+                retained_changes.push(format!("{remaining} more"));
+            }
         }
         // A server that cannot provision, for example without PostGIS or the
         // privilege to create it, is an environment failure.
@@ -867,20 +877,8 @@ impl<'a> ProductRunner<'a> {
                 args.extend(["--baseline-package".as_ref(), baseline.as_os_str()]);
             }
         }
-        let retained_refusal = |error| {
-            if baseline.is_some() {
-                anyhow::anyhow!(
-                    "BReg refused changes to the retained package ({}). Start with --clean. {}",
-                    retained_changes.join(", "),
-                    format!("{error:#}")
-                        .split("Run diff, review the migration")
-                        .next()
-                        .unwrap_or_default()
-                )
-            } else {
-                error
-            }
-        };
+        let retained_refusal =
+            |error| retained_breg_refusal(error, baseline.is_some(), &retained_changes);
         self.tool(Product::Breg, "test", &test_args)
             .map_err(retained_refusal)?;
         self.tool(Product::Breg, "package", &package_args)
@@ -941,7 +939,7 @@ impl<'a> ProductRunner<'a> {
             let codes = report_codes(serde_json::to_vec(&report)?.as_slice())?;
             ensure!(
                 only_refusal(&report, "status.database.uninitialized"),
-                "bregctl status refused the retained database: {codes}"
+                "bregctl status refused the retained database: {codes}. Start with --clean"
             );
             return Ok(None);
         }
@@ -952,7 +950,8 @@ impl<'a> ProductRunner<'a> {
         let package = state.join(format!("breg-package-{}", &digest["sha256:".len()..]));
         ensure!(
             package.is_dir(),
-            "the active BReg package is missing from the development project state"
+            "the active BReg package is missing at {}. Start with --clean",
+            package.display()
         );
         Ok(Some(package))
     }
@@ -969,6 +968,7 @@ impl<'a> ProductRunner<'a> {
         let key = state.as_deref().unwrap_or(self.root).join(FIELD_KEY);
         let mut bytes = super::read_private(&key)?.map(zeroize::Zeroizing::new);
         if bytes.is_none() {
+            self.require_fresh_secret(&key)?;
             self.tool(
                 Product::Breg,
                 "field-encryption",
@@ -1677,6 +1677,7 @@ impl<'a> ProductRunner<'a> {
         let bytes = match super::read_private(&file)? {
             Some(bytes) => zeroize::Zeroizing::new(bytes),
             None => {
+                self.require_fresh_secret(&file)?;
                 write_private(&file, fresh)?;
                 return self.secret(name, fresh);
             }
@@ -1829,6 +1830,19 @@ impl<'a> ProductRunner<'a> {
 
 /// Coordinator binds the token endpoint into its live workflows. Keep the
 /// local issuer address as long as those workflows can be resumed.
+fn needs_stable_issuer(runtime: &Value, external_jwks: Option<&str>) -> bool {
+    external_jwks.is_none()
+        && runtime["connections"]
+            .as_object()
+            .is_some_and(|connections| {
+                connections.values().any(|connection| {
+                    ["authorization", "observationAuthorization"]
+                        .iter()
+                        .any(|field| connection[*field].is_object())
+                })
+            })
+}
+
 fn coordinator_issuer_listener(state: Option<&Path>) -> Result<TcpListener> {
     let Some(state) = state else {
         return Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?);
@@ -1995,6 +2009,53 @@ fn retain_tool_receipt(
     )
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub(super) struct LoggedToolFailure {
+    message: String,
+    codes: BTreeSet<String>,
+    status: ExitStatus,
+}
+
+impl LoggedToolFailure {
+    pub(super) fn operational(&self) -> bool {
+        registry_cli_report::Status::from_exit(self.status.code().unwrap_or(3) as u8)
+            == registry_cli_report::Status::OperationalFailure
+    }
+}
+
+fn retained_breg_refusal(
+    error: anyhow::Error,
+    has_baseline: bool,
+    changes: &[String],
+) -> anyhow::Error {
+    let retention_refusal = error
+        .downcast_ref::<LoggedToolFailure>()
+        .is_some_and(|failure| {
+            failure.codes.iter().any(|code| {
+                matches!(
+                    code.as_str(),
+                    "migration.review.required"
+                        | "migration.change.unsupported"
+                        | "migration.rehearsal.baseline-fingerprint-drift"
+                        | "migration.rehearsal.baseline-unavailable"
+                        | "migration.rehearsal.baseline-not-reproducible"
+                        | "apply.package.active-mismatch"
+                        | "apply.package.fingerprint-mismatch"
+                        | "apply.successor.roles-differ"
+                )
+            })
+        });
+    if has_baseline && retention_refusal {
+        error.context(format!(
+            "BReg refused changes to the retained package ({}). Start with --clean",
+            changes.join(", ")
+        ))
+    } else {
+        error
+    }
+}
+
 fn logged_tool_result(
     status: ExitStatus,
     output: &mut fs::File,
@@ -2004,25 +2065,38 @@ fn logged_tool_result(
     if status.success() {
         return Ok(());
     }
+    output.rewind()?;
+    let mut bytes = Vec::new();
+    output.take(MAX_TOOL_REPORT + 1).read_to_end(&mut bytes)?;
+    let report = (bytes.len() as u64 <= MAX_TOOL_REPORT)
+        .then(|| serde_json::from_slice::<Value>(&bytes).ok())
+        .flatten();
     if product == "breg" && stage == "test" {
         // The tool's own report is the failure record; the runner adds nothing.
-        output.rewind()?;
-        let mut bytes = Vec::new();
-        (&mut *output)
-            .take(MAX_TOOL_REPORT + 1)
-            .read_to_end(&mut bytes)?;
         ensure!(
             bytes.len() as u64 <= MAX_TOOL_REPORT,
             "the breg test report exceeds the run limit"
         );
         write_private(&root.join("logs/breg-test-report.json"), &bytes)?;
     }
-    output.rewind()?;
-    let codes = report_codes(output)?;
-    bail!(
-        "{product} {stage} failed{codes}{}",
-        failure_detail(&log_path(root, &format!("{product}-{stage}")))
-    );
+    let shown = report_codes(bytes.as_slice())?;
+    let codes = report
+        .as_ref()
+        .and_then(|report| report["diagnostics"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|item| item["severity"] == "error")
+        .filter_map(|item| item["code"].as_str().map(str::to_owned))
+        .collect();
+    Err(LoggedToolFailure {
+        message: format!(
+            "{product} {stage} failed{shown}{}",
+            failure_detail(&log_path(root, &format!("{product}-{stage}")))
+        ),
+        status,
+        codes,
+    }
+    .into())
 }
 
 /// Exercise the log/result boundary in unit tests without routing a shell
@@ -3504,8 +3578,13 @@ fn checked_casework_run_issuer(plan: &Plan, project: &Path) -> Result<Value> {
 pub(super) fn is_loopback_run_issuer(issuer: &str) -> bool {
     issuer
         .strip_prefix("http://127.0.0.1:")
+        .or_else(|| issuer.strip_prefix("http://[::1]:"))
         .map(|rest| rest.strip_suffix('/').unwrap_or(rest))
-        .is_some_and(|port| port.parse::<u16>().is_ok_and(|port| port > 1))
+        .is_some_and(|port| {
+            !port.is_empty()
+                && port.bytes().all(|byte| byte.is_ascii_digit())
+                && port.parse::<u16>().is_ok_and(|port| port > 1)
+        })
 }
 
 fn has_run_source(plan: &Plan) -> bool {
@@ -4502,9 +4581,9 @@ mod tests {
             fs::write(root.join(name), "fixture").unwrap();
         }
         let node = root.join("node");
-        fs::write(
+        write_private(
             &node,
-            format!("#!/usr/bin/env bash\nset -euo pipefail\nif [[ $1 == --version ]]; then\n  printf '{node_version}\\n'\nelse\n  printf 'fixture-prepare 1.0\\n'\nfi\n"),
+            format!("#!/usr/bin/env bash\nset -euo pipefail\nif [[ $1 == --version ]]; then\n  printf '{node_version}\\n'\nelse\n  printf 'fixture-prepare 1.0\\n'\nfi\n").as_bytes(),
         )
         .unwrap();
         fs::set_permissions(&node, fs::Permissions::from_mode(0o700)).unwrap();
@@ -5004,6 +5083,20 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_retains_an_issuer_port_only_for_local_authenticated_connections() {
+        let unauthenticated = json!({"connections": {"target": {}}});
+        assert!(!needs_stable_issuer(&unauthenticated, None));
+        for field in ["authorization", "observationAuthorization"] {
+            let authenticated = json!({"connections": {"target": {(field): {}}}});
+            assert!(needs_stable_issuer(&authenticated, None));
+            assert!(!needs_stable_issuer(
+                &authenticated,
+                Some("http://127.0.0.1:41000/keys")
+            ));
+        }
+    }
+
+    #[test]
     fn coordinator_names_the_occupied_issuer_port_and_the_fix() {
         let state = tempfile::tempdir().unwrap();
         let retained = coordinator_issuer_listener(Some(state.path())).unwrap();
@@ -5221,6 +5314,81 @@ INVENTORY
         }
     }
 
+    #[test]
+    fn external_hook_ids_must_match_the_inventory_exactly() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let tool = root.path().join("bregctl");
+        fs::write(&tool, r#"#!/bin/sh
+printf '%s' '{"ok":true,"explanation":{"deliveries":[{"destinationId":"declared","classificationCeiling":"public","attemptTimeoutMs":2000,"maximumAttempts":4}]}}'
+"#).unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut input = breg_input(false);
+        input.binaries.insert(
+            Product::Breg,
+            crate::Binaries {
+                tool: tool.clone(),
+                runtime: tool,
+            },
+        );
+        input.plan.external_breg = Some(serde_json::from_value(json!({"hooks": {
+            "extra": {"origin": "http://127.0.0.1:42000", "path": "/events", "keyRef": "secret:file/key"}
+        }})).unwrap());
+        let terminate = AtomicBool::new(false);
+        let mut runner = ProductRunner::new(Arc::new(input), root.path(), &terminate).unwrap();
+        let error = runner
+            .prepare_breg_hooks(root.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("must name exactly the BReg destinations"),
+            "{error}"
+        );
+        assert!(runner.breg_hook_report().is_none());
+    }
+
+    #[test]
+    fn messaging_metrics_use_a_separate_numeric_loopback_listener() {
+        let root = tempfile::tempdir().unwrap();
+        let mut input = breg_input(false);
+        input.plan.products = serde_json::from_value(json!([{
+            "product": "messaging", "project": ".", "audience": "messaging"
+        }]))
+        .unwrap();
+        input.plan.people = serde_json::from_value(json!({"sender": {
+            "subject": "sender", "client": "client",
+            "grants": {"messaging": {"profile": "sender", "scopes": []}}
+        }}))
+        .unwrap();
+        let terminate = AtomicBool::new(false);
+        let runner = ProductRunner::new(Arc::new(input), root.path(), &terminate).unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let bind = listener.local_addr().unwrap();
+        let database = DatabaseUrls {
+            runtime: "postgresql://runtime@localhost/fixture".to_owned(),
+            migration: "postgresql://migration@localhost/fixture".to_owned(),
+        };
+        let config = runner
+            .config(
+                Product::Messaging,
+                "messaging",
+                &bind.to_string(),
+                root.path(),
+                database,
+            )
+            .unwrap();
+        let config: Value = serde_json::from_slice(&fs::read(config).unwrap()).unwrap();
+        let metrics: std::net::SocketAddr = config["metricsListener"]["bind"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(metrics.ip(), Ipv4Addr::LOCALHOST);
+        assert_ne!(metrics.port(), 0);
+        assert_ne!(metrics, bind);
+    }
+
     fn breg_config(runner: &ProductRunner<'_>, root: &Path, name: &str) -> (Value, String) {
         let urls = DatabaseUrls {
             runtime: "postgresql://runtime:password@127.0.0.1:5432/run".to_owned(),
@@ -5395,6 +5563,73 @@ INVENTORY
         terminate.store(true, Ordering::Relaxed);
         let stopped = runner.ensure_active().unwrap_err();
         assert_eq!(class(&stopped), "domain", "{stopped:#}");
+    }
+
+    #[test]
+    fn a_migration_refusal_keeps_the_tool_source_and_exit_class() {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        for (code, expected) in [
+            ("migration.review.required", true),
+            ("migration.change.unsupported", true),
+            ("test.step.failed", false),
+        ] {
+            let mut output = tempfile::tempfile_in(root.path()).unwrap();
+            serde_json::to_writer(
+                &mut output,
+                &json!({
+                    "diagnostics": [{"code": code, "severity": "error"}]
+                }),
+            )
+            .unwrap();
+            let source = logged_tool_result(
+                ExitStatus::from_raw(3 << 8),
+                &mut output,
+                root.path(),
+                ("breg", "apply"),
+            )
+            .unwrap_err();
+            let refusal = retained_breg_refusal(source, true, &["seven more".into()]);
+            assert_eq!(refusal.to_string().contains("--clean"), expected);
+            assert!(format!("{refusal:#}").contains(code));
+            assert!(crate::is_operational(&refusal));
+            assert_eq!(
+                refusal
+                    .downcast_ref::<LoggedToolFailure>()
+                    .unwrap()
+                    .status
+                    .code(),
+                Some(3)
+            );
+        }
+    }
+
+    #[test]
+    fn retained_runs_refuse_missing_field_and_audit_keys_at_their_paths() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let mut input = breg_input(true);
+        input.project_key = Some("project".into());
+        let state = input.project_state(&root).unwrap();
+        super::super::private_directory(&state).unwrap();
+        let terminate = AtomicBool::new(false);
+        let mut runner = ProductRunner::new(Arc::new(input), &root, &terminate).unwrap();
+        runner.set_retained_volume(true);
+        let field = runner.write_field_key().unwrap_err().to_string();
+        let audit = runner
+            .retained_secret("breg", "breg-audit-key", b"test")
+            .unwrap_err()
+            .to_string();
+        for (name, error) in [(FIELD_KEY, field), ("breg-audit-key", audit)] {
+            let path = state.join(name);
+            assert!(
+                error.contains(path.to_str().unwrap()) && error.contains("--clean"),
+                "{error}"
+            );
+            assert!(!path.exists());
+        }
     }
 
     #[test]

@@ -34,6 +34,10 @@ impl BregRun {
         let root = run_dir(run_id)?;
         ensure_private(&root, false)?;
         let report = status(run_id)?;
+        Self::open_from_report(root, project, &report)
+    }
+
+    fn open_from_report(root: PathBuf, project: &Path, report: &Value) -> Result<Self> {
         ensure!(
             report["status"] == "ready",
             "The BReg development run is not ready."
@@ -138,5 +142,133 @@ impl BregRun {
         }
         let plan: super::plan::Plan = serde_json::from_value(body)?;
         Ok(serde_json::to_value(plan)? == serde_json::to_value(&self.input.plan)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn input(project: &Path, product: &str) -> Value {
+        json!({
+            "run_id": "0123456789abcdef0123456789abcdef",
+            "project": project,
+            "ttl_seconds": 120,
+            "plan": {
+                "issuer": "https://issuer.example.invalid",
+                "products": [{"product": product, "project": ".", "audience": "fixture"}],
+                "people": {},
+                "scenarioFile": "tests/scenarios.yaml"
+            },
+            "schema_people": [],
+            "casework_principals": {},
+            "binaries": {}
+        })
+    }
+
+    fn open(root: &Path, project: &Path, status: &str) -> Result<BregRun> {
+        BregRun::open_from_report(
+            root.to_owned(),
+            project,
+            &json!({
+                "status": status, "expires_at": 9999999999_u64,
+                "products": {"breg": "http://127.0.0.1:42000"}
+            }),
+        )
+    }
+
+    #[test]
+    fn refuses_a_run_that_is_not_ready() {
+        let root = tempfile::tempdir().unwrap();
+        let error = open(root.path(), root.path(), "stopping").err().unwrap();
+        assert!(error.to_string().contains("run is not ready"));
+    }
+
+    #[test]
+    fn refuses_a_run_for_a_different_breg_project() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        crate::write_private(
+            &root.path().join("input.json"),
+            &serde_json::to_vec(&input(root.path(), "breg")).unwrap(),
+        )
+        .unwrap();
+        let error = open(root.path(), other.path(), "ready").err().unwrap();
+        assert!(error.to_string().contains("different BReg project"));
+    }
+
+    #[test]
+    fn refuses_a_run_without_breg() {
+        let root = tempfile::tempdir().unwrap();
+        crate::write_private(
+            &root.path().join("input.json"),
+            &serde_json::to_vec(&input(root.path(), "evidence")).unwrap(),
+        )
+        .unwrap();
+        let error = open(root.path(), root.path(), "ready").err().unwrap();
+        assert!(error.to_string().contains("does not contain BReg"));
+    }
+
+    #[test]
+    fn refuses_external_or_ambiguous_example_token_issuance() {
+        let root = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::write_private(
+            &root.path().join("breg-runtime.yaml"),
+            &serde_json::to_vec(&json!({
+                "package": {"root": root.path()},
+                "identity": {"databaseId": "fixture"},
+                "authentication": {"authorityClaims": {"principal": "sub"}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut captured = input(root.path(), "breg");
+        captured["plan"]["issuer"] = json!("http://127.0.0.1:41000");
+        captured["plan"]["externalJwksUri"] = json!("http://127.0.0.1:41000/keys");
+        let path = root.path().join("input.json");
+        crate::write_private(&path, &serde_json::to_vec(&captured).unwrap()).unwrap();
+        let run = open(root.path(), root.path(), "ready").unwrap();
+        let error = run.example_token("fixture-client", "author").unwrap_err();
+        assert!(error.to_string().contains("external issuer"));
+
+        captured["plan"]
+            .as_object_mut()
+            .unwrap()
+            .remove("externalJwksUri");
+        let person = json!({
+            "subject": "synthetic", "client": "fixture-client",
+            "grants": {"breg": {"profile": "author", "scopes": []}}
+        });
+        captured["plan"]["people"] = json!({"alice": person.clone(), "bob": person});
+        crate::write_private(&path, &serde_json::to_vec(&captured).unwrap()).unwrap();
+        let run = open(root.path(), root.path(), "ready").unwrap();
+        let error = run.example_token("fixture-client", "author").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("one matching example client and profile"));
+    }
+
+    #[test]
+    fn the_token_command_refuses_an_external_issuer_before_loading_the_signer() {
+        let root = tempfile::tempdir().unwrap();
+        let mut captured = input(root.path(), "breg");
+        captured["plan"]["issuer"] = json!("http://127.0.0.1:41000");
+        captured["plan"]["externalJwksUri"] = json!("http://127.0.0.1:41000/keys");
+        crate::write_private(
+            &root.path().join("input.json"),
+            &serde_json::to_vec(&captured).unwrap(),
+        )
+        .unwrap();
+        let error = crate::token_from_report(
+            root.path(),
+            "0123456789abcdef0123456789abcdef",
+            "person",
+            &json!({"status": "ready"}),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Obtain tokens from that issuer"));
     }
 }

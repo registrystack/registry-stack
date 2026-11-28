@@ -3,6 +3,8 @@
 //! published on loopback only, serving verified TLS from a CA the run draws,
 //! and removed by its run label when the run stops, expires or is recovered.
 
+use registry_platform_provision::sql::{quote_identifier, quote_literal};
+
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::{
@@ -114,6 +116,11 @@ pub(super) fn container_name(run_id: &str) -> String {
 pub(super) struct Server {
     pub(super) admin_url: Zeroizing<String>,
     pub(super) ca_pem: Vec<u8>,
+}
+
+pub(super) enum RehearsalCleanup {
+    Dropped(Vec<String>),
+    NotDropped(Vec<String>),
 }
 
 pub(super) struct Docker {
@@ -229,13 +236,27 @@ impl Docker {
         Ok(false)
     }
 
+    pub(super) fn daemon_id(&self) -> Result<String> {
+        let output = self.run(&["info", "--format", "{{.ID}}"], None, COMMAND_DEADLINE)?;
+        let id = output.trim();
+        ensure!(
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_:".contains(&byte)),
+            "Docker did not report a usable daemon ID. Check the active Docker context"
+        );
+        Ok(id.to_owned())
+    }
+
     pub(super) fn volume_generation(&self, key: &str) -> Result<String> {
         let output = self.run(
             &[
                 "volume",
                 "inspect",
                 "--format",
-                "{{index .Labels \"org.registrystack.dev.generation\"}}",
+                "{{or (index .Labels \"org.registrystack.rstack.generation\") (index .Labels \"org.registrystack.dev.generation\")}}",
                 &volume_name(key),
             ],
             None,
@@ -257,18 +278,20 @@ impl Docker {
     pub(super) fn start_server(
         &self,
         root: &Path,
+        project: &Path,
         run_id: &str,
         image: Image,
         key: &str,
         generation: &str,
     ) -> Result<Server> {
-        self.start_labelled(root, run_id, image, key, generation)
+        self.start_labelled(root, project, run_id, image, key, generation)
             .map_err(operational)
     }
 
     fn start_labelled(
         &self,
         root: &Path,
+        project: &Path,
         run_id: &str,
         image: Image,
         key: &str,
@@ -283,7 +306,19 @@ impl Docker {
                 "--label",
                 &format!("{PROJECT_LABEL}={key}"),
                 "--label",
-                &format!("org.registrystack.dev.generation={generation}"),
+                &format!("org.registrystack.rstack.generation={generation}"),
+                "--label",
+                &format!(
+                    "org.registrystack.rstack.project-path={}",
+                    project.display()
+                ),
+                "--label",
+                &format!(
+                    "org.registrystack.rstack.state-root={}",
+                    root.parent()
+                        .context("missing development state root")?
+                        .display()
+                ),
                 &volume,
             ],
             None,
@@ -342,6 +377,14 @@ impl Docker {
             "docker run did not report the ID of container {name}"
         );
 
+        let attached_generation = self.volume_generation(key).with_context(|| {
+            format!("Cannot inspect the attached PostgreSQL volume {volume}. Start with --clean")
+        })?;
+        ensure!(
+            attached_generation == generation,
+            "Attached PostgreSQL volume {volume} lacks the expected generation. Start with --clean"
+        );
+
         let published = self.run(&["port", &id, "5432/tcp"], None, COMMAND_DEADLINE)?;
         let port = published
             .lines()
@@ -360,7 +403,11 @@ impl Docker {
         ));
         self.sql(
             &id,
-            &format!("ALTER ROLE postgres PASSWORD '{}';", verifier.as_str()),
+            &format!(
+                "ALTER ROLE {} PASSWORD {};",
+                quote_identifier("postgres"),
+                quote_literal(verifier.as_str())
+            ),
         )?;
         let tls = RunTls::generate()?;
         let hba_file = self.sql(&id, "SHOW hba_file;")?;
@@ -583,9 +630,9 @@ impl Docker {
         &self,
         run_id: &str,
         groups: Vec<Vec<String>>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<RehearsalCleanup> {
         if groups.is_empty() {
-            return Ok(Vec::new());
+            return Ok(RehearsalCleanup::Dropped(Vec::new()));
         }
         let name = container_name(run_id);
         let name_filter = format!("name=^/{name}$");
@@ -605,7 +652,9 @@ impl Docker {
             stopped.push("--all");
             let existing = self.run(&stopped, None, COMMAND_DEADLINE)?;
             if existing.trim().is_empty() {
-                anyhow::bail!("cannot drop rehearsal objects for run {run_id} because its PostgreSQL container {name} is gone");
+                return Ok(RehearsalCleanup::NotDropped(
+                    groups.into_iter().flatten().collect(),
+                ));
             }
             // The data volume is retained even after Docker stopped the
             // container. Reopen it locally long enough to release the test database.
@@ -617,15 +666,19 @@ impl Docker {
         use std::fmt::Write as _;
         for mut names in groups {
             let database = names.pop().context("missing rehearsal database name")?;
-            writeln!(sql, r#"DROP DATABASE IF EXISTS "{database}" WITH (FORCE);"#)?;
+            writeln!(
+                sql,
+                "DROP DATABASE IF EXISTS {} WITH (FORCE);",
+                quote_identifier(&database)
+            )?;
             dropped.push(database);
             for role in names {
-                writeln!(sql, r#"DROP ROLE IF EXISTS "{role}";"#)?;
+                writeln!(sql, "DROP ROLE IF EXISTS {};", quote_identifier(&role))?;
                 dropped.push(role);
             }
         }
         self.sql(&name, &sql)?;
-        Ok(dropped)
+        Ok(RehearsalCleanup::Dropped(dropped))
     }
 
     /// Remove every container labelled with this run, with its anonymous
@@ -864,8 +917,15 @@ mod tests {
                 true,
             )?;
             self.docker
-                .start_server(&root, RUN_ID, image, RUN_ID, RUN_ID)
+                .start_server(&root, self.scratch.path(), RUN_ID, image, RUN_ID, RUN_ID)
         }
+    }
+
+    #[test]
+    fn daemon_identity_reads_the_connected_docker_engine() {
+        let fake = Fake::new();
+        fs::write(fake.state().join("daemon-id"), "fixture-daemon-2").unwrap();
+        assert_eq!(fake.docker.daemon_id().unwrap(), "fixture-daemon-2");
     }
 
     #[test]
@@ -888,12 +948,37 @@ mod tests {
     #[test]
     fn recovery_reports_rehearsal_cleanup_when_the_container_is_gone() {
         let fake = Fake::new();
+        let result = fake.docker.drop_rehearsals(
+            RUN_ID,
+            vec![vec!["role".to_owned(), "rehearsal".to_owned()]],
+        );
+        match result.unwrap() {
+            RehearsalCleanup::NotDropped(names) => assert_eq!(names, ["role", "rehearsal"]),
+            RehearsalCleanup::Dropped(_) => panic!("the container is gone"),
+        }
+    }
+
+    #[test]
+    fn a_volume_replaced_during_attach_is_refused_before_sql() {
+        let fake = Fake::new();
+        fs::write(fake.state().join("replace-volume-on-run"), "").unwrap();
         let error = fake
-            .docker
-            .drop_rehearsals(RUN_ID, vec![vec!["rehearsal".to_owned()]])
-            .unwrap_err()
+            .start(Image::for_plan(false))
+            .err()
+            .expect("the replacement volume must be refused")
             .to_string();
-        assert!(error.contains("cannot drop rehearsal objects") && error.contains(RUN_ID));
+        assert!(error.contains("--clean"), "{error}");
+        assert!(!fake.state().join("psql.log").exists());
+    }
+
+    #[test]
+    fn managed_volume_labels_bind_project_path_and_state_root() {
+        let fake = Fake::new();
+        fake.start(Image::for_plan(false)).unwrap();
+        let create = &fake.invocations("volume")[0];
+        assert!(create.contains("org.registrystack.rstack.generation="));
+        assert!(create.contains("org.registrystack.rstack.project-path="));
+        assert!(create.contains("org.registrystack.rstack.state-root="));
     }
 
     #[test]

@@ -227,7 +227,7 @@ The human report prints the same facts.
   `evidencectl request prepare --runtime-config` instead of guessing it. The human report prints
   one `Runtime config PRODUCT PATH` line per product. Only the address line starts with the
   product name, so `awk '$1 == "breg" {print $2}'` reads the address.
-- `bregHookSink` gives the loopback origin and the URL where you can read received BReg hooks.
+- `bregHookSink` gives the loopback origin and the URL where you can read received BReg hooks. The hook sink holds raw synthetic payloads and signatures, unredacted, on loopback.
 - `sinks` maps each Messaging provider to its sink, where you can read what the run sent:
   `{"type":"smtp","smtp":"HOST:PORT","url":"MAILPIT_URL"}` for Mailpit, or
   `{"type":"http","url":"GATEWAY_ORIGIN/sent"}` for the mock gateway. It is absent when the run has
@@ -402,7 +402,8 @@ fields.
 ## Use an issuer you run
 
 Set `issuer` to the exact token issuer and `externalJwksUri` to its public key endpoint.
-Use HTTPS or loopback HTTP. Keep each product's audience in its `products` entry.
+Use numeric loopback HTTP with an explicit port for the issuer, key endpoint and external BReg connections. Keep each product's audience in its `products` entry.
+Tokens from an issuer you run carry no development mark, so use an issuer that only this run trusts.
 BReg expects RS256 access tokens from an external issuer.
 
 Set `scenarios: []` in the scenario file and drive the run with credentials obtained from
@@ -594,8 +595,8 @@ The native review example at `products/breg/acceptance/reviewed-evidence-journey
 ### Evidence on its own
 
 An Evidence plan starts no database and needs no Docker.
-The run is the issuer: Evidence's local target accepts only a loopback issuer, so the plan sets `issuer: run`, and the run signs each test token with a throwaway key it serves as a key set on its own loopback origin.
-An Evidence plan may not declare an application, and it may not name another issuer.
+With `issuer: run`, the run signs each test token with a throwaway key and serves its public key set on its own loopback origin.
+An Evidence plan may not declare an application. To provide your own issuer, follow the [external issuer requirements](#use-an-issuer-you-run).
 
 To start Evidence, the run copies the project and creates a target with `evidencectl target new`, from the project's `local-target.yaml` when it has one, with development secrets for what that target references.
 It points the target at the run's issuer, listener and package directory, packages the project, activates the compiled authority and runs `evidence serve`.
@@ -673,6 +674,7 @@ Captures are available only to later steps in the same scenario.
 Other references must name an earlier capture.
 The runner reads and validates the file during `check` and `start`, then snapshots its content before execution, so edits after `start` do not alter that run.
 Scenarios execute in file order and each gets fresh captures.
+A scenario that succeeded against kept state, including a read-only scenario, runs again only after it changes or you clear the state with `--clean`.
 
 The BReg project's `tests/journeys.yaml` remains its separate native schema test input.
 The Stack scenario file does not replace or change it.
@@ -887,6 +889,7 @@ Use synthetic test people and keep the issuer's private directory under your use
 
 Stop and TTL expiry terminate the services and remove the containers and run files.
 Managed runs keep the PostgreSQL volume, project keys and audit journals. The next start skips unchanged scenarios that previously passed.
+Use `rstack dev stop RUN_ID --clean` to clear the managed project state and volume even after a normal stop or TTL expiry.
 Use `rstack dev stop RUN_ID --clean` to delete the managed volume and project state after stopping, or `rstack dev start PROJECT --clean` to delete them before starting.
 Both commands permanently delete the project's local development data.
 When you supply a PostgreSQL server, stop and TTL expiry also drop the run's databases and roles, including the `breg_bbox_` role of a spatial BReg run.
@@ -899,9 +902,9 @@ When you supply a PostgreSQL server, stop and TTL expiry also drop the run's dat
 A BReg project with encrypted fields runs without extra setup.
 `start` draws a development data key from the operating system's random source when it needs one and writes a copy as `field-key` in the run directory, readable only by your user.
 BReg reads it through its `local-file` key custody, which it accepts only in the development posture.
-The key is never printed, never written to the checkout, and is removed with the run directory on stop, TTL expiry, and a failed start.
+The run's copy is removed with the run directory. Managed runs keep the project's copy in the project state.
 When a run needs recovery, the report names the key file under `recovery.field_encryption_key` until `stop --recover` removes it.
-Managed runs keep the key with the project state so the next run can read existing encrypted data. Runs using a supplied PostgreSQL server draw a new key each time.
+Runs using a supplied PostgreSQL server draw a new key each time.
 
 The schema test that `start` runs before activation has no field-encryption key.
 A step in `tests/journeys.yaml` that touches a Record type with an encrypted field fails it, and `start` reports `breg test failed (test.step.failed)`.
@@ -943,7 +946,8 @@ For a run on a server by address, use an administrator URL for the same PostgreS
 `--database-url` defaults to `RSTACK_DEV_DATABASE_URL`, as for `start`.
 Recovery checks the recorded cluster identifier and maintenance database before dropping any resources.
 It waits for the process guards to finish, then drops the databases and roles and removes the run directory.
-If any step fails, the report gives the reason and the resources you can check before retrying.
+If the managed PostgreSQL container is gone, recovery removes the run directory and lists any remaining rehearsal databases and roles in `recovered.notDropped`. Run `rstack dev start PROJECT --clean` to clear them.
+If any other step fails, the report gives the reason and the resources you can check before retrying.
 
 An abrupt machine restart can stop a guard before it writes its completed cleanup receipt.
 In that case `--recover` refuses to claim the guarded workload was reaped, even if the process no longer exists.

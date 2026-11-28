@@ -248,7 +248,7 @@ enum WorkerReply {
 
 impl WorkerReply {
     fn failed(error: &anyhow::Error) -> Self {
-        Self::failure(format!("{error:#}"), error.is::<Operational>())
+        Self::failure(format!("{error:#}"), is_operational(error))
     }
 
     fn failure(error: String, operational: bool) -> Self {
@@ -611,7 +611,7 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
                     Usage(format!("{code}: {message}. {action}")).into()
                 })
                 .and_then(|()| {
-                    if let Some(notice) = live_run_notice(&live_run_ids(&state_dir())) {
+                    if let Some(notice) = live_run_notice(&live_run_ids(&state_dir()?)) {
                         let _ = writeln!(stderr, "{notice}");
                     }
                     start(&project, application_root.as_deref(), ttl.as_deref(), clean)
@@ -682,11 +682,17 @@ struct Usage(String);
 /// The error envelope and exit code for a failed command. It is the launcher's
 /// `registry.rstack.error.v1` object, plus `run_id` and `recovery` when a run
 /// still has resources to release.
-fn error_report(error: &anyhow::Error) -> (Value, u8) {
-    let operational = error.is::<Operational>()
+fn is_operational(error: &anyhow::Error) -> bool {
+    error.is::<Operational>()
         || error.is::<RecoveryNeeded>()
-        || error.is::<products::InspectionUnavailable>();
-    let (class, code) = if operational {
+        || error.is::<products::InspectionUnavailable>()
+        || error
+            .downcast_ref::<products::LoggedToolFailure>()
+            .is_some_and(products::LoggedToolFailure::operational)
+}
+
+fn error_report(error: &anyhow::Error) -> (Value, u8) {
+    let (class, code) = if is_operational(error) {
         ("operational", OPERATIONAL_FAILURE_EXIT)
     } else if error.is::<Usage>() {
         ("usage", USAGE_EXIT)
@@ -731,6 +737,16 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
                 name.as_str().unwrap_or("?")
             )?;
         }
+        for name in recovered["notDropped"].as_array().into_iter().flatten() {
+            writeln!(
+                output,
+                "  could not release database or role {}",
+                name.as_str().unwrap_or("?")
+            )?;
+        }
+        if let Some(action) = recovered["action"].as_str() {
+            writeln!(output, "  {action}")?;
+        }
         for container in recovered["containers"].as_array().into_iter().flatten() {
             writeln!(
                 output,
@@ -739,10 +755,10 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
             )?;
         }
     }
-    if report["database"]["replacedMissingVolume"] == true {
+    if let Some(path) = report["database"]["orphanedState"].as_str() {
         writeln!(
             output,
-            "  The development volume was missing. Started with fresh project state."
+            "  The development volume was missing. Previous project state moved to {path}."
         )?;
     }
     if let Some(retention) = report["database"]["retention"].as_str() {
@@ -1048,7 +1064,7 @@ fn start(
         .map(|entry| Ok((entry.product, binaries(entry.product)?)))
         .collect::<Result<_>>()?;
     let run_id = Uuid::new_v4().simple().to_string();
-    let base = state_dir();
+    let base = state_dir()?;
     if let Some(parent) = base.parent().filter(|path| !path.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
     }
@@ -1182,6 +1198,21 @@ fn start_abandoned(signals: &AtomicBool, deadline: Instant) -> Option<anyhow::Er
 
 /// Runs the supervisor's startup, turning a panic into an operational failure
 /// that carries no panic payload.
+fn kept_scenario_conflict(report: &Value) -> bool {
+    report["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|step| {
+            step["result"] == "failed"
+                && step["status"] == 409
+                && matches!(
+                    step["problem"]["code"].as_str(),
+                    Some("mutation.conflict" | "idempotency.key-reused")
+                )
+        })
+}
+
 fn catch_startup<T>(startup: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(startup)).unwrap_or_else(|_| {
         Err(operational(anyhow::anyhow!(
@@ -1221,6 +1252,48 @@ fn reserve_run_issuer(plan: &mut plan::Plan) -> Result<Option<TcpListener>> {
     Ok(Some(listener))
 }
 
+fn check_daemon(state: &Path, daemon: &str) -> Result<()> {
+    if let Some(saved) = read_private(&state.join("docker-daemon"))? {
+        let saved = std::str::from_utf8(&saved)
+            .context("cannot read the retained Docker daemon ID. Start with --clean")?;
+        ensure!(
+            saved == daemon,
+            "Development state belongs to Docker daemon {saved}, but the current daemon is {daemon}. Switch back to {saved} or start with --clean"
+        );
+    }
+    Ok(())
+}
+
+fn orphan_project_state(state: &Path) -> Result<PathBuf> {
+    let now = time::OffsetDateTime::now_utc();
+    let timestamp = format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}.{:09}Z",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+        now.nanosecond()
+    );
+    let mut orphan = state.as_os_str().to_owned();
+    orphan.push(format!(".orphaned-{timestamp}"));
+    let orphan = PathBuf::from(orphan);
+    ensure!(
+        !orphan.exists(),
+        "orphaned development state already exists at {}",
+        orphan.display()
+    );
+    fs::rename(state, &orphan).with_context(|| {
+        format!(
+            "cannot move development state {} to {}",
+            state.display(),
+            orphan.display()
+        )
+    })?;
+    Ok(orphan)
+}
+
 fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let name = root
         .file_name()
@@ -1251,7 +1324,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         );
     }
     let project_state = restored.project_state(root);
-    let _project_lock = restored
+    let project_lock = restored
         .project_key
         .as_deref()
         .map(|key| lock_project(root, key))
@@ -1260,6 +1333,11 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let input = Arc::new(restored);
     let signals = signals()?;
     let mut products = ProductRunner::new(input.clone(), root, &signals)?;
+    let clean_gate = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(root.join(CLEAN_GATE))?;
     let lock = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1280,7 +1358,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let mut expiry = None;
     let mut browser = None;
     let image = Image::for_plan(input.requires_postgis());
-    let mut replaced_missing_volume = false;
+    let mut orphaned_state = None;
     let mut retained_volume = false;
     let mut fresh_generation = None;
     let prepared = catch_startup(|| {
@@ -1298,7 +1376,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                     .as_deref()
                     .context("missing development project state")?;
                 let engine = docker.insert(Docker::connect()?);
-                engine.require_free_volume(key)?;
+                let daemon = engine.daemon_id()?;
                 let state_exists = match fs::symlink_metadata(state) {
                     Ok(_) => {
                         ensure_private(state, false)?;
@@ -1307,14 +1385,22 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                     Err(error) if error.kind() == io::ErrorKind::NotFound => false,
                     Err(error) => return Err(error.into()),
                 };
+                if state_exists && !input.clean {
+                    check_daemon(state, &daemon)?;
+                }
+                engine.require_free_volume(key)?;
                 let volume_exists = engine.has_project_volume(key)?;
                 retained_volume = !input.clean && volume_exists;
+                products.set_retained_volume(retained_volume);
                 if input.clean {
                     engine.remove_project_volume(key)?;
                 }
-                replaced_missing_volume = !input.clean && state_exists && !volume_exists;
-                if state_exists && (input.clean || replaced_missing_volume) {
-                    fs::remove_dir_all(state)?;
+                if state_exists && input.clean {
+                    fs::remove_dir_all(state).with_context(|| {
+                        format!("cannot remove development state {}", state.display())
+                    })?;
+                } else if state_exists && !volume_exists {
+                    orphaned_state = Some(orphan_project_state(state)?);
                 }
                 if retained_volume {
                     ensure!(
@@ -1342,7 +1428,15 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                     fresh_generation = Some(generation.clone());
                     generation
                 };
-                let server = engine.start_server(root, &input.run_id, image, key, &generation)?;
+                write_private(&state.join("docker-daemon"), daemon.as_bytes())?;
+                let server = engine.start_server(
+                    root,
+                    &input.project,
+                    &input.run_id,
+                    image,
+                    key,
+                    &generation,
+                )?;
                 write_private(&root.join("postgres-ca"), &server.ca_pem)?;
                 (server.admin_url, Some(server.ca_pem))
             } else {
@@ -1399,20 +1493,16 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                 continue;
             }
             let mut report = serde_json::to_value(
-                products.journey(&issuer, &urls, journey).with_context(|| {
-                    if retained_volume {
-                        "cannot run the scenario against kept data. Start with --clean"
-                    } else {
-                        "cannot run the scenario"
-                    }
-                })?,
+                products
+                    .journey(&issuer, &urls, journey)
+                    .context("cannot run the scenario")?,
             )?;
             if report["result"] == "passed" {
                 if let Some(path) = &scenario_state {
                     applied.insert(journey.id.clone(), digest);
                     write_private(path, &serde_json::to_vec(&applied)?)?;
                 }
-            } else if retained_volume {
+            } else if retained_volume && kept_scenario_conflict(&report) {
                 report["action"] =
                     json!("Start with --clean to clear kept data before running this scenario.");
             }
@@ -1452,7 +1542,8 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             json!({
                 "mode": "managed", "image": image.reference,
                 "developmentState": project_state,
-                "replacedMissingVolume": replaced_missing_volume,
+                "replacedMissingVolume": orphaned_state.is_some(),
+                "orphanedState": orphaned_state,
                 "volume": docker::volume_name(input.project_key.as_deref().expect("managed key")),
                 "retention": format!("Development data is kept after stop in {}; start this project with --clean to clear it.", project_state.as_ref().expect("managed state").display())
             })
@@ -1481,6 +1572,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         });
         add_run_addresses(&mut report, &input.plan, application);
 
+        if let (Some(state), Some(key)) = (&project_state, &input.project_key) {
+            write_private(&state.join(format!("run-{}", input.run_id)), key.as_bytes())?;
+        }
         write_private(&root.join(REPORT), &capture_report(&report)?)?;
         Ok::<_, anyhow::Error>(report)
     });
@@ -1543,7 +1637,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                         {
                             engine.remove_project_volume(key)?;
                         }
-                        fs::remove_dir_all(state)?;
+                        fs::remove_dir_all(state).with_context(|| {
+                            format!("cannot remove development state {}", state.display())
+                        })?;
                     }
                 }
                 Ok(())
@@ -1558,6 +1654,27 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     );
     if let Err(error) = cleanup {
         return Err(cleanup_gave_up(root, &input.run_id, &error).into());
+    }
+    // On acceptance the supervisor owns cleaning through directory removal.
+    // A caller that arrives after removal uses the ended run's project record.
+    flock(&clean_gate, FlockOperation::LockExclusive)?;
+    let request = root.join(CLEAN_REQUEST);
+    if request.exists() {
+        let clean = (|| -> Result<()> {
+            let state = project_state
+                .as_deref()
+                .context("missing development project state")?;
+            let key = input
+                .project_key
+                .as_deref()
+                .context("missing development project key")?;
+            let engine = docker
+                .as_ref()
+                .context("missing managed Docker connection")?;
+            clean_project(engine, state, key)
+        })();
+        let failure = clean.err().map(|error| format!("{error:#}"));
+        fs::write(&request, serde_json::to_vec(&failure)?)?;
     }
     // A failed run keeps its logs outside the run directory.
     let removed = if failure.is_some() {
@@ -1578,6 +1695,10 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     drop(issuer_listener);
     // If the root is gone, no stale ready report could have survived.
     mark_stopping?;
+    drop(products);
+    drop(clean_gate);
+    drop(lock);
+    drop(project_lock);
     Ok(())
 }
 
@@ -1593,7 +1714,7 @@ fn status(run_id: &str) -> Result<Value> {
     if !root.exists() {
         return Err(Usage(format!(
             "no development run {run_id} in {}; it never started, or it has stopped and been cleaned up",
-            state_dir().display()
+            root.parent().expect("run directory has a state root").display()
         ))
         .into());
     }
@@ -1638,17 +1759,20 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         ))
     );
     let report = status(run_id)?;
+    token_from_report(&run_dir(run_id)?, run_id, person, &report)
+}
+
+fn token_from_report(root: &Path, run_id: &str, person: &str, report: &Value) -> Result<Value> {
     ensure!(
         report["status"] == "ready",
         "development run {run_id} is not ready"
     );
-    let root = run_dir(run_id)?;
     let input: RunInput = read_json(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)?;
     ensure!(
         input.plan.jwks_uri().is_none(),
         "This run uses an external issuer. Obtain tokens from that issuer."
     );
-    let signer = Issuer::load(&root)?;
+    let signer = Issuer::load(root)?;
     let run_expires = report["expires_at"]
         .as_u64()
         .context("run expiry is missing")?;
@@ -1683,36 +1807,14 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
     }))
 }
 
-fn stop_with_clean(run_id: &str, clean: bool) -> Result<Value> {
-    if !clean {
-        return stop(run_id);
-    }
-    let root = run_dir(run_id)?;
-    ensure_private(&root, false).with_context(|| {
-        format!("cannot identify the project of run {run_id}. Start the project with --clean")
-    })?;
-    let input = captured_input(&root)?;
-    let key = input
-        .project_key
-        .as_deref()
-        .context("--clean requires a run using managed development PostgreSQL")?;
-    let state = input.project_state(&root).expect("managed project state");
-    ensure_private(&state, false)?;
-    let generation_path = state.join("generation");
-    let generation = read_private(&generation_path)?
+const CLEAN_GATE: &str = "stop-clean.lock";
+const CLEAN_REQUEST: &str = "stop-clean.request";
+
+fn clean_project(engine: &Docker, state: &Path, key: &str) -> Result<()> {
+    ensure_private(state, false)?;
+    let generation = read_private(&state.join("generation"))?
         .context("missing project generation. Start with --clean")?;
-    let worker_lock = File::open(root.join("worker.lock"))?;
-    let mut report = stop(run_id)?;
-    // The worker removes the run directory before releasing its project lock.
-    flock(&worker_lock, FlockOperation::LockShared)?;
-    let _project_lock = lock_project(&root, key)?;
-    ensure_private(&state, false)?;
-    ensure!(
-        read_private(&generation_path)?.as_deref() == Some(generation.as_slice()),
-        "development state directory {} changed while stopping. Start with --clean",
-        state.display()
-    );
-    let engine = Docker::connect()?;
+    check_daemon(state, &engine.daemon_id()?)?;
     engine.require_free_volume(key)?;
     if engine.has_project_volume(key)? {
         ensure!(
@@ -1723,7 +1825,91 @@ fn stop_with_clean(run_id: &str, clean: bool) -> Result<Value> {
         );
         engine.remove_project_volume(key)?;
     }
-    fs::remove_dir_all(state)?;
+    fs::remove_dir_all(state)
+        .with_context(|| format!("cannot remove development state {}", state.display()))
+}
+
+fn request_clean(root: &Path) -> Result<Option<File>> {
+    let gate = match File::open(root.join(CLEAN_GATE)) {
+        Ok(gate) => gate,
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !root.exists() => return Ok(None),
+        Err(error) => return Err(error).context("cannot open the supervisor's stop --clean lock"),
+    };
+    flock(&gate, FlockOperation::LockExclusive)?;
+    if !root.exists() {
+        return Ok(None);
+    }
+    ensure!(
+        captured_input(root)?.project_key.is_some(),
+        "--clean requires a run using managed development PostgreSQL"
+    );
+    let result = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(root.join(CLEAN_REQUEST))?;
+    Ok(Some(result))
+}
+
+fn project_for_ended_run(root: &Path, run_id: &str) -> Result<Option<(String, PathBuf)>> {
+    let Some(base) = root.parent().filter(|base| base.exists()) else {
+        return Ok(None);
+    };
+    for entry in fs::read_dir(base)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(key) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("development-project-"))
+            .filter(|key| run_dir_name(key))
+        else {
+            continue;
+        };
+        if entry.file_type()?.is_dir() && entry.path().join(format!("run-{run_id}")).is_file() {
+            return Ok(Some((key.to_owned(), entry.path())));
+        }
+    }
+    Ok(None)
+}
+
+fn stop_with_clean(run_id: &str, clean: bool) -> Result<Value> {
+    if !clean {
+        return stop(run_id);
+    }
+    let root = run_dir(run_id)?;
+    if root.exists() {
+        match ensure_private(&root, false) {
+            Ok(()) => {}
+            Err(error) if root.exists() => return Err(error),
+            Err(_) => {}
+        }
+        if let Some(mut result) = request_clean(&root)? {
+            let mut report = stop(run_id)?;
+            let mut bytes = Vec::new();
+            result.read_to_end(&mut bytes)?;
+            let failure: Option<String> = serde_json::from_slice(&bytes)
+                .context("the supervisor did not report the clean result. Retry stop --clean")?;
+            if let Some(failure) = failure {
+                return Err(anyhow::anyhow!("{failure}"));
+            }
+            report["cleaned"] = json!(true);
+            return Ok(report);
+        }
+    }
+    let (key, state) = project_for_ended_run(&root, run_id)?.with_context(|| {
+        format!("cannot identify the project of run {run_id}. Start the project with --clean")
+    })?;
+    let _project_lock = lock_project(&root, &key)?;
+    ensure_private(&state, false)?;
+    ensure!(
+        read_private(&state.join(format!("run-{run_id}")))?.as_deref() == Some(key.as_bytes()),
+        "development state for run {run_id} changed. Start the project with --clean"
+    );
+    clean_project(&Docker::connect()?, &state, &key)?;
+    let mut report = simple_report(run_id, "stopped");
     report["cleaned"] = json!(true);
     Ok(report)
 }
@@ -1808,7 +1994,7 @@ fn recover_run(run_id: &str) -> Result<Value> {
         }
         .into()
     };
-    let (stopped_groups, dropped, containers) = (|| -> Result<_> {
+    let (stopped_groups, dropped, containers, not_dropped, project) = (|| -> Result<_> {
         // Status can read the last report while recovery holds the worker lock.
         write_private(
             &root.join(REPORT),
@@ -1826,19 +2012,22 @@ fn recover_run(run_id: &str) -> Result<Value> {
             let provisioned = input.project_key.is_some()
                 && read_json::<Option<RecoveryIdentity>>(&root.join(POSTGRES_IDENTITY), 1024)?
                     .is_some();
-            let dropped = if provisioned {
+            let (dropped, not_dropped) = if provisioned {
                 let names = provisioned_labels(&root)?
                     .into_iter()
                     .filter(|(label, _)| *label == "breg_test")
                     .map(|(label, spatial)| database::run_object_names(run_id, label, spatial))
                     .collect::<Result<Vec<_>>>()?;
-                docker.drop_rehearsals(run_id, names)?
+                match docker.drop_rehearsals(run_id, names)? {
+                    docker::RehearsalCleanup::Dropped(names) => (names, Vec::new()),
+                    docker::RehearsalCleanup::NotDropped(names) => (Vec::new(), names),
+                }
             } else {
-                Vec::new()
+                (Vec::new(), Vec::new())
             };
             let containers = docker.remove(run_id)?;
             remove_run_dir(&root)?;
-            return Ok((stopped_groups, dropped, containers));
+            return Ok((stopped_groups, dropped, containers, not_dropped, Some(input.project)));
         }
         // A null identity means the worker never began provisioning. Missing
         // or invalid metadata cannot prove that there is nothing to release.
@@ -1872,7 +2061,7 @@ fn recover_run(run_id: &str) -> Result<Value> {
             Vec::new()
         };
         remove_run_dir(&root)?;
-        Ok((stopped_groups, dropped, containers))
+        Ok((stopped_groups, dropped, containers, Vec::new(), None))
     })()
     .map_err(|error| unrecovered(format!("{error:#}")))?;
     let mut report = simple_report(run_id, "stopped");
@@ -1881,6 +2070,13 @@ fn recover_run(run_id: &str) -> Result<Value> {
         "databases_and_roles": dropped,
         "containers": containers,
     });
+    if let Some(project) = project.filter(|_| !not_dropped.is_empty()) {
+        report["recovered"]["notDropped"] = json!(not_dropped);
+        report["recovered"]["action"] = json!(format!(
+            "Run rstack dev start {} --clean to clear the remaining rehearsal objects.",
+            project.display()
+        ));
+    }
     Ok(report)
 }
 
@@ -1927,7 +2123,9 @@ fn signals() -> Result<Arc<AtomicBool>> {
 }
 
 fn stopping(root: &Path, signals: &AtomicBool) -> bool {
-    signals.load(Ordering::Relaxed) || root.join("stop").exists()
+    signals.load(Ordering::Relaxed)
+        || root.join("stop").exists()
+        || root.join(CLEAN_REQUEST).exists()
 }
 
 fn binary(product: Product, name: &str) -> Result<PathBuf> {
@@ -2005,7 +2203,7 @@ fn parse_ttl(value: &str) -> Result<u64> {
         .ok_or_else(error)
 }
 
-fn state_dir() -> PathBuf {
+fn state_dir() -> Result<PathBuf> {
     select_state_dir(
         env::var_os("RSTACK_DEV_STATE_DIR").map(PathBuf::from),
         env::var_os("XDG_STATE_HOME").map(PathBuf::from),
@@ -2019,19 +2217,23 @@ fn select_state_dir(
     xdg: Option<PathBuf>,
     home: Option<PathBuf>,
     macos: bool,
-) -> PathBuf {
-    if let Some(path) = override_dir {
-        return path;
-    }
-    let home = home.unwrap_or_default();
-    let base = xdg.filter(|path| path.is_absolute()).unwrap_or_else(|| {
-        if macos {
-            home.join("Library/Application Support")
-        } else {
-            home.join(".local/state")
-        }
+) -> Result<PathBuf> {
+    let path = override_dir.unwrap_or_else(|| {
+        let home = home.unwrap_or_default();
+        let base = xdg.filter(|path| path.is_absolute()).unwrap_or_else(|| {
+            if macos {
+                home.join("Library/Application Support")
+            } else {
+                home.join(".local/state")
+            }
+        });
+        base.join("registry-stack/rstack-dev")
     });
-    base.join("registry-stack/rstack-dev")
+    ensure!(
+        path.is_absolute(),
+        Usage("development state requires an absolute path. Set RSTACK_DEV_STATE_DIR to an absolute directory".to_owned())
+    );
+    Ok(path)
 }
 
 fn run_dir_name(run_id: &str) -> bool {
@@ -2048,7 +2250,7 @@ fn run_dir(run_id: &str) -> Result<PathBuf> {
             "invalid run ID \"{run_id}\"; use the 32-character ID printed by rstack dev start"
         ))
     );
-    Ok(state_dir().join(run_id))
+    Ok(state_dir()?.join(run_id))
 }
 
 fn private_directory(path: &Path) -> std::io::Result<()> {
@@ -2301,21 +2503,85 @@ mod tests {
     fn state_directory_defaults_and_override() {
         let home = Some(PathBuf::from("/home/developer"));
         assert_eq!(
-            select_state_dir(None, None, home.clone(), false),
+            select_state_dir(None, None, home.clone(), false).unwrap(),
             Path::new("/home/developer/.local/state/registry-stack/rstack-dev")
         );
         assert_eq!(
-            select_state_dir(None, None, home.clone(), true),
+            select_state_dir(None, None, home.clone(), true).unwrap(),
             Path::new("/home/developer/Library/Application Support/registry-stack/rstack-dev")
         );
         assert_eq!(
-            select_state_dir(None, Some("/state".into()), home.clone(), false),
+            select_state_dir(None, Some("/state".into()), home.clone(), false).unwrap(),
             Path::new("/state/registry-stack/rstack-dev")
         );
         assert_eq!(
-            select_state_dir(Some("/override".into()), Some("/state".into()), home, true),
+            select_state_dir(Some("/override".into()), Some("/state".into()), home, true).unwrap(),
             Path::new("/override")
         );
+    }
+
+    #[test]
+    fn only_a_failed_kept_data_conflict_suggests_clearing_scenario_state() {
+        let report = |status, result, code| {
+            json!({
+                "steps": [{"status": status, "result": result, "problem": {"code": code}}]
+            })
+        };
+        assert!(kept_scenario_conflict(&report(
+            409,
+            "failed",
+            "mutation.conflict"
+        )));
+        assert!(!kept_scenario_conflict(&report(
+            409,
+            "passed",
+            "mutation.conflict"
+        )));
+        assert!(!kept_scenario_conflict(&report(
+            403,
+            "failed",
+            "access.denied"
+        )));
+    }
+
+    #[test]
+    fn missing_volume_preserves_owner_only_state_at_a_timestamped_path() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("development-project");
+        ensure_private(&state, true).unwrap();
+        write_private(&state.join("audit"), b"fixture").unwrap();
+        let orphan = orphan_project_state(&state).unwrap();
+        assert!(!state.exists());
+        assert!(orphan
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("development-project.orphaned-"));
+        ensure_private(&orphan, false).unwrap();
+        assert_eq!(fs::read(orphan.join("audit")).unwrap(), b"fixture");
+    }
+
+    #[test]
+    fn docker_daemon_mismatch_names_both_engines_and_remedies() {
+        let root = tempfile::tempdir().unwrap();
+        write_private(&root.path().join("docker-daemon"), b"engine-one").unwrap();
+        check_daemon(root.path(), "engine-one").unwrap();
+        let error = check_daemon(root.path(), "engine-two")
+            .unwrap_err()
+            .to_string();
+        for expected in ["engine-one", "engine-two", "Switch back", "--clean"] {
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn relative_state_directory_names_the_absolute_override() {
+        for path in [None, Some(PathBuf::from("relative"))] {
+            let error = select_state_dir(path, None, None, false)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("absolute") && error.contains("RSTACK_DEV_STATE_DIR"));
+        }
     }
 
     #[test]

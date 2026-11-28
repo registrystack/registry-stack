@@ -1072,10 +1072,14 @@ impl Plan {
         require_file_inside(root, path, "/scenarioFile", "authored scenario file")?;
         require(
             self.issuer == "run"
-                || issuer_url(&self.issuer, self.jwks_uri().is_some()),
+                || if self.jwks_uri().is_some() {
+                    crate::products::is_loopback_run_issuer(&self.issuer)
+                } else {
+                    issuer_url(&self.issuer)
+                },
             "/issuer",
-            "The issuer must be `run`, an HTTPS URL, or a loopback HTTP URL with externalJwksUri. URLs cannot contain credentials, query, or fragment.",
-            "Set issuer to `run` for an application or exact paired run issuer binding, or to an HTTPS URL with a host and no credentials, query, or fragment.",
+            "An issuer with externalJwksUri must use a numeric loopback HTTP origin. Other issuers must be `run` or HTTPS without credentials, query, or fragment.",
+            "Set issuer to the exact numeric loopback HTTP origin for an external key endpoint, or use `run` or a fixed HTTPS issuer for runner-managed keys.",
         )?;
         if let Some(bindings) = &self.external_breg {
             require(
@@ -1089,9 +1093,9 @@ impl Plan {
         }
         if let Some(uri) = self.jwks_uri() {
             require(
-                self.issuer != "run" && issuer_url(uri, true),
+                self.issuer != "run" && numeric_loopback_endpoint(uri),
                 "/externalJwksUri",
-                "An external key endpoint needs a fixed issuer and an HTTPS or loopback HTTP URL.",
+                "An external key endpoint needs a fixed issuer and a numeric loopback HTTP URL.",
                 "Set issuer to the exact external issuer and externalJwksUri to its key endpoint.",
             )?;
         }
@@ -1731,20 +1735,25 @@ impl ScenarioFile {
     }
 }
 
-pub(super) fn issuer_url(value: &str, allow_loopback: bool) -> bool {
+fn issuer_url(value: &str) -> bool {
     value.len() <= 512
         && ParsedUrl::parse(value).is_ok_and(|url| {
-            let loopback = url.host().is_some_and(|host| match host {
-                url::Host::Ipv4(ip) => ip.is_loopback(),
-                url::Host::Ipv6(ip) => ip.is_loopback(),
-                url::Host::Domain(host) => host == "localhost",
-            });
-            (url.scheme() == "https" || (allow_loopback && url.scheme() == "http" && loopback))
+            url.scheme() == "https"
                 && url.host().is_some()
                 && url.username().is_empty()
                 && url.password().is_none()
                 && url.query().is_none()
                 && url.fragment().is_none()
+        })
+}
+
+pub(super) fn numeric_loopback_endpoint(value: &str) -> bool {
+    value.len() <= 512
+        && !value.contains(['\\', '?', '#'])
+        && !value.chars().any(char::is_whitespace)
+        && value.strip_prefix("http://").is_some_and(|rest| {
+            let authority = rest.split('/').next().unwrap_or_default();
+            crate::products::is_loopback_run_issuer(&format!("http://{authority}"))
         })
 }
 
@@ -1889,6 +1898,70 @@ mod tests {
         ] {
             plan.external_jwks_uri = Some(uri.to_owned());
             assert!(plan.validate(root.path()).is_err());
+        }
+    }
+
+    #[test]
+    fn external_authentication_urls_require_numeric_loopback_http() {
+        let (root, mut plan) = plan(json!({"id": "read", "product": "breg",
+            "as": "operator", "method": "GET", "path": "/v1/records", "expect": {"status": 200}}));
+        for invalid in [
+            "https://127.0.0.1:41000",
+            "http://localhost:41000",
+            "http://192.0.2.1:41000",
+        ] {
+            plan.issuer = invalid.to_owned();
+            plan.external_jwks_uri = Some("http://127.0.0.1:41000/keys".to_owned());
+            let error = plan.validate(root.path()).unwrap_err();
+            assert_eq!(error.field, "/issuer");
+            assert!(error.reason.contains("numeric loopback HTTP"));
+
+            plan.issuer = "http://[::1]:41000".to_owned();
+            plan.external_jwks_uri = Some(format!("{invalid}/keys"));
+            let error = plan.validate(root.path()).unwrap_err();
+            assert_eq!(error.field, "/externalJwksUri");
+            assert!(error.reason.contains("numeric loopback HTTP"));
+        }
+    }
+
+    #[test]
+    fn external_breg_peers_require_numeric_loopback_http() {
+        for pointer in [
+            "/reviewAuthority/endpoint",
+            "/reviewAuthority/tokenEndpoint",
+            "/taskGrant/sourceIssuer",
+            "/taskGrant/statusUrl",
+            "/taskGrant/tokenEndpoint",
+        ] {
+            for invalid in [
+                "https://127.0.0.1:41000",
+                "http://localhost:41000",
+                "http://192.0.2.1:41000",
+            ] {
+                let url = "http://127.0.0.1:41000";
+                let root = tempfile::tempdir().unwrap();
+                fs::create_dir(root.path().join("fixture")).unwrap();
+                crate::write_private(&root.path().join("fixture/key"), b"synthetic").unwrap();
+                let mut input = json!({
+                    "reviewAuthority": {
+                        "id": "review", "endpoint": url, "profile": "review",
+                        "producerId": "producer", "recoveryDays": 1, "tokenEndpoint": url,
+                        "clientId": "client", "assertionKeyRef": "secret:file/key",
+                        "resource": "casework", "scopes": []
+                    },
+                    "taskGrant": {
+                        "sourceIssuer": url, "assertionClient": "assertion", "statusUrl": url,
+                        "tokenEndpoint": url, "statusClient": "status",
+                        "statusKeyRef": "secret:file/key", "statusResource": "casework"
+                    }
+                });
+                *input.pointer_mut(pointer).unwrap() = json!(invalid);
+                let peers: crate::external_breg::ExternalBreg =
+                    serde_json::from_value(input).unwrap();
+                let error = peers.validate(root.path()).unwrap_err();
+                assert_eq!(error.field, format!("/externalBreg{pointer}"));
+                assert!(error.reason.contains("numeric loopback HTTP"));
+            }
         }
     }
 

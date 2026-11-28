@@ -14,6 +14,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(feature = "session")]
+#[path = "journey-fixture/grant.rs"]
+mod grant;
+
+#[cfg(feature = "session")]
 mod fixture {
     use std::{
         collections::BTreeMap,
@@ -28,7 +32,7 @@ mod fixture {
     use registry_thunderid_tooling::{
         container::Session,
         description::{ExchangeIssuer, ExchangeMapping, SessionIdentity, TokenExchangeClient},
-        grant_file, local, render,
+        local, render,
         version::ThunderIdPin,
     };
     use serde::{Deserialize, Serialize};
@@ -150,7 +154,7 @@ mod fixture {
                 allow_human_fixture: client.allow_human_fixture,
             });
         }
-        let label = format!("k3c-journey-{}", state.id);
+        let label = format!("journey-issuer-{}", state.id);
         let mut description = local::typed_local_description(
             SessionIdentity {
                 label: label.clone(),
@@ -275,7 +279,7 @@ mod fixture {
             [command, root] if command == "stop" => {
                 let root = Path::new(root);
                 let state: State = read(&root.join("fixture.json"))?;
-                let label = format!("k3c-journey-{}", state.id);
+                let label = format!("journey-issuer-{}", state.id);
                 let pin = ThunderIdPin::load()?;
                 local::stop(&session(root, &state, &label, &pin), Path::new("docker"))?;
                 Ok(())
@@ -291,8 +295,11 @@ mod fixture {
             }
             [command, root, file, client, grant] if command == "grant" => {
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-                let result = runtime.block_on(grant_file::acquire_development_to_header(Path::new(file), Path::new(root), client, grant))?;
-                println!("{}", result.header_file.display());
+                let root = Path::new(root);
+                let state: State = read(&root.join("fixture.json"))?;
+                let issuer = format!("http://127.0.0.1:{}", state.port);
+                let header = runtime.block_on(super::grant::acquire_header(Path::new(file), root, client, grant, &issuer))?;
+                println!("{}", header.display());
                 Ok(())
             }
             _ => Err("usage: journey-issuer start ROOT CLIENTS ID PORT RESOURCE | stop ROOT | token ROOT CLIENTS CLIENT FILE | grant ROOT CONNECTION CLIENT GRANT".into()),

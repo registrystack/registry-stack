@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_provision::{
     plan,
-    sql::{quote_identifier, quote_literal},
+    sql::{owned_schema_sql, quote_identifier, quote_literal},
     Plan, Probe, ProductDatabase, ProvisionTarget, RoleCredential, SchemaLayout, Scope, Spatial,
 };
 use rustls::pki_types::{pem::PemObject as _, CertificateDer};
@@ -1007,11 +1007,7 @@ fn retained_password_sql(name: &str, verifier: &str) -> String {
 }
 
 fn retained_schema_sql(name: &str, owner: &str) -> String {
-    let name = quote_identifier(name);
-    let owner = quote_identifier(owner);
-    format!(
-        "CREATE SCHEMA IF NOT EXISTS {name} AUTHORIZATION {owner}; REVOKE ALL ON SCHEMA {name} FROM PUBLIC"
-    )
+    owned_schema_sql(name, owner).replacen("CREATE SCHEMA ", "CREATE SCHEMA IF NOT EXISTS ", 1)
 }
 
 #[cfg(test)]

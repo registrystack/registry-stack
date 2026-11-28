@@ -156,7 +156,7 @@ retained files.
 
 ## Acquire an approved task
 
-`bregctl`, `caseworkctl`, and `evidencectl` expose the same bounded command:
+Shipped tools do not acquire task grants. The `journey-issuer` example acquires them for tests and journeys only:
 
 ```sh
 journey-issuer grant FIXTURE_DIRECTORY CONNECTION_FILE task-agent APPROVED-GRANT-UUID
