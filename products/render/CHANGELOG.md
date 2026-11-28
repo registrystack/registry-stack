@@ -33,11 +33,13 @@
 
 - A scope refusal writes the scope claim name and the scope the route
   requires on its `request refused` log line. Both values come from the
-  runtime file and never from the caller's token. Responses are unchanged.
+  runtime file and never from the caller's token. Production responses are
+  unchanged.
 - Render counts every refusal of a caller in `render_request_refusals_total{check}`
   (served when `metricsListener` is set) and writes one `request refused` log line with
   `failed_check` and the trace id, at most five per check per minute. The
-  counter and the line carry a fixed check name only. Responses are unchanged.
+  counter and the line carry a fixed check name only. Production responses are
+  unchanged.
   A refusal whose audit entry cannot be written is answered as an audit
   failure and is not counted.
 - A static key set that Render refuses at startup now names the reason in the

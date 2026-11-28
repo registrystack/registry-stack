@@ -96,7 +96,7 @@
   `request refused` line with `failed_check` and the request's trace id, at
   most five lines per check per minute. That line replaces the
   authentication refusal line that carried a `stage` field. Refusal statuses,
-  headers and bodies are unchanged. An answer replayed from a stored receipt
+  headers and production bodies are unchanged. An answer replayed from a stored receipt
   under the same idempotency key is not counted again, because the decision
   was counted when it was made. A grant or access token that lapses while a
   commitment waits inside the capacity transaction counts under
@@ -106,7 +106,7 @@
 - A `request refused` line for a scope refusal names the scope claim the
   deployment configured, the scope the route needs, and the source-busy
   profile id when one applies. It never names a scope the token carries.
-  Answers are unchanged.
+  Production answers are unchanged.
 - A static key set that the shared key set rule refuses is refused at startup
   under `scheduling.runtime.unreadable-jwks-secret`, with the rule it broke,
   in place of `scheduling.runtime-dependency.unavailable`. The rule refuses a
@@ -119,9 +119,11 @@
   `127.0.0.0/8`, or `localhost` in any case. `localhost.` and `*.localhost`
   stay refused.
 
-- Add `GET /health` and `GET /ready`, answering `{"status":"ok"}` and
-  `{"status":"ready"}` as `application/json` with no token, as the other
-  services do. `/healthz` and `/readyz` keep answering an empty 200.
+- Add `GET /health` and `GET /ready`, answering `{"status":"ok"}` on
+  `/health` and JSON with `status: "ready"`, `posture` and
+  `developmentSettings` on `/ready` as `application/json` with no token, as
+  the other services do. `/healthz` keeps answering an empty 200, and
+  `/readyz` returns the same JSON readiness body as `/ready`.
 
 - A task grant with more than 900 seconds left on the offline path
   (`taskGrantStatus: unchecked-final-fifteen-minutes`) now answers 403

@@ -41,9 +41,9 @@
 
 - Checks with `--deny-warnings` still list development-only settings accepted under a development declaration.
 
-- BREAKING (Rust API): `DatabaseConfig::plaintext_permitted` is replaced by
-  `DatabaseConfig::permitted_transport`, which also returns the numeric addresses
-  each host was checked as. A host name is looked up once.
+- `DatabaseConfig::permitted_transport` checks database hosts against the
+  declared transport and returns the numeric addresses each host was checked
+  as, looking up each host name once.
   `DatabaseConfig::permitted_transport_with_resolver` and
   `check_database_hosts` take the resolver as an argument. The new
   `registry-platform-postgres` crate keeps `tokio-postgres` out of
@@ -275,7 +275,7 @@
   is a standard-library Go receiver, and CI runs its tests against the shared
   vectors.
 
-- Outbound destination types. No product reads these members yet.
+- Outbound destination types.
   `registry-platform-loopback` adds `TransportClass` (`VerifiedTls`,
   `LoopbackPlaintext`, `PrivateNetworkPlaintext`), the checks
   `private_address_eligible` and `private_range_eligible` (RFC 1918, RFC 6598
@@ -403,9 +403,8 @@
   `check_url_hook_destination_file`, which report every refusal activation
   would make: each refused range at its entry, the selector's code at
   `transport` or `url`, and at `url` a query or fragment, an https URL naming
-  a name under `localhost` or `localhost.`, or port zero. Scheduling and Documents do
-  not call the check yet, so a refused destination still surfaces at their
-  startup.
+  a name under `localhost` or `localhost.`, or port zero. Scheduling and
+  Documents call this check during offline runtime checks and at startup.
   BREAKING (Rust API): `UrlDestinationAddress` adds `selected`,
   `UrlDestinationError` adds `Refused`, and `UrlHookActivationError` adds
   `DestinationRefused`, each carrying the selector's refusal with `code()`.
@@ -550,7 +549,8 @@
   `TaskGrantStatusClient::new_without_peer_policy`,
   `TaskGrantStatusRegistry::activate_without_peer_policy` and
   `GrantClaims::verify_context_without_peer_policy` refuse development
-  peers, and every runtime uses them until it declares its posture.
+  peers for callers without a declared posture. Every runtime declares its
+  posture and passes a `PeerPolicy`.
 
 - The shared activation ledger records a posture with every activation.
   `registry-platform-activation` adds `Activation.posture` and
@@ -559,8 +559,8 @@
   declared }` when the active row records the other one. A row written
   before the column existed reads as production.
   `NewActivation::without_posture` and `check_active_package_without_posture`
-  record and check production, and every runtime uses them until it declares
-  its posture.
+  record and check production for callers without a declared posture. Every
+  runtime declares its posture and passes it directly.
 
 - Every runtime reads a secret file under one rule. A relative link that
   stays below `secretProviders.file.root` is followed, at most eight links
@@ -587,7 +587,7 @@
   `declared_from`/`declared`, which read the `--posture` flag and the
   `REGISTRY_STACK_POSTURE` variable. Unset means production. A value that is
   not a posture, or a flag and variable that disagree, is refused before any
-  file is read. No product reads it yet.
+  file is read. Every product runtime and CLI reads it.
 
 - `registry-platform-yaml` exports `DEVELOPMENT_ONLY`, `GatedSite` and
   `gated_site()`, which let a development-only value learn its pointer and
@@ -606,7 +606,7 @@
   logs the declared posture, the development settings in use and the explicit
   production settings in use. A check acceptance cannot hide a posture
   diagnostic: one that names a posture code is refused with
-  `config.check-acceptance-not-acceptable`. No runtime uses the gate yet.
+  `config.check-acceptance-not-acceptable`. Every runtime uses this gate.
 
 - BREAKING (Rust API): `RuntimeConfigLoader::new` takes the
   `DeclaredPosture`. In production it refuses every development-only setting
@@ -615,26 +615,24 @@
   `PostureReport` and, in development only, the `DevelopmentWitness`.
   `check_offline` reports each such setting as an error in production and a
   warning in development, under the same code, and still decodes the file.
-  Migration: call `RuntimeConfigLoader::new_without_posture(envelope)`, which
-  behaves as `new` did, until the runtime adopts the posture; add
-  `transport: None` to a `DatabaseConfig` literal; and call
-  `OidcIssuerConfig::check_without_posture(field, allow_loopback_http)` where
-  `check` was called.
+  Migration: pass the resolved `DeclaredPosture` to `RuntimeConfigLoader::new`
+  and `OidcIssuerConfig::check`, or use `new_without_posture` and
+  `check_without_posture` where no posture is declared. Add `transport: None`
+  to a `DatabaseConfig` literal.
 
 - The shared database block adds `database.transport`: `verified-tls`, the
   default, `loopback-plaintext`, for a Unix socket, a numeric loopback
   address or `localhost` when it resolves only to loopback addresses, and
   `private-network-plaintext`, development only,
-  for loopback or private addresses. `DatabaseConfig::plaintext_permitted`
+  for loopback or private addresses. `DatabaseConfig::permitted_transport`
   checks the hosts against the value, and `DatabaseConfig::check` refuses
   `transport` beside `testOnlyPlaintext`, and `testOnlyPlaintext` outside a
   test build. The shared audit block adds `audit.hashKeyCustody`:
   `operator-provisioned`, the default, or `development-generated`,
   development only. `authentication.oidc.allowInsecureHttp: true` is
   recorded as a development-only setting. The shared and product runtime
-  schemas mark these members `x-registry-development-only`. No runtime reads
-  the new members yet, and a runtime that has not adopted the posture
-  behaves as before.
+  schemas mark these members `x-registry-development-only`, and every
+  runtime reads them.
 
 - The shared private listener adds `tlsTermination: loopback-plaintext`:
   plaintext on a loopback bind behind a proxy on the same host, valid in
@@ -643,10 +641,9 @@
   `development-loopback`. The shared OIDC issuer block adds
   `jwksSource: {type: test-issuer, documentRef: <secret reference>}`, which
   reads the key set from the secret like `static`, for a development run's
-  test issuer. A posture-aware load refuses it in production with
-  `platform.posture.test-issuer` and admits and lists it in development. A
-  runtime that has not adopted the posture reads it like `static`, and
-  Evidence, which reads access-token keys only from `uri`, refuses it. The
+  test issuer. Production refuses it with `platform.posture.test-issuer`, and
+  development admits and lists it. Evidence, which reads access-token keys
+  only from `uri`, refuses it in either posture. The
   shared and product runtime schemas gain both values. Migration: add
   `JwksSource::TestIssuer { document_ref }` beside `Static { document_ref }`
   in an exhaustive match, and a `LoopbackPlaintext` arm where
@@ -661,8 +658,10 @@
   declared posture. In development it sets `Registry-Posture: development` on
   every response, over any value a handler set, and in production it sends no
   mark. `posture_mark(posture)` sets only the mark, for routers that do not use
-  `security_headers`. Migration: call `security_headers_without_posture(csp)`,
-  which behaves as production, until the runtime adopts the posture.
+  `security_headers`. Every runtime passes its declared posture to
+  `security_headers(csp, posture)`. `security_headers_without_posture(csp)`
+  remains available for callers without a declared posture and behaves as
+  production.
 
 - `registry-platform-httpsec` implements authcommon's `RefusalTraceId` for
   `TraceId` behind the opt-in `refusal-trace-id` feature, not `server`. A
@@ -742,10 +741,10 @@
   `DestinationProfile::LoopbackDevelopmentHttp` is now
   `DestinationProfile::LoopbackHttp`, and
   `DestinationProfile::LocalPrivateDevelopmentHttp` exists only in test builds
-  and under the `test-support` feature. Migration: a client with no runtime
-  policy yet calls `validate_response_headers_without_peer_policy`, which
-  behaves as production and refuses a development peer, and the two renamed
-  names change at their call sites.
+  and under the `test-support` feature. Migration: pass a `PeerPolicy` to
+  `validate_response_headers`, or call
+  `validate_response_headers_without_peer_policy` when a caller always refuses
+  development peers, and update call sites for the two renamed names.
 
 - `registry-thunderid-tooling` reads development identity files and task
   connections with the same loopback rule. A development issuer or local app
@@ -773,16 +772,17 @@
   receiver clock, through `DeliveryFreshness::default_at`.
 
 - `registry_platform_authcommon::FailedCheck` is the closed set of checks a
-  request can fail, with a stable kebab-case label for each. It is
-  operator-side only and is never written to a response. Behind the
+  request can fail, with a stable kebab-case label for each. In production it
+  stays operator-side and is never written to a response. Under development,
+  `name_failed_check` can add `failedCheck` to JSON refusal bodies. Behind the
   `refusal-recorder` feature, `RefusalRecorder` counts every refusal in
   `<product>_request_refusals_total{check}` and admits at most five log lines
   per check per minute, and `record_refusal!` writes the line with
   `failed_check`, `suppressed`, an optional code-defined `remedy` and an
   optional `trace_id`, which must be a `RefusalTraceId`. The request's
-  `registry_platform_httpsec::TraceId` implements it under httpsec's `server`
-  feature, and authcommon does not depend on httpsec. Alert on the counter,
-  not on the log line.
+  `registry_platform_httpsec::TraceId` implements it under httpsec's
+  `refusal-trace-id` feature, and authcommon does not depend on httpsec. Alert
+  on the counter, not on the log line.
 
 - A scope refusal's `request refused` line can name what the operator
   declared: `record_refusal!(.., declared = Some(&scope))` takes a
