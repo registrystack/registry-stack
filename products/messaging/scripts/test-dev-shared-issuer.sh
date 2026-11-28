@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify exact audience and key rotation against a journey-owned stock issuer.
+# Verify delivery, authorization and fresh key loading with a stock issuer.
 set -euo pipefail
 dev_name=test-dev-shared-issuer
 # shellcheck source=products/messaging/scripts/dev-session.sh
@@ -7,7 +7,7 @@ dev_name=test-dev-shared-issuer
 dev_prepare
 fixture=${JOURNEY_ISSUER_BIN:-"${CARGO_TARGET_DIR:-$dev_repo_root/target}/debug/examples/journey-issuer"}
 if [[ ! -x "$fixture" ]]; then
-  registry_cargo_build "$dev_repo_root" --locked -p registry-thunderid-tooling     --features session --example journey-issuer
+  registry_cargo_build "$dev_repo_root" --locked -p registry-thunderid-tooling --features session --example journey-issuer
 fi
 issuer_root=
 clean_issuer() {
@@ -34,6 +34,9 @@ Path(registration).write_text(json.dumps({
     "clients": [{
         "id": "case-system", "scopes": ["messaging:send"],
         "grants": [{"audience": other, "scopes": ["messaging:send"]}],
+        "claims": {"registry_actor_kind": "service"},
+    }, {
+        "id": "operations-console", "scopes": ["messaging:operate"],
         "claims": {"registry_actor_kind": "service"},
     }],
     "issuer": {"resources": [{"audience": other, "scopes": ["messaging:send"]}]},
@@ -62,34 +65,57 @@ read_status() {
 start_fixture original
 "$fixture" token "$issuer_root" "$registration" case-system "$dev_work/original.header"
 "$fixture" token "$issuer_root" "$registration" case-system "$dev_work/other.header" "$other"
+"$fixture" token "$issuer_root" "$registration" operations-console "$dev_work/operator.header"
 dev_start
 if "$rstack_bin" --format json dev token "$dev_run" --as case-system >"$dev_work/token-refusal.json"; then
   printf '%s: the runner issued a token for an external issuer\n' "$dev_name" >&2
   exit 1
 fi
 grep -Fq 'Obtain tokens from that issuer' "$dev_work/token-refusal.json"
+sms_body='{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}'
+email_body='{"senderProfile":"transactional","to":{"email":"ada@example.org"},"template":{"id":"appointment-reminder","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}'
 submit() {
-  curl --silent --show-error --fail-with-body -X POST "$dev_api/v1/messages"   -H @"$1" -H 'content-type: application/json'   -H "Idempotency-Key: $2"   --data '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}' |
-    dev_member id
+  local header=$1 key=$2 body=$3
+  shift 3
+  curl --silent --show-error -X POST "$dev_api/v1/messages" \
+    -H @"$header" -H 'content-type: application/json' -H "Idempotency-Key: $key" \
+    --data "$body" "$@"
 }
-message=$(submit "$dev_work/original.header" before-rotation)
+
+operator_status=$(submit "$dev_work/operator.header" operator-forbidden "$sms_body" \
+  -o /dev/null -w '%{http_code}')
+[[ "$operator_status" == 403 ]]
+message=$(submit "$dev_work/original.header" before-rotation "$sms_body" --fail-with-body | dev_member id)
 [[ "$(read_status "$dev_work/original.header")" == 200 ]]
 [[ "$(read_status "$dev_work/other.header")" == 401 ]]
-dev_log "accepted the exact audience and refused a token for another audience"
+email=$(submit "$dev_work/original.header" before-rotation-email "$email_body" --fail-with-body | dev_member id)
+delivery_status() {
+  curl --silent --show-error --fail-with-body "$dev_api/v1/messages/$1" \
+    -H @"$dev_work/original.header" | dev_member status
+}
 
-"$rstack_bin" --format json dev stop "$dev_run" >/dev/null
-[[ -z "$(dev_containers)" ]]
-dev_run=
+deadline=$((SECONDS + 30))
+until [[ "$(delivery_status "$message")" == delivered && "$(delivery_status "$email")" == submitted ]]; do
+  if (( SECONDS >= deadline )); then
+    printf '%s: SMS and email did not settle within 30 seconds\n' "$dev_name" >&2
+    exit 1
+  fi
+  sleep 0.5
+done
+[[ "$(curl --silent --show-error --fail-with-body "$dev_mailpit/api/v1/messages" | dev_member total)" == 1 ]]
+dev_log "delivered SMS, submitted one Mailpit email, refused operator submit and a different audience"
+
+dev_stop
 "$fixture" stop "$issuer_root"
 start_fixture rotated
 "$fixture" token "$issuer_root" "$registration" case-system "$dev_work/rotated.header"
 dev_start
-message=$(submit "$dev_work/rotated.header" after-rotation)
+message=$(submit "$dev_work/rotated.header" after-rotation "$sms_body" --fail-with-body | dev_member id)
 new_status=$(read_status "$dev_work/rotated.header")
 old_status=$(read_status "$dev_work/original.header")
 if [[ "$new_status" != 200 || "$old_status" != 401 ]]; then
   printf 'rotated token returned %s and original token returned %s\n' "$new_status" "$old_status" >&2
   exit 1
 fi
-dev_log "accepted the rotated key and refused the old token"
+dev_log "a fresh run accepted the rotated key and refused the old token"
 dev_stop

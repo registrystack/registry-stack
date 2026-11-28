@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import UTC, datetime, timedelta
 import hashlib
 import http.server as http_server
 import importlib.util
@@ -37,6 +38,7 @@ SCRIPTS = REPO / "products/coordinator/scripts"
 EXAMPLE = REPO / "products/coordinator/examples/reservation-review"
 SCHEDULING_PROJECT = EXAMPLE / "scheduling"
 REQUIRED_BINARIES = (
+    "rstack",
     "breg",
     "bregctl",
     "casework",
@@ -279,6 +281,12 @@ def add_reservation_source_client(project: Path) -> None:
             },
         }
     )
+    issuer = document.setdefault("issuer", {})
+    issuer.setdefault("resources", []).append({
+        "audience": "urn:example:reservation-source",
+        "scopes": ["reservations:workflow"],
+    })
+    issuer.setdefault("clientResources", {})["reservation-source-agent"] = "urn:example:reservation-source"
     native.private(path, document)
 
 
@@ -388,11 +396,17 @@ def write_reservation_messaging(root: Path) -> Path:
     return root
 
 
-def write_reservation_scheduling(root: Path, _day: str) -> Path:
+def write_reservation_scheduling(root: Path, day: str) -> Path:
     root = Path(root)
     root.mkdir(parents=True)
-    for name in ("scheduling.yaml", "records.yaml"):
-        shutil.copy2(SCHEDULING_PROJECT / name, root / name)
+    project = yaml.safe_load((SCHEDULING_PROJECT / "scheduling.yaml").read_text())
+    opening = project["openings"]["reservation-hours"]
+    opening["effectiveFrom"] = day
+    opening["effectiveUntil"] = (
+        datetime.fromisoformat(day) + timedelta(days=7)
+    ).date().isoformat()
+    native.private(root / "scheduling.yaml", project)
+    shutil.copy2(SCHEDULING_PROJECT / "records.yaml", root / "records.yaml")
     return root
 
 
@@ -691,6 +705,7 @@ class ReservationJourney(native.Journey):
         shutil.copytree(EXAMPLE / "request-only", project)
         bind_review_policy(project, binding)
         return self.coordinator_service(
+            owner,
             "reservation-review-request-only",
             keys,
             {
@@ -1022,8 +1037,13 @@ class ReservationJourney(native.Journey):
         native.write_messaging = write_reservation_messaging
         native.write_scheduling = write_reservation_scheduling
         messaging_url, messaging_runtime = self.messaging_service(bootstrap)
+        # Native Scheduling enforces lead time and opens only on weekdays.
+        first = datetime.now(UTC).date() + timedelta(days=2)
+        while first.weekday() >= 5:
+            first += timedelta(days=1)
+        second = first + timedelta(days=1 if first.weekday() < 4 else 3)
         scheduling_url, scheduling_runtime = self.scheduling_service(
-            bootstrap, resource, "2026-11-03"
+            bootstrap, resource, first.isoformat()
         )
         scheduling_proxy = LostSchedulingResponseProxy(
             scheduling_url, "/v1/appointments"
@@ -1062,8 +1082,8 @@ class ReservationJourney(native.Journey):
         source_token = self.token("reservation-source-agent")
         reservations = {}
         for label, policy, start in (
-            ("request-only-success", "request-only", "2026-11-03T09:00:00Z"),
-            ("request-only-rejected", "request-only", "2026-11-04T09:00:00Z"),
+            ("request-only-success", "request-only", f"{first.isoformat()}T09:00:00Z"),
+            ("request-only-rejected", "request-only", f"{second.isoformat()}T09:00:00Z"),
         ):
             identifier, record = self.create_reservation(
                 source_url, source_token, label, policy, start

@@ -28,7 +28,7 @@ class NativePreparationTests(unittest.TestCase):
         target = root / "custom-target"
         target.mkdir()
         messages = []
-        for name in (*native.NATIVE_BINARIES, "reviewed-notice-input"):
+        for name in (*native.NATIVE_BINARIES, "reviewed-notice-input", "journey-issuer"):
             path = target / name
             path.write_text("executable " + name)
             messages.append({"reason": "compiler-artifact", "target": {"name": name}, "executable": str(path)})
@@ -75,7 +75,10 @@ class NativePreparationTests(unittest.TestCase):
             self.assertEqual(metadata.call_args.args[0]["CARGO_TARGET_DIR"], str(target))
             self.assertEqual(manifest["cargoTargetDirectory"], str(target))
             self.assertEqual(set(manifest["binarySha256"]), set(native.NATIVE_BINARIES))
-            self.assertEqual(manifest["helperSha256"], {"reviewed-notice-input": native.file_digest(binaries / "reviewed-notice-input")})
+            self.assertEqual(manifest["helperSha256"], {
+                name: native.file_digest(binaries / name)
+                for name in ("reviewed-notice-input", "journey-issuer")
+            })
             self.assertEqual(manifest["sourceBeforeBuild"]["capturedAt"], "before")
             self.assertEqual(manifest["sourceAfterBuild"]["capturedAt"], "after")
             command = build.call_args.args[0]
@@ -105,7 +108,8 @@ class NativePreparationTests(unittest.TestCase):
             root = Path(directory)
             _, messages = self.artifacts(root)
             with self.assertRaisesRegex(SystemExit, "reviewed-notice-input"):
-                self.prepare(root, messages[:-1])
+                self.prepare(root, [entry for entry in messages
+                                    if entry["target"]["name"] != "reviewed-notice-input"])
             self.assertFalse((root / "prepared/build-manifest.json").exists())
 
     def test_existing_output_is_never_overwritten(self):
@@ -235,6 +239,7 @@ class ReleasedArchiveTests(unittest.TestCase):
             binaries = root / "released"
             binaries.mkdir()
             (binaries / "coordinator").write_bytes(b"released executable")
+            (binaries / "journey-issuer").write_bytes(b"local issuer fixture")
             library = binaries / "libaws_lc_fips_0_14_2_crypto.dylib"
             library.write_bytes(b"released runtime library")
             (binaries / "unrelated.dylib").write_bytes(b"excluded")

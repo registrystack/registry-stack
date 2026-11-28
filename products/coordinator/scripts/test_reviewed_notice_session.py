@@ -35,7 +35,6 @@ class ReviewedNoticeSessionStartupTests(unittest.TestCase):
             journey.bin = root / "bin"
             journey.containers = []
             journey.rstack_runs = []
-            journey.rstack_volumes = []
             journey.issuer_fixture = root / "journey-issuer"
             journey.env = {}
             journey.ports = {"breg": 18100, "issuer": 18101, "bregdb": 15432}

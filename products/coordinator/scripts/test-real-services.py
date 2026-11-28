@@ -204,10 +204,14 @@ def bind_review_policy(project, binding):
     private(path, source)
 
 
-def subject(token):
+def fixture_claims(token):
     # Display data from our own dev fixture. Products still verify signatures.
     payload = token.split(".")[1]
-    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
+    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
+def subject(token):
+    return fixture_claims(token)["sub"]
 
 
 def database_environment(database, base):
@@ -470,7 +474,6 @@ class Journey:
         self.log_index = 0
         self.children = []
         self.rstack_runs = []
-        self.rstack_volumes = []
         self.issuer_root = root / "thunderid"
         self.issuer_clients = None
         self.issuer_resource = "urn:example:coordinator:breg"
@@ -560,6 +563,10 @@ class Journey:
                 assert self.build_provenance["helperSha256"]["reviewed-notice-input"] == self.reviewed_notice_starter_digest, "reviewed-notice-input differs from build evidence"
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env.get("PATH", "")
         self.env["REGISTRY_THUNDERID_TOOLING_DIAGNOSTICS"] = "1"
+        # All services in this journey run in development. Coordinator's
+        # breg_action::tests::a_development_peer_is_refused_as_an_invalid_response
+        # and review::tests::a_development_peer_read_is_refused_as_an_invalid_response
+        # cover refusals of development responses through production clients.
         self.env["REGISTRY_STACK_POSTURE"] = "development"
         self.env["RSTACK_DEV_STATE_DIR"] = str(root / "rstack-runs")
         self.env["RSTACK_BREGCTL_BIN"] = str(self.bin / "bregctl")
@@ -572,12 +579,16 @@ class Journey:
             listener.close()
         self.urls = {key: f"http://127.0.0.1:{port}" for key, port in self.ports.items()}
 
-    def ctl(self, binary, *args, success=True):
+    def ctl(self, binary, *args, success=True, track_run=False):
         self.log_index += 1
         result = subprocess.run([str(self.bin / binary), "--format", "json", *map(str, args)],
                                 env=self.env, capture_output=True, timeout=240)
         log = self.root / "logs" / f"command-{self.log_index:03d}.txt"
         private(log, result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace"))
+        if track_run:
+            report = json.loads(result.stdout)
+            if run := report.get("run_id"):
+                self.rstack_runs.append(run)
         if success:
             assert result.returncode == 0, f"{binary} {args[0]} failed; inspect private {log}"
             report = json.loads(result.stdout)
@@ -682,15 +693,11 @@ class Journey:
             "apiVersion": "id.registrystack.org/formats/rstack/scenarios/v1alpha1", "kind": "RStackScenarios",
             "scenarios": [],
         })
-        report = self.ctl("rstack", "dev", "start", project)
-        self.rstack_runs.append(report["run_id"])
-        volume = report.get("database", {}).get("volume")
-        if volume is not None:
-            assert re.fullmatch(r"rstack-development-project-[0-9a-f]{32}", volume), "unexpected run volume name"
-            self.rstack_volumes.append(volume)
+        report = self.ctl("rstack", "dev", "start", project, track_run=True)
         self.urls["breg"] = report["products"]["breg"]
         runtime = json.loads(Path(report["runtimeConfigs"]["breg"]).read_text())
-        return {"resource": resource, "issuer": issuer,
+        served = runtime["authentication"]["oidc"]["issuers"]["main"]
+        return {"resource": served["audience"], "issuer": served["issuer"],
                 "runtimeConfig": report["runtimeConfigs"]["breg"],
                 "package": runtime["package"]["root"], "instanceId": runtime["identity"]["instanceId"]}
 
@@ -905,16 +912,10 @@ class Journey:
                     child.wait(timeout=5)
             stream.close()
         for run in reversed(self.rstack_runs):
-            if self.ctl("rstack", "dev", "stop", run, success=False) != 0:
-                failures.append("rstack " + run)
-        if success:
-            for volume in reversed(self.rstack_volumes):
-                removed = subprocess.run(
-                    ["docker", "volume", "rm", volume], env=self.env,
-                    capture_output=True, timeout=60,
-                )
-                if removed.returncode != 0:
-                    failures.append("docker volume " + volume)
+            if self.ctl("rstack", "dev", "stop", run, "--clean", success=False) != 0:
+                if (self.ctl("rstack", "dev", "stop", run, "--recover", success=False) != 0
+                        or self.ctl("rstack", "dev", "stop", run, "--clean", success=False) != 0):
+                    failures.append("rstack " + run)
         if (self.issuer_root / "fixture.json").exists():
             try:
                 self.issuer_command("stop", self.issuer_root)
@@ -956,7 +957,14 @@ class Journey:
         owner = write_breg(self.root / "breg", self.urls, binding, borrower=True)
         self.ctl("bregctl", "check", owner)
         report = self.start_breg(owner)
-        assert report["resource"] == resource and report["issuer"] == bootstrap_report["issuer"]
+        fixture = fixture_claims(self.token("seed-client"))
+        audiences = fixture["aud"]
+        if isinstance(audiences, str):
+            audiences = [audiences]
+        assert all(
+            started["issuer"] == fixture["iss"] and [started["resource"]] == audiences
+            for started in (bootstrap_report, report)
+        ), "BReg runtime issuer and audience must match the shared fixture token"
         print("BReg and stock issuer ready through native dev tooling.", flush=True)
         casework = self.root / "casework"
         shutil.copytree(policy_project, casework)

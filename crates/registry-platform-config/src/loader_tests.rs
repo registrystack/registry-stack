@@ -1032,7 +1032,7 @@ mod files {
         assert!(error
             .deciding_diagnostic()
             .suggested_action
-            .contains(&format!("chmod g-w {}", path.display())));
+            .contains(&format!("chmod g-w -- '{}'", path.display())));
     }
 
     #[cfg(unix)]
@@ -1041,7 +1041,7 @@ mod files {
         use std::os::unix::fs::PermissionsExt as _;
 
         let (_guard, root) = directory();
-        let writable = root.join("writable");
+        let writable = root.join("writable dir's");
         std::fs::create_dir(&writable).unwrap();
         let path = writable.join("runtime.yaml");
         std::fs::write(&path, header()).unwrap();
@@ -1068,9 +1068,10 @@ mod files {
                 assert!(diagnostic
                     .message
                     .contains(&format!("`{}` is writable by {who}", writable.display())));
-                assert!(diagnostic
-                    .suggested_action
-                    .contains(&format!("chmod {permission} {}", writable.display())));
+                assert!(diagnostic.suggested_action.contains(&format!(
+                    "chmod {permission} -- '{}/writable dir'\\''s'",
+                    root.display()
+                )));
                 assert_eq!(
                     diagnostic
                         .suggested_action
@@ -1085,7 +1086,7 @@ mod files {
     #[test]
     fn trusted_ownership_refuses_a_foreign_owner_in_both_postures() {
         let (_guard, root) = directory();
-        let path = root.join("foreign-owner");
+        let path = root.join("foreign owner's");
         std::fs::create_dir(&path).unwrap();
         for posture in [Posture::Production, Posture::Development] {
             for (uid, target) in [(0, "root"), (u32::MAX, "4294967295")] {
@@ -1097,9 +1098,10 @@ mod files {
                     diagnostic.message,
                     format!("`{}` is owned by another user", path.display())
                 );
-                assert!(diagnostic
-                    .suggested_action
-                    .contains(&format!("chown {target} {}", path.display())));
+                assert!(diagnostic.suggested_action.contains(&format!(
+                    "chown {target} -- '{}/foreign owner'\\''s'",
+                    root.display()
+                )));
                 assert!(diagnostic.suggested_action.contains("sudo"));
             }
         }

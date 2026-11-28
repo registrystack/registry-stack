@@ -1852,10 +1852,11 @@ def verify_restart(root, bin_dir, product):
             original = scenario.read_text()
             scenario.write_text(original.replace("contact@example.test", "changed@example.test"))
             try:
-                changed = dev(bin_dir, env, checkout, "start", ".", expected=1)
-                assert changed["scenarios"][0]["result"] == "failed", changed
-                assert "--clean" in changed["scenarios"][0]["action"], changed
-                dev(bin_dir, env, checkout, "stop", changed["run_id"])
+                for _ in range(2):
+                    changed = dev(bin_dir, env, checkout, "start", ".", expected=1)
+                    assert changed["scenarios"][0]["result"] == "failed", changed
+                    assert "--clean" in changed["scenarios"][0]["action"], changed
+                    dev(bin_dir, env, checkout, "stop", changed["run_id"])
             finally:
                 scenario.write_text(original)
             registry = checkout / "registry.yaml"
@@ -2007,8 +2008,11 @@ def verify_package_posture(bin_dir, checkout, runtime, env, product, placeholder
 def verify_production_refusal(root, bin_dir, product):
     """Check the generated runtime and the package it names under production."""
     placeholder = product == "breg-placeholder"
+    external = product == "evidence-external-issuer"
     if placeholder:
         product = "breg"
+    if external:
+        product = "evidence"
     init_tool, *args = PRODUCTION_STARTERS[product]
     checkout = root / "project"
     env = {key: value for key, value in os.environ.items() if key not in {
@@ -2040,27 +2044,42 @@ def verify_production_refusal(root, bin_dir, product):
     })
     source = None
     source_thread = None
-    if product == "discovery":
-        catalog = (STACK / "products/discovery/fixtures/descriptions/evidence.jsonld").read_bytes()
+    if product == "discovery" or external:
+        if external:
+            path, content_type = "/oauth2/jwks", "application/json"
+            keys = STACK / "products/evidence/fixtures/conformance/consumer-verification/jwks.json"
+            payload = keys.read_bytes()
+        else:
+            path = "/evidence.jsonld"
+            content_type = 'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"'
+            payload = (STACK / "products/discovery/fixtures/descriptions/evidence.jsonld").read_bytes()
 
-        class CatalogHandler(BaseHTTPRequestHandler):
+        class SourceHandler(BaseHTTPRequestHandler):
             def do_GET(self):
-                assert self.path == "/evidence.jsonld"
+                if self.path != path:
+                    self.send_error(404)
+                    return
                 self.send_response(200)
-                self.send_header(
-                    "Content-Type",
-                    'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"',
-                )
-                self.send_header("Content-Length", str(len(catalog)))
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
-                self.wfile.write(catalog)
+                self.wfile.write(payload)
 
             def log_message(self, *_):
                 pass
 
-        source = ThreadingHTTPServer(("127.0.0.1", 0), CatalogHandler)
-        origins = checkout / "origins.yaml"
-        origins.write_text(origins.read_text().replace("38090", str(source.server_port)).replace("enabled: false", "enabled: true"))
+        source = ThreadingHTTPServer(("127.0.0.1", 0), SourceHandler)
+        if external:
+            issuer = f"http://127.0.0.1:{source.server_port}"
+            plan = checkout / "dev.yaml"
+            plan_text = plan.read_text()
+            assert plan_text.count("issuer: run") == 1
+            plan.write_text(plan_text.replace("issuer: run", f"issuer: {issuer}\nexternalJwksUri: {issuer}{path}"))
+            scenarios = checkout / "tests/scenarios.yaml"
+            scenarios.write_text(scenarios.read_text().split("scenarios:", 1)[0] + "scenarios: []\n")
+        else:
+            origins = checkout / "origins.yaml"
+            origins.write_text(origins.read_text().replace("38090", str(source.server_port)).replace("enabled: false", "enabled: true"))
         source_thread = threading.Thread(target=source.serve_forever)
         source_thread.start()
     try:
@@ -2078,22 +2097,36 @@ def verify_production_refusal(root, bin_dir, product):
             "render": ("registry-render", "check", ("--runtime-config", runtime)),
             "discovery": ("discoveryctl", "check", ("--runtime-config", runtime)),
         }[product]
-        result = command(bin_dir / tool, action, *flags, cwd=checkout, env=env)
-        output = (result.stdout + result.stderr).decode()
+        code, pointer = {
+            "adapter": ("platform.posture.test-issuer", "/oidc/issuers/main/jwksSource"),
+            "coordinator": ("platform.posture.test-issuer", "/deployment/authentication/issuers/main/jwksSource"),
+            "discovery": ("discovery.posture.loopback-catalog-url", "/origins/0/catalogUrl"),
+            "evidence": ("evidence.posture.local-assurance", "/assuranceProfile"),
+        }.get(product, ("platform.posture.test-issuer", "/authentication/oidc/issuers/main/jwksSource"))
+        args = (bin_dir / tool, action, *flags, "--format", "json")
+        production = command(*args, cwd=checkout, env=env)
+        assert production.returncode != 0, f"{product} accepted {runtime} in production"
+        refusal = json.loads(production.stdout)
+        assert any(
+            diagnostic["code"] == code and diagnostic["path"] == pointer
+            and diagnostic["severity"] == "error"
+            for diagnostic in refusal["diagnostics"]
+        ), (product, code, pointer, refusal)
+        development = command(*args, "--posture", "development", cwd=checkout, env=env)
+        assert development.returncode == 0, (product, development.stdout, development.stderr)
         if product == "discovery":
             package = Path(json.loads(runtime.read_text())["package"]["root"])
             index = package / "discovery-index.json"
-            probe = command(bin_dir / tool, "check", "--format", "json", "--index", index, cwd=checkout, env=env)
+            probe = command(
+                bin_dir / tool, "check", "--format", "json", "--index", index,
+                cwd=checkout, env=env,
+            )
             assert probe.returncode == 1 and any(
-                diagnostic["code"] == "discovery.posture.loopback-catalog-url"
+                diagnostic["code"] == code and diagnostic["path"] == pointer
                 for diagnostic in json.loads(probe.stdout)["diagnostics"]
             ), probe.stdout.decode()
-        if result.returncode == 0:
-            raise AssertionError(f"{product} accepted {runtime} in production: {output}")
-        assert re.search(r"posture|placeholder|development", output, re.IGNORECASE), (
-            product, runtime, result.returncode, output,
-        )
-        print(f"{product} refused its generated runtime under production (exit {result.returncode})")
+        mode = " with external issuer" if external else ""
+        print(f"{product}{mode} refused {code} at {pointer} in production and passed development")
         verify_package_posture(bin_dir, checkout, runtime, env, product, placeholder)
     finally:
         if source is not None:
@@ -2248,12 +2281,15 @@ def main():
         "and a Mailpit in Docker",
     )
     parser.add_argument(
-        "--production-checks", choices=(*PRODUCTION_STARTERS, "breg-placeholder", "all"),
-        help="check the runtime and package generated for one starter or for all ten",
+        "--production-checks", choices=(*PRODUCTION_STARTERS, "breg-placeholder", "evidence-external-issuer", "all"),
+        help="check generated runtimes and packages under production and development",
     )
     args = parser.parse_args()
     if args.production_checks:
-        products = (*PRODUCTION_STARTERS, "breg-placeholder") if args.production_checks == "all" else (args.production_checks,)
+        products = (
+            (*PRODUCTION_STARTERS, "breg-placeholder", "evidence-external-issuer")
+            if args.production_checks == "all" else (args.production_checks,)
+        )
         failures = []
         for product in products:
             with tempfile.TemporaryDirectory(prefix="m4b-production-", dir=args.scratch_parent) as directory:

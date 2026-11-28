@@ -58,16 +58,17 @@ pub struct BregDev {
 
 impl Drop for BregDev {
     fn drop(&mut self) {
-        let status = self
-            .rstack
-            .command()
-            .args(["stop", &self.run_id])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if !matches!(status, Ok(status) if status.success()) {
+        let stop = |option| {
+            self.rstack
+                .command()
+                .args(["stop", &self.run_id, option])
+                .stdout(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        if !(stop("--clean") || stop("--recover") && stop("--clean")) {
             eprintln!(
-                "the owned rstack dev fixture did not stop cleanly; run rstack dev stop {}",
+                "the owned rstack dev fixture cleanup failed for run {}",
                 self.run_id
             );
         }
