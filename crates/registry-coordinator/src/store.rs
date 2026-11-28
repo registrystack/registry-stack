@@ -51,7 +51,7 @@ enum InspectionBinding<'a> {
 /// The protected state schema version. It is written once, when apply creates
 /// the namespace, to `control.schema_version` and to the activation migration
 /// ledger, and every state transaction fences on it.
-pub(crate) const SCHEMA_VERSION: i32 = 6;
+pub(crate) const SCHEMA_VERSION: i32 = 7;
 
 /// Identifies a namespace whose tables this runtime created and owns.
 const NAMESPACE_MARKER: &str = "registry-coordinator protected-state";
@@ -719,7 +719,7 @@ impl Store {
             StoreSecurity {
                 database_id: namespace.to_owned(),
                 keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x22; 32])?,
-                audit: AuditWriter::from_line_sink(Box::new(std::io::sink())),
+                audit: AuditWriter::from_line_sink_without_posture(Box::new(std::io::sink())),
                 audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                     vec![0x33; 32],
                 ))
@@ -3556,15 +3556,15 @@ mod tests {
     /// every statement that creates the schema, including the shared dispatch
     /// job table, its product widening, and the activation ledger.
     #[test]
-    fn schema_version_6_is_pinned() {
+    fn schema_version_7_is_pinned() {
         let mut ddl = schema_statements("coordinator_pin").expect("a valid namespace");
         ddl.push(crate::deployment::activation_ledger_statements());
         let digest = hex::encode(Sha256::digest(ddl.join("\n")));
         assert_eq!(
             (SCHEMA_VERSION, digest.as_str()),
             (
-                6,
-                "c9e4c5df5c2d5f5dfe4a1db6ee69e05f637bc74e98a7a2f2db0bdc42b931ec91"
+                7,
+                "ccc850397a0304baf054aa3315a789ac7889afa953abb3f93a32ccef8d181b48"
             ),
             "the protected state schema DDL changed at this SCHEMA_VERSION; {MIGRATION_PIN_RULE}"
         );

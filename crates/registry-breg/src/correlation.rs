@@ -115,6 +115,7 @@ pub(crate) struct PublicProblem {
     field_path: Option<String>,
     declared_refusal: Option<(String, String)>,
     guard_reason: Option<String>,
+    guard_label: Option<String>,
     declared_field: Option<(String, String)>,
     declared_constraint: Option<Box<crate::mutation::RowLocalConstraintViolation>>,
     timer_window_fields: Option<(String, String)>,
@@ -144,6 +145,7 @@ pub(crate) fn problem_response(
         field_path: None,
         declared_refusal: None,
         guard_reason: None,
+        guard_label: None,
         declared_field: None,
         declared_constraint: None,
         timer_window_fields: None,
@@ -189,6 +191,7 @@ pub(crate) fn problem_response_with_field_path(
         field_path: Some(field_path.clone()),
         declared_refusal: None,
         guard_reason: None,
+        guard_label: None,
         declared_field: None,
         declared_constraint: None,
         timer_window_fields: None,
@@ -243,8 +246,12 @@ pub(crate) fn action_refusal_response(
     response
 }
 
-/// Called only after the ordinary guard and boundary disclosure recheck.
-pub(crate) fn action_guard_failure_response(reason: Option<String>) -> Response {
+/// Called only after the ordinary guard and boundary disclosure recheck. The
+/// authored label, when the guard has one, replaces the generic `detail`.
+pub(crate) fn action_guard_failure_response(
+    reason: Option<String>,
+    label: Option<String>,
+) -> Response {
     let code = crate::problem::ProblemCode::ActionGuardFailed;
     let mut response = problem_response(
         StatusCode::PRECONDITION_FAILED,
@@ -252,11 +259,12 @@ pub(crate) fn action_guard_failure_response(reason: Option<String>) -> Response 
         code.description(),
         code.code(),
     );
-    response
+    let problem = response
         .extensions_mut()
         .get_mut::<PublicProblem>()
-        .expect("problem metadata")
-        .guard_reason = reason;
+        .expect("problem metadata");
+    problem.guard_reason = reason;
+    problem.guard_label = label;
     response
 }
 
@@ -408,6 +416,11 @@ pub(crate) fn finish_response(
         }
         if let Some(reason) = &problem.guard_reason {
             object.insert("guardReason".to_owned(), Value::String(reason.clone()));
+            // A label is authored beside its reason, so it rides only where the
+            // reason does.
+            if let Some(label) = &problem.guard_label {
+                object.insert("detail".to_owned(), Value::String(label.clone()));
+            }
         }
         if let Some((name, value)) = problem.statistical_detail {
             object.insert(name.to_owned(), Value::String(value.to_owned()));
@@ -605,5 +618,42 @@ mod refusal_guard_tests {
             "resource.not_found",
         ));
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    async fn body_of(response: Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("the problem body reads");
+        serde_json::from_slice(&bytes).expect("the problem body is JSON")
+    }
+
+    #[tokio::test]
+    async fn a_guard_label_replaces_the_detail_only_beside_its_reason() {
+        let label = "Only a submitted application can be approved.";
+        let labelled = body_of(finish(note_refusal(
+            action_guard_failure_response(Some("not-submitted".into()), Some(label.into())),
+            FailedCheck::ActionGuard,
+        )))
+        .await;
+        assert_eq!(labelled["code"], "action.guard_failed");
+        assert_eq!(labelled["guardReason"], "not-submitted");
+        assert_eq!(labelled["detail"], label);
+
+        let plain = body_of(finish(note_refusal(
+            action_guard_failure_response(Some("not-submitted".into()), None),
+            FailedCheck::ActionGuard,
+        )))
+        .await;
+        assert_eq!(plain["detail"], "The action guard was not satisfied.");
+
+        // A label never rides without the reason it is authored beside.
+        let orphan = body_of(finish(note_refusal(
+            action_guard_failure_response(None, Some(label.into())),
+            FailedCheck::ActionGuard,
+        )))
+        .await;
+        assert_eq!(orphan["detail"], "The action guard was not satisfied.");
+        assert!(orphan.get("guardReason").is_none());
+        assert!(!orphan.to_string().contains(label));
     }
 }

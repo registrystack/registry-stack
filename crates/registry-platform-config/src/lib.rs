@@ -65,7 +65,8 @@ pub use posture::{
     FoundSetting, Gated, Posture, PostureReport, PostureSource, SettingOrigin,
 };
 pub use secrets::{
-    ProtectedSecret, SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+    ProtectedSecret, SecretError, SecretFileCheck, SecretProvider, SecretReference, SecretResolver,
+    MAX_SECRET_BYTES, MAX_SECRET_LINKS,
 };
 
 fn resolve_config_env_expression(

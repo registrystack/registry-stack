@@ -230,7 +230,7 @@ async fn setup_relationships() -> (TestDatabase, Router, MockIdp) {
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let mut verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
     verifier.allowed_clients = vec!["portal".into(), "agency".into()];
@@ -311,7 +311,7 @@ async fn setup_registry(registry: CompiledRegistry) -> (TestDatabase, Router, Mo
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let mut verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
     verifier.allowed_clients = vec!["portal".into(), "agency".into(), "evidence-service".into()];
@@ -1025,7 +1025,7 @@ async fn setup_with_mutations(
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let mut verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
     verifier.allowed_clients = vec!["portal".into(), "agency".into()];

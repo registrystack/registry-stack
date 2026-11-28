@@ -746,13 +746,8 @@ async fn assert_revised_run_used_unresolved_review(
 
 fn maintained_destination(base_url: &str, policy_name: &str) -> SignedCoordinatorEventDestination {
     let policy = Arc::new(
-        EventDestinationPolicy::new(
-            policy_name,
-            base_url,
-            DestinationProfile::LoopbackDevelopmentHttp,
-            &[],
-        )
-        .expect("the maintained event policy freezes"),
+        EventDestinationPolicy::new(policy_name, base_url, DestinationProfile::LoopbackHttp, &[])
+            .expect("the maintained event policy freezes"),
     );
     let connector = Arc::new(
         CoordinatorEventConnector::new(policy, SOURCE, KEY.to_vec(), Duration::from_secs(3))
@@ -885,7 +880,7 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
         EventDestinationPolicy::new(
             "adapter-native-coordinator",
             &format!("http://127.0.0.1:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("the native event policy freezes"),
@@ -1193,7 +1188,7 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
         EventDestinationPolicy::new(
             "adapter-native-coordinator-postgres",
             &coordinator.origin,
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("the native PostgreSQL event policy freezes"),

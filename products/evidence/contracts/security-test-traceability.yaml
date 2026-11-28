@@ -455,7 +455,10 @@ entries:
   - id: sec-secret-file-identity
     tests:
       - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_accepts_only_owner_read_and_optional_owner_write_modes}
-      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_rejects_symlinks_and_non_regular_files}
+      - {file: crates/registry-platform-config/src/secrets_tests.rs, name: a_link_that_could_leave_the_root_is_refused_in_both_postures}
+      - {file: crates/registry-platform-config/src/secrets_tests.rs, name: a_link_to_a_directory_or_a_dangling_link_is_refused}
+      - {file: crates/registry-platform-config/src/secrets_tests.rs, name: a_directory_is_not_a_secret}
+      - {file: crates/registry-platform-config/src/secrets_tests.rs, name: a_fifo_is_refused_without_blocking}
       - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_rejects_every_name_for_a_hard_link}
       - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_read_is_bounded}
   - id: sec-transport-backend-and-single-attempt

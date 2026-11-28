@@ -2264,8 +2264,10 @@ secret_policy:
     There is no query-string placement, so no credential can reach a token URL, and the token
     URL, body, response, and debug output are still fully redacted.
   file_provider_rule: >-
-    Resolve secret:file logical names beneath the configured owner-controlled file root, reject
-    symlinks and path traversal, require regular owner-only files, and parse values as data.
+    Resolve secret:file logical names beneath the configured owner-controlled file root, follow
+    only relative downward links, reject path traversal, require regular files that meet the shared
+    secret-file rule (owned by the service identity or root, never accessible to others), and parse
+    values as data.
   environment_provider_rule: >-
     Resolve secret:env names from the process environment only when the runtime declares
     secretProviders.environment; a bundle reference naming the environment is refused at

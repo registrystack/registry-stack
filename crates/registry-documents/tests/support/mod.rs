@@ -42,7 +42,9 @@ pub fn database_url() -> String {
 /// An independent in-memory audit sink for direct worker boundary tests.
 pub fn worker_audit() -> registry_documents::audit::DocumentsAudit {
     registry_documents::audit::DocumentsAudit::new(
-        registry_platform_audit::AuditWriter::from_line_sink(Box::new(Vec::<u8>::new())),
+        registry_platform_audit::AuditWriter::from_line_sink_without_posture(Box::new(
+            Vec::<u8>::new(),
+        )),
         registry_platform_audit::AuditProfile::production_from_secret_bytes(
             zeroize::Zeroizing::new(b"documents-canary-audit-key-not-a-secret".to_vec()),
         )

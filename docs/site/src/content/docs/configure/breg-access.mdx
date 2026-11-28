@@ -65,8 +65,7 @@ accessProfiles:
           operations: [create, get, list, patch]
           readableFields: [operator-code, status, jurisdiction]
           writableFields: [operator-code, status, jurisdiction]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          rowBoundaries: {rowBoundarySet: same-jurisdiction}
 ```
 
 When the token fails any of these checks, or the profile does not grant the operation, BReg
@@ -125,6 +124,29 @@ under an `in` boundary can move a row between the caller's allowed values, which
 points out. Write
 `rowBoundaries: unrestricted` only for deliberately registry-wide authority.
 
+When many grants reach rows the same way, declare the boundaries once under `rowBoundarySets` and
+reference the set wherever `rowBoundaries` is written. The facility template declares one set, and
+every grant above refers to it:
+
+```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
+rowBoundarySets:
+  same-jurisdiction:
+    - {field: jurisdiction, claim: jurisdiction, operator: equals}
+```
+
+A reference is the whole value of `rowBoundaries`. It works on record permissions, on Action and
+Proposal targets, and in a Record type's `accessRequirements`. Each grant still writes its own
+`rowBoundaries`, so the reach of a grant stays visible where it is granted, and a grant that omits
+`rowBoundaries` is still refused. References, inline lists, and `unrestricted` can sit side by side
+in one profile.
+
+A set holds at least one boundary. An empty list and `unrestricted` are both refused as a set,
+because an empty list would read as every row. Write `unrestricted` on the grant instead. A set is
+local to the file that declares it, so a module cannot reference a set from its project. A
+reference to a set the file does not declare is refused with
+`breg.row-boundary-set.reference-invalid`. BReg expands every reference when it reads the file, so
+the compiled package is the same as one that writes each list inline.
+
 A derived field is computed under the same boundaries. A profile that reads one needs a read grant
 with the same `rowBoundaries` on every other Record type its SQL reads. See
 [Grant the Record types the SQL reads](../breg/#grant-the-record-types-the-sql-reads).
@@ -164,8 +186,7 @@ and the facility grant has no `readPaths` entry:
         - recordType: facility
           operations: [get, list]
           readableFields: [facility-code, name, address-line, city, postal-code, status, jurisdiction]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          rowBoundaries: {rowBoundarySet: same-jurisdiction}
 ```
 
 Direct operator reads apply the operator permission's jurisdiction boundary. A related read uses
@@ -176,8 +197,7 @@ the facility permission's authority instead. Add the optional path grant to see 
            readableFields: [facility-code, name, address-line, city, postal-code, status, jurisdiction]
 +          readPaths:
 +            - {path: operators, readableFields: [operator-code, status, jurisdiction]}
-           rowBoundaries:
-             - {field: jurisdiction, claim: jurisdiction, operator: equals}
+           rowBoundaries: {rowBoundarySet: same-jurisdiction}
 ```
 
 Check the edited project:
@@ -187,7 +207,7 @@ bregctl check facility
 ```
 
 ```text test-excerpt
-warning[breg.access.profile-related-disclosure] <project-dir>/registry.yaml:237:15 /accessProfiles/facility-reader/permissions/records/1/readPaths/0
+warning[breg.access.profile-related-disclosure] <project-dir>/registry.yaml:241:15 /accessProfiles/facility-reader/permissions/records/1/readPaths/0
   profile `facility-reader` can read `operator` records linked to `facility` through `facility-assignment` on read path `operators`; it sees fields jurisdiction, operator-code, status under its own `facility` row boundaries, and access profiles declared for `operator` do not apply
   next: Remove fields that these readers should not see from this read path's readableFields, or remove the read path; use a direct permission on the related record type when its own row boundaries should apply.
 0 errors, 1 warning in 3 files
@@ -242,8 +262,7 @@ entry is an alternative set of fields, and a list must pin every field of at lea
 +          requiredFilters:
 +            - fields: [facility-code]
 +            - fields: [city, status]
-           rowBoundaries:
-             - {field: jurisdiction, claim: jurisdiction, operator: equals}
+           rowBoundaries: {rowBoundarySet: same-jurisdiction}
 ```
 
 With this grant, `GET /v1/records/facilities?$filter=facilityCode eq 'F-001'` runs, and so does

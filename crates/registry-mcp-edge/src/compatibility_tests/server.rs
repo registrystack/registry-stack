@@ -67,7 +67,9 @@ fn gateway_core() -> Arc<GatewayCore> {
         ["unused".to_owned()],
     )
     .expect("binding");
-    let audit = ToolAuditLog::new(AuditWriter::from_line_sink(Box::new(io::sink())));
+    let audit = ToolAuditLog::new(AuditWriter::from_line_sink_without_posture(Box::new(
+        io::sink(),
+    )));
     Arc::new(
         GatewayCore::new(
             [binding],
@@ -101,7 +103,7 @@ async fn application(resource: &str) -> Router {
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         authorization.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let profile =
         AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![8; 32])).expect("profile");

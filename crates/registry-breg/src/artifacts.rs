@@ -1046,6 +1046,7 @@ pub(crate) fn openapi_action_availability_response_schema(action: &CompiledActio
                             "observedRevision": observed_revision,
                             "reason": {"const": "guard-not-satisfied"},
                             "guardReason": {"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
+                            "guardLabel": {"type":"string","minLength":1,"maxLength":256},
                             "recovery": {"const": "none"},
                         },
                     },

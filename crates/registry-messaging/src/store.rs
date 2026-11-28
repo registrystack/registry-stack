@@ -37,14 +37,17 @@ fn database_error_class(error: &tokio_postgres::Error) -> String {
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0100_messaging.sql");
 const DISPATCH_LEASE_EXPIRY_MIGRATION: &str =
     include_str!("../migrations/0101_dispatch_lease_expiry.sql");
+const ACTIVATION_POSTURE_MIGRATION: &str =
+    include_str!("../migrations/0102_activation_posture.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list. The 1.0 baseline is version
 /// [`BASELINE_SCHEMA_VERSION`], above every version a pre-1.0 release
 /// applied; each later migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 3] = [
     (100, MESSAGING_MIGRATION),
     (101, DISPATCH_LEASE_EXPIRY_MIGRATION),
+    (102, ACTIVATION_POSTURE_MIGRATION),
 ];
 /// The 1.0 baseline schema version. A ledger holding any version below it
 /// was left by a pre-1.0 release, which this release refuses by name.
@@ -535,6 +538,7 @@ mod tests {
     fn the_baseline_is_version_100_and_later_versions_increase() {
         assert_eq!(MIGRATIONS[0].0, 100);
         assert_eq!(MIGRATIONS[1].0, 101);
+        assert_eq!(MIGRATIONS[2].0, 102);
         assert!(versions_start_at_baseline_and_increase(&MIGRATIONS));
         assert!(versions_start_at_baseline_and_increase(&[
             (100, ""),

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A migration adds a posture to the activation ledger. Every activation
+  records production until the runtime declares its posture, and the
+  activation objects in `caseworkctl` reports carry it as `posture`.
+
 - Casework counts every refused request by the check that refused it, in
   `casework_request_refusals_total{check}` on the metrics listener, published
   at zero for every check. Each refusal writes one `request refused` line with

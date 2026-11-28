@@ -76,7 +76,7 @@ impl AuditCapture {
 
 fn capture_audit() -> (ToolAuditLog, AuditCapture) {
     let buffer = AuditBuffer::default();
-    let writer = AuditWriter::from_line_sink(Box::new(buffer.clone()));
+    let writer = AuditWriter::from_line_sink_without_posture(Box::new(buffer.clone()));
     (
         ToolAuditLog::new(writer.clone()),
         AuditCapture { writer, buffer },
@@ -132,7 +132,11 @@ impl Fixture {
         );
         let audit = match override_audit {
             Some(audit) => audit,
-            None => ToolAuditLog::new(AuditWriter::open(destination).await.expect("audit opens")),
+            None => ToolAuditLog::new(
+                AuditWriter::open_without_posture(destination)
+                    .await
+                    .expect("audit opens"),
+            ),
         };
         let (binding, provider) = breg_binding_for_test(
             &registry_config,

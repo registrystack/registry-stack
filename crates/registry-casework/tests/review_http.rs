@@ -552,7 +552,7 @@ async fn app_with_project_options(
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         HumanIdentityConfig::default(),
     )
@@ -5854,7 +5854,7 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let authenticator = CaseworkAuthenticator::new(
         &project,

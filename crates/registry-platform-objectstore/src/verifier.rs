@@ -18,7 +18,9 @@ use std::{fmt, time::Duration};
 use registry_platform_config::{
     AttachmentVerifierConfig, ProtectedSecret, SecretReference, SecretResolver,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers, OutboundClientBuilder};
+use registry_platform_httputil::{
+    read_bounded, validate_response_headers_without_peer_policy, OutboundClientBuilder,
+};
 use reqwest::{
     header::{HeaderMap, HeaderValue},
     StatusCode, Url,
@@ -225,7 +227,8 @@ impl HttpVerifier {
             .send()
             .await
             .map_err(|_| VerifierError::Unavailable)?;
-        validate_response_headers(response.headers()).map_err(|_| VerifierError::Unavailable)?;
+        validate_response_headers_without_peer_policy(response.headers())
+            .map_err(|_| VerifierError::Unavailable)?;
         if response.status() != StatusCode::OK {
             return Err(VerifierError::Unavailable);
         }

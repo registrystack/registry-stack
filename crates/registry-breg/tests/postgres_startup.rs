@@ -2801,7 +2801,7 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
     serving_config: &Path,
     unopened: &Path,
 ) {
-    let serving_writer = registry_platform_audit::AuditWriter::open(
+    let serving_writer = registry_platform_audit::AuditWriter::open_without_posture(
         registry_platform_audit::AuditDestination::from_settings(
             registry_platform_audit::AuditDestinationKind::File,
             Some(configured_audit_path(serving_config)),
@@ -2965,7 +2965,7 @@ async fn mock_idp_key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 16 * 1024,
         },
-        &FetchUrlPolicy::dev(),
+        &FetchUrlPolicy::https_or_loopback(),
     )
     .await
     .expect("MockIdp discovery fetch succeeds");
@@ -2979,7 +2979,7 @@ async fn mock_idp_key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
             request_timeout: Duration::from_secs(5),
             outage_tolerance: Duration::ZERO,
         },
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ))
 }
 

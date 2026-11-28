@@ -208,13 +208,13 @@ async fn applying_the_schema_twice_applies_nothing_twice() {
         .admin
         .query(
             &format!(
-                "SELECT version FROM {}.documents_schema_migrations",
+                "SELECT version FROM {}.documents_schema_migrations ORDER BY version",
                 deployment.schema
             ),
             &[],
         )
         .await
         .unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<_, i64>(0), 100);
+    let versions: Vec<i64> = rows.iter().map(|row| row.get(0)).collect();
+    assert_eq!(versions, [100, 101]);
 }

@@ -162,7 +162,7 @@ async fn an_accepted_submission_records_its_rendered_parts_and_answers_a_receipt
 #[tokio::test]
 async fn an_audit_request_refusal_records_no_submission() {
     let harness = Harness::start().await;
-    let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+    let audit = test_audit(AuditWriter::from_line_sink_without_posture(Box::new(
         RefusingAuditSink::after(0),
     )));
     let app = harness.app_with_audit(audit).await;
@@ -193,7 +193,7 @@ async fn an_audit_request_refusal_records_no_submission() {
 #[tokio::test]
 async fn a_post_commit_audit_refusal_replays_one_committed_submission_receipt() {
     let harness = Harness::start().await;
-    let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+    let audit = test_audit(AuditWriter::from_line_sink_without_posture(Box::new(
         RefusingAuditSink::after(1),
     )));
     let app = harness.app_with_audit(audit).await;
@@ -241,7 +241,7 @@ async fn a_post_commit_audit_refusal_replays_one_committed_submission_receipt() 
 #[tokio::test]
 async fn readiness_fails_when_the_audit_writer_loses_its_destination() {
     let harness = Harness::start().await;
-    let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+    let audit = test_audit(AuditWriter::from_line_sink_without_posture(Box::new(
         RefusingAuditSink::after(0),
     )));
     assert!(audit
@@ -348,9 +348,9 @@ async fn an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_aga
     // caller's issuer and subject, so the rotation does not free it.
     let journal = RefusingAuditSink::after(usize::MAX);
     let rotated = harness
-        .app_with_audit(rotated_test_audit(AuditWriter::from_line_sink(Box::new(
-            journal.clone(),
-        ))))
+        .app_with_audit(rotated_test_audit(
+            AuditWriter::from_line_sink_without_posture(Box::new(journal.clone())),
+        ))
         .await;
     let (status, _, replay) =
         submit_to(rotated.clone(), &sender, "key-1", &email_submission()).await;
@@ -1333,9 +1333,9 @@ async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
         .execute(
             "INSERT INTO messaging_activations \
                (activation_id, apply_order, package_digest, predecessor_package_digest, \
-                database_id, plan_kind, applied_at, role_mode) \
+                database_id, plan_kind, applied_at, role_mode, posture) \
              SELECT gen_random_uuid(), apply_order + 1, $1, package_digest, \
-                    database_id, 'successor', now(), role_mode \
+                    database_id, 'successor', now(), role_mode, posture \
                FROM messaging_activations ORDER BY apply_order DESC LIMIT 1",
             &[&other],
         )
@@ -1356,9 +1356,9 @@ async fn readiness_rechecks_the_database_identity_recorded_after_startup() {
         .execute(
             "INSERT INTO messaging_activations \
                (activation_id, apply_order, package_digest, predecessor_package_digest, \
-                database_id, plan_kind, applied_at, role_mode) \
+                database_id, plan_kind, applied_at, role_mode, posture) \
              SELECT gen_random_uuid(), apply_order + 1, $1, package_digest, \
-                    'another-deployment', 'successor', now(), role_mode \
+                    'another-deployment', 'successor', now(), role_mode, posture \
                FROM messaging_activations ORDER BY apply_order DESC LIMIT 1",
             &[&digest],
         )
@@ -1460,7 +1460,7 @@ async fn a_dispatch_core_refusal_is_reported_as_an_outcome_that_may_have_applied
 /// A message store over the harness's schema whose audit writer accepts
 /// only its first `accepted_writes` records.
 async fn store_with_audit(harness: &Harness, accepted_writes: usize) -> MessageStore {
-    let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+    let audit = test_audit(AuditWriter::from_line_sink_without_posture(Box::new(
         RefusingAuditSink::after(accepted_writes),
     )));
     let schema = harness.store.current_schema().await.unwrap();
@@ -1666,7 +1666,7 @@ async fn original_receipt_disclosure_requires_both_audit_entries() {
         StatusCode::ACCEPTED
     );
     for accepted_writes in [0, 1] {
-        let audit = test_audit(AuditWriter::from_line_sink(Box::new(
+        let audit = test_audit(AuditWriter::from_line_sink_without_posture(Box::new(
             RefusingAuditSink::after(accepted_writes),
         )));
         let app = harness.app_with_audit(audit).await;

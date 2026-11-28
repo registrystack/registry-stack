@@ -194,7 +194,7 @@ fn key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
     Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ))
 }
 
@@ -226,7 +226,7 @@ impl Harness {
         let unreachable = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             "http://127.0.0.1:9/jwks.json".to_owned(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
         let authenticator = RegistryAuthenticator::new(
             &registry,

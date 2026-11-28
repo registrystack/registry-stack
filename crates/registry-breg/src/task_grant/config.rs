@@ -29,7 +29,7 @@ impl TaskGrantStatusRegistry {
         resource: &str,
         secrets: &SecretResolver,
     ) -> Result<Self, TaskGrantError> {
-        registry_platform_oidc::task_grant::TaskGrantStatusRegistry::activate(
+        registry_platform_oidc::task_grant::TaskGrantStatusRegistry::activate_without_peer_policy(
             &endpoints(configs),
             resource,
             secrets,

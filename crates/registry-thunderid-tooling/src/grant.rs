@@ -149,7 +149,7 @@ pub async fn acquire(
             "Casework refused the grant; check its approval, client, expiry and revocation",
         ));
     }
-    registry_platform_httputil::validate_response_headers(response.headers())
+    registry_platform_httputil::validate_response_headers_without_peer_policy(response.headers())
         .map_err(|_| refused("the Casework assertion headers exceed their bounds"))?;
     if response
         .headers()

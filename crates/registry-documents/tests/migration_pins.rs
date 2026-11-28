@@ -8,10 +8,16 @@ use std::path::Path;
 
 use registry_platform_testing::assert_migration_pins;
 
-const PINS: &[(&str, &str)] = &[(
-    "0100_documents.sql",
-    "d21dae145068a46052af7ec69076ad2bdf883a0e550325db66c811380fe91575",
-)];
+const PINS: &[(&str, &str)] = &[
+    (
+        "0100_documents.sql",
+        "d21dae145068a46052af7ec69076ad2bdf883a0e550325db66c811380fe91575",
+    ),
+    (
+        "0101_activation_posture.sql",
+        "b984c63d7402d024752955aed60dd3b9b5dd821a0210ca64a0e1bbc1a6ec1df9",
+    ),
+];
 
 #[test]
 fn every_migration_file_is_pinned_by_its_digest() {

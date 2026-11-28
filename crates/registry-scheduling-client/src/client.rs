@@ -9,7 +9,7 @@ use registry_platform_httputil::client::{
     send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers,
+    read_bounded, url::append_path_segments, validate_response_headers_without_peer_policy,
 };
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, AppointmentDocument,
@@ -775,7 +775,7 @@ impl SchedulingClient {
             .map_err(|error| SchedulingClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers(response.headers()).map_err(|_| {
+        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
             protocol(
                 response.status(),
                 SchedulingProtocolFailure::HeaderBounds,

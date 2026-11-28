@@ -126,10 +126,7 @@ fn assertion_key(
                 "no secret of the referenced name exists under its provider",
                 "Create the key file under secretProviders.file.root, or set the environment variable the reference names.",
             ),
-            SecretError::UnsafeFile => (
-                "the referenced key file is not a regular file you own with mode 0400 or 0600 and a single link",
-                "Make the key file a regular file you own, with mode 0400 or 0600 and a single link.",
-            ),
+            SecretError::UnsafeFile(check) => (check.message(), check.suggested_action()),
             SecretError::InvalidValue => (
                 "the referenced secret is empty, holds a NUL byte, or is larger than 64 KiB",
                 "Store the client's private assertion key as one JWK under this reference.",

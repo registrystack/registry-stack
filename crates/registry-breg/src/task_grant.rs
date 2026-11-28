@@ -163,7 +163,7 @@ impl TaskGrantStatusClient {
         token: Arc<PrivateKeyJwt>,
         trusted_roots: Option<&[u8]>,
     ) -> Result<Self, TaskGrantError> {
-        registry_platform_oidc::task_grant::TaskGrantStatusClient::new(
+        registry_platform_oidc::task_grant::TaskGrantStatusClient::new_without_peer_policy(
             source_issuer,
             resource,
             base,

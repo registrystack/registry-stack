@@ -2463,6 +2463,9 @@ jobs:
       - name: Test supporting release image packaging
         run: python3 -m unittest release/scripts/test_release_supporting_images.py
 
+      - name: Test release image build command
+        run: python3 -m unittest release/scripts/test_build_release_image.py
+
       - name: Test release candidate manifest and promotion verifier
         run: python3 -m unittest release/scripts/test_release_candidate.py
 

@@ -683,7 +683,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
 
     let writer = match writer {
         Some(writer) => writer,
-        None => AuditWriter::open(
+        None => AuditWriter::open_without_posture(
             config
                 .audit
                 .destination()

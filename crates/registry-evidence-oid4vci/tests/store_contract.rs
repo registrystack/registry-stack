@@ -1093,7 +1093,7 @@ store:
         std::fs::write(&path, SERVICE_CONFIG).expect("write the test deployment");
         let config = DeliveryConfig::load(&path).expect("the test deployment loads");
         let audit = DeliveryAudit::with_writer(
-            AuditWriter::from_line_sink(Box::new(io::sink())),
+            AuditWriter::from_line_sink_without_posture(Box::new(io::sink())),
             b"0123456789abcdef0123456789abcdef".to_vec(),
         )
         .expect("the test audit profile is valid");

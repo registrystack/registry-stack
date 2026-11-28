@@ -144,7 +144,9 @@ require a frozen Proposal to be rebased even when the migration needs no review.
     crates/registry-breg/src/package.rs, compare_actions();
     crates/registry-breg/tests/refactor_contract.rs. */}
 
-A reviewed migration is a directory you write and keep beside the project. Each migration lives at
+A reviewed migration is a directory you keep beside the project. When every change is an access or
+disclosure change that touches no table, column, or index, [draft it with `bregctl`](#draft-a-migration-that-needs-no-sql).
+Otherwise you write it. Each migration lives at
 `modules/<module>/migrations/<id>/` and holds a `descriptor.json`, a `rehearsal.json`, and any SQL
 steps, assertions, or fixtures the descriptor names. Every path inside it is relative to the
 directory root. The descriptor covers exactly the changes `diff` reported that are not compatible
@@ -180,8 +182,8 @@ lists every key with its values and bounds.
 The rehearsal receipt, `rehearsal.json`, binds the migration to the exact baseline and candidate:
 the prior package digest and schema fingerprint, the descriptor's `planDigest`, the digest of every
 SQL file and fixture, the PostgreSQL major version, the row counts your rehearsal observed, and the
-candidate's final schema fingerprint. You write it from your own rehearsal; `bregctl` checks it and
-does not generate it. Two commands give you the values it needs:
+candidate's final schema fingerprint. For a migration with SQL you write it from your own
+rehearsal, and `bregctl` checks it. Two commands give you the values it needs:
 
 ```sh test-skip="needs the reader's reviewed migration directory and disposable database"
 jq -jcS . descriptor.json | shasum -a 256
@@ -197,6 +199,40 @@ fingerprint, and rolls back without writing a receipt.
     read_rehearsal_receipt(), ReviewedMigrationStepDescriptor, and covers_are_metadata_only();
     crates/registry-bregctl/src/test_lifecycle.rs, measure().
     Refusal and descriptor observed with bregctl 0.42.0 on a disposable PostgreSQL 17. */}
+
+## Draft a migration that needs no SQL
+
+`bregctl migration draft` writes the descriptor and the rehearsal receipt for a successor whose
+changes are all access or disclosure changes that alter no table, column, or index, such as an
+access profile, a route, a query, or an Action. It covers every change that is not compatible
+additive, installs the candidate on the disposable database to measure its schema fingerprint and
+the PostgreSQL major version, and binds both to the verified baseline package:
+
+```sh test-skip="needs the reader's baseline package and disposable database"
+bregctl migration draft ./directory \
+  --baseline-package /srv/registry/build-1/package \
+  --runtime-config /srv/registry/runtime-test.yaml \
+  --output ./reviewed-migrations \
+  --module directory --id describe-email-update
+```
+
+It prints the covers it wrote and the directory,
+`modules/directory/migrations/describe-email-update/`, under `--output`. Read the covers against
+`diff`, then pass `--output` as `--reviewed-migrations`. The package validator still checks the
+coverage and the evidence when you run `test` and `package`.
+
+The command refuses before it reads the runtime configuration or opens a database when:
+
+- `migration.draft.nothing-to-review`: every change is compatible additive, so no migration is needed.
+- `migration.draft.sql-required`: a change needs authored SQL, a backup binding, or a descriptor of
+  another class. Write that migration by hand as above. The refusal names the first such change.
+- `migration.draft.module-unknown`: the project has no module with that identifier.
+- `migration.draft.output-exists`: the migration directory already exists. A draft never overwrites
+  one, so choose another `--id` or review the existing directory.
+
+{/* Evidence: crates/registry-bregctl/src/migration_draft.rs, run() and plan_covers();
+    crates/registry-bregctl/tests/migration_draft.rs;
+    products/breg/scripts/test-adopter-workflow.sh, the drafted review of the readable-field successor. */}
 
 ## Test and package the successor
 

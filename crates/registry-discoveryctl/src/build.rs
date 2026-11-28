@@ -11,7 +11,9 @@ use registry_discovery::{
     MAXIMUM_PACKAGE_DEPTH, MAXIMUM_PACKAGE_FILES, PACKAGE_COMMAND,
 };
 use registry_platform_config::{write_package, PackageError, PackageLimits, VerifiedPackage};
-use registry_platform_httputil::{read_bounded, validate_response_headers, FetchUrlPolicy};
+use registry_platform_httputil::{
+    read_bounded, validate_response_headers_without_peer_policy, FetchUrlPolicy,
+};
 use reqwest::header::{ACCEPT, CONTENT_ENCODING, CONTENT_TYPE};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -162,7 +164,7 @@ async fn fetch_origins(
     fetch_timeout: Duration,
 ) -> Result<(Vec<OriginSummary>, Vec<ServiceRecord>), BuildError> {
     let policy = if allow_loopback {
-        FetchUrlPolicy::dev()
+        FetchUrlPolicy::https_or_loopback()
     } else {
         FetchUrlPolicy::strict()
     };
@@ -183,7 +185,8 @@ async fn fetch_origins(
             .send()
             .await
             .map_err(|_| BuildError::Fetch)?;
-        validate_response_headers(response.headers()).map_err(|_| BuildError::Fetch)?;
+        validate_response_headers_without_peer_policy(response.headers())
+            .map_err(|_| BuildError::Fetch)?;
         if response.status() != reqwest::StatusCode::OK
             || !exact_profile_media_type(response.headers())
             || response

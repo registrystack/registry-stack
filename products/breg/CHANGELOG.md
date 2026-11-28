@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- A `rowBoundarySets` member declares a named list of row boundaries once
+  per project or module file. A grant, an Action or Proposal target, or a
+  Record type's `accessRequirements` writes
+  `rowBoundaries: {rowBoundarySet: <id>}` and gets the list. Each grant still writes its own `rowBoundaries`,
+  and omitting it is still refused. A set holds at least one boundary and is
+  never `unrestricted`. A reference to an undeclared set is refused with
+  `breg.row-boundary-set.reference-invalid`. The compiled package is the
+  same as one that writes each list inline.
+
+- A date guard can shift the registry-local date by whole calendar months
+  with `currentDateOffsetMonths` (-12000 to 12000), beside
+  `currentDateOffsetDays`. It requires `currentDate` and cannot be combined
+  with the day offset. The day of the month is kept and clamps to the last
+  day of a shorter month. A shift outside years 1 to 9999 fails the guard
+  closed.
+
+- A commit guard with a `reason` can carry a `label`, constant display text
+  of at most 256 bytes. It is returned where `guardReason` is: as `detail`
+  of `412 action.guard_failed` for an Action or a Proposal Submit or Apply,
+  and as `guardLabel` in the availability response. A guard the caller
+  cannot read still answers the fixed `precondition.failed`.
+
+- An immediate Action can declare
+  `execution: {mode: immediate, concurrency: current-revision}`. The caller then sends no condition and no
+  `preconditions`. BReg evaluates the commit guards against the Record it
+  locks and patches that row. `bregctl check` refuses the Action unless
+  every Record it patches has an `equals` or `isNull` guard its own write
+  makes false, and refuses a `revision: unchanged` guard, a function plan
+  that writes an existing Record, and caller-supplied values written into an
+  existing Record. A Proposal cannot declare `concurrency`.
+
+- `bregctl migration draft` writes `descriptor.json` and `rehearsal.json`
+  under `<output>/modules/<module>/migrations/<id>` for a successor whose
+  changes are all access or disclosure changes that alter no table, column
+  or index. It measures the schema fingerprint and PostgreSQL major on the
+  disposable database and binds them to the verified baseline package. It
+  refuses, before reading the runtime configuration, when nothing needs
+  review (`migration.draft.nothing-to-review`), a change needs SQL
+  (`migration.draft.sql-required`), the module is unknown
+  (`migration.draft.module-unknown`), or the directory exists
+  (`migration.draft.output-exists`). It never overwrites.
+
+- Migration note: registry revisions change on upgrade because the
+  availability response schema gained `guardLabel`. A package built before
+  this release is a new revision, so rebuild, test and package successors.
+
+- A secret file BReg refuses at startup reports the check that failed and
+  its fix under `breg.runtime.secret`, instead of one fixed sentence.
+
 - `bregctl provision` creates the PostgreSQL objects a Registry needs, from the
   two database URLs in its runtime file and an administrator URL read from
   `--admin-url-file` or `--admin-url-env`. It creates or adopts the migration

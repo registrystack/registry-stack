@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A secret file the Adapter or an Adapter job refuses names the failed
+  check and its fix. A link below the secret root now loads, so the hint
+  that a link reads as a missing file is gone.
+
 - `adapterctl provision --runtime-config FILE` creates the migration and
   runtime roles and the database from the runtime file's two database URLs, as
   a non-superuser administrator over verified TLS, or prints the script with

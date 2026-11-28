@@ -418,7 +418,7 @@ impl ExternalHttpConnection {
         // peers may be private, but metadata and non-loopback cleartext remain
         // denied. Each request connects to only the addresses validated here.
         let policy = if url.scheme() == "http" {
-            FetchUrlPolicy::dev()
+            FetchUrlPolicy::https_or_loopback()
         } else {
             FetchUrlPolicy {
                 allowed_schemes: vec!["https".into()],

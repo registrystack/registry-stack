@@ -234,7 +234,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         .audit
         .destination()
         .map_err(|error| StartupError::Audit(error.to_string()))?;
-    let audit = ToolAuditLog::new(AuditWriter::open(destination).await?);
+    let audit = ToolAuditLog::new(AuditWriter::open_without_posture(destination).await?);
     let resource = config.resource_server.resource.to_url();
     let info = GatewayInfo::new(
         "breg-mcp",

@@ -230,9 +230,9 @@ the metrics listener in [Scrape metrics](../breg-monitor/#scrape-metrics).
 
 ### Create the secret files
 
-Create the files as the user that runs `breg` and the operator commands, because the resolver
-refuses a file owned by anyone else. Each must be a regular file with mode `0400` or `0600`, with
-no other hard link and no symbolic link to it. A name starts with a lowercase letter and uses
+Create the files as the user that runs `breg` and the operator commands. Each must meet the
+[secret file rule](../../security/hardening-checklist/#secret-files): for example a regular file
+you own with mode `0400` or `0600` and no other hard link. A name starts with a lowercase letter and uses
 lowercase letters, digits, `.`, `_`, and `-`. The bytes are used exactly as written, so write them
 without a trailing newline:
 
@@ -255,7 +255,7 @@ In a container platform that injects secrets as environment variables, declare
 `secretProviders.environment` and write `secret:env/<NAME>` instead.
 
 {/* Evidence: crates/registry-platform-config/src/secrets.rs, read_secret_file(),
-    validate_file_metadata(), read_environment(); crates/registry-platform-yaml/src/secret.rs,
+    judge_file(), read_environment(); crates/registry-platform-yaml/src/secret.rs,
     valid_file_name(); crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
     crates/registry-breg/src/cursor.rs, ROOT_SECRET_MIN_BYTES;
     crates/registry-breg/src/runtime_config.rs, database_connection_config_for(). */}
@@ -856,7 +856,7 @@ docker run --restart on-failure \
 restart policy's backoff bounds how often.
 
 {/* Evidence: release/docker/Dockerfile.breg; crates/registry-breg/src/runtime_config.rs,
-    ListenerConfig; crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
+    ListenerConfig; crates/registry-platform-config/src/secrets.rs, judge_file();
     crates/registry-platform-config/src/loader.rs, require_trusted_runtime_path(),
     require_trusted_ownership();
     crates/registry-platform-audit/src/writer.rs, validate_directory(), validate_active_metadata(). */}
@@ -885,8 +885,10 @@ container's. `apply` writes audit entries beside `audit.path`, which is why the 
 writable here too.
 
 Kubernetes is outside the verified deployment profile. A ConfigMap or Secret volume mounted the
-default way presents each key as a symbolic link, which the runtime refuses for both the runtime
-file and secret files; inject secrets through `secret:env/<NAME>` instead.
+default way presents each key as a symbolic link, which the runtime refuses for the runtime file.
+Secret files accept the link chain Kubernetes writes under the
+[secret file rule](../../security/hardening-checklist/#secret-files), which gives the volume
+settings that rule needs.
 
 {/* Evidence: release/docker/Dockerfile.breg, the bregctl install line and the breg ENTRYPOINT;
     crates/registry-breg/src/audit.rs, RegistryAudit::open_companion();

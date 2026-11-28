@@ -272,7 +272,8 @@ fn doctor_accepts_only_the_runtime_owner_only_secret_modes() {
         );
         assert!(
             diagnostics.contains("secrets/audit-hmac-key")
-                && diagnostics.contains("requires exactly 0400 or 0600"),
+                && diagnostics.contains("platform.secret-file.")
+                && diagnostics.contains("0400 or 0600"),
             "doctor did not report unsupported secret mode {mode:04o}:\n{diagnostics}"
         );
     }

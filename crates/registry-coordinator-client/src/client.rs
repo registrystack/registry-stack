@@ -7,7 +7,7 @@ use registry_platform_httputil::client::{
     build_client, classify_keyed_attempt, read_failure_kind, retry_keyed_mutation,
     send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers};
+use registry_platform_httputil::{read_bounded, validate_response_headers_without_peer_policy};
 use reqwest::{
     header::{HeaderMap, ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method, RequestBuilder, Response, StatusCode,
@@ -398,7 +398,7 @@ impl CoordinatorClient {
         let response = request.send().await.map_err(|e| Error::Transport {
             kind: send_failure_kind(&e),
         })?;
-        validate_response_headers(response.headers())
+        validate_response_headers_without_peer_policy(response.headers())
             .map_err(|_| protocol(response.status().as_u16(), Failure::HeaderBounds))?;
         Ok(response)
     }

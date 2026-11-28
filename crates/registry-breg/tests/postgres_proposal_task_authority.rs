@@ -330,7 +330,7 @@ async fn authenticator(
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
     )

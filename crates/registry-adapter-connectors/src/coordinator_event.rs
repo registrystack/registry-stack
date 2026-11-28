@@ -604,7 +604,7 @@ mod tests {
         let policy = EventDestinationPolicy::new(
             "coordinator-test",
             &fixture.origin,
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("the fixture origin is permitted");
@@ -637,7 +637,7 @@ mod tests {
         let policy = EventDestinationPolicy::new(
             "coordinator-test",
             "http://127.0.0.1:9/",
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("the loopback origin is permitted");

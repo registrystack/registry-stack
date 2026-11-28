@@ -3180,6 +3180,7 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
                     dependencies: Vec::new(),
                     functions: Vec::new(),
                     value_types: Default::default(),
+                    row_boundary_sets: Default::default(),
                     entities: Vec::new(),
                     extend_entities: Vec::new(),
                     actions: Vec::new(),

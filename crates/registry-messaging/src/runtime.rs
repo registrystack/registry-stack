@@ -409,7 +409,7 @@ pub async fn assemble(
         audit_secret.expose_secret().to_vec(),
     ))
     .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
-    let writer = AuditWriter::open(config.audit.destination()?)
+    let writer = AuditWriter::open_without_posture(config.audit.destination()?)
         .await
         .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     let audit = Arc::new(MessagingAudit::new(writer, audit_profile.key_hasher()));
@@ -638,7 +638,7 @@ async fn open_audit(
             .for_process(process)
             .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     }
-    let writer = AuditWriter::open(destination)
+    let writer = AuditWriter::open_without_posture(destination)
         .await
         .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     Ok(MessagingAudit::new(writer, profile.key_hasher()))
@@ -836,11 +836,12 @@ mod tests {
         let profile =
             AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
                 .unwrap();
-        let writer = AuditWriter::open(registry_platform_audit::AuditDestination::File(
-            registry_platform_audit::FileDestination::new(&audit).unwrap(),
-        ))
-        .await
-        .unwrap();
+        let writer =
+            AuditWriter::open_without_posture(registry_platform_audit::AuditDestination::File(
+                registry_platform_audit::FileDestination::new(&audit).unwrap(),
+            ))
+            .await
+            .unwrap();
         let journal = MessagingAudit::new(writer, profile.key_hasher());
         journal
             .append_background(

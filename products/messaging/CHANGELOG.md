@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A migration adds a posture to the activation ledger. Every activation
+  records production until the runtime declares its posture, and the
+  activation objects in `messagingctl` reports carry it as `posture`.
+
 - Messaging counts every refused request by the check that refused it, in
   `messaging_request_refusals_total{check}` on the metrics listener, published
   at zero for every check. Each refusal writes one `request refused` line with

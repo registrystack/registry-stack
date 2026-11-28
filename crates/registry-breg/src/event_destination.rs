@@ -464,7 +464,7 @@ impl EventDestinationNetworkProfile {
     fn platform(self) -> DestinationProfile {
         match self {
             Self::ProductionHttps => DestinationProfile::ProductionHttps,
-            Self::LoopbackDevelopmentHttp => DestinationProfile::LoopbackDevelopmentHttp,
+            Self::LoopbackDevelopmentHttp => DestinationProfile::LoopbackHttp,
             #[cfg(feature = "postgres-test")]
             Self::PinnedLoopbackHttpsTest => DestinationProfile::PinnedLoopbackHttpsTest,
         }

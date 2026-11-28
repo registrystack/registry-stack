@@ -90,6 +90,10 @@
         "planKind": {
           "$ref": "#/$defs/PlanKind"
         },
+        "posture": {
+          "description": "The posture the activating process declared.",
+          "type": "string"
+        },
         "predecessorPackageDigest": {
           "anyOf": [
             {
@@ -121,7 +125,8 @@
         "appliedAt",
         "operatorReferenceHash",
         "backupReferences",
-        "roleMode"
+        "roleMode",
+        "posture"
       ],
       "type": "object"
     },

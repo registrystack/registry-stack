@@ -601,7 +601,7 @@ pub(crate) fn prepare_with_reserved_create_fields(
         }
         proposal = workflow(proposal.with_application_preconditions(
             FrozenApplicationPreconditions {
-                contract: action.requires.clone(),
+                contract: crate::model::without_labels(&action.requires),
                 evidence: action.commit_evidence.clone(),
                 input_values: input.clone().into_iter().collect(),
                 targets,

@@ -47,7 +47,7 @@ impl SessionAudit {
         master_secret: Zeroizing<Vec<u8>>,
     ) -> Result<Self, AuditFailure> {
         let profile = AuditProfile::production_from_secret_bytes(master_secret)?;
-        let writer = AuditWriter::open(destination).await?;
+        let writer = AuditWriter::open_without_posture(destination).await?;
         Ok(Self {
             writer,
             key_hasher: profile.key_hasher(),

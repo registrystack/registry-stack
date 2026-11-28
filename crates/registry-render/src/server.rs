@@ -2024,7 +2024,9 @@ mod tests {
             Bundle::load_package(&bundle_path, &verified).expect("packaged receipt bundle");
         Arc::new(Service {
             bundle,
-            audit: RenderAudit::new(AuditWriter::from_line_sink(Box::new(lines.clone()))),
+            audit: RenderAudit::new(AuditWriter::from_line_sink_without_posture(Box::new(
+                lines.clone(),
+            ))),
             api_key: TEST_API_KEY.as_bytes().to_vec(),
             oidc: None,
             caller_fingerprint: "caller-fingerprint".to_owned(),

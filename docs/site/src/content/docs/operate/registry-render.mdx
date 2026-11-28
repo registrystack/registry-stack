@@ -122,8 +122,9 @@ These rules are not in the tables:
   when `secretProviders.environment: {}` is declared. A reference to an undeclared provider is
   refused.
 - A file a `secret:file/` reference names (the API key, an OIDC key set, a seal key, a CA bundle)
-  is a regular file owned by the user serve runs as, with mode `0400` or `0600` and a single link.
-  Serve follows no symbolic link to one, and refuses any other file at startup with
+  meets the [secret file rule](../../security/hardening-checklist/#secret-files), for example a
+  regular file owned by the user serve runs as, with mode `0400` or `0600` and a single link.
+  Serve refuses any other file at startup with
   `runtime-invalid` and the message `the referenced secret file is unsafe`.
 - A string value may come from the environment as `${VAR}`, `${VAR:-default}`, or
   `${VAR:?message}`, except in `apiKeyRef` and under `secretProviders`.
@@ -739,7 +740,7 @@ Counters restart at zero when the process restarts.
 ## Keep the audit file
 
 Each line is one entry with `schema` (`render.registrystack.org/audit/v1`), `eventId`, `time`,
-`phase`, `correlation`, and a value-free `record`: hashes, versions, the caller's key fingerprint,
+`phase`, `posture`, `correlation`, and a value-free `record`: hashes, versions, the caller's key fingerprint,
 and the outcome. To list outcomes:
 
 ```sh

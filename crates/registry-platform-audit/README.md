@@ -6,7 +6,7 @@ authorization event shape for Registry Stack services.
 ## What It Provides
 
 - `AuditWriter`, the one audit writer every product uses. It appends one JSON
-  object per line (`schema`, `eventId`, `time`, `phase`, `correlation`,
+  object per line (`schema`, `eventId`, `time`, `phase`, `posture`, `correlation`,
   `record`): a `request` entry before protected I/O and a `response` entry with
   the outcome, both carrying the same `correlation`.
 - `AuditDestination::File` (durable: fsync with group commit, size rotation,
@@ -23,12 +23,18 @@ authorization event shape for Registry Stack services.
   across products, using pseudonyms from each product's existing audit profile.
 - `require_audit_under` to keep an audit path under a persistent root.
 
+Every new journal line records the writer's declared `posture` as
+`development` or `production`. The transitional constructors record
+`production`. Readers accept a missing posture on historical lines and
+refuse a present value outside those two spellings.
+
 ## Typical Use
 
 ```rust
 use registry_platform_audit::{
     AuditDestination, AuditEntry, AuditProfile, AuditWriter, FileDestination,
 };
+use registry_platform_posture::Posture;
 use serde_json::json;
 use zeroize::Zeroizing;
 
@@ -36,7 +42,7 @@ async fn write_audit_entries() -> Result<(), Box<dyn std::error::Error>> {
     let master_secret = Zeroizing::new(std::fs::read("/run/secrets/registry-audit-hash")?);
     let profile = AuditProfile::production_from_secret_bytes(master_secret)?;
     let destination = FileDestination::new("/var/lib/registry/audit/audit.jsonl")?;
-    let writer = AuditWriter::open(AuditDestination::File(destination)).await?;
+    let writer = AuditWriter::open(AuditDestination::File(destination), Posture::Production).await?;
 
     let subject_ref = profile.key_hasher().hash("did:example:123");
     writer

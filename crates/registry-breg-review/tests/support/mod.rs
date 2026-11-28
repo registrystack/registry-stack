@@ -1210,7 +1210,9 @@ impl Harness {
             .expect("runtime document loads");
         let router = match sink {
             Some(sink) => {
-                let writer = registry_platform_audit::AuditWriter::from_line_sink(Box::new(sink));
+                let writer = registry_platform_audit::AuditWriter::from_line_sink_without_posture(
+                    Box::new(sink),
+                );
                 registry_breg_review::router_with_audit_writer(config, writer).await
             }
             None => registry_breg_review::router(config).await,

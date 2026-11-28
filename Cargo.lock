@@ -7781,6 +7781,7 @@ name = "registry-platform-activation"
 version = "0.49.0"
 dependencies = [
  "chrono",
+ "registry-platform-posture",
  "schemars",
  "serde",
  "serde_json",
@@ -7796,6 +7797,7 @@ version = "0.49.0"
 dependencies = [
  "hmac 0.13.0",
  "regex",
+ "registry-platform-posture",
  "rustix 1.1.6",
  "schemars",
  "serde",
@@ -7990,6 +7992,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-loopback",
+ "registry-platform-posture",
  "reqwest 0.12.28",
  "rustls-native-certs",
  "serde",
@@ -8049,6 +8052,7 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httputil",
+ "registry-platform-posture",
  "registry-platform-yaml",
  "reqwest 0.12.28",
  "schemars",

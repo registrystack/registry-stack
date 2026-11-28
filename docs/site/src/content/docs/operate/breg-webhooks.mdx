@@ -267,7 +267,7 @@ The key must be at least 32 bytes, and the file a regular file owned by the user
 with mode `0400` or `0600`; `doctor` and startup refuse anything else.
 
 {/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs, MIN_HMAC_SHA256_KEY_BYTES;
-    crates/registry-platform-config/src/secrets.rs, read_secret_file() and validate_file_metadata(). */}
+    crates/registry-platform-config/src/secrets.rs, read_secret_file() and judge_file(). */}
 
 ## Build the receiver against a sample
 

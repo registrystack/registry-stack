@@ -137,7 +137,7 @@ pub(crate) fn capture(root: &Path) -> Result<CapturedReview, CaptureRefusal> {
         });
     }
     let declared_schema_fingerprint = declared_schema_fingerprint.ok_or_else(||
-        refusal("migration.review.receipt", "reviewedMigrations", "provide the referenced rehearsal.json; the CLI does not manufacture migration evidence"))?;
+        refusal("migration.review.receipt", "reviewedMigrations", "provide the referenced rehearsal.json; the CLI does not manufacture migration evidence for a migration with SQL. For a change that needs no SQL, `bregctl migration draft` writes the descriptor and its measured rehearsal receipt"))?;
     // Grouped by the bare directory, which can disagree with descriptor-path
     // order when one directory name is a strict prefix of another (`m0002`
     // and `m0002-funding-source`): `prepare_reviewed_migration_plan` requires
@@ -353,6 +353,27 @@ mod ordering_tests {
             descriptor_paths, sorted_by_descriptor_path,
             "capture must already order sources by descriptor path, \
              the key prepare_reviewed_migration_plan checks"
+        );
+    }
+
+    #[test]
+    fn a_missing_receipt_names_the_draft_command_for_changes_without_sql() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let dir = root.join("modules/core/migrations/m0001");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("descriptor.json"), minimal_descriptor("m0001")).unwrap();
+
+        let CaptureRefusal::Tool(refused) =
+            capture(&root).expect_err("a descriptor without its receipt is refused")
+        else {
+            panic!("a missing receipt is the command's own diagnostic");
+        };
+        assert_eq!(refused.code, "migration.review.receipt");
+        assert!(
+            refused.message.contains("bregctl migration draft"),
+            "{}",
+            refused.message
         );
     }
 }

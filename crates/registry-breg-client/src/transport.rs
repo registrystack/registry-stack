@@ -2,7 +2,7 @@ use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers,
+    read_bounded, url::append_path_segments, validate_response_headers_without_peer_policy,
 };
 use reqwest::header::{HeaderMap, CONTENT_TYPE};
 use reqwest::{Response, Url};
@@ -52,7 +52,7 @@ impl Transport {
             .send()
             .await
             .map_err(|error| BaseRegistryClientError::transport(send_failure_kind(&error)))?;
-        validate_response_headers(response.headers()).map_err(|_| {
+        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
             BaseRegistryClientError::protocol(
                 response.status().as_u16(),
                 BRegProtocolFailure::HeaderBounds,

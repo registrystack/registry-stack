@@ -39,21 +39,26 @@ pub fn build_client(options: OutboundOptions<'_>) -> Result<reqwest::Client, &'s
     builder.try_build().map_err(|error| error.reason())
 }
 
+/// Whether a host is on the loopback transport class: a loopback address literal
+/// (IPv4 or IPv6, including an IPv4-mapped loopback) or the exact name `localhost`.
+///
+/// Every other name is outside the class, because a name that happens to resolve to
+/// a loopback address is resolved off-host and the answer can change. The class is
+/// valid in every posture. The one definition lives in [`crate::loopback`].
+pub fn is_loopback_host(host: &url::Host<&str>) -> bool {
+    crate::loopback::loopback_host(&host.to_string()).is_some()
+}
+
 /// Whether this URL's transport keeps a secret sent to it away from the network.
 ///
-/// A secret in cleartext is only acceptable when it cannot leave the host, which
-/// is the local development and tutorial case. The accepted forms are the ones an
-/// adopter types: a loopback address literal, or the reserved name `localhost`.
-/// Any other name is refused, because a name that happens to resolve to a
-/// loopback address is still resolved off-host, and the answer can change. The
+/// A secret in cleartext is only acceptable when it cannot leave the host: https,
+/// or http to a host on the loopback transport class ([`is_loopback_host`]). The
 /// client built by [`build_client`] is pinned to the loopback addresses for
-/// `localhost`, so the name is never resolved off-host.
+/// `localhost`, so that name is never resolved off-host.
 pub fn transport_protects_the_credential(url: &Url) -> bool {
     match url.scheme() {
         "https" => true,
-        "http" => url
-            .host()
-            .is_some_and(|host| crate::loopback::loopback_host(&host.to_string()).is_some()),
+        "http" => url.host().is_some_and(|host| is_loopback_host(&host)),
         _ => false,
     }
 }
@@ -180,6 +185,33 @@ mod tests {
         ] {
             let url = Url::parse(raw).expect("url");
             assert!(!transport_protects_the_credential(&url), "{raw}");
+        }
+    }
+
+    #[test]
+    fn the_loopback_host_rule_accepts_numeric_loopback_and_the_exact_name_localhost() {
+        for raw in [
+            "http://127.0.0.1/",
+            "http://127.9.9.9/",
+            "http://[::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://localhost/",
+            "http://LOCALHOST/",
+        ] {
+            let url = Url::parse(raw).expect("url");
+            assert!(is_loopback_host(&url.host().expect("host")), "{raw}");
+        }
+        for raw in [
+            "http://a.localhost/",
+            "http://localhost./",
+            "http://10.0.0.1/",
+            "http://[::ffff:10.0.0.1]/",
+            "http://0.0.0.0/",
+            "http://[fe80::1]/",
+            "http://example.org/",
+        ] {
+            let url = Url::parse(raw).expect("url");
+            assert!(!is_loopback_host(&url.host().expect("host")), "{raw}");
         }
     }
 

@@ -6431,6 +6431,96 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "draft",
+              "invocation": "bregctl migration draft",
+              "about": "Write the reviewed migration directory for a successor whose changes need no SQL",
+              "long_about": "Write the reviewed migration directory for a successor whose changes need no SQL. Covers every access or disclosure change against the baseline package, measures the candidate on the disposable database the runtime configuration names, and writes descriptor.json and rehearsal.json under <OUTPUT>/modules/<MODULE>/migrations/<ID>. Pass <OUTPUT> as --reviewed-migrations to test and package. Never overwrites an existing migration.",
+              "usage": "bregctl migration draft [OPTIONS] --baseline-package <ABSOLUTE_DIRECTORY> --runtime-config <ABSOLUTE_FILE> --output <ABSOLUTE_DIRECTORY> --module <LOCAL_ID> --id <LOCAL_ID> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "Base Registry Engine project directory. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--baseline-package <ABSOLUTE_DIRECTORY>",
+                  "description": "Absolute directory of the chain tip package the successor follows. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file of the disposable schema-test database. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <ABSOLUTE_DIRECTORY>",
+                  "description": "Absolute reviewed-migrations directory the draft is written under. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--module <LOCAL_ID>",
+                  "description": "Module the migration directory belongs to",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--id <LOCAL_ID>",
+                  "description": "Identifier of the migration, also its directory name",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
             }
           ]
         },

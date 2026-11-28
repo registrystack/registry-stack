@@ -16,8 +16,8 @@ use registry_evidence_verifier::{
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
 };
 use registry_platform_httputil::{
-    read_bounded, retry_after_seconds, validate_response_headers, ExchangeAuthorization,
-    FetchUrlPolicy,
+    read_bounded, retry_after_seconds, validate_response_headers_without_peer_policy,
+    ExchangeAuthorization, FetchUrlPolicy,
 };
 use reqwest::{
     header::{
@@ -859,7 +859,7 @@ impl EvidenceClient {
             .await
             .map_err(|error| EvidenceClientError::transport(outbound::send_failure_kind(&error)))?;
         let response_status = response.status();
-        if validate_response_headers(response.headers()).is_err() {
+        if validate_response_headers_without_peer_policy(response.headers()).is_err() {
             return Err(metadata_protocol_failure_with_status(response_status));
         }
         let response_etag = metadata_etag(response.headers())
@@ -1382,7 +1382,7 @@ impl EvidenceClient {
         max_bytes: u64,
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         let status = response.status().as_u16();
-        if validate_response_headers(response.headers()).is_err() {
+        if validate_response_headers_without_peer_policy(response.headers()).is_err() {
             return Err(EvidenceClientError::Protocol {
                 status,
                 code: None,
@@ -1673,7 +1673,7 @@ fn metadata_cache_seconds(
 
 fn metadata_fetch_policy(trust: &TrustProfile) -> FetchUrlPolicy {
     match trust {
-        TrustProfile::LocalLoopbackDiscovery => FetchUrlPolicy::dev(),
+        TrustProfile::LocalLoopbackDiscovery => FetchUrlPolicy::https_or_loopback(),
         TrustProfile::HttpsDiscovery | TrustProfile::PinnedJwks { .. } => FetchUrlPolicy::strict(),
     }
 }
@@ -4262,7 +4262,7 @@ mod tests {
                 validate_metadata_url(&url, &TrustProfile::LocalLoopbackDiscovery).is_ok(),
                 "{target} was rejected"
             );
-            assert!(FetchUrlPolicy::dev()
+            assert!(FetchUrlPolicy::https_or_loopback()
                 .validate_dns_pinned_for_immediate_fetch(&url)
                 .is_ok());
         }
@@ -4442,7 +4442,7 @@ mod tests {
                 JSON_MEDIA_TYPE,
                 None,
                 600,
-                &FetchUrlPolicy::dev(),
+                &FetchUrlPolicy::https_or_loopback(),
             )
             .await
             .expect("first metadata response");
@@ -4452,7 +4452,7 @@ mod tests {
                 JSON_MEDIA_TYPE,
                 Some((&first.value, first.etag.as_ref(), first.cache_seconds)),
                 600,
-                &FetchUrlPolicy::dev(),
+                &FetchUrlPolicy::https_or_loopback(),
             )
             .await
             .expect("conditional metadata response");
@@ -4480,7 +4480,7 @@ mod tests {
                     JSON_MEDIA_TYPE,
                     None,
                     600,
-                    &FetchUrlPolicy::dev(),
+                    &FetchUrlPolicy::https_or_loopback(),
                 )
                 .await;
             let Err(error) = result else {
@@ -4532,7 +4532,7 @@ mod tests {
                 JSON_MEDIA_TYPE,
                 None,
                 600,
-                &FetchUrlPolicy::dev(),
+                &FetchUrlPolicy::https_or_loopback(),
             )
             .await
             .is_err());

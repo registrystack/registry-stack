@@ -557,9 +557,8 @@ fn local_jwk_signer(
     // when it drops after parsing.
     let secret =
         crate::runtime::resolve_protected_secret(runtime, private_key_ref).map_err(|error| {
-            let action = if error == SecretError::UnsafeFile {
-                "Make the key file a regular file owned by the serving user, with mode 0600 or \
-                 0400 and one link."
+            let action = if matches!(error, SecretError::UnsafeFile(_)) {
+                error.suggested_action()
             } else {
                 "Provide the seal's private key under the secret provider the reference names."
             };

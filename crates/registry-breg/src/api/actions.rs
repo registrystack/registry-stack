@@ -431,12 +431,17 @@ pub(super) async fn dispatch(
                     )
                     .await
                     {
-                        Ok(availability::Availability::NotSatisfied { guard_reason, .. }) => {
-                            crate::correlation::note_refusal(
-                                crate::correlation::action_guard_failure_response(guard_reason),
-                                FailedCheck::ActionGuard,
-                            )
-                        }
+                        Ok(availability::Availability::NotSatisfied {
+                            guard_reason,
+                            guard_label,
+                            ..
+                        }) => crate::correlation::note_refusal(
+                            crate::correlation::action_guard_failure_response(
+                                guard_reason,
+                                guard_label,
+                            ),
+                            FailedCheck::ActionGuard,
+                        ),
                         // Visibility and the record may have changed since rollback.
                         // Never turn the private cause into an existence oracle.
                         _ => crate::correlation::note_refusal(

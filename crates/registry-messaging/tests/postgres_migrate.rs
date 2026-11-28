@@ -245,13 +245,13 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
     a.expect("the first concurrent migration");
     b.expect("the second concurrent migration");
     c.expect("the third concurrent migration");
-    assert_eq!(applied_versions(&isolated).await, [100, 101]);
+    assert_eq!(applied_versions(&isolated).await, [100, 101, 102]);
 
     first
         .migrate()
         .await
         .expect("a repeated migration applies nothing");
-    assert_eq!(applied_versions(&isolated).await, [100, 101]);
+    assert_eq!(applied_versions(&isolated).await, [100, 101, 102]);
 
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("a runtime store");
     runtime.ready().await.expect("a migrated store is ready");
@@ -362,7 +362,7 @@ async fn a_version_100_database_migrates_forward_keeps_its_queue_and_refuses_a_l
     );
 
     store.migrate().await.expect("version 100 migrates forward");
-    assert_eq!(applied_versions(&isolated).await, [100, 101]);
+    assert_eq!(applied_versions(&isolated).await, [100, 101, 102]);
     let queued = isolated
         .admin
         .query_one(
@@ -433,9 +433,9 @@ async fn apply_migrates_a_version_100_database_forward_and_keeps_its_queue() {
     let applied = apply_activation(&config, &ApplyRequest::default())
         .await
         .expect("messagingctl apply migrates version 100 forward");
-    assert_eq!(applied.schema_versions_applied, [101]);
+    assert_eq!(applied.schema_versions_applied, [101, 102]);
     assert!(applied.recorded);
-    assert_eq!(applied_versions(&isolated).await, [100, 101]);
+    assert_eq!(applied_versions(&isolated).await, [100, 101, 102]);
     let queued = isolated
         .admin
         .query_one(

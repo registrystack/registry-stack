@@ -510,7 +510,7 @@ async fn open_named(
     } else {
         destination
     };
-    let audit = AuditWriter::open(destination)
+    let audit = AuditWriter::open_without_posture(destination)
         .await
         .map_err(audit_open_refusal)?;
     let security = StoreSecurity {
@@ -580,7 +580,7 @@ const SCHEMA_VERSION: i64 = crate::store::SCHEMA_VERSION as i64;
 /// with the namespace as the search path. Pinned with the protected state
 /// schema it records.
 pub(crate) fn activation_ledger_statements() -> String {
-    format!("CREATE TABLE IF NOT EXISTS coordinator_migrations(version bigint PRIMARY KEY); INSERT INTO coordinator_migrations VALUES({SCHEMA_VERSION}) ON CONFLICT DO NOTHING; CREATE TABLE IF NOT EXISTS coordinator_activations(activation_id uuid PRIMARY KEY,apply_order bigint UNIQUE NOT NULL,package_digest text NOT NULL,predecessor_package_digest text,database_id text NOT NULL,plan_kind text NOT NULL,applied_at timestamptz NOT NULL,operator_reference_hash text,backup_references text[] NOT NULL,role_mode text NOT NULL,runtime_role text NOT NULL)")
+    format!("CREATE TABLE IF NOT EXISTS coordinator_migrations(version bigint PRIMARY KEY); INSERT INTO coordinator_migrations VALUES({SCHEMA_VERSION}) ON CONFLICT DO NOTHING; CREATE TABLE IF NOT EXISTS coordinator_activations(activation_id uuid PRIMARY KEY,apply_order bigint UNIQUE NOT NULL,package_digest text NOT NULL,predecessor_package_digest text,database_id text NOT NULL,plan_kind text NOT NULL,applied_at timestamptz NOT NULL,operator_reference_hash text,backup_references text[] NOT NULL,role_mode text NOT NULL,runtime_role text NOT NULL,posture text NOT NULL CHECK(posture IN ('development','production'))); DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='coordinator_activations' AND column_name='posture') THEN ALTER TABLE coordinator_activations ADD COLUMN posture text NOT NULL DEFAULT 'production' CHECK(posture IN ('development','production')); END IF; END $$")
 }
 
 fn layout() -> Result<Layout> {
@@ -624,7 +624,7 @@ pub async fn check(
             .suggest("restore database connectivity")
     })?;
     let l = layout()?;
-    let active = activation::check_active_package(&*client, &l, &d.database_id, digest)
+    let active = activation::check_active_package_without_posture(&*client, &l, &d.database_id, digest)
         .await
         .map_err(|_| {
             fail("run coordinatorctl plan/apply with the correct database identity and packages, then restart every service")
@@ -957,15 +957,15 @@ pub async fn apply(
             "runtime role must not own the schema, migrate or write activation ledgers",
         ));
     }
-    let request = NewActivation {
-        activation_id: Uuid::new_v4(),
-        package_digest: workflows.digest(),
-        database_id: &d.database_id,
-        operator_reference_hash: None,
-        backup_references: &[],
-        role_mode: RoleMode::Split,
-        runtime_role: Some(&d.runtime_role),
-    };
+    let request = NewActivation::without_posture(
+        Uuid::new_v4(),
+        workflows.digest(),
+        &d.database_id,
+        None,
+        &[],
+        RoleMode::Split,
+        Some(&d.runtime_role),
+    );
     let active = activation::append_activation(&tx, &l, &request)
         .await
         .map_err(|_| fail("restore activation ledger"))?;
@@ -1081,8 +1081,10 @@ mod tests {
             AuditDestination::File(FileDestination::new(root.path().join("audit.jsonl")).unwrap())
                 .for_process("apply")
                 .unwrap();
-        let first = AuditWriter::open(destination.clone()).await.unwrap();
-        let error = match AuditWriter::open(destination.clone()).await {
+        let first = AuditWriter::open_without_posture(destination.clone())
+            .await
+            .unwrap();
+        let error = match AuditWriter::open_without_posture(destination.clone()).await {
             Ok(_) => panic!("a second writer must not acquire the same companion"),
             Err(error) => error,
         };
@@ -1093,7 +1095,9 @@ mod tests {
             Some("restore writable durable audit custody (sink-locked)")
         );
         drop(first);
-        let reopened = AuditWriter::open(destination).await.unwrap();
+        let reopened = AuditWriter::open_without_posture(destination)
+            .await
+            .unwrap();
         drop(reopened);
         root.close().unwrap();
     }

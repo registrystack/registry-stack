@@ -754,7 +754,7 @@ async fn open_audit(
             .for_process(process)
             .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     }
-    let writer = AuditWriter::open(destination)
+    let writer = AuditWriter::open_without_posture(destination)
         .await
         .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     Ok(DocumentsAudit::new(writer, profile.key_hasher()))

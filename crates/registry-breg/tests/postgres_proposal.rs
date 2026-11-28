@@ -6919,7 +6919,7 @@ async fn apply_receipt_replay_refuses_a_task_grant_expiring_at_the_idempotency_l
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("sub", Some("registry_purpose".into())),
     )

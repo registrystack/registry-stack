@@ -12,7 +12,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_audit::{
     AuditDestination, AuditEntry, AuditError, AuditKeyHasher, AuditPhase as EntryPhase,
     AuditProfile, AuditSegments, AuditUnavailable, AuditWriter, AuthorizationAuditEvent,
-    AuthorizationOutcome,
+    AuthorizationOutcome, StoredAuditEntry,
 };
 use registry_platform_crypto::canonicalize_json;
 use registry_platform_oidc::ActorKind;
@@ -1260,7 +1260,7 @@ impl EvidenceAuditLog {
         key_version: u32,
     ) -> Result<Self, EvidenceAuditError> {
         let key_hasher = identifier_key_hasher(master_secret, key_version)?;
-        let writer = AuditWriter::open(destination).await?;
+        let writer = AuditWriter::open_without_posture(destination).await?;
         Ok(Self {
             writer,
             key_hasher,
@@ -1269,7 +1269,7 @@ impl EvidenceAuditLog {
     }
 
     /// Wrap a writer that is already open, such as one built with
-    /// [`AuditWriter::from_line_sink`] to observe or refuse writes.
+    /// [`AuditWriter::from_line_sink_without_posture`] to observe or refuse writes.
     pub fn with_writer(
         writer: AuditWriter,
         master_secret: Vec<u8>,
@@ -1578,18 +1578,6 @@ struct LocalPublicCheckOperationEvent {
     disclosed_concepts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     safe_error_category: Option<String>,
-}
-
-/// One stored line as the platform writer lays it out.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StoredAuditEntry {
-    schema: String,
-    event_id: String,
-    time: String,
-    phase: EntryPhase,
-    correlation: String,
-    record: serde_json::Value,
 }
 
 /// Largest stored line the local reader accepts, matching the writer's entry
@@ -2356,8 +2344,7 @@ fn read_local_audit_file(
         if line.pop() != Some(b'\n') {
             return Err(invalid_audit_data());
         }
-        let entry: StoredAuditEntry =
-            serde_json::from_slice(&line).map_err(|_| invalid_audit_data())?;
+        let entry = AuditSegments::parse_line(&line)?;
         collector.collect(entry)?;
     }
 }
@@ -3621,7 +3608,7 @@ mod tests {
 
     fn captured_log() -> (EvidenceAuditLog, CapturedLines) {
         let captured = CapturedLines::default();
-        let writer = AuditWriter::from_line_sink(Box::new(captured.clone()));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(captured.clone()));
         let log =
             EvidenceAuditLog::with_writer(writer, MASTER.to_vec(), 1).expect("audit key derives");
         (log, captured)
@@ -3642,7 +3629,7 @@ mod tests {
     /// Write entries exactly as given, bypassing the native record checks, so
     /// the local reader's own checks are what a test exercises.
     async fn append_raw_entries(path: &Path, entries: Vec<AuditEntry>) {
-        let writer = AuditWriter::open(file_destination(path))
+        let writer = AuditWriter::open_without_posture(file_destination(path))
             .await
             .expect("raw writer opens");
         for entry in entries {
@@ -3718,7 +3705,8 @@ mod tests {
     #[test]
     fn pseudonyms_keep_key_epochs_distinguishable() {
         let pseudonym = |master: &[u8], version: u32| {
-            let writer = AuditWriter::from_line_sink(Box::new(CapturedLines::default()));
+            let writer =
+                AuditWriter::from_line_sink_without_posture(Box::new(CapturedLines::default()));
             EvidenceAuditLog::with_writer(writer, master.to_vec(), version)
                 .expect("audit key derives")
                 .pseudonym("requester-v1", "urn:example:trust", b"principal-canary")
@@ -3815,6 +3803,7 @@ mod tests {
                     "correlation",
                     "eventId",
                     "phase",
+                    "posture",
                     "record",
                     "schema",
                     "time"
@@ -3833,7 +3822,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_write_stops_every_later_append() {
-        let writer = AuditWriter::from_line_sink(Box::new(RefusingSink));
+        let writer = AuditWriter::from_line_sink_without_posture(Box::new(RefusingSink));
         let log =
             EvidenceAuditLog::with_writer(writer, MASTER.to_vec(), 1).expect("audit key derives");
         assert!(matches!(
@@ -3879,7 +3868,7 @@ mod tests {
             .expect("audit reads")
             .lines()
             .map(|line| {
-                let entry: StoredAuditEntry = serde_json::from_str(line).expect("entry parses");
+                let entry = AuditSegments::parse_line(line.as_bytes()).expect("entry parses");
                 assert_eq!(entry.schema, AUDIT_SCHEMA);
                 assert_eq!(entry.phase, EntryPhase::Request);
                 entry.correlation

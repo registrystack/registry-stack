@@ -58,6 +58,7 @@ registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
 
 [dev-dependencies]
+registry-platform-httputil = { workspace = true, features = ["test-support"] }
 registry-platform-sqlite = { workspace = true, features = ["fixture"] }
 serde_norway.workspace = true
 tempfile.workspace = true

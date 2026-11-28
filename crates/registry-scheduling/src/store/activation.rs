@@ -20,12 +20,16 @@ use uuid::Uuid;
 use super::{
     check_policy_publication, current_schema_in, lock_publication, mark_allocation_writer,
     publish_policy, refuse_combined_conflicts, refuse_pre_1_0_schema, PolicyPublication,
-    PostgresStore, StoreError, MIGRATION_LOCK_KEY, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
+    PostgresStore, StoreError, ACTIVATION_POSTURE_MIGRATION, MIGRATION_LOCK_KEY,
+    SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
 };
 
 /// Supported SQL in application order. Keep the version ledger and dispatcher
 /// aligned: adding a known version without its implementation must not compile.
-const SUPPORTED_MIGRATIONS: [(i64, &str); SCHEMA_VERSIONS.len()] = [(200, SCHEDULING_MIGRATION)];
+const SUPPORTED_MIGRATIONS: [(i64, &str); SCHEMA_VERSIONS.len()] = [
+    (200, SCHEDULING_MIGRATION),
+    (201, ACTIVATION_POSTURE_MIGRATION),
+];
 const _: () = {
     let mut index = 0;
     while index < SCHEMA_VERSIONS.len() {
@@ -447,15 +451,15 @@ impl PostgresStore {
         let activation = platform_activation::append_activation(
             &*transaction,
             &activation_layout(),
-            &NewActivation {
-                activation_id: request.activation_id,
-                package_digest: request.package_digest,
-                database_id: request.database_id,
-                operator_reference_hash: request.operator_reference_hash,
-                backup_references: request.backup_references,
+            &NewActivation::without_posture(
+                request.activation_id,
+                request.package_digest,
+                request.database_id,
+                request.operator_reference_hash,
+                request.backup_references,
                 role_mode,
-                runtime_role: Some(request.runtime_role),
-            },
+                Some(request.runtime_role),
+            ),
         )
         .await
         .map_err(platform_error)?;
@@ -1026,7 +1030,7 @@ pub(super) async fn check_active_package_in(
     client: &impl GenericClient,
     expected: &ActivePackage<'_>,
 ) -> Result<Activation, StoreError> {
-    platform_activation::check_active_package(
+    platform_activation::check_active_package_without_posture(
         client,
         &activation_layout(),
         expected.database_id,
@@ -1040,6 +1044,14 @@ pub(super) async fn check_active_package_in(
         }
         platform_activation::ActivePackageError::PackageNotActive { active, candidate } => {
             StoreError::PackageNotActive { active, candidate }
+        }
+        // Until this product declares a posture it checks as production, so a
+        // ledger recorded in development is not its active package.
+        platform_activation::ActivePackageError::PostureMismatch { recorded, .. } => {
+            StoreError::PackageNotActive {
+                active: format!("recorded in the {} posture", recorded.as_str()),
+                candidate: expected.package_digest.to_owned(),
+            }
         }
         platform_activation::ActivePackageError::Activation(error) => platform_error(error),
     })
@@ -1218,7 +1230,7 @@ mod tests {
             assert!(message.contains("pre-1.0 schema"), "{message}");
             assert!(message.contains("fresh database"), "{message}");
         }
-        for applied in [vec![], vec![200]] {
+        for applied in [vec![], vec![200], vec![200, 201]] {
             SchemaState {
                 applied,
                 pending: Vec::new(),
@@ -1234,10 +1246,14 @@ mod tests {
             SchemaState::default(),
             SchemaState {
                 applied: vec![],
-                pending: vec![200],
+                pending: vec![200, 201],
             },
             SchemaState {
                 applied: vec![200],
+                pending: vec![201],
+            },
+            SchemaState {
+                applied: vec![200, 201],
                 pending: vec![],
             },
         ] {
@@ -1256,11 +1272,11 @@ mod tests {
             },
             SchemaState {
                 applied: vec![],
-                pending: vec![201],
+                pending: vec![202],
             },
             SchemaState {
                 applied: vec![],
-                pending: vec![200, 201],
+                pending: vec![200, 201, 202],
             },
             SchemaState {
                 applied: vec![],

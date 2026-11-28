@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: protected state schema version 7 records a posture with each
+  activation. Every activation records production until the runtime declares
+  its posture. Version 6 namespaces are refused; settle their Runs with the
+  matching binary, then apply this version to a fresh namespace and database
+  identity.
+
 - Coordinator counts every refused caller by the check that refused it, in
   `coordinator_request_refusals_total{check}` on the metrics listener, and
   writes one `request refused` line with `failed_check` and the request's

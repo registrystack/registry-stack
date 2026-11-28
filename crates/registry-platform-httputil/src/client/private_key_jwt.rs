@@ -35,7 +35,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{read_bounded, validate_response_headers, FetchUrlError, FetchUrlPolicy};
+use crate::{
+    read_bounded, validate_response_headers_without_peer_policy, FetchUrlError, FetchUrlPolicy,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use registry_platform_authcommon::client_assertion::{
@@ -557,8 +559,8 @@ impl PrivateKeyJwtConfig {
     ///
     /// Existing consumers retain their configured-endpoint behavior unless
     /// they opt in. Discovery-driven clients should always opt in, using
-    /// [`FetchUrlPolicy::strict`] in production and [`FetchUrlPolicy::dev`]
-    /// only for an explicitly selected local development profile.
+    /// [`FetchUrlPolicy::strict`] unless the endpoint may be on loopback, where
+    /// [`FetchUrlPolicy::https_or_loopback`] admits plain HTTP to the loopback class.
     #[must_use]
     pub fn with_fetch_url_policy(mut self, policy: FetchUrlPolicy) -> Self {
         self.fetch_url_policy = Some(policy);
@@ -1067,7 +1069,7 @@ impl PrivateKeyJwt {
             })?;
 
         let status = response.status().as_u16();
-        if validate_response_headers(response.headers()).is_err() {
+        if validate_response_headers_without_peer_policy(response.headers()).is_err() {
             return Err(TokenError::Protocol { status });
         }
         let media_type = exact_content_type(response.headers()).map(str::to_owned);
@@ -1639,7 +1641,7 @@ mod tests {
         let clock = Arc::new(TestClock::new(NOW));
         let provider = PrivateKeyJwt::with_clock(
             config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
-                .with_fetch_url_policy(FetchUrlPolicy::dev()),
+                .with_fetch_url_policy(FetchUrlPolicy::https_or_loopback()),
             clock,
         )
         .expect("the DNS-pinned provider is usable");
@@ -1683,7 +1685,7 @@ mod tests {
         let clock = Arc::new(TestClock::new(NOW));
         let provider = PrivateKeyJwt::with_clock(
             config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
-                .with_fetch_url_policy(FetchUrlPolicy::dev()),
+                .with_fetch_url_policy(FetchUrlPolicy::https_or_loopback()),
             clock,
         )
         .expect("the DNS-pinned provider is usable");

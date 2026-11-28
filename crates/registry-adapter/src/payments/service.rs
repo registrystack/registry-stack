@@ -28,7 +28,9 @@ use registry_payment_simulator_connector::{ConnectorError, Observation, Simulato
 use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::client::BearerToken;
-use registry_platform_httputil::{read_bounded, validate_response_headers, ServiceBaseUrl};
+use registry_platform_httputil::{
+    read_bounded, validate_response_headers_without_peer_policy, ServiceBaseUrl,
+};
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
@@ -237,7 +239,7 @@ impl ProviderPort for SyntheticProvider {
                     .execute(request)
                     .await
                     .map_err(|_| ConnectorError::Unknown)?;
-                validate_response_headers(response.headers())
+                validate_response_headers_without_peer_policy(response.headers())
                     .map_err(|_| ConnectorError::Unknown)?;
                 let status = response.status().as_u16();
                 let body = read_bounded(response, 131_072)
@@ -489,7 +491,7 @@ impl SyntheticProvider {
                 ConnectorError::Unavailable
             }
         })?;
-        validate_response_headers(response.headers()).map_err(|_| {
+        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
             if prepared.method == PaymentHttpMethod::Post {
                 ConnectorError::Unknown
             } else {

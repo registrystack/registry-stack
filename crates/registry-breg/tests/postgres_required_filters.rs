@@ -107,7 +107,7 @@ async fn setup() -> (TestDatabase, Router, MockIdp) {
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let mut verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
     verifier.allowed_clients = vec!["portal".into()];

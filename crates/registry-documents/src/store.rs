@@ -18,11 +18,16 @@ use tokio_postgres::Config as PgConfig;
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const DOCUMENTS_MIGRATION: &str = include_str!("../migrations/0100_documents.sql");
+const ACTIVATION_POSTURE_MIGRATION: &str =
+    include_str!("../migrations/0101_activation_posture.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list. The 1.0 baseline is version
 /// [`BASELINE_SCHEMA_VERSION`]; each later migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 1] = [(100, DOCUMENTS_MIGRATION)];
+pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+    (100, DOCUMENTS_MIGRATION),
+    (101, ACTIVATION_POSTURE_MIGRATION),
+];
 /// The 1.0 baseline schema version, shared with the other products.
 const BASELINE_SCHEMA_VERSION: i64 = 100;
 const _: () = assert!(

@@ -46,7 +46,7 @@ impl CapturedLines {
 async fn offer_audit_refuses_an_exchange_without_a_verified_identity() {
     let captured = CapturedLines::default();
     let audit = DeliveryAudit::with_writer(
-        AuditWriter::from_line_sink(Box::new(captured.clone())),
+        AuditWriter::from_line_sink_without_posture(Box::new(captured.clone())),
         b"0123456789abcdef0123456789abcdef".to_vec(),
     )
     .expect("the audit profile is valid");
@@ -64,7 +64,7 @@ async fn offer_audit_refuses_an_exchange_without_a_verified_identity() {
 async fn offer_and_delivery_audit_is_correlated_and_privacy_safe() {
     let captured = CapturedLines::default();
     let audit = DeliveryAudit::with_writer(
-        AuditWriter::from_line_sink(Box::new(captured.clone())),
+        AuditWriter::from_line_sink_without_posture(Box::new(captured.clone())),
         b"0123456789abcdef0123456789abcdef".to_vec(),
     )
     .expect("the audit profile is valid");

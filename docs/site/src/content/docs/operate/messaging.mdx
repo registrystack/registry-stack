@@ -178,7 +178,7 @@ unset value
 ```
 
 Write `smtp-username`, `smtp-password`, `sms-gateway-token`, and `sms-gateway-callback-key` the same
-way. Each must be a regular file owned by the runtime user, mode `0400` or `0600`, with one link.
+way. Each must meet the [secret file rule](../../security/hardening-checklist/#secret-files), for example a regular file owned by the runtime user, mode `0400` or `0600`, with one link.
 
 `serve` never reads the migration credential; only `provision`, `apply`, and
 `retention erase-expired` read it. Write `migration-database-url`, the URL for
@@ -539,7 +539,7 @@ first exits 2 and the others exit 1:
 | ``messaging: the Messaging package at package.root does not satisfy the shared package envelope: the package at <package.root> does not match its SHA256SUMS; changed: messaging.yaml; rebuild the package with `messagingctl package` and deploy the whole directory`` | A package file was changed in place. Deploy the directory `messagingctl package` wrote, unchanged. A missing directory is reported the same way, as `does not exist or cannot be read` |
 | `messaging: package.expectedDigest does not pin the package at package.root, whose digest is sha256:<digest>; deploy the pinned package or update package.expectedDigest` | The package on disk is not the one `package.expectedDigest` names |
 | `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: no readable secret of that name exists under the configured provider` | No file of that name exists under `secretProviders.file.root`, or the runtime user cannot read it |
-| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: the secret file must be a regular file owned by the runtime user, with mode 0400 or 0600, and exactly one hard link` | The file exists but is a symbolic link, belongs to another user, has another mode, or has a second hard link |
+| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: the secret file has more than one hard link (platform.secret-file.hard-linked). Replace it with a copy that has one link.` | The file exists but fails a [secret file check](../../reference/errors/#secret-file-codes). The refusal names the check: here a second hard link, and other files report a link that leaves the root, another owner, or a loose mode |
 | `messaging: the Messaging database connection could not be established: Error occurred while creating a new object: error connecting to server` | Nothing answers at the URL's host and port. `error performing TLS handshake` in its place means the server certificate is not trusted; name the CA bundle in `database.caBundleRef` |
 | `messaging: the Messaging query failed: db error` | The database has no schema yet. Run `messagingctl plan`, then `apply`, with the migration credential |
 | `messaging: identity.databaseId does not match the database activation ledger` | The runtime file names another deployment's `identity.databaseId`, or its URL reaches another deployment's database |

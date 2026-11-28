@@ -485,7 +485,7 @@ async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal()
         .iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, [100, 101, 199]);
+    assert_eq!(versions, [100, 101, 102, 199]);
 
     let operator_audit = match config
         .audit
@@ -624,8 +624,8 @@ async fn apply_reports_the_active_digest_it_read_under_the_ledger_lock() {
         .batch_execute(&format!(
             "BEGIN; SELECT pg_advisory_xact_lock({LEDGER_LOCK_KEY}); \
              INSERT INTO {}.messaging_activations \
-               (activation_id,apply_order,package_digest,database_id,plan_kind,applied_at,role_mode) \
-             VALUES (gen_random_uuid(),1,'{concurrent}','messaging-test','initial',now(),'single')",
+               (activation_id,apply_order,package_digest,database_id,plan_kind,applied_at,role_mode,posture) \
+             VALUES (gen_random_uuid(),1,'{concurrent}','messaging-test','initial',now(),'single','production')",
             isolated.schema
         ))
         .await
@@ -812,7 +812,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
     )
     .await
     .expect("one transactional split-role activation");
-    assert_eq!(applied.schema_versions_applied, [100, 101]);
+    assert_eq!(applied.schema_versions_applied, [100, 101, 102]);
     assert!(applied.recorded);
     assert_eq!(applied.activation.database_id, "messaging-test");
     assert_eq!(applied.activation.role_mode.as_str(), "split");
