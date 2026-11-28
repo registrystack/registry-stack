@@ -75,6 +75,16 @@
           "type": "string",
           "maxLength": 10978
         }
+      },
+      "requiredAccessProfile": {
+        "in": "query",
+        "name": "accessProfile",
+        "required": true,
+        "explode": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 128
+        }
       }
     },
     "schemas": {
@@ -222,6 +232,67 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Site"
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "nextCursor"
+            ],
+            "properties": {
+              "nextCursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 10978
+              }
+            }
+          }
+        }
+      },
+      "Permit": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "domainData",
+          "recordIdentifier",
+          "revisionIdentifier"
+        ],
+        "properties": {
+          "domainData": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "permitCode": {
+                "type": "string"
+              }
+            }
+          },
+          "recordIdentifier": {
+            "type": "string"
+          },
+          "revisionIdentifier": {
+            "type": "string"
+          }
+        }
+      },
+      "PermitPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "pageInfo"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permit"
             }
           },
           "pageInfo": {
@@ -472,6 +543,76 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SitePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/records/permits": {
+      "get": {
+        "operationId": "records.permit.list",
+        "x-registry-operation": "list",
+        "x-registry-queryKind": "list",
+        "x-registry-recordType": "permit",
+        "x-registry-accessProfile": "permit-clerk",
+        "x-registry-queryProfile": {
+          "profile": "permit-clerk",
+          "kind": "list",
+          "maximumPageSize": 10,
+          "allowCount": false,
+          "selectableProperties": [
+            "label",
+            "permitCode"
+          ],
+          "filterableProperties": [
+            {
+              "property": "permitCode",
+              "operators": [
+                "equals"
+              ]
+            }
+          ],
+          "sortableProperties": [
+            {
+              "property": "label",
+              "directions": [
+                "asc"
+              ]
+            }
+          ],
+          "selectorProperties": [],
+          "temporal": null,
+          "requiredFilters": []
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/requiredAccessProfile"
+          },
+          {
+            "$ref": "#/components/parameters/select"
+          },
+          {
+            "$ref": "#/components/parameters/filter"
+          },
+          {
+            "$ref": "#/components/parameters/orderby"
+          },
+          {
+            "$ref": "#/components/parameters/top"
+          },
+          {
+            "$ref": "#/components/parameters/skiptoken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermitPage"
                 }
               }
             }

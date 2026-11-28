@@ -139,27 +139,59 @@ export class RegistryError extends Error implements ErrorInfo {
 
 const invalidBase = () => new TypeError('Invalid registry base URL')
 
+const tokenOverHttp = () => new TypeError('A client with a token needs an https base URL, or a loopback host.')
+
 /**
- * A host that cannot be on the public internet: a private or link-local IP literal, or a
- * single-label name such as a container name on a compose network.
+ * A host that cannot be on the public internet: a private IP literal, or a single-label name such as a
+ * container name on a compose network. The client does not resolve names, so a name is judged as written.
+ * Link-local addresses are not private here: they are where cloud metadata lives.
  */
 function privateHost(hostname: string): boolean {
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/u.exec(hostname)
   if (ipv4) {
     const first = Number(ipv4[1])
     const second = Number(ipv4[2])
-    return first === 10 || first === 172 && second >= 16 && second <= 31
-      || first === 192 && second === 168 || first === 169 && second === 254
+    return first === 10 || first === 172 && second >= 16 && second <= 31 || first === 192 && second === 168
   }
   if (hostname.startsWith('[')) {
     const leading = hostname.slice(1).split(':', 1)[0]!
     const hextet = leading === '' ? 0 : Number.parseInt(leading, 16)
-    return (hextet & 0xfe00) === 0xfc00 || (hextet & 0xffc0) === 0xfe80
+    return (hextet & 0xfe00) === 0xfc00
   }
   return !hostname.includes('.')
 }
 
-function baseAddress(value: string | URL, allowInsecureHttp: boolean): string {
+/**
+ * The IPv4 address an IPv6 literal carries in its last 32 bits: the mapped (`::ffff:`), NAT64 (`64:ff9b::`) and
+ * IPv4-compatible (`::`) forms, which the URL parser writes as two hex groups. An operating system sends a mapped
+ * literal to the IPv4 address.
+ */
+function embeddedIpv4(hostname: string): string | undefined {
+  const groups = /^\[(?:::ffff:|64:ff9b::|::)([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/u.exec(hostname)
+  if (!groups) return undefined
+  const high = Number.parseInt(groups[1]!, 16)
+  const low = Number.parseInt(groups[2]!, 16)
+  return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`
+}
+
+/** A literal no base may name under any scheme: cloud metadata, the "this network" block and multicast. */
+function deniedHost(hostname: string): boolean {
+  const embedded = embeddedIpv4(hostname)
+  if (embedded !== undefined) return deniedHost(embedded)
+  if (hostname === '[::]') return true
+  const ipv4 = /^(\d{1,3})\.\d{1,3}\.\d{1,3}\.\d{1,3}$/u.exec(hostname)
+  if (ipv4) {
+    const first = Number(ipv4[1])
+    return first === 0 || first >= 224 && first <= 239 || hostname === '169.254.169.254' || hostname === '100.100.100.200'
+  }
+  if (hostname.startsWith('[')) {
+    const leading = hostname.slice(1).split(':', 1)[0]!
+    return (leading !== '' && (Number.parseInt(leading, 16) & 0xff00) === 0xff00) || hostname === '[fd00:ec2::254]'
+  }
+  return false
+}
+
+function baseAddress(value: string | URL, allowInsecureHttp: boolean, hasToken: boolean): string {
   let input = String(value)
   // A path such as /registry resolves against the page origin where one exists.
   if (/^\/(?!\/)/u.test(input)) {
@@ -184,6 +216,10 @@ function baseAddress(value: string | URL, allowInsecureHttp: boolean): string {
     throw invalidBase()
   }
   const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127(\.\d{1,3}){3}$/u.test(url.hostname)
+  if (deniedHost(url.hostname)) throw invalidBase()
+  // A token is a credential, so it never crosses plain http beyond loopback. Without one (a page, or a signed
+  // operation) the option admits a private host. A mapped loopback literal is not loopback.
+  if (url.protocol === 'http:' && !loopback && hasToken) throw tokenOverHttp()
   const plainHttp = url.protocol === 'http:' && (loopback || allowInsecureHttp && privateHost(url.hostname))
   if (url.protocol !== 'https:' && !plainHttp || url.username || url.password) throw invalidBase()
   return url.href.replace(/\/+$/u, '')
@@ -210,7 +246,7 @@ function endpoint(base: string, operation: Operation, values: RequestValues, pro
   }
   if (operation.accessProfileParameter && !url.searchParams.has('accessProfile')) {
     if (profile !== undefined) url.searchParams.set('accessProfile', profile)
-    else if (operation.accessProfileRequired) throw new InputError('This list needs an access profile')
+    else if (operation.accessProfileRequired) throw new InputError('This call needs an access profile')
   }
   return url
 }
@@ -523,12 +559,14 @@ export class Transport {
   readonly #limit: number
 
   constructor(options: ClientOptions) {
-    this.#base = baseAddress(options.baseUrl, options.allowInsecureHttp === true)
-    this.#timeout = options.timeoutMs ?? 10_000
-    this.#limit = options.maxResponseBytes ?? 8 * 1024 * 1024
+    // One read of each option, so the check and the kept copy cannot disagree.
+    const copy = { ...options }
+    this.#base = baseAddress(copy.baseUrl, copy.allowInsecureHttp === true, copy.token !== undefined)
+    this.#timeout = copy.timeoutMs ?? 10_000
+    this.#limit = copy.maxResponseBytes ?? 8 * 1024 * 1024
     if (!Number.isSafeInteger(this.#timeout) || this.#timeout < 1 || this.#timeout > 2_147_483_647
         || !Number.isSafeInteger(this.#limit) || this.#limit < 1) throw new RangeError('Invalid transport bounds')
-    this.#options = { ...options }
+    this.#options = copy
   }
 
   get profile(): string | undefined { return this.#options.profile }
@@ -637,8 +675,8 @@ export class Transport {
       const size = bodySize(body)
       if (transfer) wait(this.#timeout + uploadAllowanceMs(size))
       const moved = () => { if (transfer) wait(this.#timeout) }
-      // A session answer is small, so a page 401 or 503 is read up to the client default even when
-      // a call's own cap is smaller, and never past it on a byte transfer.
+      // A session answer is small, so a page 401 or 503 is read up to the larger of the call's cap
+      // and the client default.
       const answerLimit = (head: ResponseHead) => pageMode && (head.status === 401 || head.status === 503)
         ? Math.max(cap ?? 0, this.#limit) : limit
       const Xhr = xhrConstructor()
@@ -820,7 +858,10 @@ export function listQuery(rules: ListRules, options: ListRequest, cursor?: strin
   if (chosen !== undefined && !rules.accessProfileParameter) throw new TypeError('This list takes no access profile')
   if (chosen === undefined && (rules.requiresAccessProfile || names.length !== 1)) throw new TypeError('This list needs an access profile')
   const name = chosen ?? names[0]!
-  if (typeof name !== 'string' || !Object.hasOwn(rules.profiles, name)) throw new TypeError('Unknown access profile')
+  if (typeof name !== 'string' || !Object.hasOwn(rules.profiles, name)) {
+    throw new TypeError(chosen !== undefined && options.accessProfile === undefined
+      ? "The client's default access profile is not one this record type publishes, so name one on the call." : 'Unknown access profile')
+  }
   const profile = rules.profiles[name]!
   const under = ' under profile `' + name + '`'
   const known = (property: unknown) => typeof property === 'string' && (Object.hasOwn(profile.filterable, property)
@@ -960,15 +1001,81 @@ export interface DescribeOptions {
   clientSentences?: Readonly<Record<string, string>>
 }
 
+/** One sentence per `can.*` reason. Part of the one words table, `clientSentences`. */
+export const availabilityMessages: Readonly<Record<string, string>> = {
+  'not-offered': 'This is not offered for this application.',
+  'not-needed': 'This application does not need to be updated to a new form.',
+  rebase: 'The form for this application has changed. Update it to the current form, then send it again.',
+  'not-awaiting-party': 'This can only be done while the application is waiting for the applicant.',
+  'pending-review': 'This is waiting for review.',
+  'review-rejected': 'The review rejected this application.',
+  'review-changes-requested': 'The reviewer asked for changes first.',
+  'review-ended': 'The review has ended.',
+  'stale-revision': 'This is no longer possible for this application.',
+  'package-changed': 'The form for this application has changed. Update it to the current form first.',
+  'attachment-required': 'A required document is missing. Add it before sending.',
+  'rebase-refused': 'This application could not be applied as it stands. Update it to the current form, then send it again.',
+  'dependency-outage': 'A service this depends on is unavailable. Try again later.',
+  'invalid-input': 'This application needs corrections first.',
+  'already-applied': 'This application has already been applied.',
+}
+
+const configurationSentence = 'This page is not set up correctly for this request.'
+const developerSentence = 'This page could not complete the request.'
+const unexpectedAnswerSentence = 'The answer was not what this page expected, so this page stopped for safety.'
+const documentUnusableSentence = 'This document cannot be used.'
+
+export const clientFallbackSentence = 'The request could not be completed from this page.'
+
 /**
- * The sentence a person reads for each `client.` code the client raises itself. This is the one
- * table a programme replaces with its own language, through `DescribeOptions.clientSentences`.
+ * The sentence a person reads for each `client.` code the client raises itself, with the `can.*` reasons and the two
+ * sentences for an offered or an unavailable step. This is the one table a programme replaces with its own language,
+ * through `DescribeOptions.clientSentences`, and passes to `proposalCommands` as well.
  */
 export const clientSentences: Readonly<Record<string, string>> = {
-  'client.file-type': 'This kind of file is not accepted, so choose another file.',
-  'client.command-unavailable': 'This action is not available right now.',
+  ...availabilityMessages,
+  available: 'Available.',
+  unavailable: 'This is not available right now.',
+  'client.fallback': clientFallbackSentence,
+  'client.file-type': 'This kind of file is not accepted here, so choose another file.',
+  'client.file-too-large': 'This file is too large, so choose a smaller file.',
+  'client.content-digest': 'The file received does not match the one stored, so it was not opened. Try again.',
+  'client.command-unavailable': 'This step is not available for this application now.',
+  'client.action-unavailable': 'This action is not available for this document.',
+  'client.link-operation': unexpectedAnswerSentence,
+  'client.upload-path': unexpectedAnswerSentence,
+  'client.stale-copy': 'This application changed elsewhere. Reload it and try again.',
+  'client.read-after-write': 'Your change was saved, but this page could not refresh. Reload it to see the latest version.',
+  'client.inputs-not-readable': 'This page cannot change these answers.',
+  'client.browser-only': developerSentence,
+  'client.document-not-ready': 'This document is not ready yet. Try again shortly.',
+  'client.wait-timeout': 'This document could not be checked in time. Try again shortly.',
+  'client.document-rejected': documentUnusableSentence,
+  'client.document-suspended': documentUnusableSentence,
+  'client.document-erasure-pending': documentUnusableSentence,
+  'client.document-erased': documentUnusableSentence,
+  // Raised only by a page that is set up wrongly.
+  'client.action-id': configurationSentence,
+  'client.unknown-operation': configurationSentence,
+  'client.unknown-slot': configurationSentence,
+  'client.unknown-policy': configurationSentence,
+  // Raised only by a bad option from the page.
+  'client.invalid-interval': developerSentence,
+  'client.invalid-timeout': developerSentence,
 }
-export const clientFallbackSentence = 'The request could not be completed from this page.'
+
+/**
+ * The sentence for `key`: the programme's own non-empty replacement, else the default table. A key the table lacks gets
+ * the fallback sentence, which the programme may replace under `client.fallback`.
+ */
+export function sentence(key: string, options: DescribeOptions = {}): string {
+  const replacement = (name: string): string | undefined => {
+    const replaced = options.clientSentences
+    const own = replaced && Object.hasOwn(replaced, name) ? replaced[name] : undefined
+    return typeof own === 'string' && own !== '' ? own : undefined
+  }
+  return replacement(key) ?? (Object.hasOwn(clientSentences, key) ? clientSentences[key]! : replacement('client.fallback') ?? clientFallbackSentence)
+}
 
 const unreadable = 'The registry sent an answer that could not be read.'
 const notBuilt = 'The request could not be built from the given values.'
@@ -984,10 +1091,10 @@ export function describeError(error: unknown, options: DescribeOptions = {}): st
     return error instanceof TypeError ? notBuilt : 'Something went wrong.'
   }
   if (error.raisedByClient && error.code?.startsWith('client.')) {
-    const replaced = options.clientSentences
-    const own = replaced && Object.hasOwn(replaced, error.code) ? replaced[error.code] : undefined
-    return typeof own === 'string' && own !== '' ? own
-      : Object.hasOwn(clientSentences, error.code) ? clientSentences[error.code]! : clientFallbackSentence
+    // A step the register no longer offers shows the sentence for the served reason when it is one of the fixed
+    // availability reasons. Any other reason, and any `client.` key, keeps the step's own sentence.
+    const reason = error.code === 'client.command-unavailable' ? error.problem?.['reason'] : undefined
+    return sentence(typeof reason === 'string' && Object.hasOwn(availabilityMessages, reason) ? reason : error.code, options)
   }
   if (error.outcomeUnknown) return 'The change may or may not have been made, so check before trying again.'
   if (error.kind === 'refused' && error.code === 'action.guard_failed') {

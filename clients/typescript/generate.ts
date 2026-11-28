@@ -173,7 +173,7 @@ const identifier = (value: string) => value.replace(/[^a-zA-Z0-9_]/gu, '_')
 
 // This server module uses the back-office bearer. Wallet exchanges use their own
 // credentials, and discovery documents include tuple schemas this generator cannot validate.
-const oid4vciOperations = new Set(['createCredentialOffer', 'createDraft13CredentialOffer', 'health', 'readiness'])
+const oid4vciOperations = new Set(['createCredentialOffer', 'createDraft13CredentialOffer'])
 
 function selectOid4vciOperations(doc: Node): void {
   doc.paths = Object.fromEntries(members(doc.paths).flatMap(([path, item]) => {
@@ -739,7 +739,7 @@ export function generate(source: string, settings: Settings = {}): string {
             'top?: number',
           ]
           const first = fields.join('; ') + '; after?: never'
-          const next = fields[0] + '; after: string; where?: never; orderBy?: never; select?: never; count?: never; top?: number'
+          const next = fields[0] + '; after: string; where?: never; orderBy?: never; select?: never; count?: never; top?: never'
           return '(CallOptions & { ' + first + ' }) | (CallOptions & { ' + next + ' })'
         })
         listTypes.push('  ' + quote(recordType) + ': ' + alternatives.join(' | '))
@@ -917,8 +917,8 @@ export function generate(source: string, settings: Settings = {}): string {
       '    const rules = Object.hasOwn(listRules, recordType) ? listRules[recordType] : undefined',
       '    if (!rules) throw new TypeError("Unknown record type for list")',
       '    const { accessProfile, where, orderBy, select, count, top, after, ...call } = options',
-      '    if (after !== undefined && [where, orderBy, select, count].some(value => value !== undefined)) {',
-      '      throw new TypeError("Use after without where, orderBy, select or count.")',
+      '    if (after !== undefined && [where, orderBy, select, count, top].some(value => value !== undefined)) {',
+      '      throw new TypeError("Use after without where, orderBy, select, count or top.")',
       '    }',
       '    if (after !== undefined && (typeof after !== "string" || !after)) throw new TypeError("Use a nonempty cursor for after.")',
       '    const query = listQuery(rules, options, after, this.#transport.profile)',
@@ -938,7 +938,7 @@ export function generate(source: string, settings: Settings = {}): string {
       '    if (accessProfile !== undefined) {',
       '      if (!route.takesProfile) throw new TypeError("Reading " + recordType + " takes no access profile.")',
       '      if (typeof accessProfile !== "string" || (route.profiles && !route.profiles.includes(accessProfile))) {',
-      '        throw new TypeError("Unknown access profile for reading " + recordType + ".")',
+      '        throw new TypeError(explicitProfile === undefined ? "The client\'s default access profile is not one this record type publishes, so name one on the call." : "Unknown access profile for reading " + recordType + ".")',
       '      }',
       '    }',
       '    const { data } = await this.#call<{ data: RecordEnvelope }>(route.operation, { ...call, path: { record_id: id }, query: { accessProfile } })',

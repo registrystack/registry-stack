@@ -35,6 +35,10 @@ test('createCredentialOffer sends a typed back-office request and decodes the of
 function typeChecks(client: Client) {
   // @ts-expect-error the offer requires subjects
   void client.call('createCredentialOffer', { body: { credentialConfigurationId: 'licence' } })
+  // @ts-expect-error health and readiness are ambiguous on the service base the modules share
+  void client.call('health')
+  // @ts-expect-error health and readiness are ambiguous on the service base the modules share
+  void client.call('readiness')
   // @ts-expect-error wallet token exchange is outside the back-office client
   void client.call('redeemPreAuthorizedCode', { body: '' })
 }

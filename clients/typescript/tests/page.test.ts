@@ -244,6 +244,20 @@ test('page mode refuses an absolute base on another origin before anything is se
   assert.equal(requests, 4)
 })
 
+test('page mode compares the whole origin: the same host on another port or scheme is refused', async () => {
+  let requests = 0
+  const fetch: typeof globalThis.fetch = async () => { requests++; return Response.json({}) }
+  await withLocation('http://localhost:8080', async () => {
+    for (const other of ['http://localhost:5173', 'https://localhost:8080']) {
+      await assert.rejects(async () => new Transport({ baseUrl: other, fetch }).call(read),
+        (error: unknown) => error instanceof TypeError && !(error instanceof RegistryError), other)
+    }
+    assert.equal(requests, 0)
+    await new Transport({ baseUrl: 'http://localhost:8080', fetch }).call(read)
+    assert.equal(requests, 1)
+  })
+})
+
 test('only the page session 503 has a known outcome', async () => {
   for (const [code, status, token, unknown] of [
     ['session.unavailable', 503, undefined, false],

@@ -12,7 +12,7 @@ document the clients' generator reads (the `inputs` table in
   idempotency key somewhere the client cannot check. `304 Not Modified` answers a conditional
   read with no body and no new target, so it is allowed.
 
-Usage: check-client-contract.py [REPOSITORY_ROOT]
+Usage: check-client-assumptions.py [REPOSITORY_ROOT]
 """
 
 from __future__ import annotations
@@ -27,13 +27,25 @@ METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 NOT_A_REDIRECT = {"304"}
 
 
+# One table entry: a name, then the quoted path of a document, with an optional trailing comment.
+ENTRY = re.compile(r"""^\s*['"]?[\w-]+['"]?\s*:\s*(['"])(?P<name>[^'"]+\.json)\1\s*,?\s*(//.*)?$""")
+
+
 def documents(root: Path) -> list[Path]:
     source = (root / GENERATOR).read_text(encoding="utf-8")
     start = source.find("const inputs = {")
     if start < 0:
         raise ValueError(f"{GENERATOR}: no `inputs` table")
-    table = source[start : source.index("}", start)]
-    names = re.findall(r"'([^']+\.json)'", table)
+    # The table ends at the first closing brace on a line of its own, so a brace in a comment does not cut it.
+    table = source[start:].split("\n", 1)[1].split("\n}", 1)[0]
+    names = []
+    for line in table.splitlines():
+        if not line.strip() or line.strip().startswith("//"):
+            continue
+        entry = ENTRY.match(line)
+        if entry is None:
+            raise ValueError(f"{GENERATOR}: cannot read this `inputs` line: {line.strip()}")
+        names.append(entry.group("name"))
     if not names:
         raise ValueError(f"{GENERATOR}: the `inputs` table names no document")
     return [root / "products" / name for name in names]
@@ -74,14 +86,14 @@ def main(argv: list[str]) -> int:
     try:
         paths = documents(root)
     except (OSError, ValueError) as error:
-        print(f"check-client-contract: {error}", file=sys.stderr)
+        print(f"check-client-assumptions: {error}", file=sys.stderr)
         return 2
     findings = []
     for path in paths:
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
-            print(f"check-client-contract: {path}: {error}", file=sys.stderr)
+            print(f"check-client-assumptions: {path}: {error}", file=sys.stderr)
             return 2
         name = path.relative_to(root).as_posix()
         findings.extend(f"{name}: {pointer} declares the session problem code {code}"
@@ -89,9 +101,9 @@ def main(argv: list[str]) -> int:
         findings.extend(f"{name}: {finding}" for finding in redirects(document))
     if findings:
         print("\n".join(findings))
-        print(f"check-client-contract: {len(findings)} finding(s)", file=sys.stderr)
+        print(f"check-client-assumptions: {len(findings)} finding(s)", file=sys.stderr)
         return 1
-    print("check-client-contract: ok")
+    print(f"check-client-assumptions: ok ({len(paths)} documents)")
     return 0
 
 

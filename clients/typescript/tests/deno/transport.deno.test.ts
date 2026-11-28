@@ -33,8 +33,12 @@ Deno.test('a path base resolves against the page origin and dot segments are ref
 
 Deno.test('plain http to a public host is refused even with allowInsecureHttp', () => {
   assert.throws(() => make(MinimalClient, { baseUrl: 'http://registry.example.org', token: () => 'fixture',
-    allowInsecureHttp: true }), /Invalid registry base URL/u)
-  make(MinimalClient, { baseUrl: 'http://breg:8080', token: () => 'fixture', allowInsecureHttp: true })
+    allowInsecureHttp: true }), /needs an https base URL/u)
+  assert.throws(() => make(MinimalClient, { baseUrl: 'http://registry.example.org', allowInsecureHttp: true }),
+    /Invalid registry base URL/u)
+  assert.throws(() => make(MinimalClient, { baseUrl: 'http://breg:8080', token: () => 'fixture', allowInsecureHttp: true }),
+    /needs an https base URL/u)
+  make(MinimalClient, { baseUrl: 'http://breg:8080', allowInsecureHttp: true })
 })
 
 Deno.test('page mode sends the page header and same-origin cookies, and reads a 401 as sign-in-expired', async () => {

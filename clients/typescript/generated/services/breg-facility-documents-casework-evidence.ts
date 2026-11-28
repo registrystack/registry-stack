@@ -5,6 +5,7 @@ import { Client as RegisterClient } from '../breg-facility.ts'
 import { Client as CaseworkClient } from '../casework.ts'
 import { Client as DocumentsClient } from '../documents.ts'
 import { Client as EvidenceClient } from '../evidence.ts'
+import { proposalCommands, documentCommands } from '../../tasks/index.ts'
 
 /** The options a page client takes. There is no `token`: the page's session part signs each call. */
 export type PageClientOptions = Omit<ClientOptions, 'token'>
@@ -12,22 +13,10 @@ export type PageClientOptions = Omit<ClientOptions, 'token'>
 /** The options a server client takes. `token` runs on each call for a bearer credential. */
 export type ServerClientOptions = Omit<ClientOptions, 'token'> & { token: () => string | Promise<string> }
 
-// HOOK POINT: task helpers.
-// The task helpers attach here. `clients/typescript/tasks/index.ts` exports
-// `proposalCommands(client, { accessProfile })` and `documentCommands(client, { custodian? })`.
-// Each takes a typed operation client. When they are imported, the two lines that go here are:
-//   registry.proposals = proposalCommands(<the register client>, { accessProfile: "facility-registrar" })
-//   registry.documents = documentCommands(<the Document Store client>)
-// Until then `documents` is the Document Store's typed operation client and `proposals` is
-// absent. A helper that takes the `documents` name must keep `call` reachable on it.
-function withTaskHelpers<R extends object, P extends object>(register: R, products: P): R & P {
-  return Object.assign(register, products)
-}
-
 function pageProducts(transport: Transport) {
   return {
     casework: new CaseworkClient(transport),
-    documents: new DocumentsClient(transport),
+    documents: documentCommands(new DocumentsClient(transport)),
     evidence: new EvidenceClient(transport),
   }
 }
@@ -35,14 +24,22 @@ function pageProducts(transport: Transport) {
 function serverProducts(transport: Transport) {
   return {
     casework: new CaseworkClient(transport),
-    documents: new DocumentsClient(transport),
+    documents: documentCommands(new DocumentsClient(transport)),
     evidence: new EvidenceClient(transport),
   }
 }
 
-/** The register's methods at the top level, and each installed product's client by name. */
-export type RegistryClient = RegisterClient & ReturnType<typeof pageProducts>
-export type RegistryServerClient = RegisterClient & ReturnType<typeof serverProducts>
+/** The Proposals helper, over the register client, under the service's author profile. */
+function taskHelpers(register: RegisterClient) {
+  return { proposals: proposalCommands(register, { accessProfile: "facility-correction-author" }) }
+}
+
+/**
+ * The register's methods at the top level, and each installed product's client by name.
+ * The Document Store client is `documentCommands` over it, which keeps its typed `call` and page methods.
+ */
+export type RegistryClient = RegisterClient & ReturnType<typeof pageProducts> & ReturnType<typeof taskHelpers>
+export type RegistryServerClient = RegisterClient & ReturnType<typeof serverProducts> & ReturnType<typeof taskHelpers>
 
 /**
  * The client for a page. It sends no `Authorization`, sends cookies to the page's own origin
@@ -52,7 +49,8 @@ export type RegistryServerClient = RegisterClient & ReturnType<typeof serverProd
 export function createRegistryClient(options: PageClientOptions): RegistryClient {
   if ('token' in options) throw new TypeError('A page client takes no token, so use createRegistryServerClient on a server.')
   const transport = new Transport(options)
-  return withTaskHelpers(new RegisterClient(transport), pageProducts(transport))
+  const register = new RegisterClient(transport)
+  return Object.assign(register, pageProducts(transport), taskHelpers(register))
 }
 
 /**
@@ -66,5 +64,6 @@ export function createRegistryServerClient(options: ServerClientOptions): Regist
   }
   if (typeof options.token !== 'function') throw new TypeError('A server client needs a token function.')
   const transport = new Transport(options)
-  return withTaskHelpers(new RegisterClient(transport), serverProducts(transport))
+  const register = new RegisterClient(transport)
+  return Object.assign(register, serverProducts(transport), taskHelpers(register))
 }

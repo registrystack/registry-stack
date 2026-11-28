@@ -338,8 +338,8 @@ DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
 # clients assume.
 TYPESCRIPT_CLIENT_INPUTS = (
     "clients/typescript/**",
-    "products/platform/scripts/check-client-contract.py",
-    "products/platform/scripts/test_check_client_contract.py",
+    "products/platform/scripts/check-client-assumptions.py",
+    "products/platform/scripts/test_check_client_assumptions.py",
     "products/casework/generated/registry-casework.openapi.json",
     "products/coordinator/generated/openapi/coordinator.openapi.json",
     "products/documents/generated/registry-documents.openapi.json",

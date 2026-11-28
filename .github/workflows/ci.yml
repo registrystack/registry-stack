@@ -4019,11 +4019,11 @@ jobs:
       - name: Install dependencies
         run: npm --prefix clients/typescript ci
 
-      - name: Test the client contract check
-        run: python3 -m unittest products/platform/scripts/test_check_client_contract.py
+      - name: Test the client assumptions check
+        run: python3 -m unittest products/platform/scripts/test_check_client_assumptions.py
 
       - name: Check the product documents against what the clients assume
-        run: python3 products/platform/scripts/check-client-contract.py
+        run: python3 products/platform/scripts/check-client-assumptions.py
 
       - name: Check generated clients
         run: npm --prefix clients/typescript run check:generated
