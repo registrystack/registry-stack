@@ -136,7 +136,7 @@ fn check_with_a_runtime_file_lists_each_explicit_production_setting_it_states() 
     let project = scratch.path().join(CANONICAL);
     let runtime = project.join("runtime.example.yaml");
     let source = std::fs::read_to_string(&runtime).expect("runtime example reads");
-    let anchor = "        allowedClients: unrestricted\n";
+    let anchor = "        allowedClients: [casework-client]\n";
     assert!(source.contains(anchor), "{source}");
     std::fs::write(
         &runtime,
