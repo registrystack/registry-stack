@@ -240,8 +240,7 @@ impl Docker {
         let output = self.run(&["info", "--format", "{{.ID}}"], None, COMMAND_DEADLINE)?;
         let id = output.trim();
         ensure!(
-            !id.is_empty()
-                && id.len() <= 128
+            id.len() <= 128
                 && id
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || b"-_:".contains(&byte)),
@@ -926,6 +925,13 @@ mod tests {
         let fake = Fake::new();
         fs::write(fake.state().join("daemon-id"), "fixture-daemon-2").unwrap();
         assert_eq!(fake.docker.daemon_id().unwrap(), "fixture-daemon-2");
+    }
+
+    #[test]
+    fn an_engine_can_report_an_unknown_daemon_id() {
+        let fake = Fake::new();
+        fs::write(fake.state().join("daemon-id"), "\n").unwrap();
+        assert!(fake.docker.daemon_id().unwrap().is_empty());
     }
 
     #[test]

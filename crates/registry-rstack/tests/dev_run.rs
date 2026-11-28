@@ -931,6 +931,13 @@ fn clean_removes_the_retained_state_of_an_ended_managed_run() {
     assert_eq!(report["status"], "stopped");
     assert_eq!(report["cleaned"], true);
     assert!(!project.exists() && !volume.exists());
+
+    let retry = clean();
+    assert!(retry.status.success(), "{retry:?}");
+    let report: serde_json::Value = serde_json::from_slice(&retry.stdout).unwrap();
+    assert_eq!(report["status"], "stopped");
+    assert_eq!(report["message"], "Nothing left to clean for this run ID.");
+    assert!(report.get("cleaned").is_none());
 }
 
 #[test]
@@ -2889,6 +2896,104 @@ fn a_casework_only_run_starts_reports_and_stops_without_breg() {
     let stopped: serde_json::Value = serde_json::from_slice(&stopped.stdout).unwrap();
     assert_eq!(stopped["status"], "stopped", "{stopped}");
     assert_eq!(live_runs(&state), Vec::<String>::new());
+}
+
+#[test]
+#[ignore = "requires the managed PostgreSQL Docker image and the BReg runtime"]
+fn managed_restart_adds_a_first_encrypted_field_and_keeps_records() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    copy_tree(&example_project("breg/examples/minimal"), &project);
+
+    let command = |arguments: &[&str]| {
+        let mut command = rstack_dev(&state, true);
+        command
+            .args(arguments)
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .env("RSTACK_BREG_BIN", host("breg"));
+        command
+    };
+    let start = || command(&["start", utf8(&project)]).output().unwrap();
+    let first = start();
+    assert!(first.status.success(), "{first:?}");
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let first_id = first["run_id"].as_str().unwrap();
+    let stopped = command(&["stop", first_id]).output().unwrap();
+    assert!(stopped.status.success(), "{stopped:?}");
+
+    // Leave the contact type and its rehearsal untouched. Add an optional
+    // encrypted field on a new type.
+    let registry = project.join("registry.yaml");
+    let source = fs::read_to_string(&registry).unwrap();
+    fs::write(
+        &registry,
+        source
+            .replace(
+                "\nactions:\n",
+                concat!(
+                    "\n  confidential-note:\n",
+                    "    route: confidential-notes\n",
+                    "    primaryDataset: directory\n",
+                    "    mutationMode: mutable\n",
+                    "    classification: restricted\n",
+                    "    display: {label: Confidential note}\n",
+                    "    fields:\n",
+                    "      - {id: note, type: string, maximumLength: 120, classification: restricted, encrypted: true}\n",
+                    "      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}\n",
+                    "\nactions:\n",
+                ),
+            )
+            .replace(
+                "      records:\n",
+                concat!(
+                    "      records:\n",
+                    "        - recordType: confidential-note\n",
+                    "          operations: [create, get]\n",
+                    "          readableFields: [note]\n",
+                    "          writableFields: [note, jurisdiction]\n",
+                    "          rowBoundaries:\n",
+                    "            - {field: jurisdiction, claim: jurisdiction, operator: equals}\n",
+                ),
+            ),
+    )
+    .unwrap();
+
+    let second = start();
+    let second_report: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    let mut read = None;
+    let clean_id = if second.status.success() {
+        let id = second_report["run_id"].as_str().unwrap();
+        let token = command(&["token", id, "--as", "editor"]).output().unwrap();
+        if token.status.success() {
+            let token: serde_json::Value = serde_json::from_slice(&token.stdout).unwrap();
+            let headers = token["credentials"][0]["header_file"].as_str().unwrap();
+            let url = second_report["products"]["breg"].as_str().unwrap();
+            read = Some(get_with_headers(
+                &format!("{url}/v1/records/contacts"),
+                headers,
+            ));
+        }
+        id
+    } else {
+        first_id
+    };
+    let cleaned = command(&["stop", clean_id, "--clean"]).output().unwrap();
+    assert!(cleaned.status.success(), "{cleaned:?}");
+
+    assert!(second.status.success(), "{second:?}");
+    assert_eq!(second_report["scenarios"][0]["result"], "skipped");
+    let (status, body) = read.expect("read kept records with the new run's token");
+    assert_eq!(status, 200);
+    assert!(body.contains("Example contact"));
+    assert!(second_report["createdKeptKeys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|path| {
+            path.as_str()
+                .is_some_and(|path| path.ends_with("/field-key"))
+        }));
 }
 
 #[test]

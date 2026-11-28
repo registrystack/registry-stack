@@ -13,42 +13,12 @@ use registry_thunderid_tooling::{
     task_connection, ToolingError,
 };
 use serde::Deserialize;
-use url::Url;
 use zeroize::Zeroizing;
+
+use super::grant_endpoint::{endpoint, refused};
 
 #[path = "../../src/grant_exchange.rs"]
 mod exchange;
-
-fn refused(reason: &'static str) -> ToolingError {
-    ToolingError::GrantAcquisition { reason }
-}
-
-fn endpoint(address: &str) -> Result<Url, ToolingError> {
-    let url = Url::parse(address).map_err(|_| refused("invalid numeric loopback HTTP endpoint"))?;
-    let host = address
-        .strip_prefix("http://")
-        .and_then(|rest| rest.split('/').next())
-        .and_then(|authority| {
-            authority
-                .strip_prefix("127.0.0.1:")
-                .or_else(|| authority.strip_prefix("[::1]:"))
-        });
-    if host.is_some_and(|port| {
-        !port.is_empty()
-            && port.bytes().all(|byte| byte.is_ascii_digit())
-            && port.parse::<u16>().is_ok_and(|port| port > 0)
-    }) && url.query().is_none()
-        && url.fragment().is_none()
-        && !address.contains('\\')
-        && !address.chars().any(char::is_whitespace)
-    {
-        Ok(url)
-    } else {
-        Err(refused(
-            "use a numeric loopback HTTP endpoint with an explicit port",
-        ))
-    }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -71,29 +41,6 @@ struct Client {
     assertion_key_ref: SecretReference,
     resource: String,
     scopes: Vec<String>,
-}
-
-fn validate_fixture_connection(
-    connection: &GrantConnection,
-    issuer: &str,
-) -> Result<(), ToolingError> {
-    endpoint(&connection.casework_url)
-        .map_err(|_| refused("set caseworkUrl to a numeric loopback HTTP endpoint with a port"))?;
-    let token_endpoint = endpoint(&connection.token_endpoint).map_err(|_| {
-        refused("set tokenEndpoint to a numeric loopback HTTP endpoint with a port")
-    })?;
-    let fixture = endpoint(issuer)?;
-    if token_endpoint.origin() != fixture.origin() {
-        return Err(refused(
-            "set tokenEndpoint to the fixture issuer's token endpoint",
-        ));
-    }
-    if connection.client_assertion_audience != issuer {
-        return Err(refused(
-            "set clientAssertionAudience to the exact fixture issuer",
-        ));
-    }
-    connection.validate()
 }
 
 pub(super) async fn acquire_header(
@@ -159,7 +106,13 @@ pub(super) async fn acquire_header(
         resource: registration.resource.clone(),
         scopes: registration.scopes.clone(),
     };
-    validate_fixture_connection(&connection, issuer)?;
+    super::grant_endpoint::validate(
+        &connection.casework_url,
+        &connection.token_endpoint,
+        &connection.client_assertion_audience,
+        issuer,
+    )?;
+    connection.validate()?;
     let key = input
         .secret_providers
         .resolver()?
@@ -204,34 +157,4 @@ pub(super) async fn acquire_header(
     file.as_file().sync_all()?;
     file.persist(&path).map_err(|error| error.error)?;
     Ok(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_remote_token_endpoints_and_other_assertion_audiences() {
-        let issuer = "http://127.0.0.1:8091";
-        let mut connection = GrantConnection {
-            casework_url: "http://127.0.0.1:8090".into(),
-            token_endpoint: format!("{issuer}/oauth2/token"),
-            client_assertion_audience: issuer.into(),
-            bootstrap_resource: "urn:registry:casework".into(),
-            resource: "urn:registry:breg".into(),
-            scopes: vec!["records:get".into()],
-        };
-        validate_fixture_connection(&connection, issuer).unwrap();
-        connection.token_endpoint = "https://issuer.example.invalid/oauth2/token".into();
-        assert!(validate_fixture_connection(&connection, issuer)
-            .unwrap_err()
-            .to_string()
-            .contains("tokenEndpoint"));
-        connection.token_endpoint = format!("{issuer}/oauth2/token");
-        connection.client_assertion_audience = "urn:other:issuer".into();
-        assert!(validate_fixture_connection(&connection, issuer)
-            .unwrap_err()
-            .to_string()
-            .contains("clientAssertionAudience"));
-    }
 }

@@ -5,6 +5,7 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs,
@@ -339,7 +340,7 @@ pub(super) struct ProductRunner<'a> {
     messaging_providers: Option<Value>,
     /// The runtime configuration the run wrote for each product.
     runtime_configs: BTreeMap<Product, PathBuf>,
-    retained_volume: bool,
+    created_kept_keys: RefCell<Vec<PathBuf>>,
 }
 
 impl<'a> ProductRunner<'a> {
@@ -372,21 +373,48 @@ impl<'a> ProductRunner<'a> {
             sinks: BTreeMap::new(),
             messaging_providers: None,
             runtime_configs: BTreeMap::new(),
-            retained_volume: false,
+            created_kept_keys: RefCell::default(),
         })
     }
 
-    pub(super) fn set_retained_volume(&mut self, retained: bool) {
-        self.retained_volume = retained;
+    pub(super) fn created_kept_keys(&self) -> std::cell::Ref<'_, Vec<PathBuf>> {
+        self.created_kept_keys.borrow()
     }
 
-    fn require_fresh_secret(&self, path: &Path) -> Result<()> {
-        ensure!(
-            !self.retained_volume,
-            "Retained key {} is missing. Start with --clean",
-            path.display()
-        );
-        Ok(())
+    /// Reserve no authority for a new key until its file and its marker are
+    /// both in owner-only project state, under the supervisor's project lock.
+    fn kept_key(
+        &self,
+        state: &Path,
+        name: &str,
+        create: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+        let path = state.join(name);
+        let marker = state.join(format!("kept-key-{name}"));
+        let recorded = super::read_private(&marker)?.is_some();
+        let existing = super::read_private(&path)?.map(zeroize::Zeroizing::new);
+        let created = existing.is_none();
+        let bytes = match existing {
+            Some(bytes) => bytes,
+            None => {
+                ensure!(
+                    !recorded,
+                    "Retained key {} is missing. Start with --clean",
+                    path.display()
+                );
+                create(&path)?;
+                super::read_private(&path)?
+                    .map(zeroize::Zeroizing::new)
+                    .context("key generation produced no key")?
+            }
+        };
+        if !recorded {
+            write_private(&marker, b"")?;
+        }
+        if created {
+            self.created_kept_keys.borrow_mut().push(path);
+        }
+        Ok(bytes)
     }
 
     /// Hands over the run issuer's listener to serve Evidence's key set.
@@ -964,23 +992,19 @@ impl<'a> ProductRunner<'a> {
         if !self.encrypts_fields() {
             return Ok(());
         }
-        let state = self.input.project_state(self.root);
-        let key = state.as_deref().unwrap_or(self.root).join(FIELD_KEY);
-        let mut bytes = super::read_private(&key)?.map(zeroize::Zeroizing::new);
-        if bytes.is_none() {
-            self.require_fresh_secret(&key)?;
+        let generate = |path: &Path| {
             self.tool(
                 Product::Breg,
                 "field-encryption",
-                &["keygen".as_ref(), "--output".as_ref(), key.as_os_str()],
-            )?;
-        }
-        if state.is_some() {
-            if bytes.is_none() {
-                bytes = super::read_private(&key)?.map(zeroize::Zeroizing::new);
-            }
-            let bytes = bytes.context("field encryption key generation produced no key")?;
-            write_private(&self.root.join(FIELD_KEY), &bytes)?;
+                &["keygen".as_ref(), "--output".as_ref(), path.as_os_str()],
+            )
+        };
+        let key = self.root.join(FIELD_KEY);
+        if let Some(state) = self.input.project_state(self.root) {
+            let bytes = self.kept_key(&state, FIELD_KEY, generate)?;
+            write_private(&key, &bytes)?;
+        } else if super::read_private(&key)?.is_none() {
+            generate(&key)?;
         }
         Ok(())
     }
@@ -1673,15 +1697,7 @@ impl<'a> ProductRunner<'a> {
         let Some(state) = self.product_state(product) else {
             return self.secret(name, fresh);
         };
-        let file = state.join(name);
-        let bytes = match super::read_private(&file)? {
-            Some(bytes) => zeroize::Zeroizing::new(bytes),
-            None => {
-                self.require_fresh_secret(&file)?;
-                write_private(&file, fresh)?;
-                return self.secret(name, fresh);
-            }
-        };
+        let bytes = self.kept_key(&state, name, |path| write_private(path, fresh))?;
         self.secret(name, &bytes)
     }
 
@@ -5606,6 +5622,37 @@ printf '%s' '{"ok":true,"explanation":{"deliveries":[{"destinationId":"declared"
     }
 
     #[test]
+    fn a_kept_project_can_add_a_key_and_refuses_its_later_loss() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        super::super::private_directory(&root).unwrap();
+        let mut input = breg_input(false);
+        input.project_key = Some("project".into());
+        let input = Arc::new(input);
+        let state = input.project_state(&root).unwrap();
+        super::super::private_directory(&state).unwrap();
+        let terminate = AtomicBool::new(false);
+        let runner = ProductRunner::new(input.clone(), &root, &terminate).unwrap();
+        let name = "breg-hook-new-key";
+        runner.retained_secret("breg", name, b"first").unwrap();
+        assert_eq!(runner.created_kept_keys().as_slice(), &[state.join(name)]);
+        drop(runner);
+
+        let restarted = ProductRunner::new(input, &root, &terminate).unwrap();
+        restarted.retained_secret("breg", name, b"second").unwrap();
+        assert!(restarted.created_kept_keys().is_empty());
+        let path = state.join(name);
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        fs::remove_file(&path).unwrap();
+        let error = restarted
+            .retained_secret("breg", name, b"third")
+            .unwrap_err();
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(error.to_string().contains("--clean"));
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn retained_runs_refuse_missing_field_and_audit_keys_at_their_paths() {
         let scratch = tempfile::tempdir().unwrap();
         let root = scratch.path().join("run");
@@ -5615,8 +5662,15 @@ printf '%s' '{"ok":true,"explanation":{"deliveries":[{"destinationId":"declared"
         let state = input.project_state(&root).unwrap();
         super::super::private_directory(&state).unwrap();
         let terminate = AtomicBool::new(false);
-        let mut runner = ProductRunner::new(Arc::new(input), &root, &terminate).unwrap();
-        runner.set_retained_volume(true);
+        let runner = ProductRunner::new(Arc::new(input), &root, &terminate).unwrap();
+        for name in [FIELD_KEY, "breg-audit-key"] {
+            let path = state.join(name);
+            write_private(&path, b"test").unwrap();
+            runner
+                .kept_key(&state, name, |_| panic!("existing key"))
+                .unwrap();
+            fs::remove_file(&path).unwrap();
+        }
         let field = runner.write_field_key().unwrap_err().to_string();
         let audit = runner
             .retained_secret("breg", "breg-audit-key", b"test")

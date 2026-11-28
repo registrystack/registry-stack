@@ -17,6 +17,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[path = "journey-fixture/grant.rs"]
 mod grant;
 
+#[cfg(any(feature = "session", test))]
+#[path = "journey-fixture/grant_endpoint.rs"]
+mod grant_endpoint;
+
 #[cfg(feature = "session")]
 mod fixture {
     use std::{
