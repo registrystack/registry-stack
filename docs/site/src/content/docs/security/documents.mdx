@@ -121,9 +121,10 @@ approve finalized versions with `contentVerification: {type: disabled}`.
 Loopback HTTP storage, verifier and hook URLs are valid in either posture.
 A development hook capture includes `"posture":"development"` inside the signed canonical body.
 The shared Standard Webhooks verifier refuses that mark with `development-peer`.
-A replay sends the captured bytes, so envelopes stored before the mark was introduced retain their original form.
+The production worker dead-letters a retained development-marked envelope with `payload-refused` before signing or sending it. A development worker can send the same captured bytes. Envelopes stored before the mark was introduced retain their original form.
 
 {/* Evidence: crates/registry-documents/tests/postgres_hooks.rs
+    production_restart_dead_letters_a_development_capture_without_sending,
     a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection,
     a_failing_destination_is_retried_then_dead_lettered_without_touching_the_transition;
     crates/registry-platform-hooks/src/receiver.rs

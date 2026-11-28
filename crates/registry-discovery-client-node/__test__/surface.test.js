@@ -131,7 +131,7 @@ function acceptsExpectedEvidence(candidate) {
     && resolution.mappingAuthorityId === expectedResolution.mappingAuthorityId;
 }
 
-test('search, resolve, and inert exact selection accept a development peer', async () => {
+test('search, resolve, and inert exact selection accept a development peer only with opt-in', async (t) => {
   const server = http.createServer((request, response) => {
     response.setHeader('registry-posture', 'development');
     response.setHeader('content-type', 'application/json');
@@ -162,8 +162,16 @@ test('search, resolve, and inert exact selection accept a development peer', asy
     response.end();
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  const client = new DiscoveryClient(`http://127.0.0.1:${address.port}/`);
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${server.address().port}/`;
+  for (const options of [baseUrl, { baseUrl }, { baseUrl, allowDevelopmentPeer: false }]) {
+    const safeClient = new DiscoveryClient(options);
+    await assert.rejects(
+      safeClient.searchEvidenceServices({ evidenceTypeId: 'urn:example:evidence-type' }),
+      (error) => error.kind === 'development-peer',
+    );
+  }
+  const client = new DiscoveryClient({ baseUrl, allowDevelopmentPeer: true });
 
   const found = await client.searchEvidenceServices({
     evidenceTypeId: 'urn:example:evidence-type',
@@ -194,7 +202,6 @@ test('search, resolve, and inert exact selection accept a development peer', asy
   );
   assert.equal(validateSelectionStructure(selection).recordId, 'record-a');
 
-  await new Promise((resolve) => server.close(resolve));
   assert.equal(JSON.parse(JSON.stringify(selection)).recordId, 'record-a');
 });
 

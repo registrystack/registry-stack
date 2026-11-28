@@ -25,6 +25,8 @@ pub enum StartupError {
     /// the fix and never carry a configured value.
     #[error("the Discovery runtime configuration was refused:\n{0}")]
     RuntimeRefused(String),
+    #[error("{}", .0.render_human())]
+    PackageRootLookup(Box<registry_platform_yaml::Diagnostic>),
     #[error("the Discovery runtime configuration is invalid")]
     RuntimeInvalid,
     #[error("{0}")]

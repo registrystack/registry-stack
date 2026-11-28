@@ -51,6 +51,7 @@ pub(super) fn webhook_challenge() -> Value {
 
 fn event_path(paths: &mut Map<String, Value>) {
     let mut responses = problem_responses(&[
+        P::EventDevelopmentPeer,
         P::EventInvalid,
         P::EventUnauthenticated,
         P::EventTooLarge,

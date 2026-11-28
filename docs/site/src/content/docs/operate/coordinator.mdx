@@ -683,7 +683,7 @@ A cache miss still waits for that scan, so the cache bounds frequency rather tha
 Startup, explicit deployment status, admissions, and worker transactions keep their fresh authoritative checks.
 Keep health endpoints on the private service listener, and pass a token by file path, never by value.
 Before a typed remote mutation, the CLI sends an unauthenticated `GET /v1/doctor` to the `--url` origin to check the response's posture.
-Forward this request through the same proxy routes as the mutation. The probe needs no access to the health endpoints.
+Forward the probe to the same Coordinator backend as the mutation and preserve its status and `Registry-Posture` response header. The probe accepts the doctor's HTTP 401 credential challenge or HTTP 200 success response. Production answers omit `Registry-Posture`, and a production CLI refuses a development-marked answer. The probe uses the API route and needs no access to the health endpoints.
 If the mutation's response declares development and you ran the command in production posture, inspect the run before repeating the command.
 
 In the doctor report:
@@ -712,6 +712,8 @@ Doctor carries no personal labels or payload values.
 Each surface names a refusal in its own vocabulary.
 The service's standard error carries the raw code: `store-unavailable` while the database is unreachable, `deployment.refused` or `state-key-custody` when the service stops, and `live-binding-conflict` when startup finds a live run's binding changed.
 `coordinatorctl` prefixes its codes with `coordinator.`, as in `coordinator.deployment.refused`, `coordinator.deployment.workflow-unlisted`, `coordinator.deployment.workflow-live-runs`, `coordinator.command.state-key-custody`, `coordinator.command.live-binding-conflict`, and `coordinator.command.development-peer`, which a typed command raises when it runs as production and the service answers as development.
+Probe refusals point to `--url`. `coordinator.command.service-unavailable` means the probe failed to receive an answer or received an unexpected status. `coordinator.command.probe-posture-invalid` means the posture header was malformed or repeated.
+
 HTTP answers carry RFC 9457 problem documents; the ones an operator acts on are:
 
 | Code | Status | What to do |

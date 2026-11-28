@@ -51,6 +51,7 @@ pub const DEFINITION_REFUSED_PROBLEM: &str = "definition.refused";
 pub const DEPLOYMENT_ACTIVATION_CHANGED_PROBLEM: &str = "deployment.activation-changed";
 pub const DEPLOYMENT_REFUSED_PROBLEM: &str = "deployment.refused";
 pub const EVALUATION_UNCERTAIN_PROBLEM: &str = "evaluation.uncertain";
+pub const EVENT_DEVELOPMENT_PEER_PROBLEM: &str = "event.development-peer";
 pub const EVENT_INVALID_PROBLEM: &str = "event.invalid";
 pub const EVENT_TOO_LARGE_PROBLEM: &str = "event.too-large";
 pub const EVENT_UNAUTHENTICATED_PROBLEM: &str = "event.unauthenticated";
@@ -100,6 +101,7 @@ pub enum ProblemCode {
     DeploymentActivationChanged,
     DeploymentRefused,
     EvaluationUncertain,
+    EventDevelopmentPeer,
     EventInvalid,
     EventTooLarge,
     EventUnauthenticated,
@@ -150,6 +152,7 @@ impl ProblemCode {
         Self::DeploymentActivationChanged,
         Self::DeploymentRefused,
         Self::EvaluationUncertain,
+        Self::EventDevelopmentPeer,
         Self::EventInvalid,
         Self::EventTooLarge,
         Self::EventUnauthenticated,
@@ -200,6 +203,7 @@ impl ProblemCode {
             Self::DeploymentActivationChanged => DEPLOYMENT_ACTIVATION_CHANGED_PROBLEM,
             Self::DeploymentRefused => DEPLOYMENT_REFUSED_PROBLEM,
             Self::EvaluationUncertain => EVALUATION_UNCERTAIN_PROBLEM,
+            Self::EventDevelopmentPeer => EVENT_DEVELOPMENT_PEER_PROBLEM,
             Self::EventInvalid => EVENT_INVALID_PROBLEM,
             Self::EventTooLarge => EVENT_TOO_LARGE_PROBLEM,
             Self::EventUnauthenticated => EVENT_UNAUTHENTICATED_PROBLEM,
@@ -252,7 +256,8 @@ impl ProblemCode {
     #[must_use]
     pub const fn http_status(self) -> u16 {
         match self {
-            Self::EventInvalid
+            Self::EventDevelopmentPeer
+            | Self::EventInvalid
             | Self::IdempotencyKeyInvalid
             | Self::InputInvalid
             | Self::RequestInvalid
@@ -311,6 +316,7 @@ impl ProblemCode {
             Self::DeploymentActivationChanged => "Active packages changed",
             Self::DeploymentRefused => "Deployment not serving",
             Self::EvaluationUncertain => "Evaluation outcome uncertain",
+            Self::EventDevelopmentPeer => "Development event refused",
             Self::EventInvalid => "Event contract refused",
             Self::EventTooLarge => "Event too large",
             Self::EventUnauthenticated => "Event authentication refused",
@@ -383,6 +389,7 @@ impl ProblemCode {
             Self::EvaluationUncertain => {
                 "An evaluation may have completed at its provider, so the run is never evaluated again."
             }
+            Self::EventDevelopmentPeer => "A production Coordinator refuses development-marked events.",
             Self::EventInvalid => "The signed event must satisfy the accepted canonical envelope and typed event contract.",
             Self::EventTooLarge => "The signed event exceeds the event value profile: 131072 canonical bytes, 32 levels of nesting, 4096 values, 256 items per array, 256 members per object, and 16384 bytes per string. Have the producer project fewer or smaller fields into the event.",
             Self::EventUnauthenticated => "Send a fresh signed delivery from the exact configured source to its accepted trigger.",
@@ -489,6 +496,7 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "request.body-too-large" => ProblemCode::RequestBodyTooLarge,
         "request.content-type-invalid" => ProblemCode::RequestUnsupportedMediaType,
         "list-limit-invalid" => ProblemCode::RequestLimitOutOfRange,
+        "event-development-peer" => ProblemCode::EventDevelopmentPeer,
         "event-invalid" => ProblemCode::EventInvalid,
         "event-too-large" => ProblemCode::EventTooLarge,
         "event-unauthenticated" => ProblemCode::EventUnauthenticated,
@@ -723,7 +731,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 45);
+        assert_eq!(ProblemCode::ALL.len(), 46);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -731,6 +739,11 @@ mod tests {
         assert_eq!(ProblemCode::from_code("run-absent"), None);
         assert_eq!(ProblemCode::from_code(""), None);
         for (internal, public, status) in [
+            (
+                "event-development-peer",
+                ProblemCode::EventDevelopmentPeer,
+                400,
+            ),
             ("event-invalid", ProblemCode::EventInvalid, 400),
             (
                 "event-unauthenticated",

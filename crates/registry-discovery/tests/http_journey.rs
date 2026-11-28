@@ -197,6 +197,34 @@ fn executable_logs_the_source_of_each_posture_declaration() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn startup_reports_package_root_lookup_failure() {
+    let (temporary, runtime) = packaged_runtime(&index());
+    let root = temporary.path().join("package-loop");
+    std::os::unix::fs::symlink(&root, &root).unwrap();
+    let text = fs::read_to_string(&runtime).unwrap();
+    let text = text
+        .lines()
+        .map(|line| {
+            if line.starts_with("  root:") {
+                format!("  root: {}", root.display())
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&runtime, text).unwrap();
+    let Err(registry_discovery::StartupError::PackageRootLookup(diagnostic)) =
+        prepare(&runtime, PRODUCTION)
+    else {
+        panic!("startup must return a typed diagnostic for the package root lookup");
+    };
+    assert_eq!(diagnostic.code, "discovery.runtime.package-refused");
+    assert_eq!(diagnostic.path, "/package/root");
+}
+
 #[tokio::test]
 async fn production_refuses_loopback_package_urls() {
     let mut index = index();

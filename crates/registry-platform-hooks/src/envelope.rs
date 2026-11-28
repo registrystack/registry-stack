@@ -370,21 +370,19 @@ impl HookEnvelope {
         bytes: &[u8],
         limits: &EnvelopeLimits,
     ) -> Result<Self, HookEnvelopeError> {
+        Self::from_canonical_bytes_with_posture(bytes, limits, false)
+    }
+
+    pub(crate) fn from_canonical_bytes_with_posture(
+        bytes: &[u8],
+        limits: &EnvelopeLimits,
+        allow_development: bool,
+    ) -> Result<Self, HookEnvelopeError> {
         let (envelope, development) = Self::decode_canonical_bytes(bytes, limits)?;
-        if development {
+        if development && !allow_development {
             return Err(HookEnvelopeError::DevelopmentPeer);
         }
         Ok(envelope)
-    }
-
-    /// Validate the shape of bytes already captured for delivery. The worker
-    /// signs and sends those stored bytes, including any original mark.
-    #[cfg(feature = "postgres")]
-    pub(crate) fn from_stored_canonical_bytes(
-        bytes: &[u8],
-        limits: &EnvelopeLimits,
-    ) -> Result<Self, HookEnvelopeError> {
-        Self::decode_canonical_bytes(bytes, limits).map(|(envelope, _)| envelope)
     }
 
     fn decode_canonical_bytes(

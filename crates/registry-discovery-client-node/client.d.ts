@@ -2,6 +2,7 @@ export type ServiceKind = 'evidence';
 
 export interface DiscoveryClientOptions {
   baseUrl: string;
+  allowDevelopmentPeer?: boolean;
   attemptTimeoutMilliseconds?: number;
   connectTimeoutMilliseconds?: number;
   maximumResponseBytes?: number;

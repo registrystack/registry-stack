@@ -842,6 +842,7 @@ pub fn check_runtime(path: &Path, substitute: bool, audit_root: Option<&Path>) -
 /// names a seal the runtime does not bind is an error, and a runtime seal no
 /// document type names is a warning, each placed in the runtime file. With no
 /// `signing` block, a manifest that names seals requires development posture.
+/// When no manifest is supplied, verify the configured package.
 #[must_use]
 pub fn check_runtime_with_bundle(
     path: &Path,
@@ -850,8 +851,27 @@ pub fn check_runtime_with_bundle(
     manifest: Option<&Manifest>,
     declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    let package = CheckPackage::Explicit(manifest);
+    let package = manifest.map_or(CheckPackage::Configured, |manifest| {
+        CheckPackage::Explicit(Some(manifest))
+    });
     check_runtime_package(path, substitute, audit_root, package, declared)
+}
+
+/// Check the runtime configuration without reading or validating its package.
+#[must_use]
+pub fn check_runtime_only(
+    path: &Path,
+    substitute: bool,
+    audit_root: Option<&Path>,
+    declared: DeclaredPosture,
+) -> RuntimeCheck {
+    check_runtime_package(
+        path,
+        substitute,
+        audit_root,
+        CheckPackage::Explicit(None),
+        declared,
+    )
 }
 
 pub(crate) enum CheckPackage<'a> {

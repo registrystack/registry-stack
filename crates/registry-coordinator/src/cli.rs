@@ -645,7 +645,8 @@ fn validate_coordinator_peer(
     peer_policy: PeerPolicy,
     mutation_sent: bool,
 ) -> Result<()> {
-    validate_response_headers(response.headers(), peer_policy).map_err(|error| match error {
+    validate_response_headers(response.headers(), peer_policy).map_err(|error| {
+        let mut refusal = match error {
         ResponseHeaderError::DevelopmentPeer if mutation_sent => CoordinatorError::new(
             "development-peer",
             "The development Coordinator may already have applied the request.",
@@ -661,7 +662,17 @@ fn validate_coordinator_peer(
             "the service response headers exceeded their bounds",
         )
         .suggest("Check that --url names the Coordinator service origin."),
+        };
+        refusal.field = Some("/--url".into());
+        refusal
     })
+}
+
+fn probe_refusal(code: &'static str, message: &'static str) -> CoordinatorError {
+    let mut refusal = CoordinatorError::new(code, message)
+        .suggest("Check that --url reaches the Coordinator API and the proxy preserves the response from /v1/doctor.");
+    refusal.field = Some("/--url".into());
+    refusal
 }
 
 async fn remote(
@@ -729,23 +740,32 @@ async fn remote(
         let mut probe = url.clone();
         probe.set_path("/v1/doctor");
         let response = client.get(probe).send().await.map_err(|_| {
-            CoordinatorError::new(
+            probe_refusal(
                 "service-unavailable",
                 "the Coordinator API posture probe could not answer",
             )
-            .suggest("Check that --url reaches the running Coordinator API.")
         })?;
+        let mut marks = response.headers().get_all("registry-posture").iter();
+        if marks
+            .next()
+            .is_some_and(|mark| mark != "production" && mark != "development")
+            || marks.next().is_some()
+        {
+            return Err(probe_refusal(
+                "probe-posture-invalid",
+                "the Coordinator API posture probe returned a malformed or repeated Registry-Posture header",
+            ));
+        }
         validate_coordinator_peer(&response, peer_policy, false)?;
-        if peer_policy == PeerPolicy::RefuseDevelopmentPeer {
-            let marks = response.headers().get_all("registry-posture");
-            let mut marks = marks.iter();
-            if marks.next().is_some_and(|mark| mark != "production") || marks.next().is_some() {
-                return Err(CoordinatorError::new(
-                    "service-unavailable",
-                    "the Coordinator API posture probe returned a malformed Registry-Posture header",
-                )
-                .suggest("Check the Coordinator and proxy response headers on /v1/doctor."));
-            }
+        // The doctor handler answers 200 on success and 401 without a bearer token.
+        if !matches!(
+            response.status(),
+            reqwest::StatusCode::OK | reqwest::StatusCode::UNAUTHORIZED
+        ) {
+            return Err(probe_refusal(
+                "service-unavailable",
+                "the Coordinator API posture probe returned an unexpected status",
+            ));
         }
     }
     url.set_path(path.split('?').next().unwrap_or(path));
@@ -862,6 +882,7 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         ProblemCode::RetryRefused => "Inspect the run: retry-same applies only to held work before its original deadline; cancel the run when no further execution is appropriate.",
         ProblemCode::RunDefinitionIncompatible => "This service's Coordinator version cannot interpret the run's pinned definition, so it holds the run and refuses to retry, reconcile or cancel it; only a Coordinator release that accepts that definition can.",
         ProblemCode::ReceiptExpired => "Consult the receiving product's own records for the original command rather than inferring it was not sent, and cancel the run when no further execution is appropriate.",
+        ProblemCode::EventDevelopmentPeer => "Deliver production events to a production Coordinator, or use a development Coordinator for development events.",
         ProblemCode::EventInvalid => "Correct the producer event contract or the reviewed trigger's event schema and input mapping before retrying delivery.",
         ProblemCode::EventTooLarge => "Project fewer or smaller fields into the producer's event so it fits the 131072-byte event value profile, then redeliver it.",
         ProblemCode::EventUnauthenticated => "Sign the webhook ID, timestamp and exact body with the key configured for this trigger URL, within 300 seconds.",

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Production event intake refuses signed development envelopes with `event.development-peer` at `/posture`. Development intake accepts these envelopes after signature verification. An invalid signature returns `event.unauthenticated` in either posture.
+
+- Typed remote mutations require an unauthenticated doctor response with HTTP 401 or 200 and a valid posture header if present. Probe refusals point to `--url`, with `coordinator.command.probe-posture-invalid` for malformed or repeated headers.
+
 - Start a local development run from the starter with `rstack dev start`.
 - Typed remote mutations probe the Coordinator API through an unauthenticated `GET /v1/doctor`. Production commands refuse a development or malformed posture mark before sending the mutation.
 

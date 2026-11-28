@@ -24,10 +24,13 @@ declare function adopterChooseRecord(items: ServiceRecord[]): ServiceRecord;
 async function useDiscoveryClient(): Promise<void> {
   const client = new DiscoveryClient({
     baseUrl: 'https://discovery.example.invalid/',
+    allowDevelopmentPeer: true,
     attemptTimeoutMilliseconds: 1500,
     maximumResponseBytes: 1500,
     trustedRootCertificates: '-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----',
   });
+  // @ts-expect-error the development opt-in takes a boolean
+  new DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/', allowDevelopmentPeer: 'true' });
   // @ts-expect-error trust roots are PEM text, not binary data
   new DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/', trustedRootCertificates: Buffer.from('certificate') });
   // @ts-expect-error null is not an omission in JavaScript configuration

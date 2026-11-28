@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The library checks verify a configured package. Use `check_runtime_only` to check a runtime file without inspecting its package.
+
 - Start a local development run from the starter with `rstack dev start`.
 
 - BREAKING: An undeclared posture is production. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
