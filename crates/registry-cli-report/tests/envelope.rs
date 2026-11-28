@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_cli_report::{json_requested, Report, Status};
+use registry_cli_report::{json_requested, ExplicitSettingLine, Report, Status};
 use registry_platform_posture::{DeclaredPosture, Posture, PostureSource};
 use serde_json::{json, Value};
 
@@ -166,4 +166,112 @@ fn the_declared_posture_replaces_a_command_member_of_the_same_name() {
         report["posture"],
         json!({"value": "development", "source": "flag"})
     );
+}
+
+fn explicit_line(pointer: &str, line: Option<usize>) -> ExplicitSettingLine {
+    ExplicitSettingLine {
+        code: "platform.posture.jwt-access-token".to_owned(),
+        file: None,
+        pointer: Some(pointer.to_owned()),
+        line,
+        column: line.map(|_| 7),
+        summary: "admits access tokens typed JWT. ID tokens stay refused".to_owned(),
+    }
+}
+
+#[test]
+fn explicit_settings_follow_the_posture_as_their_own_list_and_never_as_a_diagnostic() {
+    let value = members();
+    let report = Report::new(&value, "1.0.0-dev")
+        .unwrap()
+        .with_posture(declared(Posture::Production, PostureSource::Default))
+        .explicit_settings(vec![
+            explicit_line(
+                "/authentication/oidc/issuers/staff/accessTokenType",
+                Some(12),
+            ),
+            explicit_line(
+                "/authentication/oidc/issuers/partners/accessTokenType",
+                None,
+            ),
+        ]);
+    let rendered = serde_json::to_value(&report).unwrap();
+    assert_eq!(rendered["diagnostics"], json!([]));
+    assert_eq!(
+        rendered["explicitProductionSettings"],
+        json!([
+            {
+                "code": "platform.posture.jwt-access-token",
+                "pointer": "/authentication/oidc/issuers/staff/accessTokenType",
+                "line": 12,
+                "column": 7,
+                "summary": "admits access tokens typed JWT. ID tokens stay refused"
+            },
+            {
+                "code": "platform.posture.jwt-access-token",
+                "pointer": "/authentication/oidc/issuers/partners/accessTokenType",
+                "summary": "admits access tokens typed JWT. ID tokens stay refused"
+            }
+        ])
+    );
+    let text = serde_json::to_string(&report).unwrap();
+    let posture = text.find(r#""posture""#).unwrap();
+    let explicit = text.find(r#""explicitProductionSettings""#).unwrap();
+    let diagnostics = text.find(r#""diagnostics""#).unwrap();
+    assert!(posture < explicit && explicit < diagnostics, "{text}");
+}
+
+#[test]
+fn an_explicit_setting_line_names_its_file_and_leaves_out_an_unknown_pointer() {
+    let value = members();
+    let report = Report::new(&value, "1.0.0-dev")
+        .unwrap()
+        .explicit_settings(vec![
+            ExplicitSettingLine {
+                file: Some("package/registry.yaml".to_owned()),
+                ..explicit_line("/oidc/issuers/staff/accessTokenType", Some(4))
+            },
+            ExplicitSettingLine {
+                pointer: None,
+                ..explicit_line("", None)
+            },
+        ]);
+    let rendered = serde_json::to_value(&report).unwrap();
+    assert_eq!(
+        rendered["explicitProductionSettings"],
+        json!([
+            {
+                "code": "platform.posture.jwt-access-token",
+                "file": "package/registry.yaml",
+                "pointer": "/oidc/issuers/staff/accessTokenType",
+                "line": 4,
+                "column": 7,
+                "summary": "admits access tokens typed JWT. ID tokens stay refused"
+            },
+            {
+                "code": "platform.posture.jwt-access-token",
+                "summary": "admits access tokens typed JWT. ID tokens stay refused"
+            }
+        ])
+    );
+}
+
+#[test]
+fn a_report_that_names_no_explicit_list_is_unchanged() {
+    let value = members();
+    let rendered = serde_json::to_string(&Report::new(&value, "1.0.0-dev").unwrap()).unwrap();
+    assert!(
+        !rendered.contains("explicitProductionSettings"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn an_empty_explicit_list_is_written_so_a_reader_can_tell_none_from_unreported() {
+    let value = members();
+    let report = Report::new(&value, "1.0.0-dev")
+        .unwrap()
+        .explicit_settings(Vec::new());
+    let rendered = serde_json::to_value(&report).unwrap();
+    assert_eq!(rendered["explicitProductionSettings"], json!([]));
 }

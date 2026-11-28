@@ -7868,6 +7868,7 @@ dependencies = [
 name = "registry-platform-config"
 version = "0.49.0"
 dependencies = [
+ "registry-cli-report",
  "registry-platform-canonical-json",
  "registry-platform-loopback",
  "registry-platform-posture",
@@ -7965,6 +7966,7 @@ version = "0.49.0"
 dependencies = [
  "axum",
  "http",
+ "http-body",
  "registry-platform-authcommon",
  "registry-platform-loopback",
  "registry-platform-posture",
@@ -7974,6 +7976,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http 0.7.1",
+ "tracing",
  "ulid",
 ]
 

@@ -31,7 +31,8 @@ mod token_fixtures;
 pub use token_fixtures::{
     Against, Basis, BindTarget, Binding, ClaimValue, Comparison, Configuration, Expectations,
     ExpectedCell, ExpectedRow, FixtureCase, FixtureClass, FixtureHeader, Outcome, ProductReport,
-    RowReport, SignedToken, Stage, TokenCorpus, TokenFixture, TokenFixtureError, TokenSigner,
+    RowConfiguration, RowReport, SignedToken, Stage, TokenCorpus, TokenFixture, TokenFixtureError,
+    TokenSigner,
 };
 
 #[cfg(feature = "postgres-catalog")]

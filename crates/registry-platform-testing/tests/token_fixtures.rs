@@ -7,9 +7,10 @@
 use std::collections::BTreeSet;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_platform_oidc::ActorKind;
 use registry_platform_testing::{
-    Against, Binding, Comparison, Configuration, ExpectedCell, FixtureClass, Outcome, Stage,
-    TokenCorpus, TokenFixture, TokenSigner,
+    Against, Binding, Comparison, Configuration, ExpectedCell, FixtureClass, Outcome,
+    RowConfiguration, Stage, TokenCorpus, TokenFixture, TokenSigner,
 };
 use serde_json::{json, Value};
 
@@ -291,7 +292,7 @@ fn every_fixture_has_a_row_and_no_row_repeats() {
     for fixture in corpus.fixtures() {
         assert!(with_row.contains(fixture.id.as_str()), "{}", fixture.id);
     }
-    let keys: BTreeSet<(String, Against, Configuration)> = rows
+    let keys: BTreeSet<(String, Against, RowConfiguration)> = rows
         .iter()
         .map(|r| (r.fixture.clone(), r.against, r.configuration))
         .collect();
@@ -555,7 +556,8 @@ fn the_driver_compares_against_main_unless_the_cell_has_landed() {
                 .find(|row| {
                     row.fixture == case.fixture.id
                         && row.against == case.against
-                        && row.configuration == case.configuration
+                        && row.configuration.block() == case.configuration
+                        && row.configuration.declared_kind(&case.fixture) == case.declared_kind
                 })
                 .expect("row exists");
             row.products["casework"].expected().clone()
@@ -600,6 +602,50 @@ fn a_literal_audience_is_the_configured_audience_only_for_a_positive_recipe_row(
 }
 
 #[test]
+fn a_declared_kind_row_is_the_recipe_block_with_the_fixture_s_subject_kind_declared() {
+    let corpus = corpus();
+    let rows: Vec<_> = corpus
+        .expectations()
+        .rows
+        .iter()
+        .filter(|row| row.configuration == RowConfiguration::RecipeDeclaredKind)
+        .collect();
+    assert!(!rows.is_empty());
+    for row in rows {
+        let fixture = corpus.fixture(&row.fixture).expect("exists");
+        let expected = match fixture.subject_kind.as_str() {
+            "user" => ActorKind::Human,
+            "service" => ActorKind::Service,
+            other => panic!("{}: subject kind {other}", row.fixture),
+        };
+        assert_eq!(row.configuration.block(), Configuration::Recipe);
+        assert_eq!(
+            row.configuration.declared_kind(fixture),
+            Some(expected),
+            "{}",
+            row.fixture
+        );
+    }
+    let identity_only = corpus.fixture("identity-only").expect("exists");
+    for configuration in [
+        RowConfiguration::Default,
+        RowConfiguration::Recipe,
+        RowConfiguration::JwtAccepted,
+    ] {
+        assert_eq!(configuration.declared_kind(identity_only), None);
+    }
+    let unspecified = TokenFixture::parse(
+        "unit-fixture",
+        &minimal_fixture(json!({ "subjectKind": "unspecified" })),
+    )
+    .expect("parses");
+    assert_eq!(
+        RowConfiguration::RecipeDeclaredKind.declared_kind(&unspecified),
+        None
+    );
+}
+
+#[test]
 fn the_driver_refuses_an_unknown_product() {
     let corpus = corpus();
     let signer = TokenSigner::new();
@@ -618,6 +664,7 @@ fn outcomes_parse_and_print_the_values_expected_yaml_uses() {
         "admitted/unspecified",
         "refused/token-type",
         "refused/claims",
+        "refused/actor-kind",
         "none",
         "n-a",
         "unknown",
@@ -627,6 +674,19 @@ fn outcomes_parse_and_print_the_values_expected_yaml_uses() {
     }
     for text in ["refused", "refused/nowhere", "admitted/", "yes", ""] {
         assert!(text.parse::<Outcome>().is_err(), "`{text}`");
+    }
+}
+
+#[test]
+fn the_caller_contract_refusals_name_their_stage() {
+    use registry_platform_oidc::OidcError;
+    for (error, stage) in [
+        (OidcError::IdTokenPresented, "refused/token-type"),
+        (OidcError::IssuerNotConfigured, "refused/issuer"),
+        (OidcError::ActorKindConflict, "refused/actor-kind"),
+        (OidcError::IdentityOnly, "refused/actor-kind"),
+    ] {
+        assert_eq!(Outcome::refused_by(&error).to_string(), stage, "{error:?}");
     }
 }
 

@@ -967,7 +967,7 @@ fn allowed_clients_refused<E: serde::de::Error>() -> E {
 // shared-block drift check compares by name.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(untagged))]
-enum OidcAllowedClients {
+pub(crate) enum OidcAllowedClients {
     /// Admit a token from every client the issuer verifies.
     Unrestricted(UnrestrictedClients),
     /// Admit a token only from a listed client.
@@ -977,7 +977,7 @@ enum OidcAllowedClients {
 registry_platform_yaml::shape_union!(OidcAllowedClients { scalar => Unrestricted, list => Listed });
 
 /// The keyword `unrestricted`.
-struct UnrestrictedClients;
+pub(crate) struct UnrestrictedClients;
 
 impl<'de> Deserialize<'de> for UnrestrictedClients {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -1005,7 +1005,7 @@ impl schemars::JsonSchema for UnrestrictedClients {
 }
 
 /// At least one client, none repeated (CFG-ID-6).
-struct ListedClients(Vec<String>);
+pub(crate) struct ListedClients(pub(crate) Vec<String>);
 
 impl<'de> Deserialize<'de> for ListedClients {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {

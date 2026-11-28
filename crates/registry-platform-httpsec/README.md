@@ -15,6 +15,12 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
   behaves as production.
 - `posture_mark(posture)`, a layer that only sets the development mark, for
   routers that do not use `security_headers`.
+- `bearer_challenge()`, the `Bearer` value every 401 carries in
+  `WWW-Authenticate`.
+- With the `refusal-trace-id` feature, `refusal_detail::name_failed_check(posture)`,
+  a layer that adds a `failedCheck` member to a JSON refusal body that carries
+  a refusal note when the posture is development. In production it returns the
+  response untouched and does not read the body.
 - Conditional Cross-Origin-Resource-Policy handling.
 - Request body limit layer construction.
 - RFC 9457 Problem Details responses with `application/problem+json`.

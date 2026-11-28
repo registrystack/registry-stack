@@ -160,6 +160,104 @@
   `_without_posture` forms record production. Audit readers accept older
   lines without the member and refuse malformed posture values.
 
+- Caller contract: `registry-platform-oidc` verifies against a set of issuers.
+  `IssuerSet::new` takes the entries and the `ClaimNames` the kind claim is
+  read with. It refuses two entries that name one issuer, compared as parsed
+  URLs, as `IssuerSetError::DuplicateIss`, and invalid claim names as
+  `IssuerSetError::InvalidClaimNames`. `IssuerSet::verify` refuses a credential
+  that is not three dot-separated segments with a readable header and a JSON
+  object payload as `OidcError::MalformedToken`. It then matches the token to
+  one `IssuerEntry` by its exact `iss`, read before any key is fetched, and
+  verifies it only with that entry's verifier. An `iss` no entry names is
+  `OidcError::IssuerNotConfigured` (the `token-issuer` check). A refusal is a
+  `CallerRefusal` that carries the `OidcError` and, from `OidcError::remedy`,
+  a sentence for the operator's log line that names the setting keys to look
+  at and never a value. `IssuerSet::verify` returns a `VerifiedCaller` that
+  carries the entry id, the verified token and a `CallerKind`.
+
+- Caller contract: the caller kind of a verified token is `Declared` (the
+  operator stated it for the client, else for the issuer), `Claimed` (the token
+  carries the kind claim) or `Unspecified`. The client is the allowed client
+  the token matched, else its `azp`, else its `client_id`. A kind claim that
+  differs from the declared kind is refused as `OidcError::ActorKindConflict`,
+  and one that cannot be read as `OidcError::ActorKindMalformed` (both the
+  `actor-kind` check). A token that grants no scope and whose kind is not
+  `Declared` is refused as `OidcError::IdentityOnly` (the `actor-kind` check),
+  so nothing admits an identity-only token unless the operator declares the
+  client's kind. A claimed kind does not count, and the OpenID Connect scopes
+  `openid`, `profile`, `email`, `address`, `phone` and `offline_access`
+  (`OPENID_CONNECT_SCOPES`) grant nothing. `caller_kind` and
+  `refuse_identity_only` are the two steps.
+
+- Caller contract: a `TokenVerifier` whose access-token type set holds `JWT`
+  refuses a token that carries a `nonce`, `at_hash`, `c_hash` or `s_hash`
+  claim, or a `typ` claim equal to `ID`, as `OidcError::IdTokenPresented` (the
+  `token-type` check). There is no setting to turn it off.
+  `TokenVerifierConfig::refuses_id_token_markers` reports it. `TokenVerifier`
+  gains `issuer`.
+
+- Caller contract: `registry-platform-oidc` builds an issuer entry from the
+  shared configuration block. `TokenVerifierConfig::for_caller_issuer` takes a
+  `CallerIssuerCore`, the allowed algorithms and, for a `from-package` or
+  `from-policies` client rule, the resolved client list. It applies the issuer,
+  the audience, the access-token type set, the scope claim and the client rule,
+  and the product adds its own members. Without a resolved list, a
+  `from-package` or `from-policies` rule is refused as `UnresolvedClients`.
+  `access_token_types` maps `accessTokenType` to its type set,
+  `DeclaredKinds::from_core` reads `actorKind` and `clientActorKinds`
+  (refusing both at once as `ActorKindTwice`), and `ActorKind` converts from
+  `DeclaredActorKind`.
+
+- Caller contract: `registry-platform-config` adds `Stated<T>`, the twin of
+  `Gated<T>` for an explicit production setting. It never refuses. It records
+  the setting with its pointer and position, and the loader hands each one to
+  `PostureReport::record_explicit`, so the startup log lists it.
+  `collect_posture_settings` returns both lists, and
+  `collect_development_settings` stays as a wrapper over it. The generated
+  schema marks a stated member with `x-registry-explicit-production`.
+
+- Caller contract: `registry-platform-config` adds the shared `CallerIssuers`
+  block. An entry holds a `CallerIssuerCore`: the issuer, its audience and key
+  source, `accessTokenType` (`at+jwt` by default, `JWT` explicit), `scopeClaim`
+  (`scope` by default), `allowedClients`, and an optional `actorKind` or
+  `clientActorKinds`. The explicit settings are
+  `platform.posture.jwt-access-token`, `platform.posture.scope-claim`,
+  `platform.posture.unrestricted-clients`, `platform.posture.issuer-actor-kind`
+  and `platform.posture.client-actor-kinds`. `CallerIssuers::check` reports
+  `platform.oidc.no-issuer`, `platform.oidc.duplicate-issuer`,
+  `platform.oidc.client-in-two-issuers`, `platform.oidc.actor-kind-twice`,
+  `platform.oidc.actor-kind-for-unadmitted-client`,
+  `platform.oidc.audience-is-a-client` and
+  `platform.oidc.scope-claim-reserved`. `CallerIssuers::check_file` gives the
+  same findings for an offline check of a runtime file, with each position,
+  the first entry or listing as `related`, and no comparison of a member the
+  check did not substitute. `client-in-two-issuers` points at the second
+  listing of the client. A product that resolves `from-package` or
+  `from-policies` clients runs the client kind and audience findings again
+  over the resolved list. The client types are `AllowedClients` (list or
+  `unrestricted`), `ClientList`, `PolicyClients` (`from-policies` or a list)
+  and the existing `PackageClients`, each a `ClientRule`. `clientActorKinds`
+  keys are client identifiers, so an empty key is refused. The shared-blocks
+  schema holds `CallerIssuerCore` over each client type and `CallerIssuers`.
+
+- Caller contract: `registry-platform-httpsec` adds `bearer_challenge`, the
+  `Bearer` value every 401 carries, and, with the `refusal-trace-id` feature,
+  `refusal_detail::name_failed_check`. Under the development posture the layer
+  adds a `failedCheck` member to a JSON refusal body that carries a refusal
+  note. It keeps `Content-Length` equal to the rewritten body. When the body
+  cannot be read, it logs the error at debug level and returns an empty body
+  with no stated length. In production it returns the response untouched and
+  does not read the body. The `refusal-trace-id` feature now enables the
+  refusal recorder of `registry-platform-authcommon`.
+
+- Caller contract: `registry-cli-report` adds `Report::explicit_settings`. A
+  `check` report lists explicit production settings as
+  `explicitProductionSettings` after `posture`, each with `code`, an optional
+  `file`, `pointer`, `line` and `column`, and a value-free `summary`. The list
+  is not a diagnostic, so `--deny-warnings` does not change.
+  `FoundExplicitSetting::report_line` in `registry-platform-config` builds the
+  line for a named file.
+
 - `registry-platform-oidc` can refuse task authority that comes from a
   development peer. `TaskGrantStatusClient::new` and
   `TaskGrantStatusRegistry::activate` take a `PeerPolicy`. Under

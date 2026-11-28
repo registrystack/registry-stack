@@ -21,9 +21,16 @@ server = [
 ]
 
 # Implements authcommon's `RefusalTraceId` for `TraceId`, so a service passes
-# its request trace id to `record_refusal!`. Opt-in because authcommon reaches
+# its request trace id to `record_refusal!`, and provides `name_failed_check`,
+# the development-only layer that adds the failed check to a refusal body. A
+# service enables it to place that layer. Opt-in because authcommon reaches
 # the crypto stack, which a service that only serves HTTP does not carry.
-refusal-trace-id = ["server", "dep:registry-platform-authcommon"]
+refusal-trace-id = [
+    "server",
+    "dep:registry-platform-authcommon",
+    "dep:tracing",
+    "registry-platform-authcommon/refusal-recorder",
+]
 
 [[test]]
 name = "integration"
@@ -41,8 +48,10 @@ thiserror.workspace = true
 tokio = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 tower-http = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 ulid = { workspace = true, optional = true }
 
 [dev-dependencies]
+http-body.workspace = true
 registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 tokio.workspace = true

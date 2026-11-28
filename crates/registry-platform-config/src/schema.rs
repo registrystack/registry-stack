@@ -8,6 +8,10 @@ use crate::blocks::{
     OidcPackageClientsConfig, PackageConfig, PrivateListenerConfig, SecretProvidersConfig,
     TaskGrantStatusConfig, UrlHookDestinationConfig,
 };
+use crate::caller_issuers::{
+    AllowedClients, CallerIssuerCore, CallerIssuers, ClientList, PolicyClients,
+};
+use crate::PackageClients;
 
 /// File name the shared-blocks generator writes.
 pub const SHARED_BLOCKS_SCHEMA_FILE: &str = "runtime-config-blocks.schema.json";
@@ -32,6 +36,11 @@ struct SharedBlocks {
     object_storage: ObjectStorageConfig,
     attachment_verifier: AttachmentVerifierConfig,
     url_hook_destination: UrlHookDestinationConfig,
+    caller_issuer_core: CallerIssuerCore<AllowedClients>,
+    caller_issuer_core_from_package: CallerIssuerCore<PackageClients>,
+    caller_issuer_core_from_policies: CallerIssuerCore<PolicyClients>,
+    caller_issuer_core_listed: CallerIssuerCore<ClientList>,
+    caller_issuers: CallerIssuers<CallerIssuerCore<AllowedClients>>,
 }
 
 /// The pretty-printed shared-blocks document, newline terminated.
