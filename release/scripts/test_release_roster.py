@@ -210,6 +210,9 @@ class ReleaseRosterTest(TestCase):
         self.assertEqual("cp311-abi3", release_roster.python_wheel_abi_tag((0, 41, 0)))
         self.assertEqual("cp311-abi3", release_roster.python_wheel_abi_tag((1, 0, 0)))
 
+    def test_messaging_issuer_set_is_introduced_in_v0_49(self) -> None:
+        self.assertEqual((0, 49, 0), release_roster.MESSAGING_ISSUER_SET_INTRODUCED)
+
     def test_cli_reports_the_version_selected_roster(self) -> None:
         for command in (
             "breg-services-in-release",
