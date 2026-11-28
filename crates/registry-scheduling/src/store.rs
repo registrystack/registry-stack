@@ -5559,7 +5559,7 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         self.execute(
             "INSERT INTO scheduling_outbox(outbox_id, purpose, generation, state, attempt, \
              next_attempt_at, claim_id, appointment_revision, due_at, payload) \
-             VALUES($1,$2,1,'pending',0,$5,$3,$4,$5,$6)",
+             VALUES($1,$2,1,'pending',0,transaction_timestamp(),$3,$4,$5,$6)",
             &[
                 &Uuid::new_v4(),
                 &purpose,

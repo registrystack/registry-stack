@@ -5463,6 +5463,82 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
     );
 }
 
+#[tokio::test]
+async fn immediate_outbox_intents_are_claimable_when_the_application_clock_is_ahead() {
+    let fx = fixture().await;
+    let database_now: DateTime<Utc> = fx
+        .admin
+        .query_one("SELECT transaction_timestamp()", &[])
+        .await
+        .expect("read database clock")
+        .get(0);
+    assert!(
+        pinned_now() > database_now,
+        "fixture application clock must run ahead of the database clock"
+    );
+
+    let (appointment_id, revision) = booked(&fx, 360, 480, "outbox-clock-skew-book").await;
+    let confirmation = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect(
+            "immediate confirmation uses the database clock despite an application clock ahead",
+        );
+    assert_eq!(confirmation.purpose(), "confirmation");
+    assert_eq!(confirmation.claim_id().to_string(), appointment_id);
+    finish_intent_for_test(&fx.store, &confirmation, true)
+        .await
+        .expect("confirmation delivered");
+
+    let new_slot = first_slot(&fx, OFFERING, 540, 660).await;
+    let (status, moved) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "outbox-clock-skew-move",
+            json!({
+                "observedRevision": revision,
+                "admission": admission(&fx, OFFERING, new_slot),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let moved_revision = moved["revision"].as_u64().unwrap();
+    let change = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect(
+            "immediate change notice uses the database clock despite an application clock ahead",
+        );
+    assert_eq!(change.purpose(), "change");
+    assert_eq!(change.claim_id().to_string(), appointment_id);
+    finish_intent_for_test(&fx.store, &change, true)
+        .await
+        .expect("change notice delivered");
+
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &fx.agent,
+            "outbox-clock-skew-cancel",
+            json!({
+                "observedRevision": moved_revision,
+                "reason": "clock-skew regression",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    let cancellation = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect("immediate cancellation notice uses the database clock despite an application clock ahead");
+    assert_eq!(cancellation.purpose(), "cancellation");
+    assert_eq!(cancellation.claim_id().to_string(), appointment_id);
+    finish_intent_for_test(&fx.store, &cancellation, true)
+        .await
+        .expect("cancellation notice delivered");
+}
+
 /// Make every intent not yet attempted that falls due by `instant`, on the
 /// store's pinned clock, due now on the database clock the dispatch claim
 /// reads. Intents due later keep their own instant.
@@ -6932,7 +7008,16 @@ async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
     let confirmation = intent_of(&fx, &appointment_id, "confirmation").await;
 
     // A deployment that declares no destination sets its reminder aside
-    // locally rather than pretending a delivery happened.
+    // locally rather than pretending a delivery happened. Hold the immediate
+    // confirmation back until the retry-exhaustion step below.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() + interval '1 day' \
+             WHERE outbox_id = $1",
+            &[&confirmation],
+        )
+        .await
+        .expect("defer confirmation for the exhaustion step");
     make_intent_due(&fx, reminder).await;
     dispatch_due_intents(&fx.store, SCHEDULING_ID, None)
         .await
@@ -10060,6 +10145,14 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
 async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_lease() {
     let fx = fixture().await;
     let (appointment, _) = booked(&fx, 90, 200, "lease-1").await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() + interval '1 day' \
+             WHERE purpose <> 'reminder'",
+            &[],
+        )
+        .await
+        .expect("leave the immediate confirmation out of the way");
     let reminder = intent_of(&fx, &appointment, "reminder").await;
     make_intent_due(&fx, reminder).await;
     let first = claim_due_intent_for_test(&fx.store)
@@ -10123,6 +10216,14 @@ async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_lease() {
 async fn a_lapsed_final_attempt_is_set_aside_for_an_operator() {
     let fx = fixture().await;
     let (appointment, _) = booked(&fx, 90, 200, "lapsed-final").await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() + interval '1 day' \
+             WHERE purpose <> 'reminder'",
+            &[],
+        )
+        .await
+        .expect("leave the immediate confirmation out of the way");
     let reminder = intent_of(&fx, &appointment, "reminder").await;
     fx.admin
         .execute(
@@ -12771,7 +12872,7 @@ mod queue_depth {
         let earliest: DateTime<Utc> = fx
             .admin
             .query_one(
-                "SELECT min(due_at) FROM scheduling_outbox WHERE state='pending'",
+                "SELECT min(next_attempt_at) FROM scheduling_outbox WHERE state='pending'",
                 &[],
             )
             .await
