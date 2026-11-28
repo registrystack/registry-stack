@@ -825,7 +825,8 @@ Idempotency-Key: <caller-chosen-key>
 ```
 
 `text` is required for an `answer` want, must be nonblank and is bounded to 2,000 UTF-8 bytes.
-A `document` want requires at least one addition ID from this submission, added at or after the ask and not cited by another answer.
+A `document` want requires at least one addition ID from the current submission that no other answer cites.
+An uncited file already on the submission can satisfy it, even when the additions slot is full.
 The list holds at most 32 distinct IDs. Unknown body members are refused.
 Every answer needs text or at least one cited file, even when the ask has no wants.
 Use `request.invalid` and its `fieldPath` to correct the body.
@@ -842,7 +843,9 @@ Casework joins validated answers onto its own asks by ask ID and does not store 
 Only human reviewers receive answers. A reviewer uses their own review-context authority and token.
 Agents, standing or task-granted, delegated reads and services receive neither asks nor answers, even with a `get-review-context` grant, and get no ask-bound download.
 A file they can reach through an authored additions context field follows that field's grant as before.
-The batch review-context read used for inboxes carries no asks. Read a single Proposal's review context to see them.
+The batch review-context read used for inboxes carries no asks.
+The single review-context route includes them only with `include=answers`, which the BReg client's display read supplies.
+Casework omits that option for claim, ask and decide preflight, so those reads neither disclose answers nor audit an answer disclosure.
 A cited file is not limited by the reviewer's readable context fields, because it is admitted in place of an authored additions field.
 A cited file's download remains bound to the current review request, submission version, frozen effect and context schema, and its bytes must pass verification.
 A file not cited by an answer still needs an authored additions context field.
@@ -860,10 +863,13 @@ The worker sends the provider only the frozen subject and stored answer time, us
 Answer text and files stay in BReg.
 Transient failures retry with the same key and timestamp until this answer's recovery deadline, measured from `answeredAt`.
 A deterministic refusal ends delivery and preserves the local answer. `review.ask-not-open` records that the provider no longer accepts it.
+Keep BReg and Casework clocks synchronized within five minutes: a future `answeredAt` beyond that tolerance is permanently refused as `review.ask-answer-time-invalid` and raises `review.result_lookups.unavailable`.
 Revise, Rebase and Cancel close open asks and supersede pending deliveries for that submission.
 The `asked` and `answered` hook transitions carry value-free lifecycle events.
 Question disclosure and ask-bound downloads are audited, and the answer audit records only cited file IDs.
 Answers and added files follow the Action's `retention` mode and are erased per submission version by operator erasure.
+Separately, review maintenance prunes value-free feed deduplication receipts after the authority's recovery window, measured from observation.
+A feed cursor reset checks stored asks before fetching them again, including after those receipts expire.
 
 {/* Evidence: crates/registry-breg/tests/support/proposal_review_asks.rs
     asks_reach_only_a_human_caller_who_may_answer_this_proposal,

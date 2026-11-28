@@ -119,6 +119,9 @@ pub(crate) async fn deliver_one(
         }
     }
     tx.commit().await.map_err(|_| MutationError::Unavailable)?;
+    if code.as_deref() == Some("review.ask-answer-time-invalid") {
+        crate::startup::OperationalEvent::ReviewResultLookupsUnavailable.emit();
+    }
     Ok(true)
 }
 

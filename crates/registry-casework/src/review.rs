@@ -1072,6 +1072,7 @@ impl CaseworkService {
                             None => {
                                 provider
                                     .human_display(HumanDisplayRequest {
+                                        include_answers: true,
                                         identity: &identity,
                                         source_profile_id: profile,
                                         credential: EphemeralCredential::new(token),
@@ -1649,6 +1650,7 @@ impl CaseworkService {
                 let view = tokio::time::timeout_at(
                     deadline,
                     provider.human_display(HumanDisplayRequest {
+                        include_answers: false,
                         identity: &identity,
                         source_profile_id: profile,
                         credential: EphemeralCredential::new(token),

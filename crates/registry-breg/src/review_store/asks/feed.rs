@@ -36,7 +36,8 @@ pub(crate) async fn consume_feed(
     mutations: &crate::postgres::PostgresRecordMutationService,
 ) -> Result<bool, MutationError> {
     // Deadline cleanup must not depend on credentials or authority availability.
-    let expired = expire_announcements(client, &authority.authority).await?;
+    let expired =
+        expire_announcements(client, &authority.authority, authority.recovery_days).await?;
     let token = authority
         .token_provider
         .bearer_token()
@@ -77,6 +78,18 @@ pub(crate) async fn consume_feed(
     let changed = expired > 0 || !entries.is_empty();
     let mut staged = Vec::with_capacity(entries.len());
     for (entry, parked, expired) in entries {
+        if client.query_opt("SELECT 1 FROM registry_internal.registry_proposal_review_ask_feed_events WHERE authority=$1 AND event_id=$2",&[&authority.authority,&entry.event_id]).await.map_err(|_|MutationError::Unavailable)?.is_some() {
+            continue;
+        }
+        if let Some(row)=client.query_opt("SELECT state,asked_at_wire,last_feed_changed_at_wire FROM registry_internal.registry_proposal_review_asks WHERE authority=$1 AND review_request_id=$2 AND ask_id=$3",&[&authority.authority,&entry.request_id,&entry.ask_id]).await.map_err(|_|MutationError::Unavailable)? {
+            // Terminal mirrors never change through the feed. For a legacy
+            // open mirror, its opening event has the provider's askedAt time.
+            let last=row.get::<_,Option<String>>(2).unwrap_or_else(||row.get(1));
+            let last=last.parse::<DateTime<Utc>>().map_err(|_|MutationError::Unavailable)?;
+            if row.get::<_,String>(0)!="open" || entry.changed_at<=last {
+                continue;
+            }
+        }
         let mut observation = Observation {
             entry,
             binding: None,
@@ -256,7 +269,10 @@ pub(crate) async fn consume_feed(
         if parked {
             remove_parked(&tx, &authority.authority, &entry).await?;
         }
-        tx.execute("INSERT INTO registry_internal.registry_proposal_review_ask_feed_events(authority,event_id,review_request_id,ask_id,state,error_code) VALUES($1,$2,$3,$4,$5,$6)",&[&authority.authority,&entry.event_id,&entry.request_id,&entry.ask_id,&state,&error]).await.map_err(|_| MutationError::Unavailable)?;
+        if state == "mirrored" {
+            tx.execute("UPDATE registry_internal.registry_proposal_review_asks SET last_feed_changed_at_wire=$4 WHERE authority=$1 AND review_request_id=$2 AND ask_id=$3",&[&authority.authority,&entry.request_id,&entry.ask_id,&entry.changed_at.to_rfc3339()]).await.map_err(|_|MutationError::Unavailable)?;
+        }
+        tx.execute("INSERT INTO registry_internal.registry_proposal_review_ask_feed_events(authority,event_id,review_request_id,ask_id,state,error_code,recovery_days) VALUES($1,$2,$3,$4,$5,$6,$7)",&[&authority.authority,&entry.event_id,&entry.request_id,&entry.ask_id,&state,&error,&(authority.recovery_days as i32)]).await.map_err(|_| MutationError::Unavailable)?;
         if state != "mirrored" {
             tracing::debug!(
                 outcome = state,
@@ -273,6 +289,7 @@ pub(crate) async fn consume_feed(
 async fn expire_announcements(
     client: &mut tokio_postgres::Client,
     authority: &str,
+    recovery_days: u32,
 ) -> Result<u64, MutationError> {
     let tx = client
         .transaction()
@@ -284,7 +301,7 @@ async fn expire_announcements(
     )
     .await
     .map_err(|_| MutationError::Unavailable)?;
-    let count=tx.execute("WITH expired AS (DELETE FROM registry_internal.registry_proposal_review_ask_announcements WHERE authority=$1 AND expires_at<=transaction_timestamp() RETURNING event_id,review_request_id,ask_id) INSERT INTO registry_internal.registry_proposal_review_ask_feed_events(authority,event_id,review_request_id,ask_id,state,error_code) SELECT $1,event_id,review_request_id,ask_id,'unknown','ask-request-unknown' FROM expired ON CONFLICT(authority,event_id) DO NOTHING",&[&authority]).await.map_err(|_|MutationError::Unavailable)?;
+    let count=tx.execute("WITH expired AS (DELETE FROM registry_internal.registry_proposal_review_ask_announcements WHERE authority=$1 AND expires_at<=transaction_timestamp() RETURNING event_id,review_request_id,ask_id) INSERT INTO registry_internal.registry_proposal_review_ask_feed_events(authority,event_id,review_request_id,ask_id,state,error_code,recovery_days) SELECT $1,event_id,review_request_id,ask_id,'unknown','ask-request-unknown',$2 FROM expired ON CONFLICT(authority,event_id) DO NOTHING",&[&authority,&(recovery_days as i32)]).await.map_err(|_|MutationError::Unavailable)?;
     tx.commit().await.map_err(|_| MutationError::Unavailable)?;
     Ok(count)
 }

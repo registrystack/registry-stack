@@ -64,7 +64,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 self.assertIn("path", invariant["negativeTest"])
                 self.assertIn("name", invariant["negativeTest"])
 
-    def test_security_range_is_closed_through_proposal_additions_invariants(self) -> None:
+    def test_security_range_is_closed_through_proposal_ask_invariants(self) -> None:
         matrix = VALIDATOR.load_yaml(
             VALIDATOR.CONTRACTS / "security-invariant-matrix.yaml"
         )
@@ -74,7 +74,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 233) if index not in {61, 62}],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 244) if index not in {61, 62}],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:

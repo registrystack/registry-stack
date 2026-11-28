@@ -77,12 +77,14 @@ class ReviewDocumentTests(unittest.TestCase):
             binding = contract.select_proposal_review_context('reviewer', 'correct')
             self.assertIsInstance(binding, BRegProposalReviewBinding)
             observed = client.read_proposal_review_by_id(binding, identifier)['value']
+            self.assertEqual(parse_qs(urlsplit(requests[-1]).query)['include'], ['answers'])
             batch = client.read_proposal_review_context_batch(binding, [identifier, concealed_id])
             self.assertEqual(batch['value'], [observed, None])
             batch_url = urlsplit(requests[-1])
             self.assertEqual(batch_url.path, '/tenant/v1/proposals/review-context')
             self.assertEqual(parse_qs(batch_url.query)['ids'], [f'{identifier},{concealed_id}'])
             self.assertEqual(parse_qs(batch_url.query)['accessProfile'], ['reviewer'])
+            self.assertNotIn('include', parse_qs(batch_url.query))
             before_batch_refusals = len(requests)
             for ids in [[], [identifier, identifier]]:
                 with self.assertRaises(BaseRegistryClientError):

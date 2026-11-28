@@ -4,6 +4,7 @@ struct AnswerSource {
     inner: ReviewSource,
     answers: Arc<Mutex<serde_json::Value>>,
     reads: Arc<AtomicUsize>,
+    requests_answers: Arc<Mutex<Vec<bool>>>,
 }
 
 #[async_trait]
@@ -19,10 +20,15 @@ impl ReviewContextProvider for AnswerSource {
         request: HumanDisplayRequest<'_>,
     ) -> Result<HumanDisplayObservation, ReviewContextError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
+        self.requests_answers
+            .lock()
+            .unwrap()
+            .push(request.include_answers);
+        let include_answers = request.include_answers;
         let mut value = serde_json::to_value(self.inner.human_display(request).await?)
             .map_err(|_| ReviewContextError::Invalid)?;
         let answers = self.answers.lock().unwrap().clone();
-        if !answers.as_object().unwrap().is_empty() {
+        if include_answers && !answers.as_object().unwrap().is_empty() {
             value["answers"] = answers;
         }
         serde_json::from_value(value).map_err(|_| ReviewContextError::Invalid)
@@ -54,6 +60,7 @@ async fn source_answers_join_known_asks_live_without_entering_the_display_schema
     current_source(&mut project);
     let answers = Arc::new(Mutex::new(json!({})));
     let reads = Arc::new(AtomicUsize::new(0));
+    let requests_answers = Arc::new(Mutex::new(Vec::new()));
     let provider = AnswerSource {
         inner: ReviewSource {
             revoked: fixture.source_revoked.clone(),
@@ -65,6 +72,7 @@ async fn source_answers_join_known_asks_live_without_entering_the_display_schema
         },
         answers: answers.clone(),
         reads: reads.clone(),
+        requests_answers: requests_answers.clone(),
     };
     let service = CaseworkService::new(
         fixture.store.clone(),
@@ -99,6 +107,11 @@ async fn source_answers_join_known_asks_live_without_entering_the_display_schema
         )
         .await
         .unwrap();
+    assert_eq!(
+        *requests_answers.lock().unwrap(),
+        vec![false],
+        "claim preflight must not request applicant answers"
+    );
     let asked = service
         .ask_applicant(
             &fixture.reviewer_a,
@@ -111,6 +124,11 @@ async fn source_answers_join_known_asks_live_without_entering_the_display_schema
         )
         .await
         .unwrap();
+    assert_eq!(
+        *requests_answers.lock().unwrap(),
+        vec![false, false],
+        "ask preflight must not request applicant answers"
+    );
     let answer = json!({"text":"synthetic-answer-live-only","documents":[{
         "id":"cited-file","sha256":"a".repeat(64),"contentType":"text/plain","byteSize":7,
         "download":{"method":"GET","operation":"get-review-context","accessProfile":"staff","path":"/files/cited"}
@@ -132,6 +150,11 @@ async fn source_answers_join_known_asks_live_without_entering_the_display_schema
         context.err()
     );
     let value = serde_json::to_value(context.unwrap()).unwrap();
+    assert_eq!(
+        *requests_answers.lock().unwrap(),
+        vec![false, false, true],
+        "only the displayed context requests applicant answers"
+    );
     assert_eq!(value["asks"][0]["answer"], answer);
     assert!(!value.to_string().contains("unknown-answer-must-not-appear"));
     let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
@@ -186,4 +209,47 @@ async fn source_answers_join_known_asks_live_without_entering_the_display_schema
         .get("answer")
         .is_none());
     assert_eq!(reads.load(Ordering::SeqCst), before + 1);
+    *answers.lock().unwrap() = json!({(asked.ask.ask_id.to_string()):answer});
+    let inbox = service
+        .review_tasks(
+            &fixture.reviewer_a,
+            Some("staff"),
+            "human-token",
+            None,
+            None,
+            25,
+        )
+        .await
+        .unwrap();
+    assert_eq!(inbox.items.len(), 1);
+    let inbox = serde_json::to_value(inbox).unwrap();
+    assert!(inbox["items"][0].get("asks").is_none());
+    assert!(!inbox.to_string().contains("synthetic-answer-live-only"));
+    assert_eq!(
+        requests_answers.lock().unwrap().last(),
+        Some(&false),
+        "inbox hydration must not request answers"
+    );
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
+            },
+            Some("staff"),
+            "human-token",
+            asked.task.revision,
+            "source-answers-decide",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        requests_answers.lock().unwrap().last(),
+        Some(&false),
+        "decide preflight must not request answers"
+    );
 }

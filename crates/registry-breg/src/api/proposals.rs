@@ -492,6 +492,10 @@ pub(super) fn selected_profile(raw: Option<&str>) -> Result<Option<String>, ()> 
 }
 
 fn review_status_options(raw: Option<&str>) -> Result<(Option<String>, bool), ()> {
+    review_include_options(raw, "progress")
+}
+
+fn review_include_options(raw: Option<&str>, include: &str) -> Result<(Option<String>, bool), ()> {
     let Some(raw) = raw else {
         return Ok((None, false));
     };
@@ -499,20 +503,20 @@ fn review_status_options(raw: Option<&str>) -> Result<(Option<String>, bool), ()
         return Err(());
     }
     let mut ordinary = Vec::new();
-    let mut include_progress = false;
+    let mut included = false;
     for pair in raw.split('&') {
         let (name, value) = pair.split_once('=').ok_or(())?;
         if percent_decode(name).map_err(|_| ())? == "include" {
-            if include_progress || percent_decode(value).map_err(|_| ())? != "progress" {
+            if included || percent_decode(value).map_err(|_| ())? != include {
                 return Err(());
             }
-            include_progress = true;
+            included = true;
         } else {
             ordinary.push(pair);
         }
     }
     let ordinary = (!ordinary.is_empty()).then(|| ordinary.join("&"));
-    Ok((selected_profile(ordinary.as_deref())?, include_progress))
+    Ok((selected_profile(ordinary.as_deref())?, included))
 }
 
 fn parse_input(action: &CompiledAction, value: &Value) -> Result<Map<String, Value>, ()> {
@@ -1620,8 +1624,10 @@ async fn review_read(
     let Ok(id) = Uuid::parse_str(&id) else {
         return concealed(FailedCheck::Visibility);
     };
-    let Ok((selected, include_progress)) = (if operation == ProposalOperation::GetReviewStatus {
+    let Ok((selected, included)) = (if operation == ProposalOperation::GetReviewStatus {
         review_status_options(raw.as_deref())
+    } else if operation == ProposalOperation::GetReviewContext {
+        review_include_options(raw.as_deref(), "answers")
     } else {
         selected_profile(raw.as_deref()).map(|selected| (selected, false))
     }) else {
@@ -1664,9 +1670,10 @@ async fn review_read(
             .await;
         }
     };
-    if answers == ReviewAnswers::Omitted {
+    if answers == ReviewAnswers::Omitted || !included {
         authority.receives_review_answers = false;
     }
+    let include_progress = included && operation == ProposalOperation::GetReviewStatus;
     let records = review_record_authorities(
         &service.registry,
         action,

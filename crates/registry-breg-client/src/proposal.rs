@@ -1359,6 +1359,30 @@ impl BaseRegistryClient {
         binding: &BRegProposalReviewBinding,
         id: &str,
     ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        self.read_proposal_review_by_id_with_answers(
+            binding,
+            id,
+            binding.operation == "get-review-context",
+        )
+        .await
+    }
+
+    /// Read governed context for admission without requesting live applicant answers.
+    pub async fn read_proposal_review_by_id_without_answers(
+        &self,
+        binding: &BRegProposalReviewBinding,
+        id: &str,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        self.read_proposal_review_by_id_with_answers(binding, id, false)
+            .await
+    }
+
+    async fn read_proposal_review_by_id_with_answers(
+        &self,
+        binding: &BRegProposalReviewBinding,
+        id: &str,
+        include_answers: bool,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
         if binding.source != self.source_binding() || !canonical_proposal_id(id) {
             return Err(refusal());
         }
@@ -1370,13 +1394,18 @@ impl BaseRegistryClient {
             if_match: None,
             availability: None,
         };
-        let response = self.proposal_exchange(&link, None, None).await?;
+        let response = if include_answers {
+            self.proposal_review_answers_exchange(&link).await?
+        } else {
+            self.proposal_exchange(&link, None, None).await?
+        };
         let value =
             crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
         let document: BRegProposalReviewDocument =
             serde_json::from_value(value).map_err(|_| refusal())?;
         let is_context = binding.operation == "get-review-context";
         if document.id != id
+            || (!include_answers && !document.context.asks.is_empty())
             || document.action_id != binding.action
             || !valid_review_document(&document, is_context, false)
             || !review_asks::profiles(&document, &binding.profile)
@@ -1528,6 +1557,8 @@ impl BaseRegistryClient {
                 return Err(refusal());
             }
             self.proposal_review_progress_exchange(link).await?
+        } else if operation == "reviewContext" {
+            self.proposal_review_answers_exchange(link).await?
         } else {
             self.proposal_exchange(link, None, None).await?
         };

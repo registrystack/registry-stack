@@ -20,6 +20,9 @@ pub struct ReviewContextIdentity {
 /// The caller's bearer is borrowed for this read and cannot become a stored credential.
 #[derive(Debug)]
 pub struct HumanDisplayRequest<'a> {
+    /// Request live applicant answers only for a displayed task context.
+    /// Preflight and inbox observations omit them.
+    pub include_answers: bool,
     pub identity: &'a ReviewContextIdentity,
     pub source_profile_id: &'a str,
     pub credential: EphemeralCredential<'a>,
@@ -213,6 +216,7 @@ pub trait ReviewContextProvider: Send + Sync {
         for identity in identities {
             results.push(
                 self.human_display(HumanDisplayRequest {
+                    include_answers: false,
                     identity,
                     source_profile_id,
                     credential: EphemeralCredential::new(credential),

@@ -77,6 +77,8 @@ Rules for the provider:
   that may repeat.
 - A provider validates an ask with `ReviewAsk::check` before it stores it.
 
+Keep producer and provider clocks synchronized within five minutes: Casework permanently refuses an `answeredAt` beyond that future tolerance with `review.ask-answer-time-invalid`.
+
 Rules for the producer:
 
 - Never stall the feed on one bad ask. For a deterministic refusal (a

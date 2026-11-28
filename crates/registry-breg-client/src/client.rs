@@ -1451,14 +1451,32 @@ impl BaseRegistryClient {
         &self,
         link: &BRegProposalLink,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
-        if link.method() != "GET" || link.operation() != "get-review-status" {
+        self.proposal_review_include_exchange(link, "get-review-status", "progress")
+            .await
+    }
+
+    pub(crate) async fn proposal_review_answers_exchange(
+        &self,
+        link: &BRegProposalLink,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        self.proposal_review_include_exchange(link, "get-review-context", "answers")
+            .await
+    }
+
+    async fn proposal_review_include_exchange(
+        &self,
+        link: &BRegProposalLink,
+        operation: &str,
+        include: &str,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        if link.method() != "GET" || link.operation() != operation {
             return Err(BaseRegistryClientError::invalid_request(
-                "the selected Base Registry Engine Proposal review status link is invalid",
+                "the selected Base Registry Engine Proposal review link is invalid",
             ));
         }
         let segments = fixed_operation_segments(link.path())?;
         let mut pairs = access_profile_query(Some(link.access_profile()))?;
-        pairs.push(("include".to_owned(), "progress".to_owned()));
+        pairs.push(("include".to_owned(), include.to_owned()));
         let url = self.url_with_query(&segments, &pairs)?;
         let builder = self
             .authorize(

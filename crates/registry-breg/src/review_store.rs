@@ -722,12 +722,8 @@ impl ReviewAuthorityRegistry {
         client: &mut tokio_postgres::Client,
         mutations: &crate::postgres::PostgresRecordMutationService,
     ) -> Result<bool, MutationError> {
-        let erased_completions = erase_expired_review_completions(client).await?;
-        if erased_completions > 0 {
-            tracing::debug!(
-                erased = erased_completions,
-                "BReg review completion retention pass erased expired rows"
-            );
+        let cleanup = maintain_review_receipts(client).await?;
+        if cleanup.worked() {
             return Ok(true);
         }
         let correlated_completions = correlate_stored_review_completions(client).await?;
@@ -1036,17 +1032,54 @@ fn terminal_submission_problem_status(status: u16) -> bool {
     (400..=499).contains(&status) && status != 429
 }
 
-async fn erase_expired_review_completions(
+struct ReviewReceiptCleanup {
+    completions_pruned: u64,
+    ask_feed_events_pruned: u64,
+}
+
+impl ReviewReceiptCleanup {
+    fn worked(&self) -> bool {
+        self.completions_pruned > 0 || self.ask_feed_events_pruned > 0
+    }
+}
+
+async fn maintain_review_receipts(
     client: &impl GenericClient,
-) -> Result<u64, MutationError> {
-    client
+) -> Result<ReviewReceiptCleanup, MutationError> {
+    let completions_pruned = client
         .execute(
             "DELETE FROM registry_internal.registry_proposal_review_completions
               WHERE expires_at <= transaction_timestamp()",
             &[],
         )
         .await
-        .map_err(|_| MutationError::Unavailable)
+        .map_err(|_| MutationError::Unavailable)?;
+    let ask_feed_events_pruned=client.execute(
+        "WITH expired AS (
+            SELECT authority,event_id FROM registry_internal.registry_proposal_review_ask_feed_events
+            WHERE observed_at <= transaction_timestamp()-interval '1 day'
+              AND observed_at + (recovery_days*interval '1 day') <= transaction_timestamp()
+            ORDER BY observed_at,authority,event_id LIMIT 1000
+        ) DELETE FROM registry_internal.registry_proposal_review_ask_feed_events e USING expired x
+          WHERE e.authority=x.authority AND e.event_id=x.event_id",
+        &[]).await.map_err(|_|MutationError::Unavailable)?;
+    let cleanup = ReviewReceiptCleanup {
+        completions_pruned,
+        ask_feed_events_pruned,
+    };
+    if completions_pruned > 0 {
+        tracing::debug!(
+            erased = completions_pruned,
+            "BReg review completion retention pass erased expired rows"
+        );
+    }
+    if ask_feed_events_pruned > 0 {
+        tracing::debug!(
+            ask_feed_events_pruned,
+            "BReg review receipt maintenance pruned expired rows"
+        );
+    }
+    Ok(cleanup)
 }
 
 async fn correlate_stored_review_completions(
@@ -1253,14 +1286,13 @@ impl ReviewWorker {
             let mut failed = false;
             let worked = match self.pool.get().await {
                 Ok(mut client) => {
-                    let housekeeping_worked =
-                        match erase_expired_review_completions(&**client).await {
-                            Ok(erased) => erased > 0,
-                            Err(_) => {
-                                failed = true;
-                                false
-                            }
-                        };
+                    let housekeeping_worked = match maintain_review_receipts(&**client).await {
+                        Ok(cleanup) => cleanup.worked(),
+                        Err(_) => {
+                            failed = true;
+                            false
+                        }
+                    };
                     // Authority recovery keeps a fair turn on every iteration:
                     // a sustained application backlog must not starve
                     // submissions, cancellations, result feeds, and polls.
@@ -1635,7 +1667,7 @@ pub(crate) const REVIEW_TABLES: &[(&str, &[&str])] = &[
     ("registry_proposal_review_ask_files", &["INSERT", "SELECT"]),
     (
         "registry_proposal_review_ask_feed_events",
-        &["INSERT", "SELECT"],
+        &["INSERT", "SELECT", "DELETE"],
     ),
     (
         "registry_proposal_review_ask_feed_checkpoints",

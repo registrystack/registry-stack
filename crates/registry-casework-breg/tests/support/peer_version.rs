@@ -49,6 +49,7 @@ async fn read_peer(
     peer_metadata(&server, version, malformed).await;
     let result = provider
         .human_display(HumanDisplayRequest {
+            include_answers: true,
             identity: &identity,
             source_profile_id: "reviewer",
             credential: EphemeralCredential::new("human-bearer"),

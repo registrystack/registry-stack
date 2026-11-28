@@ -53,6 +53,17 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   {/* Evidence: crates/registry-review-client/tests/http_boundary.rs,
       request_progress_rejects_each_substituted_binding_member;
       crates/registry-casework/tests/review_http.rs, producer_progress_omits_an_unmapped_active_stage. */}
+- Applicant answer disclosure: displayed task context reads validated source answers live and joins them only to known ask IDs.
+  Claim, ask and decide preflight, and inbox hydration, request no answers.
+  The BReg provider adds `include=answers` only for displayed context, under the reviewer's own bearer.
+  Delegated institutional reads receive neither asks nor answers nor task markers.
+  Casework stores no source answer text or file descriptors (`CASEWORK-SEC-46`, `CASEWORK-SEC-48`).
+  {/* Evidence: crates/registry-casework/tests/support/source_ask_answers.rs,
+      source_answers_join_known_asks_live_without_entering_the_display_schema_or_store;
+      crates/registry-casework/tests/review_http.rs,
+      delegated_institutional_reads_carry_neither_asks_nor_markers;
+      crates/registry-casework-breg/tests/context_provider.rs,
+      preflight_omits_answers_and_only_display_opts_in_under_the_same_human_bearer. */}
 - Private reason versus public reason: every decision names an outcome declared by the pinned
   policy and offered at the current stage.
   The reviewer's private reason stays in the accountability record.

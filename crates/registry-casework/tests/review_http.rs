@@ -152,6 +152,7 @@ impl ReviewContextProvider for ReviewSource {
         barrier.entered.notify_one();
         barrier.release.notified().await;
         self.human_display(HumanDisplayRequest {
+            include_answers: true,
             identity: request.identity,
             source_profile_id: request.source_profile_id,
             credential: request.credential,
@@ -178,6 +179,7 @@ impl ReviewContextProvider for ReviewSource {
         for identity in identities {
             observations.push(
                 self.human_display(HumanDisplayRequest {
+                    include_answers: true,
                     identity,
                     source_profile_id,
                     credential: EphemeralCredential::new(credential),

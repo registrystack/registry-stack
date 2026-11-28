@@ -245,6 +245,7 @@ impl ReviewContextProvider for VerifiedSourceProvider {
         }
         self.inner
             .human_display(HumanDisplayRequest {
+                include_answers: request.include_answers,
                 identity: request.identity,
                 source_profile_id: &self.profile,
                 credential: EphemeralCredential::new(&self.token),
@@ -463,6 +464,7 @@ mod tests {
             },
         };
         let request = || HumanDisplayRequest {
+            include_answers: true,
             identity: &identity,
             source_profile_id: "source-profile",
             credential: EphemeralCredential::new("casework-canary"),
@@ -478,6 +480,7 @@ mod tests {
         assert_eq!(tokens, ["source-first-canary", "source-second-canary"]);
         assert!(first
             .human_display(HumanDisplayRequest {
+                include_answers: true,
                 identity: &identity,
                 source_profile_id: "wrong",
                 credential: EphemeralCredential::new("casework-canary")

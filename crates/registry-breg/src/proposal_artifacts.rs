@@ -345,6 +345,12 @@ pub(crate) fn append_proposal_openapi(
                     "schema":{"const":"progress"},
                     "description":"Request the institution's optional applicant-visible progress code. The code is returned only when the selected caller-owned grant enables readableReviewProgress."
                 }));
+            } else {
+                document["parameters"].as_array_mut().unwrap().push(json!({
+                    "name":"include","in":"query","required":false,
+                    "schema":{"const":"answers"},
+                    "description":"Request live applicant answers for a displayed human review context. Admission and preflight reads omit this option and receive no intrinsic asks."
+                }));
             }
             document["responses"]["200"]["content"]["application/json"]["schema"] =
                 review_document_schema(operation == ProposalOperation::GetReviewContext);

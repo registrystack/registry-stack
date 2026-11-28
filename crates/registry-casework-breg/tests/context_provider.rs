@@ -198,6 +198,45 @@ fn provider(server: &MockServer, export: BregContextExport) -> BregContextProvid
     BregContextProvider::new("provider".into(), export, client, "status".into()).unwrap()
 }
 #[tokio::test]
+async fn preflight_omits_answers_and_only_display_opts_in_under_the_same_human_bearer() {
+    let server = MockServer::start().await;
+    let export = export();
+    let identity = identity(&export);
+    let provider = provider(&server, export);
+    mocks(&server, "reviewer", "human-bearer", true, DIGEST).await;
+    for include_answers in [false, true] {
+        let observed = provider
+            .human_display(HumanDisplayRequest {
+                identity: &identity,
+                source_profile_id: "reviewer",
+                credential: EphemeralCredential::new("human-bearer"),
+                include_answers,
+            })
+            .await
+            .unwrap();
+        assert!(observed.answers.is_empty());
+        assert_eq!(observed.fields["reference"], "REF-42");
+    }
+    let requests = server.received_requests().await.unwrap();
+    let contexts: Vec<_> = requests
+        .iter()
+        .filter(|r| r.url.path().ends_with("/review-context"))
+        .collect();
+    assert_eq!(contexts.len(), 2);
+    assert!(!contexts[0]
+        .url
+        .query_pairs()
+        .any(|(key, _)| key == "include"));
+    assert!(contexts[1]
+        .url
+        .query_pairs()
+        .any(|(key, value)| key == "include" && value == "answers"));
+    assert!(contexts
+        .iter()
+        .all(|r| r.headers["authorization"] == "Bearer human-bearer"));
+}
+
+#[tokio::test]
 async fn human_display_uses_exact_caller_bearer_and_status_discloses_no_values() {
     let server = MockServer::start().await;
     let export = export();
@@ -207,6 +246,7 @@ async fn human_display_uses_exact_caller_bearer_and_status_discloses_no_values()
     mocks(&server, "status", "status-bearer", false, DIGEST).await;
     let display = provider
         .human_display(HumanDisplayRequest {
+            include_answers: true,
             identity: &identity,
             source_profile_id: "reviewer",
             credential: EphemeralCredential::new("human-bearer"),
@@ -250,6 +290,7 @@ async fn unrelated_registry_revision_change_preserves_the_exact_context_contract
     .await;
     let display = provider
         .human_display(HumanDisplayRequest {
+            include_answers: true,
             identity: &identity,
             source_profile_id: "reviewer",
             credential: EphemeralCredential::new("human-bearer"),
@@ -376,6 +417,7 @@ async fn canonical_document_fields_roundtrip_with_human_bearer_without_fetching_
         let provider = provider(&server, export);
         let displayed = provider
             .human_display(HumanDisplayRequest {
+                include_answers: true,
                 identity: &identity,
                 source_profile_id: "proposal-reviewer",
                 credential: EphemeralCredential::new("human-bearer"),
@@ -437,6 +479,7 @@ async fn missing_or_changed_producer_contract_refuses_without_releasing_fields()
         assert_eq!(
             provider
                 .human_display(HumanDisplayRequest {
+                    include_answers: true,
                     identity: &identity,
                     source_profile_id: "reviewer",
                     credential: EphemeralCredential::new("human-bearer"),
@@ -516,6 +559,7 @@ async fn changed_request_source_type_or_contract_refuses_before_source_io() {
         assert_eq!(
             provider
                 .human_display(HumanDisplayRequest {
+                    include_answers: true,
                     identity: &identity,
                     source_profile_id: "reviewer",
                     credential: EphemeralCredential::new("human-bearer"),
@@ -573,6 +617,7 @@ async fn changed_observed_action_or_subject_refuses_the_exact_binding() {
         assert_eq!(
             provider
                 .human_display(HumanDisplayRequest {
+                    include_answers: true,
                     identity: &identity,
                     source_profile_id: "reviewer",
                     credential: EphemeralCredential::new("human-bearer"),
@@ -611,6 +656,7 @@ async fn current_metadata_must_advertise_the_exact_profile_action_and_purpose() 
         assert_eq!(
             provider
                 .human_display(HumanDisplayRequest {
+                    include_answers: true,
                     identity: &identity,
                     source_profile_id: "reviewer",
                     credential: EphemeralCredential::new("human-bearer"),
@@ -659,6 +705,7 @@ async fn current_row_disclosure_refusal_never_falls_back_to_service_credentials(
         assert_eq!(
             provider
                 .human_display(HumanDisplayRequest {
+                    include_answers: true,
                     identity: &identity,
                     source_profile_id: "reviewer",
                     credential: EphemeralCredential::new("human-bearer"),
@@ -700,6 +747,7 @@ async fn display_fields_must_match_the_exported_schema() {
     assert_eq!(
         provider
             .human_display(HumanDisplayRequest {
+                include_answers: true,
                 identity: &identity,
                 source_profile_id: "reviewer",
                 credential: EphemeralCredential::new("human-bearer"),
@@ -867,12 +915,25 @@ async fn intrinsic_answers_are_validated_and_transported_beside_authored_fields_
     Mock::given(method("GET")).and(path(format!("/v1/proposals/{ID}/review-context"))).and(query_param("accessProfile","reviewer")).and(header("authorization","Bearer human-bearer")).respond_with(response(json!({"id":ID,"actionId":"correct-address","actionRevision":DIGEST,"submissionVersion":1,"revision":2,"effectDigest":DIGEST,"authority":"provider","policy":{"id":"check","version":"1","digest":DIGEST},"subject":{"source":"source","subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},"context":{"reference":"native-proposal","contract":export.contract,"fields":{"reference":"REF-42"},"asks":[{"id":ask,"text":"Why?","wants":[{"kind":"answer"}],"askedAt":"2026-11-27T00:00:00Z","state":"answered","answer":answer}]},"reviewable":true}))).with_priority(1).mount(&server).await;
     let display = provider
         .human_display(HumanDisplayRequest {
+            include_answers: true,
             identity: &identity,
             source_profile_id: "reviewer",
             credential: EphemeralCredential::new("human-bearer"),
         })
         .await
         .expect("closed authored schema does not consume intrinsic answers");
+    let unsolicited = provider
+        .human_display(HumanDisplayRequest {
+            include_answers: false,
+            identity: &identity,
+            source_profile_id: "reviewer",
+            credential: EphemeralCredential::new("human-bearer"),
+        })
+        .await;
+    assert!(
+        unsolicited.is_err(),
+        "a preflight response must not smuggle unsolicited answers through the client"
+    );
     assert_eq!(
         display.fields,
         std::collections::BTreeMap::from([("reference".into(), json!("REF-42"))])

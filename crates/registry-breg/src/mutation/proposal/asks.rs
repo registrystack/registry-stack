@@ -70,8 +70,7 @@ impl MutationTransaction {
         let deadline = answered_at
             .checked_add_signed(chrono::Duration::days(i64::from(days)))
             .ok_or(MutationError::Unavailable)?;
-        let earliest_file = answer_time(asked, asked).ok_or(MutationError::Unavailable)?;
-        let eligible: i64 = tx.query_one("SELECT count(*) FROM registry_internal.registry_proposal_additions f WHERE f.action_id=$1 AND f.proposal_id=$2 AND f.submission_version=$3 AND f.addition_id=ANY($4::uuid[]) AND f.erased_at IS NULL AND f.added_at >= $5 AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_review_ask_files c WHERE c.action_id=f.action_id AND c.proposal_id=f.proposal_id AND c.submission_version=f.submission_version AND c.addition_id=f.addition_id)",&[&document.action_id,&document.proposal_id,&document.header.submission_version,&answer.body.additions,&earliest_file]).await.map_err(map_database_error)?.get(0);
+        let eligible: i64 = tx.query_one("SELECT count(*) FROM registry_internal.registry_proposal_additions f WHERE f.action_id=$1 AND f.proposal_id=$2 AND f.submission_version=$3 AND f.addition_id=ANY($4::uuid[]) AND f.erased_at IS NULL AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_review_ask_files c WHERE c.action_id=f.action_id AND c.proposal_id=f.proposal_id AND c.submission_version=f.submission_version AND c.addition_id=f.addition_id)",&[&document.action_id,&document.proposal_id,&document.header.submission_version,&answer.body.additions]).await.map_err(map_database_error)?.get(0);
         if eligible != answer.body.additions.len() as i64 {
             return Err(MutationError::InvalidRequestAt(
                 RequestLocation::proposal_answer_additions(),

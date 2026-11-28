@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
+#[path = "proposal_review_asks_final.rs"]
+mod final_review;
 
 #[tokio::test]
 async fn storage_installs_the_ask_mirror_answers_and_feed_checkpoint() {
@@ -31,6 +33,8 @@ pub(super) struct FeedState {
     gone_once: bool,
     pause_answer: bool,
     answer_status: u16,
+    answer_code: Option<String>,
+    reads: Vec<Uuid>,
     deliveries: Vec<(String, Value)>,
     entries: Vec<Value>,
     replies: BTreeMap<Uuid, (StatusCode, Value)>,
@@ -72,7 +76,8 @@ pub(super) async fn read(
 ) -> Response {
     assert_eq!(headers["authorization"], format!("Bearer {OUTGOING_TOKEN}"));
     assert_eq!(headers["registry-review-profile"], "producer");
-    let asks = state.asks.lock().unwrap();
+    let mut asks = state.asks.lock().unwrap();
+    asks.reads.push(ask);
     let (status, body) = asks.replies.get(&ask).unwrap();
     response(*status, body.clone())
 }
@@ -716,10 +721,12 @@ pub(super) async fn answer_remote(
         reply.as_object_mut().unwrap().remove("closedAt");
         return response(status, reply);
     }
-    let code = if status == StatusCode::CONFLICT {
-        "review.ask-not-open"
+    let code = if let Some(code) = state.asks.lock().unwrap().answer_code.clone() {
+        code
+    } else if status == StatusCode::CONFLICT {
+        "review.ask-not-open".to_owned()
     } else {
-        "review.refused"
+        "review.refused".to_owned()
     };
     (status,[("content-type","application/problem+json"),("traceparent",TRACE)],serde_json::to_vec(&json!({"type":format!("https://review.example.test/problems/{code}"),"title":"Refused","status":status.as_u16(),"detail":"Synthetic refusal","code":code,"traceId":"0123456789abcdef0123456789abcdef"})).unwrap()).into_response()
 }
@@ -1078,7 +1085,7 @@ async fn intrinsic_review_context_shows_the_answer_outside_the_authored_fields()
     let (fixture, id, ask) = committed_answer(&authority, "review-answer-context").await;
     let (status, _, bytes) = reviewer_get(
         &fixture,
-        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer&include=answers"),
         "zone-a",
     )
     .await;
@@ -1112,7 +1119,7 @@ async fn intrinsic_review_context_shows_the_answer_outside_the_authored_fields()
     );
     let denied = reviewer_get(
         &fixture,
-        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer&include=answers"),
         "zone-b",
     )
     .await;
@@ -1236,7 +1243,7 @@ async fn ask_bound_file_download_discloses_only_cited_verified_files_of_this_rev
     assert_eq!(answered.0, StatusCode::OK, "{}", answered.2);
     let context = reviewer_get(
         &fixture,
-        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer&include=answers"),
         "zone-a",
     )
     .await;
@@ -1376,7 +1383,7 @@ async fn pending_and_rejected_cited_files_have_no_review_link_and_refuse_a_guess
         fixture.database.admin.execute("INSERT INTO registry_internal.registry_attachment_verification(sha256,policy_digest,content_type,verdict) SELECT sha256,$1,content_type,$2 FROM registry_internal.registry_proposal_additions WHERE addition_id=$3 ON CONFLICT(sha256,policy_digest,content_type) DO UPDATE SET verdict=EXCLUDED.verdict",&[&policy,&verdict,&file]).await.unwrap();
         let context = reviewer_get(
             &fixture,
-            &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+            &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer&include=answers"),
             "zone-a",
         )
         .await;
@@ -1625,20 +1632,23 @@ async fn answer_refusals_name_only_fields_and_preserve_the_open_ask() {
     )
     .await;
     assert_eq!(unchanged.2["revision"], before["revision"]);
-    // A file predating the question cannot satisfy a document want.
-    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_additions SET added_at=transaction_timestamp()-interval '2 days' WHERE addition_id=$1",&[&file]).await.unwrap();
-    let too_old = request(
+    // A citation must belong to this Proposal and submission version.
+    let other = submitted(&fixture, "foreign-citation").await;
+    let other_binding = retained_binding(&fixture, other).await;
+    accept(&fixture, other, &other_binding).await;
+    let foreign = add_file(&fixture, other, "foreign-citation-file", b"foreign file").await;
+    let wrong_proposal = request(
         &fixture,
         "POST",
         &path,
         Some(etag),
-        Some("pre-ask-file"),
-        json!({"text":"explanation","additions":[file]}),
+        Some("foreign-file"),
+        json!({"text":"explanation","additions":[foreign]}),
     )
     .await;
-    assert_eq!(too_old.0, StatusCode::BAD_REQUEST);
-    assert_eq!(too_old.2["fieldPath"], "/additions");
-    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_additions SET added_at=transaction_timestamp() WHERE addition_id=$1",&[&file]).await.unwrap();
+    assert_eq!(wrong_proposal.0, StatusCode::BAD_REQUEST);
+    assert_eq!(wrong_proposal.2["code"], "request.invalid");
+    assert_eq!(wrong_proposal.2["fieldPath"], "/additions");
     let accepted = request(
         &fixture,
         "POST",
@@ -1820,6 +1830,17 @@ async fn agent_answer_fixture(
     registry_platform_testing::MockIdp,
     registry_breg::auth::RegistryAuthenticator,
 ) {
+    agent_answer_fixture_with_checker(authority, Arc::new(ActiveTaskGrant)).await
+}
+
+async fn agent_answer_fixture_with_checker(
+    authority: &Authority,
+    checker: Arc<dyn registry_breg::task_grant::TaskGrantStatusChecker>,
+) -> (
+    client_http::ClientFixture,
+    registry_platform_testing::MockIdp,
+    registry_breg::auth::RegistryAuthenticator,
+) {
     let mut source = answer_source();
     let mut standing = source["accessProfiles"]["reviewer"].clone();
     standing["actorKind"] = json!("agent");
@@ -1881,7 +1902,7 @@ async fn agent_answer_fixture(
         client_http::ClientFixture::start_with_mutations(registry, claims(), move |service| {
             service
                 .with_review_result_source(bindings)
-                .with_task_status(Arc::new(ActiveTaskGrant))
+                .with_task_status(checker)
         })
         .await;
     let idp = registry_platform_testing::MockIdp::start().await;
@@ -2015,7 +2036,7 @@ async fn cited_answer(
     assert_eq!(answered.0, StatusCode::OK, "{}", answered.2);
     let (status, _, bytes) = reviewer_get(
         fixture,
-        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer&include=answers"),
         "zone-a",
     )
     .await;
@@ -2058,7 +2079,7 @@ async fn agents_holding_review_context_authority_get_no_answers_and_no_cited_fil
         let before = fixture.audit_capture.entries().len();
         let (status, bytes) = agent_get(
             &agent,
-            &format!("/v1/proposals/{id}/review-context?accessProfile={profile}"),
+            &format!("/v1/proposals/{id}/review-context?accessProfile={profile}&include=answers"),
         )
         .await;
         assert_eq!(
@@ -2119,7 +2140,7 @@ async fn batch_review_context_carries_no_answers_and_records_no_ask_disclosure()
     let before = fixture.audit_capture.entries().len();
     let (status, _, bytes) = reviewer_get(
         &fixture,
-        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer&include=answers"),
         "zone-a",
     )
     .await;
@@ -2187,7 +2208,7 @@ async fn a_human_reviewer_under_a_stale_binding_is_refused_the_previous_rounds_c
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$2,next_result_poll_at=transaction_timestamp()+interval '1 hour' WHERE proposal_id=$1 AND submission_version=2", &[&id, &json!(binding)]).await.unwrap();
     let (status, _, bytes) = reviewer_get(
         &fixture,
-        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer&include=answers"),
         "zone-a",
     )
     .await;
@@ -2326,12 +2347,8 @@ async fn asks_reach_only_a_human_caller_who_may_answer_this_proposal() {
         json!({"text":"service answer"}),
     )
     .await;
-    assert_ne!(
-        refused.0,
-        StatusCode::OK,
-        "a service answered: {}",
-        refused.2
-    );
+    assert_eq!(refused.0, StatusCode::NOT_FOUND, "{}", refused.2);
+    assert_eq!(refused.2["code"], "resource.not_found");
 
     let standing = fixture
         .client_for(
@@ -2381,10 +2398,10 @@ async fn asks_reach_only_a_human_caller_who_may_answer_this_proposal() {
         .send()
         .await
         .unwrap();
-    assert_ne!(
-        answered.status().as_u16(),
-        200,
-        "a task-granted agent answered"
+    assert_eq!(answered.status().as_u16(), 404);
+    assert_eq!(
+        answered.json::<Value>().await.unwrap()["code"],
+        "resource.not_found"
     );
 
     let (_, headers, _) = request_as(
@@ -2434,7 +2451,7 @@ async fn a_human_reviewer_without_answer_reads_answers_only_through_the_review_c
     let (ask, _, path) = cited_answer(&fixture, &authority, id).await;
     let (status, _, bytes) = reviewer_get(
         &fixture,
-        &format!("/v1/proposals/{id}/review-context?accessProfile=review-staff"),
+        &format!("/v1/proposals/{id}/review-context?accessProfile=review-staff&include=answers"),
         "zone-a",
     )
     .await;

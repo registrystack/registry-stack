@@ -53,12 +53,14 @@ test('review-only binding reads context and exact document without Proposal Get'
     const binding = contract.selectProposalReviewContext('reviewer', 'correct');
     assert.ok(binding instanceof BRegProposalReviewBinding);
     const observed = (await client.readProposalReviewById(binding, id)).value;
+    assert.equal(new URL(requests.at(-1), 'http://local').searchParams.get('include'), 'answers');
     const batch = await client.readProposalReviewContextBatch(binding, [id, concealedId]);
     assert.deepEqual(batch.value, [observed, null]);
     const batchUrl = new URL(requests.at(-1), 'http://local');
     assert.equal(batchUrl.pathname, '/tenant/v1/proposals/review-context');
     assert.equal(batchUrl.searchParams.get('ids'), `${id},${concealedId}`);
     assert.equal(batchUrl.searchParams.get('accessProfile'), 'reviewer');
+    assert.equal(batchUrl.searchParams.has('include'), false);
     const beforeBatchRefusals = requests.length;
     for (const ids of [[], [id, id]]) {
       await assert.rejects(client.readProposalReviewContextBatch(binding, ids), error => error.kind === 'invalid-request');

@@ -30,6 +30,9 @@ pub(super) async fn install(client: &impl GenericClient) -> Result<(), MutationE
             FOREIGN KEY (action_id,proposal_id,submission_version)
                 REFERENCES registry_internal.registry_proposal_review_submissions
         );
+        ALTER TABLE registry_internal.registry_proposal_review_asks
+            ADD COLUMN IF NOT EXISTS last_feed_changed_at_wire text
+            CHECK (last_feed_changed_at_wire IS NULL OR octet_length(last_feed_changed_at_wire)<=64);
         CREATE INDEX IF NOT EXISTS registry_proposal_review_asks_version
             ON registry_internal.registry_proposal_review_asks(action_id,proposal_id,submission_version,asked_at DESC,ask_id);
         CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_review_ask_answers (
@@ -107,7 +110,14 @@ pub(super) async fn install(client: &impl GenericClient) -> Result<(), MutationE
             error_code text CHECK (error_code IS NULL OR octet_length(error_code) BETWEEN 1 AND 128),
             observed_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
             PRIMARY KEY (authority,event_id)
-        );"
+        );
+        -- Receipts without an observed policy retain the maximum recovery window.
+        -- New receipts store the configured authority window explicitly.
+        ALTER TABLE registry_internal.registry_proposal_review_ask_feed_events
+            ADD COLUMN IF NOT EXISTS recovery_days integer NOT NULL DEFAULT 3650
+            CHECK (recovery_days BETWEEN 1 AND 3650);
+        CREATE INDEX IF NOT EXISTS registry_proposal_review_ask_feed_events_observed
+            ON registry_internal.registry_proposal_review_ask_feed_events(observed_at);"
     ).await.map_err(|_| MutationError::Unavailable)
 }
 
