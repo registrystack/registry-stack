@@ -1,8 +1,19 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
+/**
+ * The fixed header the client sends on every call, in both modes. The session part in front
+ * of a page requires it on every route. Its name and value live only here.
+ */
+export const pageRequestHeader = { name: 'Registry-Client', value: 'page' } as const
+
 export interface ClientOptions {
   baseUrl: string | URL
-  token: () => string | undefined | Promise<string | undefined>
+  /**
+   * Runs on each call for a bearer credential. Leave it out in a page whose session part
+   * signs calls: the client then sends no `Authorization` and sends cookies to its own
+   * origin only.
+   */
+  token?: () => string | undefined | Promise<string | undefined>
   allowInsecureHttp?: boolean
   timeoutMs?: number
   maxResponseBytes?: number
@@ -12,6 +23,11 @@ export interface ClientOptions {
 export interface CallOptions {
   signal?: AbortSignal
   idempotencyKey?: string
+  /**
+   * Largest answer body this call reads. A JSON or text call reads up to the client's
+   * `maxResponseBytes` without it. A byte transfer has no cap without it.
+   */
+  maxResponseBytes?: number
 }
 
 export interface RequestValues extends CallOptions {
@@ -56,7 +72,7 @@ export interface WireText<Media extends string = string> { text: string; mediaTy
 
 export type ErrorKind = 'refused' | 'unreachable' | 'unexpected'
 export type ErrorReason = 'token' | 'input' | 'network' | 'timeout' | 'aborted'
-  | 'too-large' | 'media' | 'schema' | 'unsafe-integer' | 'status'
+  | 'too-large' | 'media' | 'schema' | 'unsafe-integer' | 'status' | 'stale' | 'sign-in-expired'
 
 interface ErrorInfo {
   reason: ErrorReason
@@ -237,7 +253,32 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 
 class AnswerTooLarge extends Error {}
 
-async function readBytes(response: Response, maxBytes: number, signal: AbortSignal): Promise<Uint8Array> {
+/**
+ * A byte transfer sends or answers with bytes rather than JSON: a request body that is not
+ * JSON or form fields, or a success answer read as bytes.
+ */
+export function isTransfer(operation: Operation): boolean {
+  const media = operation.requestMediaTypes ?? (operation.requestMediaType ? [operation.requestMediaType] : [])
+  return media.some(entry => !isJsonMedia(mediaType(entry)) && mediaType(entry) !== 'application/x-www-form-urlencoded')
+    || Object.entries(operation.responses).some(([status, variants]) =>
+      Number(status) >= 200 && Number(status) < 300 && variants.some(variant => variant.mode === 'binary'))
+}
+
+// Fetch cannot report upload progress, so while a body is sent the wait for the answer
+// grows by one second for each 16 KiB, an upload rate of 128 kbit/s.
+const uploadAllowanceMs = (bytes: number) => Math.ceil(bytes / 16_384) * 1000
+const longestTimer = 2_147_483_647
+
+function bodySize(body: BodyInit | undefined): number {
+  if (body === undefined) return 0
+  if (typeof body === 'string') return new TextEncoder().encode(body).length
+  if (body instanceof Blob) return body.size
+  if (body instanceof Uint8Array) return body.length
+  return 0
+}
+
+async function readBytes(response: Response, maxBytes: number, signal: AbortSignal,
+    progress?: () => void): Promise<Uint8Array> {
   if (!response.body) return new Uint8Array()
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
@@ -246,6 +287,7 @@ async function readBytes(response: Response, maxBytes: number, signal: AbortSign
     while (true) {
       const chunk = await abortable(reader.read(), signal)
       if (chunk.done) break
+      progress?.()
       size += chunk.value.length
       if (size > maxBytes) throw new AnswerTooLarge()
       chunks.push(chunk.value)
@@ -300,7 +342,15 @@ export class Transport {
 
   async call<T>(operation: Operation, values: RequestValues = {}): Promise<Answer<T>> {
     const deadline = new AbortController()
-    const timer = setTimeout(() => deadline.abort(), this.#timeout)
+    // A JSON call has one deadline for the whole exchange. A byte transfer restarts it
+    // while bytes move, so it fails only when the transfer stalls.
+    const transfer = isTransfer(operation)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const wait = (ms: number) => {
+      clearTimeout(timer)
+      timer = setTimeout(() => deadline.abort(), Math.min(ms, longestTimer))
+    }
+    wait(this.#timeout)
     let response: Response | undefined
     let raw: Uint8Array | undefined
     let problem: Record<string, unknown> | undefined
@@ -328,6 +378,9 @@ export class Transport {
     try {
       callerSignal = values.signal
       const signal = callerSignal ? AbortSignal.any([deadline.signal, callerSignal]) : deadline.signal
+      const cap = values.maxResponseBytes
+      if (cap !== undefined && (!Number.isSafeInteger(cap) || cap < 1)) throw new InputError('Invalid response cap')
+      const limit = cap ?? (transfer ? Number.POSITIVE_INFINITY : this.#limit)
       if (operation.keyed) {
         idempotencyKey = values.idempotencyKey
         if (operation.requiresExistingKey && !idempotencyKey) {
@@ -341,6 +394,7 @@ export class Transport {
         if (['authorization', 'cookie', 'idempotency-key'].includes(key.toLowerCase())) continue
         if (value !== undefined) headers.set(key, String(value))
       }
+      headers.set(pageRequestHeader.name, pageRequestHeader.value)
       if (idempotencyKey !== undefined) headers.set('idempotency-key', idempotencyKey)
       if (values.accept) headers.set('accept', values.accept)
       let body: BodyInit | undefined
@@ -359,21 +413,30 @@ export class Transport {
         } else if (!declared.includes('*/*') && isJsonMedia(mediaType(content))) body = JSON.stringify(values.body)
         else if (typeof values.body === 'string') body = values.body
         else if (values.body instanceof Uint8Array) body = Uint8Array.from(values.body)
-        else throw new InputError('Binary request body must be a Uint8Array or string')
+        // A Blob, including a File, cannot change after it is made, so it is sent as given.
+        else if (values.body instanceof Blob) body = values.body
+        else throw new InputError('Binary request body must be a Uint8Array, Blob or string')
       }
       stage = 'token'
       signal.throwIfAborted()
       // A signed operation authenticates by its signature, so no bearer credential is asked for.
-      token = operation.signed ? undefined : await abortable(Promise.resolve(this.#options.token()), signal)
+      const source = operation.signed ? undefined : this.#options.token
+      token = source ? await abortable(Promise.resolve(source()), signal) : undefined
       if (token) headers.set('authorization', 'Bearer ' + token)
       signal.throwIfAborted()
       const fetcher = this.#options.fetch ?? globalThis.fetch
       stage = 'network'
       dispatched = true
+      // Page mode sends cookies to the page's own origin only. A token or a signature
+      // authenticates every other call, so it sends none.
+      const pageMode = this.#options.token === undefined && !operation.signed
+      if (transfer) wait(this.#timeout + uploadAllowanceMs(bodySize(body)))
       response = await abortable(fetcher(url, {
-        method: operation.method, headers, body, redirect: 'manual', credentials: 'omit', signal,
+        method: operation.method, headers, body, redirect: 'manual', credentials: pageMode ? 'same-origin' : 'omit', signal,
       }), signal)
-      raw = await readBytes(response, this.#limit, signal)
+      const moved = transfer ? () => wait(this.#timeout) : undefined
+      moved?.()
+      raw = await readBytes(response, limit, signal, moved)
       signal.throwIfAborted()
       const media = mediaType(response.headers.get('content-type'))
       const variants = operation.responses[response.status]
@@ -386,9 +449,12 @@ export class Transport {
               && (!operation.messaging || matchesMessagingProblem(response.headers, candidate))
               && (!token || !containsCredential(candidate, token))) problem = candidate
         }
+        // In page mode the session part answers 401 when the sign-in has ended, and passes
+        // nothing on, so the outcome is known whatever the body says.
+        if (response.status === 401 && pageMode) throw failure('refused', 'sign-in-expired')
         const kind = response.status >= 500 || response.status === 0 ? 'unreachable'
           : response.status >= 400 && problem ? 'refused' : 'unexpected'
-        throw failure(kind, 'status')
+        throw failure(kind, response.status === 412 ? 'stale' : 'status')
       }
       const variant = variants.find(entry => entry.mediaType !== undefined &&
         (mediaType(entry.mediaType) === media || (entry.mediaType === '*/*' && media !== '')))
@@ -427,6 +493,164 @@ export class Transport {
 }
 
 export interface Page<T> { items: T[]; nextCursor: string | null }
+
+/** A BReg list page. `count` is there when the call asked for it and the profile allows it. */
+export interface ListPage<T> extends Page<T> { count?: number }
+
+export type FilterOperator = 'equals' | 'in' | 'range' | 'is-null' | 'is-not-null' | 'prefix' | 'contains'
+type Scalar = string | number | boolean
+type DomainField<Row, F extends string> = Row extends { domainData?: infer D }
+  ? D extends object ? F extends keyof D ? D[F] : unknown : unknown
+  : unknown
+/** The value a filter compares a Record property with, from the row type where it declares one. */
+export type FieldValue<Row, F extends string> = [Extract<NonNullable<DomainField<Row, F>>, Scalar>] extends [never]
+  ? Scalar : Extract<NonNullable<DomainField<Row, F>>, Scalar>
+export interface Range<V> { gt?: V; ge?: V; lt?: V; le?: V }
+/** The filter forms a query profile allows for one property. */
+export type Filter<V, Op extends FilterOperator> =
+  | ('equals' extends Op ? V : never)
+  | ('in' extends Op ? readonly V[] : never)
+  | ('range' extends Op ? Range<V> : never)
+  | ('prefix' extends Op ? { startsWith: string } : never)
+  | ('contains' extends Op ? { contains: string } : never)
+  | ('is-null' extends Op ? { isNull: true } : never)
+  | ('is-not-null' extends Op ? { isNull: false } : never)
+
+export interface ListProfileRules {
+  maximumPageSize: number
+  allowCount: boolean
+  selectable: string[]
+  filterable: Record<string, FilterOperator[]>
+  sortable: Record<string, Array<'asc' | 'desc'>>
+  requiredFilters?: string[][]
+}
+export interface ListRules { accessProfileParameter: boolean; profiles: Record<string, ListProfileRules> }
+export interface ListRequest extends CallOptions {
+  accessProfile?: string
+  where?: object
+  orderBy?: string
+  select?: readonly string[]
+  count?: boolean
+  top?: number
+}
+
+const rangeKeys = ['gt', 'ge', 'lt', 'le'] as const
+const maximumInValues = 100
+
+function filterLiteral(value: unknown): string {
+  if (typeof value === 'string') return "'" + value.replaceAll("'", "''") + "'"
+  if (typeof value === 'boolean') return String(value)
+  if (typeof value === 'number' && /^-?\d+(?:\.\d+)?$/u.test(String(value))) return String(value)
+  throw new TypeError('Filter values must be strings, booleans or plain decimal numbers')
+}
+
+function predicate(property: string, value: unknown): [FilterOperator, string[]] {
+  if (value === null) throw new TypeError('Use isNull to filter on a missing value')
+  if (Array.isArray(value)) {
+    if (value.length < 1 || value.length > maximumInValues) throw new TypeError('An in filter needs 1 to 100 values')
+    return ['in', [property + ' in (' + value.map(filterLiteral).join(',') + ')']]
+  }
+  if (typeof value !== 'object') return ['equals', [property + ' eq ' + filterLiteral(value)]]
+  const entry = value as Record<string, unknown>
+  const keys = Object.keys(entry).filter(key => entry[key] !== undefined)
+  const only = keys.length === 1 ? keys[0] : undefined
+  if (only === 'startsWith' && typeof entry.startsWith === 'string') {
+    return ['prefix', ['startswith(' + property + ',' + filterLiteral(entry.startsWith) + ')']]
+  }
+  if (only === 'contains' && typeof entry.contains === 'string') {
+    return ['contains', ['contains(' + property + ',' + filterLiteral(entry.contains) + ')']]
+  }
+  if (only === 'isNull' && typeof entry.isNull === 'boolean') {
+    return [entry.isNull ? 'is-null' : 'is-not-null', [property + (entry.isNull ? ' eq null' : ' ne null')]]
+  }
+  if (keys.length && keys.every(key => (rangeKeys as readonly string[]).includes(key))) {
+    return ['range', rangeKeys.filter(key => keys.includes(key)).map(key => property + ' ' + key + ' ' + filterLiteral(entry[key]))]
+  }
+  throw new TypeError('A filter is a value, a list of values, or one of startsWith, contains, isNull, gt, ge, lt and le')
+}
+
+/**
+ * Builds a BReg list query from typed options and the operation's query profiles, and
+ * refuses what the profile does not allow before anything is sent. A message names a
+ * property or profile only when the profile declares it, never a filter value. With a
+ * cursor, the query is the access profile and the cursor, because the cursor carries the
+ * rest.
+ */
+export function listQuery(rules: ListRules, options: ListRequest, cursor?: string): Record<string, string | number | boolean> {
+  const chosen = options.accessProfile
+  const names = Object.keys(rules.profiles)
+  if (chosen !== undefined && !rules.accessProfileParameter) throw new TypeError('This list takes no access profile')
+  if (chosen === undefined && names.length !== 1) throw new TypeError('This list needs an access profile')
+  const name = chosen ?? names[0]!
+  if (typeof name !== 'string' || !Object.hasOwn(rules.profiles, name)) throw new TypeError('Unknown access profile')
+  const profile = rules.profiles[name]!
+  const under = ' under profile `' + name + '`'
+  const known = (property: unknown) => typeof property === 'string' && (Object.hasOwn(profile.filterable, property)
+    || Object.hasOwn(profile.sortable, property) || profile.selectable.includes(property))
+  const label = (property: unknown) => known(property) ? '`' + String(property) + '`' : 'A property'
+  const query: Record<string, string | number | boolean> = {}
+  if (chosen !== undefined) query.accessProfile = chosen
+
+  const where = options.where ?? {}
+  if (typeof where !== 'object' || where === null || Array.isArray(where)) throw new TypeError('`where` must be an object')
+  const predicates: string[] = []
+  const equalities = new Set<string>()
+  for (const [property, value] of Object.entries(where)) {
+    if (value === undefined) continue
+    if (!Object.hasOwn(profile.filterable, property)) throw new TypeError(label(property) + ' cannot be filtered' + under)
+    const [operator, text] = predicate(property, value)
+    if (!profile.filterable[property]!.includes(operator)) {
+      throw new TypeError(label(property) + ' cannot be filtered with ' + operator + under)
+    }
+    if (operator === 'equals') equalities.add(property)
+    predicates.push(...text)
+  }
+  const required = profile.requiredFilters
+  if (required && !required.some(alternative => alternative.every(property => equalities.has(property)))) {
+    throw new TypeError('Profile `' + name + '` lists only with an equality filter on ' +
+      required.map(alternative => alternative.map(property => '`' + property + '`').join(' and ')).join(', or on '))
+  }
+  if (predicates.length) query.$filter = predicates.join(' and ')
+
+  if (options.orderBy !== undefined) {
+    const match = typeof options.orderBy === 'string' ? /^([^ ]+)(?: (desc))?$/u.exec(options.orderBy) : null
+    const property = match?.[1]
+    const direction = match?.[2] ?? 'asc'
+    if (!property || !Object.hasOwn(profile.sortable, property) || !profile.sortable[property]!.includes(direction as 'asc' | 'desc')) {
+      throw new TypeError(label(property) + ' cannot be sorted that way' + under)
+    }
+    query.$orderby = options.orderBy
+  }
+  if (options.select !== undefined) {
+    if (!Array.isArray(options.select) || !options.select.length) throw new TypeError('`select` needs at least one property')
+    for (const property of options.select) {
+      if (typeof property !== 'string' || !profile.selectable.includes(property)) {
+        throw new TypeError(label(property) + ' cannot be selected' + under)
+      }
+    }
+    if (new Set(options.select).size !== options.select.length) throw new TypeError('`select` names a property twice')
+    query.$select = options.select.join(',')
+  }
+  if (options.top !== undefined) {
+    if (!Number.isSafeInteger(options.top) || options.top < 1 || options.top > profile.maximumPageSize) {
+      throw new TypeError('`top` must be a whole number from 1 to ' + profile.maximumPageSize + under)
+    }
+    query.$top = options.top
+  }
+  if (options.count !== undefined) {
+    if (typeof options.count !== 'boolean') throw new TypeError('`count` must be true or false')
+    if (options.count && !profile.allowCount) throw new TypeError('Profile `' + name + '` does not allow count')
+    query.$count = options.count
+  }
+  if (cursor === undefined) return query
+  return chosen === undefined ? { $skiptoken: cursor } : { accessProfile: chosen, $skiptoken: cursor }
+}
+
+export function listPage<T>(data: { items: T[]; pageInfo: { nextCursor?: string | null }; count?: number }): ListPage<T> {
+  const page: ListPage<T> = { items: data.items, nextCursor: data.pageInfo.nextCursor ?? null }
+  if (typeof data.count === 'number') page.count = data.count
+  return page
+}
 
 /**
  * Walks cursor pages. A failed load rejects that `next()` call and leaves the walk
@@ -515,6 +739,8 @@ export function describeError(error: unknown, options: DescribeOptions = {}): st
     return typeof label === 'string' && label !== '' ? label : 'The action is not possible in the current state.'
   }
   switch (error.reason) {
+    case 'sign-in-expired': return 'Your sign-in has ended, so sign in again.'
+    case 'stale': return 'The item changed since it was loaded, so reload it and try again.'
     case 'token': return 'Your credentials could not be obtained, so sign in again.'
     case 'input': return notBuilt
     case 'timeout': return 'The registry took too long to answer.'

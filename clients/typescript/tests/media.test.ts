@@ -119,7 +119,7 @@ test('wildcard uploads require a concrete media type and a binary or string body
   await assert.rejects(documents.call('uploadDocumentContent', { ...options, contentType: '*/*' }),
     { name: 'TypeError', message: 'Invalid request media type' })
   await assert.rejects(documents.call('uploadDocumentContent', { ...options, body: {} as never }),
-    { name: 'TypeError', message: 'Binary request body must be a Uint8Array or string' })
+    { name: 'TypeError', message: 'Binary request body must be a Uint8Array, Blob or string' })
   assert.equal(requests, 0)
   await assert.rejects(documents.call('uploadDocumentContent', options), {
     kind: 'unreachable', outcomeUnknown: true, idempotencyKey: undefined,

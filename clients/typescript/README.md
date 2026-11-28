@@ -43,24 +43,73 @@ policy before using its assertion.
 Use HTTPS for a remote registry. HTTP is accepted for `localhost`, IPv4
 loopback, and IPv6 loopback. `localhost` resolves through the operating system.
 With `allowInsecureHttp: true`, HTTP is also accepted for a host that cannot be
-on the public internet: a private or link-local IP address (`10.0.0.0/8`,
-`172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `fc00::/7`, `fe80::/10`) or
-a host name without a dot, such as a container name on a compose network. HTTP
-to any other host is refused when the client is built, before any token is
-asked for, with or without the option.
+on the public internet. That is a private or link-local IP address in
+`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `fc00::/7` or
+`fe80::/10`. It is also a host name without a dot, such as a container name on
+a compose network. HTTP to any other host is refused when the client is built,
+before any token is asked for, with or without the option.
 Supply a base without credentials, query, fragment, or `.` and `..` segments
 (plain or percent-encoded). A path prefix is preserved. In a browser the base
 can be a path such as `/registry`. It resolves against
 `globalThis.location.origin` and then follows the same rule. Where there is no
 page origin, a path is refused. A refused base throws
 `TypeError('Invalid registry base URL')`. The token provider runs on each call. It may return a promise or
-`undefined` for a call without a bearer credential. Fetch omits ambient
-credentials and handles redirects manually. Call options accept an
-`AbortSignal`. The 10-second default deadline covers the exchange including
-token acquisition and reading the response. The default response cap is 8 MiB
-and can be set with `maxResponseBytes`. Cross-origin deployments must expose
+`undefined` for a call without a bearer credential. With a token provider,
+Fetch omits ambient credentials. Every call handles redirects manually. Every
+call, including page methods, Actions and byte transfers, accepts an
+`AbortSignal` in `signal`. For a JSON or text call, the 10-second default
+deadline covers the exchange including token acquisition and reading the
+response. The default response cap is 8 MiB and can be set with
+`maxResponseBytes` on the client or on one call. Cross-origin deployments must expose
 `Retry-After`, `ETag`, `Location`, and Messaging's `traceparent` through
-`Access-Control-Expose-Headers` when the browser needs to read them.
+`Access-Control-Expose-Headers` when the browser needs to read them. The client
+sends `Registry-Client: page` on every call, so a browser sends a CORS preflight
+for each cross-origin call. The registry must list that header in
+`Access-Control-Allow-Headers`.
+
+## Byte transfers
+
+A byte transfer is an operation whose request body is not JSON or form fields,
+such as a document upload. An operation whose success answer is read as bytes,
+such as a download, is one too.
+
+- An upload body is a `Uint8Array`, a string, or a `Blob` such as a `File` from
+  a file input. A `Blob` is sent as given.
+- `timeoutMs` is an idle deadline. It restarts when the answer's headers arrive
+  and each time a chunk of the body arrives. A slow download that keeps moving
+  finishes, and one that stops fails with reason `timeout`.
+- Fetch cannot report upload progress. While a body is sent, the wait for the
+  answer is `timeoutMs` plus one second for each 16 KiB of body. That allows an
+  upload rate as low as 128 kbit/s.
+- The client's `maxResponseBytes` does not apply. A transfer reads the whole
+  answer unless the call sets its own cap, for example
+  `{ maxResponseBytes: 50 * 1024 * 1024 }`. A larger answer fails with reason
+  `too-large`.
+
+## Page mode
+
+A page whose session part signs its calls leaves `token` out:
+
+```ts
+const client = createRegistryClient({ baseUrl: '/registry' })
+```
+
+- The client sends no `Authorization` header.
+- Fetch sends cookies with `credentials: 'same-origin'`, so they go to the
+  page's own origin only. With a token provider, it sends `'omit'`.
+- The client sends `Registry-Client: page` on every call, in both modes. The
+  session part requires it on every route. The exported `pageRequestHeader`
+  constant holds the name and value, and a header of that name in a call's
+  options is replaced.
+- In page mode any 401 has `reason: 'sign-in-expired'` and
+  `outcomeUnknown: false`, whatever its body, because the session part passes
+  nothing on. Keep the person's unsent values and offer to sign in again.
+- In both modes a 412 has `reason: 'stale'`. Reload and try again. The Base
+  Registry Engine (BReg) also answers a refused guard with 412, so it is
+  `stale` too, and `describeError` still shows that guard's label.
+
+Both reasons sit on the existing error kinds, so code that catches a refusal
+keeps working. Operations authenticated by a signature never send cookies.
 
 ## Errors and writes
 
@@ -95,9 +144,9 @@ marks a dispatched mutation whose outcome could not be established, including
 a transport failure, 5xx, or unreadable success. Failures before dispatch and
 4xx responses leave it false.
 
-A call that cannot be built, such as a missing path value, an undeclared media
-type, or a receipt lookup without its key, throws `TypeError` before anything is
-sent. Every other failure is a `RegistryError`.
+A call that cannot be built throws `TypeError` before anything is sent. Examples
+are a missing path value, an undeclared media type, or a receipt lookup without
+its key. Every other failure is a `RegistryError`.
 
 Operations that a Standard Webhooks signature authenticates, such as
 Coordinator `admitEvent` and the `receiveReviewCompletion` routes, take the
@@ -132,7 +181,7 @@ const contacts = await allPages(cursor => client.records_contact_listPage({
 }, cursor))
 ```
 
-Page methods are generated only for read operations. They normalize product
+Page methods are generated only for read operations. They normalise product
 responses to `Page<T> { items, nextCursor }`. Use `pages(load, cap)` to iterate or
 `allPages(load, cap)` to collect the items. Both default to 100 pages
 and throw `RangeError` if a cursor repeats or a continuation remains at the
@@ -153,6 +202,38 @@ const walk = pages(cursor => client.records_contact_listPage({}, cursor))
 const first = await walk.next()
 ```
 
+A BReg list operation that publishes query profiles, in
+`x-registry-queryProfiles` or `x-registry-queryProfile`, also has a typed
+`list` method:
+
+```ts
+const page = await client.list('records.licence.list', {
+  accessProfile: 'licence-officer',
+  where: { status: ['active', 'suspended'], holderName: { startsWith: 'Dep' } },
+  orderBy: 'expiresOn',
+  top: 20,
+  count: true,
+})
+const next = await client.list('records.licence.list', { accessProfile: 'licence-officer' }, page.nextCursor ?? undefined)
+```
+
+- `where` keys are the profile's filterable properties. A value is an
+  equality (`'active'`), a list for `in`, `{ startsWith }`, `{ contains }`,
+  `{ isNull }`, or a range with `gt`, `ge`, `lt` and `le`. Each form needs the
+  matching operator in the profile. All filters hold together.
+- `orderBy` is one sortable property, or `'property desc'` where allowed.
+  `select` lists selectable properties. `count` is allowed only with
+  `allowCount`. `top` runs from 1 to the profile's `maximumPageSize`.
+- `accessProfile` is required when the operation has more than one profile.
+- A profile with `requiredFilters` lists only when `where` holds an equality
+  filter on every property of one alternative. An `in` list does not count.
+- The types enforce these rules, and the client checks them again before it
+  sends anything. A refusal is a `TypeError` naming the property and profile,
+  never a filter value.
+- The answer is `{ items, nextCursor }`, plus `count` when the answer carries
+  it. A call with a cursor sends only the access profile and the cursor.
+- Only profiles of kind `list` are covered. Other queries use `call`.
+
 ```ts
 const input = { contactId, email: 'alice@example.org' }
 const preconditions = await client.targetConditions('update-contact-email', {
@@ -165,7 +246,9 @@ Action IDs, input members, access profiles, and Record fields come from the
 project contract. Use target condition inputs for the named Action and the same
 target in the invocation. Each returned condition carries that target's
 `ifMatch`. The `invoke` signature requires conditions for Actions that declare
-them and disallows them for Actions with no required conditions.
+them and disallows them for Actions with no required conditions. `invoke` never
+reads target conditions by itself. The `ifMatch` it sends is the one the person
+saw, so a change made since then is refused rather than overwritten.
 
 An Action with an availability route is a typed call. Its answer reports
 `available`, `observedRevision`, an optional `guardReason` with its optional

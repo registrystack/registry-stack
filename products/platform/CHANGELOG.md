@@ -24,6 +24,31 @@
   require one `application/json` content type, refuse a body over 1 MiB, and
   `verifyRequest` checks the headers before it reads the body.
 
+- The TypeScript clients have a page mode. `token` is optional, and without
+  it a client sends no `Authorization` and sends cookies with
+  `credentials: 'same-origin'`. With a token it sends `'omit'`. The client
+  sends `Registry-Client: page` on every call, from the exported
+  `pageRequestHeader` constant, so a registry on another origin must allow
+  that header for CORS. In page mode any 401 is reason
+  `sign-in-expired` with `outcomeUnknown: false`. A 412 is reason `stale` in
+  both modes. Every call, page method, Action and byte transfer takes
+  `{ signal }`.
+
+- TypeScript client uploads accept a `Blob` or `File` and send it as given.
+  A byte transfer, an upload or a download, treats `timeoutMs` as an idle
+  deadline that restarts while bytes move, and waits one second more for each
+  16 KiB it sends. It reads the whole answer unless the call sets
+  `maxResponseBytes`. JSON and text calls keep the 10-second deadline and the
+  8 MiB cap.
+
+- Generated BReg TypeScript clients have a `list` method typed from each list
+  operation's query profiles, read from `x-registry-queryProfiles` or
+  `x-registry-queryProfile`. `where`, `orderBy`, `select`, `count` and `top`
+  accept only what the chosen profile allows, and a profile's optional
+  `requiredFilters` makes one of its equality-filter alternatives required. The
+  client checks the same rules before sending and refuses with a `TypeError`
+  that names the property and profile, never a filter value.
+
 - Every URL hook delivery is signed with Standard Webhooks. The signature is
   `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body
   bytes, joined by periods, with HMAC-SHA-256. `webhook-id` is the envelope

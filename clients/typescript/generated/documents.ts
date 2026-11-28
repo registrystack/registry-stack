@@ -39,7 +39,7 @@ export interface Operations {
   "listDocumentGrants": { input: CallOptions & { path: { "documentId": (string) } } & { query?: { "cursor"?: (string); "limit"?: (number) } } & { accept?: "application/json" | "*/*" }; required: true; output: Schema_DocumentGrantPage }
   "issueDocumentGrant": { input: CallOptions & { path: { "documentId": (string) } } & ({ body: Schema_IssueGrantRequest }) & { accept?: "application/json" | "*/*" }; required: true; output: Schema_DocumentGrantView }
   "downloadDocumentVersion": { input: CallOptions & { path: { "documentId": (string); "versionId": (string) } } & { accept?: "*/*" }; required: true; output: WireBytes }
-  "uploadDocumentContent": { input: CallOptions & { path: { "uploadId": (string) } } & ({ body: Uint8Array | string; contentType: string }) & { accept?: "application/json" | "*/*" }; required: true; output: Schema_DocumentView }
+  "uploadDocumentContent": { input: CallOptions & { path: { "uploadId": (string) } } & ({ body: Uint8Array | Blob | string; contentType: string }) & { accept?: "application/json" | "*/*" }; required: true; output: Schema_DocumentView }
 }
 
 const rules: Record<string, unknown> = Object.fromEntries([

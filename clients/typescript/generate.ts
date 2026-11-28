@@ -49,6 +49,84 @@ function looksLikeRead(id: string, path: string, operation: Node): boolean {
     || operation['x-scheduling-authority'] === 'reads-scope'
 }
 
+interface QueryProfile {
+  profile: string
+  maximumPageSize: number
+  allowCount: boolean
+  selectable: string[]
+  filterable: { property: string; operators: string[] }[]
+  sortable: { property: string; directions: string[] }[]
+  requiredFilters?: string[][]
+}
+const filterOperators = new Set(['equals', 'in', 'range', 'is-null', 'is-not-null', 'prefix', 'contains'])
+// A property name goes into a $filter, $orderby or $select value as written, so it must be a
+// plain identifier.
+const queryProperty = /^[A-Za-z_][A-Za-z0-9_.-]*$/u
+
+// Reads the query profiles a BReg list operation publishes, in either form, and refuses any
+// shape this client cannot type. Undefined when the operation publishes none.
+function queryProfiles(operation: Node, pointer: string): QueryProfile[] | undefined {
+  const several = operation['x-registry-queryProfiles']
+  const one = operation['x-registry-queryProfile']
+  if (several !== undefined && one !== undefined) fail(pointer, 'both x-registry-queryProfiles and x-registry-queryProfile')
+  if (several === undefined && one === undefined) return undefined
+  const entries: [string | undefined, Node, string][] = one !== undefined
+    ? [[undefined, one, child(pointer, 'x-registry-queryProfile')]]
+    : several && typeof several === 'object' && !Array.isArray(several)
+      ? members(several).map(([key, value]) => [key, value, child(child(pointer, 'x-registry-queryProfiles'), key)])
+      : fail(child(pointer, 'x-registry-queryProfiles'), 'expected an object of query profiles')
+  if (!entries.length) fail(pointer, 'expected at least one query profile')
+  const names = (value: unknown, at: string): string[] => {
+    if (!Array.isArray(value)) return fail(at, 'expected a list of property names')
+    value.forEach((name, index) => {
+      if (typeof name !== 'string' || !queryProperty.test(name)) fail(child(at, String(index)), 'expected a property name')
+    })
+    return value
+  }
+  return entries.map(([key, value, at]) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return fail(at, 'expected a query profile')
+    if (typeof value.profile !== 'string' || (key !== undefined && value.profile !== key)) fail(at, 'profile does not match its name')
+    if (value.kind !== 'list') fail(at, 'only list query profiles are supported')
+    if (!Number.isSafeInteger(value.maximumPageSize) || value.maximumPageSize < 1) fail(at, 'expected a maximum page size of at least 1')
+    if (typeof value.allowCount !== 'boolean') fail(at, 'expected allowCount')
+    const selectable = names(value.selectableProperties, child(at, 'selectableProperties'))
+    const listOf = (field: string, member: string, allowed: Set<string>) => {
+      const list = value[field]
+      if (!Array.isArray(list)) return fail(child(at, field), 'expected a list')
+      return list.map((entry: Node, index: number) => {
+        const entryAt = child(child(at, field), String(index))
+        if (!entry || typeof entry.property !== 'string' || !queryProperty.test(entry.property)) fail(entryAt, 'expected a property name')
+        if (!Array.isArray(entry[member]) || !entry[member].length || entry[member].some((item: unknown) => !allowed.has(item as string))) {
+          fail(entryAt, 'unsupported ' + member)
+        }
+        return { property: entry.property as string, [member]: entry[member] as string[] }
+      })
+    }
+    const filterable = listOf('filterableProperties', 'operators', filterOperators) as QueryProfile['filterable']
+    const sortable = listOf('sortableProperties', 'directions', new Set(['asc', 'desc'])) as QueryProfile['sortable']
+    const profile: QueryProfile = { profile: value.profile, maximumPageSize: value.maximumPageSize, allowCount: value.allowCount,
+      selectable, filterable, sortable }
+    if (value.requiredFilters !== undefined) {
+      const requiredAt = child(at, 'requiredFilters')
+      const required = value.requiredFilters
+      if (!Array.isArray(required) || !required.length || required.some((alternative: unknown) => !Array.isArray(alternative))) {
+        fail(requiredAt, 'expected a list of alternatives, each a list of property names')
+      }
+      profile.requiredFilters = required.map((alternative: unknown[], index: number) => {
+        const alternativeAt = child(requiredAt, String(index))
+        if (!alternative.length) fail(alternativeAt, 'expected at least one property')
+        return names(alternative, alternativeAt).map((name, position) => {
+          if (!filterable.some(entry => entry.property === name && entry.operators.includes('equals'))) {
+            fail(child(alternativeAt, String(position)), 'required filter is not an equality filter')
+          }
+          return name
+        })
+      })
+    }
+    return profile
+  })
+}
+
 const patternSites = new Set([
   '/components/schemas/TaskTemplate/properties/subjects',
   '/components/schemas/RoutingCondition/properties/fields',
@@ -320,6 +398,9 @@ export function generate(source: string, settings: Settings = {}): string {
   const definitions: Node = Object.create(null)
   const pageMethods: string[] = []
   const pageNames = new Set<string>()
+  const listTypes: string[] = []
+  const listRowTypes: string[] = []
+  const listRules: Node = {}
   const invoke: { id: string; operation: string; body: string; keys: string[]; profile: string; profileRequired: boolean; attachments: boolean }[] = []
   const actionInputs: Record<string, Node> = {}
   const conditions: { id: string; operation: string; body: string; profile: string; result: string; profileRequired: boolean }[] = []
@@ -483,7 +564,7 @@ export function generate(source: string, settings: Settings = {}): string {
           requestType = describe(spec.schema, at)
           assertRequestSchema(spec.schema, at)
           hasAttachments ||= Boolean(deref(spec.schema, at).properties?.attachments)
-          if (!isJson(media)) requestType = media === 'application/x-www-form-urlencoded' ? 'string' : 'Uint8Array | string'
+          if (!isJson(media)) requestType = media === 'application/x-www-form-urlencoded' ? 'string' : 'Uint8Array | Blob | string'
           if (definition.signed) requestType = 'Uint8Array'
           if (media === '*/*') {
             variants.push('{ body: ' + requestType + '; contentType: string }')
@@ -575,12 +656,57 @@ export function generate(source: string, settings: Settings = {}): string {
         pageNames.add(name)
         const rest = requiredOptions ? 'options: Operations[' + quote(id) + ']["input"], cursor?: string'
           : 'options: Operations[' + quote(id) + ']["input"] = {}, cursor?: string'
-        const query = cursorName === '$skiptoken'
-          ? '{ accessProfile: options.query?.accessProfile, "$skiptoken": cursor }'
-          : '{ ...options.query, cursor }'
+        // A BReg cursor carries the query, so a continuation sends only the access profile,
+        // where the route takes one, and the cursor.
+        const query = cursorName !== '$skiptoken' ? '{ ...options.query, cursor }'
+          : parameterMap.has('query:accessProfile') ? '{ accessProfile: options.query?.accessProfile, "$skiptoken": cursor }'
+            : '{ "$skiptoken": cursor }'
         pageMethods.push('  async ' + name + '(' + rest + '): Promise<Page<' + page.itemType + '>> {\n' +
           '    const { data } = await this.call(' + quote(id) + ', { ...options, query: cursor === undefined ? options.query : ' + query + ' })\n' +
           '    return { items: data.' + page.items + ', nextCursor: data.' + page.cursor + ' ?? null }\n  }')
+      }
+      const listProfiles = breg && operation['x-registry-operation'] === 'list'
+        && (operation['x-registry-queryKind'] ?? 'list') === 'list' ? queryProfiles(operation, pointer) : undefined
+      if (listProfiles) {
+        const listShape = page && page.items === 'items' && page.cursor === 'pageInfo.nextCursor'
+          && cursorName === '$skiptoken' && !definition.mutating
+          ? page : fail(pointer, 'query profiles on an operation without a BReg list page')
+        const profileParameter = parameterMap.get('query:accessProfile')?.value
+        if (!profileParameter && listProfiles.length > 1) fail(pointer, 'several query profiles need an accessProfile parameter')
+        const profileRequired = listProfiles.length > 1 || profileParameter?.required === true
+        const row = 'ListRows[' + quote(id) + ']'
+        const value = (property: string) => 'FieldValue<' + row + ', ' + quote(property) + '>'
+        const alternatives = listProfiles.map(entry => {
+          const filters = entry.filterable.map(filter => quote(filter.property) + '?: Filter<' + value(filter.property) + ', ' +
+            filter.operators.map(operator => quote(operator)).join(' | ') + '>')
+          const optional = filters.length ? '{ ' + filters.join('; ') + ' }' : 'never'
+          const where = entry.requiredFilters
+            ? 'where: (' + entry.requiredFilters.map(alternative => '{ ' + alternative.map(property =>
+              quote(property) + ': ' + value(property)).join('; ') + ' }').join(' | ') + ') & ' + optional
+            : 'where?: ' + optional
+          const order = entry.sortable.flatMap(sort => sort.directions.map(direction =>
+            quote(direction === 'asc' ? sort.property : sort.property + ' desc')))
+          const fields = [
+            profileParameter ? 'accessProfile' + (profileRequired ? '' : '?') + ': ' + quote(entry.profile) : 'accessProfile?: never',
+            where,
+            'orderBy?: ' + (order.length ? order.join(' | ') : 'never'),
+            'select?: ' + (entry.selectable.length ? 'ReadonlyArray<' + entry.selectable.map(name => quote(name)).join(' | ') + '>' : 'never'),
+            'count?: ' + (entry.allowCount ? 'boolean' : 'never'),
+            'top?: number',
+          ]
+          return '(CallOptions & { ' + fields.join('; ') + ' })'
+        })
+        listTypes.push('  ' + quote(id) + ': ' + alternatives.join(' | '))
+        listRowTypes.push('  ' + quote(id) + ': ' + listShape.itemType)
+        listRules[id] = {
+          accessProfileParameter: Boolean(profileParameter),
+          profiles: Object.fromEntries(listProfiles.map(entry => [entry.profile, {
+            maximumPageSize: entry.maximumPageSize, allowCount: entry.allowCount, selectable: entry.selectable,
+            filterable: Object.fromEntries(entry.filterable.map(filter => [filter.property, filter.operators])),
+            sortable: Object.fromEntries(entry.sortable.map(sort => [sort.property, sort.directions])),
+            ...(entry.requiredFilters ? { requiredFilters: entry.requiredFilters } : {}),
+          }])),
+        }
       }
       const action = operation['x-registry-action']
       const routeKind = operation['x-registry-routeKind']
@@ -658,10 +784,21 @@ export function generate(source: string, settings: Settings = {}): string {
     ...[...used].sort().map(pointer => '// Unconstrained JSON ' + pointer),
     'import { Transport, type Answer, type CallOptions, type ClientOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from ' + quote(settings.coreImport ?? '../core.ts'),
     'import { validator } from ' + quote(settings.schemaImport ?? '../schema.ts'),
+    ...(listTypes.length ? [
+      'import { listPage, listQuery, type FieldValue, type Filter, type ListPage, type ListRequest, type ListRules } from ' +
+        quote(settings.coreImport ?? '../core.ts'),
+    ] : []),
     '',
     ...[...types].map(([name, type]) => 'export type ' + name + ' = ' + type),
     '',
     'export interface Operations {', ...opTypes, '}',
+    ...(listTypes.length ? [
+      '',
+      '// The row each list returns, and the list options its query profiles allow.',
+      'export interface ListRows {', ...listRowTypes, '}',
+      'export interface ListOptions {', ...listTypes, '}',
+      'const listRules: Record<string, ListRules> = JSON.parse(' + quote(quote(listRules)) + ')',
+    ] : []),
     ...(conditionalAnswers.length ? [
       'interface ConditionalAnswers {', ...conditionalAnswers, '}',
       'type OperationAnswer<K extends keyof Operations> = K extends keyof ConditionalAnswers ? ConditionalAnswers[K] : Answer<Operations[K]["output"]>',
@@ -695,7 +832,19 @@ export function generate(source: string, settings: Settings = {}): string {
     '    if (!route) throw new TypeError("Unknown operation")',
     '    return this.#transport.call(route, options)',
     '  }',
-    ...pageMethods, ...actionMethods, '}',
+    ...pageMethods,
+    ...(listTypes.length ? [
+      '  list<K extends keyof ListOptions>(operation: K, ...args: {} extends ListOptions[K] ? [options?: ListOptions[K], cursor?: string] : [options: ListOptions[K], cursor?: string]): Promise<ListPage<ListRows[K]>>',
+      '  async list(operation: string, options: ListRequest = {}, cursor?: string): Promise<ListPage<unknown>> {',
+      '    const rules = Object.hasOwn(listRules, operation) ? listRules[operation] : undefined',
+      '    if (!rules) throw new TypeError("Unknown list operation")',
+      '    const query = listQuery(rules, options, cursor)',
+      '    const { accessProfile, where, orderBy, select, count, top, ...call } = options',
+      '    const { data } = await this.#call<{ items: unknown[]; pageInfo: { nextCursor?: string | null }; count?: number }>(operation, { ...call, query })',
+      '    return listPage(data)',
+      '  }',
+    ] : []),
+    ...actionMethods, '}',
     '',
     '// Every generated module exports this one factory name. The client it returns is typed to this',
     '// registry\'s operations.',

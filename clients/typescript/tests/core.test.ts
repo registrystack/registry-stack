@@ -59,6 +59,36 @@ test('plain http reaches only loopback, or a private or single-label host with a
   assert.equal(asked, 0)
 })
 
+test('allowInsecureHttp admits IPv6 unique-local and link-local literals exactly like IPv4 private ranges', () => {
+  let asked = 0
+  const token = () => { asked++; return 'fixture' }
+  const admitted = ['http://10.0.0.5', 'http://192.168.1.20', 'http://[fc00::1]', 'http://[fdff:ffff::1]:8080',
+    'http://[fe80::1]', 'http://[febf:ffff::1]/registry']
+  for (const baseUrl of admitted) {
+    assert.throws(() => new Transport({ baseUrl, token }), /^TypeError: Invalid registry base URL$/u, baseUrl)
+    new Transport({ baseUrl, token, allowInsecureHttp: true })
+  }
+  // Just outside fc00::/7 and fe80::/10.
+  for (const baseUrl of ['http://[fbff:ffff::1]', 'http://[fe00::1]', 'http://[fe7f::1]', 'http://[fec0::1]']) {
+    assert.throws(() => new Transport({ baseUrl, token, allowInsecureHttp: true }), /^TypeError: Invalid registry base URL$/u, baseUrl)
+  }
+  assert.equal(asked, 0)
+})
+
+test('allowInsecureHttp admits only single-label names, never a name with a dot', () => {
+  let asked = 0
+  const token = () => { asked++; return 'fixture' }
+  for (const baseUrl of ['http://breg', 'http://breg:8080', 'http://registry-db/prefix']) {
+    new Transport({ baseUrl, token, allowInsecureHttp: true })
+  }
+  for (const baseUrl of ['http://breg.internal', 'http://localhost.example', 'http://breg.svc.cluster.local:8080',
+    'http://registry.local', 'http://localhost.', 'http://breg.']) {
+    assert.throws(() => new Transport({ baseUrl, token }), /^TypeError: Invalid registry base URL$/u, baseUrl)
+    assert.throws(() => new Transport({ baseUrl, token, allowInsecureHttp: true }), /^TypeError: Invalid registry base URL$/u, baseUrl)
+  }
+  assert.equal(asked, 0)
+})
+
 test('a base with dot segments, or one the URL parser refuses, is refused with the fixed message', () => {
   for (const baseUrl of ['https://example.org/registry/../other', 'https://example.org/registry/./v1',
     'https://example.org/registry/%2e%2e/other', 'https://example.org/registry/%2E/v1', 'https://example.org/a/.%2e',
