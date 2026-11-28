@@ -1778,6 +1778,7 @@ pub(super) fn add(
     bregctl: &Path,
     declared: registry_platform_config::DeclaredPosture,
 ) -> Result<Value> {
+    let deny_runtime_warnings = declared.posture == registry_platform_config::Posture::Production;
     bregctl_version(bregctl)?;
     let proposals = explain(bregctl, breg_project, "proposals")?;
     let actions = explain(bregctl, breg_project, "actions")?;
@@ -1837,7 +1838,7 @@ pub(super) fn add(
                 project,
                 &runtime_path,
                 false,
-                false,
+                deny_runtime_warnings,
                 Ok(check),
                 declared,
             )?;
@@ -1906,7 +1907,7 @@ pub(super) fn add(
     if package_output.is_some_and(Path::exists) {
         return Err(ProviderAddFailure::PackageDestinationExists.into());
     }
-    let stage = tempfile::tempdir_in(&parent)?;
+    let stage = crate::trusted_tempdir_in(&parent)?;
     let staged_project = stage.path().join("project");
     crate::project::init(&staged_project, pattern)?;
     let provider_id = configure_project(
@@ -1922,17 +1923,33 @@ pub(super) fn add(
         crate::project::check(&staged_project, false, false)?,
         "caseworkctl check",
     )?;
-    check = confirmed(
-        crate::project::check_runtime_config(
-            &staged_project,
-            &staged_project.join("runtime.example.yaml"),
-            false,
-            false,
-            Ok(check),
-            declared,
-        )?,
-        "caseworkctl check --runtime-config",
-    )?;
+    let staged_runtime = std::path::absolute(staged_project.join("runtime.example.yaml"))?;
+    let destination_runtime = std::path::absolute(project.join("runtime.example.yaml"))?;
+    let runtime_check = crate::project::check_runtime_config(
+        &staged_project,
+        &staged_runtime,
+        false,
+        deny_runtime_warnings,
+        Ok(check),
+        declared,
+    )
+    .map_err(|mut error| {
+        if let Some(report) = error.downcast_mut::<registry_platform_yaml::Report>() {
+            let staged_file = staged_runtime.to_string_lossy();
+            let destination_file = destination_runtime.to_string_lossy();
+            for diagnostic in report.diagnostics_mut() {
+                if let Some(source) = diagnostic
+                    .source
+                    .as_mut()
+                    .filter(|source| source.file == staged_file)
+                {
+                    source.file = destination_file.to_string();
+                }
+            }
+        }
+        error
+    })?;
+    check = confirmed(runtime_check, "caseworkctl check --runtime-config")?;
     let pairing = if let Some(package) = breg_package {
         let paired = crate::provider_pair::pair(
             &staged_project,
@@ -3446,10 +3463,11 @@ exit 1
             ];
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
-            let exit = crate::main_entry_from(
+            let exit = crate::main_entry_with_posture_resolver(
                 args.into_iter().map(std::ffi::OsString::from),
                 &mut stdout,
                 &mut stderr,
+                |flag| registry_platform_config::declared_from(flag, None),
             );
             (exit, serde_json::from_slice::<Value>(&stdout).unwrap())
         };
@@ -3465,6 +3483,10 @@ exit 1
                 .find(|diagnostic| diagnostic["code"] == "casework.posture.unrestricted-clients")
                 .expect("production reports unrestricted clients");
             assert_eq!(refusal["path"], "/authentication/oidc/allowedClients");
+            assert_eq!(
+                refusal["source"]["file"],
+                json!(project.join("runtime.example.yaml"))
+            );
             assert!(refusal["suggestedAction"]
                 .as_str()
                 .unwrap()
@@ -3486,7 +3508,13 @@ exit 1
         .unwrap();
         assert_eq!(created["ok"], true, "initial generation");
         assert_eq!(created["outcome"], "created");
+        let policy_path = project.join("casework.yaml");
+        let export_path = project.join("context-providers/correct-address-context.json");
+        let policy_before = fs::read(&policy_path).unwrap();
+        let export_before = fs::read(&export_path).unwrap();
         assert_production_refuses();
+        assert_eq!(fs::read(&policy_path).unwrap(), policy_before);
+        assert_eq!(fs::read(&export_path).unwrap(), export_before);
         let (exit, report) = run_with_posture("development");
         assert_eq!(exit, std::process::ExitCode::SUCCESS);
         assert_eq!(report["posture"]["value"], "development");
@@ -3520,6 +3548,22 @@ exit 1
                 .unwrap()
                 .join(".casework/package"))
         );
+        let mut incomplete_runtime = runtime.clone();
+        incomplete_runtime["authentication"]["oidc"]["allowedClients"] = json!("${CLIENTS}");
+        write_yaml(&runtime_path, &incomplete_runtime).unwrap();
+        let (exit, report) = run_with_posture("production");
+        assert_eq!(
+            exit,
+            std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT)
+        );
+        assert!(report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| {
+                diagnostic["code"] == "platform.runtime-config.check-incomplete"
+                    && diagnostic["path"] == "/authentication/oidc/allowedClients"
+            }));
         let mut production_runtime = runtime.clone();
         let clients = &mut production_runtime["authentication"]["oidc"];
         clients["allowedClients"] = json!(["casework-client"]);
@@ -3577,10 +3621,6 @@ exit 1
                 .unwrap()
                 .ends_with(".test")
         );
-        let policy_before = fs::read(project.join("casework.yaml")).unwrap();
-        let export_before =
-            fs::read(project.join("context-providers/correct-address-context.json")).unwrap();
-
         let rerun = add(
             &project,
             &breg_project,

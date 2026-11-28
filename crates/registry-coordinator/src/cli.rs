@@ -637,6 +637,21 @@ pub(crate) fn absolute_runtime_path(path: &Path) -> Result<PathBuf> {
     }
     Ok(normal)
 }
+fn validate_coordinator_peer(response: &reqwest::Response, peer_policy: PeerPolicy) -> Result<()> {
+    validate_response_headers(response.headers(), peer_policy).map_err(|error| match error {
+            ResponseHeaderError::DevelopmentPeer => CoordinatorError::new(
+                "development-peer",
+                "The Coordinator declared development and this command runs as production.",
+            )
+            .suggest("Use a production Coordinator, or declare development with --posture development or REGISTRY_STACK_POSTURE=development."),
+            _ => CoordinatorError::new(
+                "service-unavailable",
+                "the service response headers exceeded their bounds",
+            )
+            .suggest("Check that --url names the Coordinator service origin."),
+        })
+}
+
 async fn remote(
     service: &Service,
     method: reqwest::Method,
@@ -689,8 +704,6 @@ async fn remote(
         )
         .suggest("Write one current compact access token, three dot-separated parts, into the --token-file file.")
     })?;
-    url.set_path(path.split('?').next().unwrap_or(path));
-    url.set_query(path.split_once('?').map(|(_, q)| q));
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
@@ -699,6 +712,27 @@ async fn remote(
         .map_err(|_| {
             CoordinatorError::new("service-unavailable", "cannot initialize the HTTP client")
         })?;
+    if method != reqwest::Method::GET {
+        let mut health = url.clone();
+        health.set_path(registry_platform_httputil::probe::HEALTH_PATH);
+        let response = client.get(health).send().await.map_err(|_| {
+            CoordinatorError::new(
+                "service-unavailable",
+                "the Coordinator health probe could not answer",
+            )
+            .suggest("Check that --url reaches the running Coordinator service.")
+        })?;
+        validate_coordinator_peer(&response, peer_policy)?;
+        if !response.status().is_success() {
+            return Err(CoordinatorError::new(
+                "service-unavailable",
+                "the Coordinator health probe did not succeed",
+            )
+            .suggest("Check that --url reaches the running Coordinator service."));
+        }
+    }
+    url.set_path(path.split('?').next().unwrap_or(path));
+    url.set_query(path.split_once('?').map(|(_, q)| q));
     let mut request = client.request(method, url).bearer_auth(token.as_str());
     if let Some(body) = body {
         request = request.json(&body);
@@ -713,18 +747,7 @@ async fn remote(
         )
         .suggest("Check that --url reaches the running Coordinator service, then inspect the original run before repeating the command.")
     })?;
-    validate_response_headers(response.headers(), peer_policy).map_err(|error| match error {
-            ResponseHeaderError::DevelopmentPeer => CoordinatorError::new(
-                "development-peer",
-                "The Coordinator declared development and this command runs as production.",
-            )
-            .suggest("Use a production Coordinator, or declare development with --posture development or REGISTRY_STACK_POSTURE=development."),
-            _ => CoordinatorError::new(
-                "service-unavailable",
-                "the service response headers exceeded their bounds",
-            )
-            .suggest("Check that --url names the Coordinator service origin."),
-        })?;
+    validate_coordinator_peer(&response, peer_policy)?;
     let status = response.status();
     let bytes = registry_platform_httputil::read_bounded(response, 1_048_576)
         .await

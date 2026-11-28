@@ -178,11 +178,11 @@ impl fmt::Display for StoreError {
             ),
             StoreError::InvalidRecordedPosture => write!(
                 formatter,
-                "the last pass has an invalid recorded posture"
+                "the job store has an invalid recorded posture"
             ),
             StoreError::PostureMismatch { recorded } => write!(
                 formatter,
-                "{POSTURE_MISMATCH}: the last pass ran under {}; use a fresh store when changing the deployment posture",
+                "{POSTURE_MISMATCH}: the job store records {}. {POSTURE_RECOVERY}",
                 recorded.as_str()
             ),
             StoreError::Pool(reason) => write!(
@@ -1408,18 +1408,19 @@ pub struct IdentityRebind {
 ///
 /// # Errors
 ///
-/// [`StoreError::LeaseHeld`] while a pass holds the lease; a failed query
-/// refuses.
+/// [`StoreError::PostureMismatch`] when the recorded posture differs,
+/// [`StoreError::LeaseHeld`] while a pass holds the lease, or a query error.
 pub async fn rebind_item_identity(
     client: &mut Object,
     job_id: &str,
     digest: Option<&[u8; 32]>,
+    posture: registry_platform_config::Posture,
 ) -> Result<IdentityRebind, StoreError> {
     let tx = client.transaction().await?;
     let state = tx
         .query_opt(
-            "SELECT item_identity_digest, (lease_expires IS NOT NULL AND lease_expires > now()) \
-             FROM adapter_job_state WHERE job_id = $1 FOR UPDATE",
+            "SELECT item_identity_digest, (lease_expires IS NOT NULL AND lease_expires > now()), \
+             last_pass_posture FROM adapter_job_state WHERE job_id = $1 FOR UPDATE",
             &[&job_id],
         )
         .await?;
@@ -1438,6 +1439,7 @@ pub async fn rebind_item_identity(
             items_kept,
         });
     };
+    check_recorded_posture(parse_recorded_posture(state.get(2))?, posture)?;
     let leased: bool = state.get(1);
     if leased {
         return Err(StoreError::LeaseHeld);
@@ -1476,7 +1478,7 @@ pub struct JobStateRow {
     pub lease_expires: Option<SystemTime>,
     /// When the last pass ran.
     pub last_pass_at: Option<SystemTime>,
-    /// The declaration of the process that recorded the latest pass.
+    /// The declaration recorded when a pass acquires its lease.
     pub last_pass_posture: Option<registry_platform_config::Posture>,
     /// Why the last pass stopped, value-free.
     pub last_pass_stop: Option<String>,
@@ -1511,13 +1513,7 @@ pub async fn read_state(
     let Some(row) = row else {
         return Ok(None);
     };
-    let last_pass_posture = row
-        .get::<_, Option<&str>>(9)
-        .map(|value| {
-            registry_platform_config::Posture::parse(value)
-                .ok_or(StoreError::InvalidRecordedPosture)
-        })
-        .transpose()?;
+    let last_pass_posture = parse_recorded_posture(row.get(9))?;
     Ok(Some(JobStateRow {
         position: row.get(0),
         projection_digest: row.get(1),
@@ -1533,19 +1529,34 @@ pub async fn read_state(
 }
 
 pub const POSTURE_MISMATCH: &str = "adapter.job.posture-mismatch";
+pub const POSTURE_RECOVERY: &str =
+    "Use the recorded posture, or use a fresh store when changing the deployment posture. Run adapter-job status to see both postures.";
+
+fn parse_recorded_posture(
+    raw: Option<&str>,
+) -> Result<Option<registry_platform_config::Posture>, StoreError> {
+    raw.map(|value| {
+        registry_platform_config::Posture::parse(value).ok_or(StoreError::InvalidRecordedPosture)
+    })
+    .transpose()
+}
+
+fn check_recorded_posture(
+    recorded: Option<registry_platform_config::Posture>,
+    declared: registry_platform_config::Posture,
+) -> Result<(), StoreError> {
+    if let Some(recorded) = recorded.filter(|recorded| *recorded != declared) {
+        return Err(StoreError::PostureMismatch { recorded });
+    }
+    Ok(())
+}
 
 impl JobStateRow {
     pub fn check_posture(
         &self,
         posture: registry_platform_config::Posture,
     ) -> Result<(), StoreError> {
-        if let Some(recorded) = self
-            .last_pass_posture
-            .filter(|recorded| *recorded != posture)
-        {
-            return Err(StoreError::PostureMismatch { recorded });
-        }
-        Ok(())
+        check_recorded_posture(self.last_pass_posture, posture)
     }
 }
 
@@ -1585,8 +1596,8 @@ pub struct LeasedState {
 ///
 /// # Errors
 ///
-/// A failed write refuses; an error is never a held lease, which is
-/// the `None` answer.
+/// [`StoreError::PostureMismatch`] when the recorded posture differs,
+/// or a failed write. A held lease returns `None`.
 pub async fn take_lease(
     client: &impl GenericClient,
     job_id: &str,
@@ -1598,7 +1609,7 @@ pub async fn take_lease(
     let granted = client
         .query_opt(
             "UPDATE adapter_job_state SET lease_epoch = lease_epoch + 1, \
-             lease_expires = now() + make_interval(secs => $2) \
+             lease_expires = now() + make_interval(secs => $2), last_pass_posture = $3 \
              WHERE job_id = $1 AND (lease_expires IS NULL OR lease_expires <= now()) \
              AND (last_pass_posture IS NULL OR last_pass_posture = $3) \
              RETURNING lease_epoch, position, rescan_active",
@@ -1795,8 +1806,9 @@ pub async fn stop_pass(
 ///
 /// # Errors
 ///
-/// [`StoreError::LeaseHeld`] while a pass holds the lease, or when no
-/// state row exists; a failed write refuses.
+/// [`StoreError::PostureMismatch`] when the recorded posture differs,
+/// [`StoreError::LeaseHeld`] while a pass holds the lease or when no state row
+/// exists, or a failed write.
 pub async fn mark_rescan_due(
     client: &impl GenericClient,
     job_id: &str,

@@ -498,7 +498,7 @@ fn unseal(root: &Path) {
     }
 }
 #[allow(clippy::too_many_arguments)]
-fn start_issuer(
+fn prepare_issuer(
     root: &Path,
     casework_port: u16,
     human: &registry_platform_crypto::PrivateJwk,
@@ -508,7 +508,7 @@ fn start_issuer(
     status: &registry_platform_crypto::PrivateJwk,
     seed: &registry_platform_crypto::PrivateJwk,
     other_seed: &registry_platform_crypto::PrivateJwk,
-) -> Issuer {
+) -> IssuerDescription {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
@@ -663,24 +663,13 @@ fn start_issuer(
         assertion_scope: "casework:grants:assert".into(),
         ordinary_resource_permissions: Vec::new(),
     });
-    let posture_claim = registry_platform_oidc::POSTURE_CLAIM;
     description
-        .machine_clients
-        .iter_mut()
-        .find(|client| client.client_id == "task-agent")
-        .unwrap()
-        .token_attributes
-        .push(posture_claim.into());
-    description.schema_attributes.extend([
-        "evidence_tags".into(),
-        "evidence_audience".into(),
-        posture_claim.into(),
-    ]);
+        .schema_attributes
+        .extend(["evidence_tags".into(), "evidence_audience".into()]);
     description.schema_attributes.sort();
     description.schema_attributes.dedup();
-    let connection_id = Uuid::new_v4().to_string();
     description.exchange_issuers.push(ExchangeIssuer {
-        id: connection_id.clone(),
+        id: Uuid::new_v4().to_string(),
         name: "Casework task authority".into(),
         issuer: AUTHORITY.into(),
         jwks_endpoint: format!("http://host.docker.internal:{casework_port}/.well-known/jwks.json"),
@@ -694,34 +683,24 @@ fn start_issuer(
         std::fs::write(&path, Uuid::new_v4().to_string()).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
-    let rendered = render::render(&description).unwrap();
-    // Project the signed posture claim on this fixture's institutional exchange.
-    let connection_path = rendered
-        .resources_dir
-        .join("connections")
-        .join(format!("{connection_id}.yaml"));
-    let mut connection = registry_platform_yaml::Reader::new("fixture connection")
-        .scan(&fs::read(&connection_path).unwrap())
-        .unwrap()
-        .unwrap()
-        .to_json_value();
-    connection["attributeConfiguration"]["user_type_attribute_mappings"][0]["attributes"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"external_attribute": posture_claim, "local_attribute": posture_claim}));
-    fs::write(
-        &connection_path,
-        serde_norway::to_string(&connection).unwrap(),
-    )
-    .unwrap();
-    let pin = registry_thunderid_tooling::version::ThunderIdPin::load().unwrap();
-    let mut issuer = Issuer {
-        description,
-        image: pin.image,
-        jwks: Value::Null,
-    };
-    issuer.jwks = local::start(&issuer.session(), Path::new("docker"), &mut || false).unwrap();
-    issuer
+    render::render(&description).unwrap();
+    description
+}
+
+#[test]
+fn stock_institutional_issuer_fixture_renders() {
+    let root = canonical_tempdir();
+    prepare_issuer(
+        root.path(),
+        12345,
+        &key("human"),
+        &key("agent"),
+        &key("evidence-agent"),
+        &key("other-agent"),
+        &key("status"),
+        &key("seed"),
+        &key("other-seed"),
+    );
 }
 
 struct DockerNetwork {
@@ -1482,7 +1461,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         key("seed"),
         key("other-seed"),
     );
-    let (h, a, e, o, s, d, x) = (
+    let (human, agent, evidence_agent, other_agent, status, seed, other_seed) = (
         human_key.clone(),
         agent_key.clone(),
         evidence_agent_key.clone(),
@@ -1493,7 +1472,25 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     );
     let path = root.path().to_path_buf();
     let issuer = tokio::task::spawn_blocking(move || {
-        start_issuer(&path, casework_port, &h, &a, &e, &o, &s, &d, &x)
+        let description = prepare_issuer(
+            &path,
+            casework_port,
+            &human,
+            &agent,
+            &evidence_agent,
+            &other_agent,
+            &status,
+            &seed,
+            &other_seed,
+        );
+        let pin = registry_thunderid_tooling::version::ThunderIdPin::load().unwrap();
+        let mut issuer = Issuer {
+            description,
+            image: pin.image,
+            jwks: Value::Null,
+        };
+        issuer.jwks = local::start(&issuer.session(), Path::new("docker"), &mut || false).unwrap();
+        issuer
     })
     .await
     .unwrap();

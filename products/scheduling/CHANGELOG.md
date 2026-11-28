@@ -26,7 +26,8 @@
   first. A previous key equal to the current key is refused.
 
 - BREAKING: An undeclared posture is production. Runtime files with development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
-- BREAKING: `check` reports development settings as errors when no posture is declared. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: `schedulingctl check` and `schedulingctl test` refuse development-only runtime settings under production. Migration: Use `--posture development` or `REGISTRY_STACK_POSTURE=development` when checking or replaying fixtures for a development project.
+- `schedulingctl plan` reports `platform.activation.posture-mismatch` at `/database` as its first diagnostic when the activation posture differs.
 - BREAKING: Use `loopback-plaintext` to bind a plaintext listener to loopback in either posture. Migration: Write tlsTermination: loopback-plaintext; settings it used to relax now follow the posture.
 - BREAKING: Issuer `allowInsecureHttp: true` requires development. Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
 - BREAKING: Plaintext PostgreSQL on a private address requires development. The test-only plaintext diagnostic becomes `platform.database.test-only-plaintext`. Migration: Use database.transport: private-network-plaintext for a database container beside the product. Update scripts that match the old codes.

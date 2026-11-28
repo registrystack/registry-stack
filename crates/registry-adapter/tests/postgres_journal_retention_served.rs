@@ -1627,7 +1627,10 @@ async fn served_get(port: u16, path: &str, bearer: Option<&str>) -> (u16, serde_
     )
 }
 
-async fn served_disbursement_status_with_marked_peer(posture: registry_platform_config::Posture) {
+async fn served_disbursement_status(
+    posture: registry_platform_config::Posture,
+    development_peer: bool,
+) {
     use registry_adapter::payments::{
         config::{PaymentsConfig, API_VERSION, KIND},
         g2p_model::{DisbursementInstruction, G2pAttempt, PreparedG2pRegistryAction},
@@ -1800,7 +1803,16 @@ async fn served_disbursement_status_with_marked_peer(posture: registry_platform_
         axum::routing::get(move || {
             stub_calls.fetch_add(1, Ordering::Relaxed);
             let response = response.clone();
-            async move { ([("Registry-Posture", "development")], axum::Json(response)) }
+            async move {
+                let mut headers = axum::http::HeaderMap::new();
+                if development_peer {
+                    headers.insert(
+                        "Registry-Posture",
+                        axum::http::HeaderValue::from_static("development"),
+                    );
+                }
+                (headers, axum::Json(response))
+            }
         }),
     );
     let server = tokio::spawn(async move { axum::serve(listener, peer).await.unwrap() });
@@ -1823,7 +1835,7 @@ async fn served_disbursement_status_with_marked_peer(posture: registry_platform_
     server.abort();
     assert_eq!(calls.load(Ordering::Relaxed), 1, "{status}: {body}");
     match posture {
-        Posture::Production => {
+        Posture::Production if development_peer => {
             assert_eq!(status, 503, "{body}");
             assert_eq!(body["title"], "adapter.payment.unavailable", "{body}");
             assert!(
@@ -1831,8 +1843,17 @@ async fn served_disbursement_status_with_marked_peer(posture: registry_platform_
                 "{body}"
             );
         }
-        Posture::Development => {
+        Posture::Development | Posture::Production => {
             assert_eq!(status, 200, "{body}");
+            let observation = connect(&database)
+                .await
+                .query_one(
+                    "SELECT posture FROM adapter_g2p_events WHERE attempt_id = $1 AND kind = 'g2p.provider-observed'",
+                    &[&id],
+                )
+                .await
+                .expect("read the observation written by the served payment host");
+            assert_eq!(observation.get::<_, &str>(0), posture.as_str());
         }
     }
     let audits = connect(&database)
@@ -1849,12 +1870,15 @@ async fn served_disbursement_status_with_marked_peer(posture: registry_platform_
 
 #[tokio::test]
 async fn served_production_refuses_a_development_payment_peer_opaquely() {
-    served_disbursement_status_with_marked_peer(registry_platform_config::Posture::Production)
-        .await;
+    served_disbursement_status(registry_platform_config::Posture::Production, true).await;
 }
 
 #[tokio::test]
 async fn served_development_accepts_a_development_payment_peer() {
-    served_disbursement_status_with_marked_peer(registry_platform_config::Posture::Development)
-        .await;
+    served_disbursement_status(registry_platform_config::Posture::Development, true).await;
+}
+
+#[tokio::test]
+async fn served_production_records_disbursement_observation_posture() {
+    served_disbursement_status(registry_platform_config::Posture::Production, false).await;
 }

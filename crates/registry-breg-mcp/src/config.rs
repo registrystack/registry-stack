@@ -167,7 +167,7 @@ pub struct ServiceConfig {
     /// declared development posture.
     #[cfg_attr(feature = "schema", schemars(extend("x-registry-development-only" = ["breg.posture.review-http-public-origin"])))]
     #[cfg_attr(feature = "schema", schemars(with = "Url"))]
-    review_base_url: Gated<ReviewOrigin>,
+    review_base_url: CheckedReviewOrigin,
 }
 
 static HTTP_REVIEW_ORIGIN: DevelopmentSetting = DevelopmentSetting {
@@ -191,6 +191,49 @@ impl DevelopmentClass for ReviewOrigin {
     }
 }
 
+/// The URL stays gated for outbound use. Offline validation needs only
+/// whether its path, query, and fragment have the shape of an origin.
+#[derive(Clone, Debug)]
+struct CheckedReviewOrigin {
+    url: Gated<ReviewOrigin>,
+    has_path: bool,
+    has_query_or_fragment: bool,
+}
+
+impl<'de> Deserialize<'de> for CheckedReviewOrigin {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ReadOrigin;
+
+        impl<'de> serde::de::Visitor<'de> for ReadOrigin {
+            type Value = CheckedReviewOrigin;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a review URL")
+            }
+
+            fn visit_newtype_struct<D: serde::Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                let authored = Url::deserialize(deserializer)?;
+                let parsed = authored.to_url();
+                // Keep the loader's source location active while decoding the gate.
+                let url =
+                    Gated::deserialize(serde_json::Value::String(authored.as_str().to_owned()))
+                        .map_err(serde::de::Error::custom)?;
+                Ok(CheckedReviewOrigin {
+                    url,
+                    has_path: parsed.path() != "/",
+                    has_query_or_fragment: parsed.query().is_some() || parsed.fragment().is_some(),
+                })
+            }
+        }
+
+        deserializer
+            .deserialize_newtype_struct(registry_platform_yaml::DEVELOPMENT_ONLY, ReadOrigin)
+    }
+}
+
 impl ServiceConfig {
     /// The review page origin, which only a development process may read when
     /// it is plain http.
@@ -198,7 +241,16 @@ impl ServiceConfig {
         &self,
         development: Option<&DevelopmentWitness>,
     ) -> Result<&Url, DevelopmentOnlyRefused> {
-        self.review_base_url.get(development).map(|value| &value.0)
+        self.review_base_url
+            .url
+            .get(development)
+            .map(|value| &value.0)
+    }
+
+    /// Whether the review URL has the path, query, and fragment of an origin.
+    #[must_use]
+    pub fn review_base_url_is_origin(&self) -> bool {
+        !self.review_base_url.has_path && !self.review_base_url.has_query_or_fragment
     }
 
     /// The development-only setting this block holds, with its pointer under
@@ -206,6 +258,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn development_settings(&self, service: &str) -> Vec<FoundSetting> {
         self.review_base_url
+            .url
             .development_setting()
             .map(|setting| FoundSetting {
                 setting,
@@ -536,7 +589,7 @@ fn findings(
             .iter()
             .map(resource_server_finding),
     );
-    endpoint_findings(config, development, &mut findings);
+    endpoint_findings(config, &mut findings);
     cross_member_findings(config, defers, development, &mut findings);
     if let Err(error) = config.audit.destination() {
         findings.push(audit_finding(&error));
@@ -546,11 +599,7 @@ fn findings(
 
 /// Every endpoint the gateway serves or calls is https with no query or
 /// fragment, or plain HTTP on a loopback host.
-fn endpoint_findings(
-    config: &RuntimeConfig,
-    development: Option<&DevelopmentWitness>,
-    findings: &mut Vec<Finding>,
-) {
+fn endpoint_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
     let endpoints = [
         ("/registry/baseUrl", &config.registry.base_url),
         ("/exchange/tokenEndpoint", &config.exchange.token_endpoint),
@@ -574,14 +623,8 @@ fn endpoint_findings(
             ));
         }
     }
-    // The review page serves its pages at the root of its publicOrigin. A
-    // plain http origin read without the witness is the posture report's
-    // finding.
-    let Ok(review) = config.service.review_base_url(development) else {
-        return;
-    };
-    let review = review.to_url();
-    if review.query().is_some() || review.fragment().is_some() {
+    let review = &config.service.review_base_url;
+    if review.has_query_or_fragment {
         findings.push(Finding::new(
             "breg.mcp-runtime.endpoint-query-or-fragment",
             "/service/reviewBaseUrl",
@@ -589,7 +632,7 @@ fn endpoint_findings(
             "Remove the query and the fragment from the URL.",
         ));
     }
-    if review.path() != "/" {
+    if review.has_path {
         findings.push(Finding::new(
             "breg.mcp-runtime.review-base-url-not-origin",
             "/service/reviewBaseUrl",
@@ -1395,6 +1438,25 @@ rateLimits:
             "platform.posture.mcp-http-resource".to_owned(),
             "/resourceServer/resource".to_owned()
         )));
+    }
+
+    #[test]
+    fn production_reports_http_review_url_posture_and_structure_together() {
+        let source = document().replace(
+            "reviewBaseUrl: https://review.example.test",
+            "reviewBaseUrl: http://review.example.test/nested?example=value#fragment",
+        );
+        let findings = findings_of(&source);
+        for code in [
+            "breg.posture.review-http-public-origin",
+            "breg.mcp-runtime.review-base-url-not-origin",
+            "breg.mcp-runtime.endpoint-query-or-fragment",
+        ] {
+            assert!(
+                findings.contains(&(code.to_owned(), "/service/reviewBaseUrl".to_owned())),
+                "{code}: {findings:?}"
+            );
+        }
     }
 
     #[test]

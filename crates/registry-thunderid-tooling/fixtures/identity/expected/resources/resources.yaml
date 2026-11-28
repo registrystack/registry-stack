@@ -639,6 +639,8 @@ attributeConfiguration:
       local_attribute: evidence_audience
     - external_attribute: evidence_tags
       local_attribute: evidence_tags
+    - external_attribute: registry_posture
+      local_attribute: registry_posture
     user_type: registry-exchange
   user_type_resolution:
     default: registry-exchange

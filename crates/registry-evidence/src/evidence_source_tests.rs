@@ -50,16 +50,17 @@ async fn composed_runtime() -> ComposedRuntime {
 }
 
 async fn composed_runtime_for_wallet(wallet: bool) -> ComposedRuntime {
-    composed_runtime_with_route(wallet, false).await
+    composed_runtime_with_route(wallet, false, crate::config::Posture::Development).await
 }
 
 async fn composed_runtime_with_finally_terminal_precedence() -> ComposedRuntime {
-    composed_runtime_with_route(false, true).await
+    composed_runtime_with_route(false, true, crate::config::Posture::Development).await
 }
 
 async fn composed_runtime_with_route(
     wallet: bool,
     finally_terminal_precedence: bool,
+    posture: crate::config::Posture,
 ) -> ComposedRuntime {
     let server = MockServer::start().await;
     let mut ceilings = FixtureCeilings::deployment_defaults();
@@ -355,8 +356,17 @@ async fn composed_runtime_with_route(
             |root| configure_source(root, wallet),
         )
     };
+    let deployment = crate::bundle::DeploymentInputs::load(
+        &downstream.runtime_path,
+        crate::config::DeclaredPosture {
+            posture: crate::config::Posture::Development,
+            source: crate::config::PostureSource::Flag,
+        },
+    )
+    .unwrap()
+    .with_test_posture(posture);
     let runtime = Arc::new(
-        EvidenceRuntime::initialize_with_authenticator(&downstream.runtime_path, authenticator())
+        EvidenceRuntime::initialize_from_with_authenticator(deployment, authenticator())
             .await
             .expect("downstream signed-source deployment initializes"),
     );
@@ -1179,6 +1189,30 @@ async fn signed_evidence_source_accepts_only_http_200() {
             response.text()
         );
         assert_eq!(response.json::<Value>()["code"], "source.unavailable");
+    }
+}
+
+#[tokio::test]
+async fn signed_evidence_source_applies_runtime_posture_to_marked_responses() {
+    use crate::config::Posture;
+    for (posture, status) in [
+        (Posture::Development, StatusCode::OK),
+        (Posture::Production, StatusCode::SERVICE_UNAVAILABLE),
+    ] {
+        // The synthetic upstream is a running development Evidence service.
+        let fixture = composed_runtime_with_route(false, false, posture).await;
+        mount_residence_source_expecting(&fixture.upstream.server, 1).await;
+        let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+        let response = http
+            .post("/v1/evidence")
+            .add_header(
+                "authorization",
+                format!("Bearer {}", access_token_for("peer-test", None)),
+            )
+            .add_header("accept", EVIDENCE_JWS_MEDIA_TYPE)
+            .json(&residence_request())
+            .await;
+        assert_eq!(response.status_code(), status);
     }
 }
 

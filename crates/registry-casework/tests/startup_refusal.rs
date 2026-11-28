@@ -341,9 +341,14 @@ taskAuthority:
     let config = loaded.config;
     let package = config.load_package().expect("package");
     let secrets = registry_casework::secret_resolver(&config).expect("secrets");
-    let error = registry_casework::build_context_providers(&config, &package, &secrets)
-        .err()
-        .expect("runtime binding omits the required task-grant profile");
+    let error = registry_casework::build_context_providers(
+        &config,
+        &package,
+        &secrets,
+        registry_platform_config::Posture::Development,
+    )
+    .err()
+    .expect("runtime binding omits the required task-grant profile");
 
     assert!(matches!(
         &error,
@@ -464,4 +469,154 @@ fn invalid_posture_is_a_usage_error_before_runtime_loading() {
         String::from_utf8(output.stderr).unwrap(),
         "casework: [platform.posture.invalid-value] --posture was given a value that is not a posture\n  next: Pass --posture development or --posture production.\n"
     );
+}
+
+#[tokio::test]
+async fn serving_provider_applies_peer_policy_to_marked_breg_response() {
+    use registry_casework_core::{
+        EphemeralCredential, HumanDisplayRequest, ReviewContextCapability, ReviewContextError,
+        ReviewContextIdentity, ReviewContextProvider, ReviewContextProviderPolicy, SubjectBinding,
+    };
+    use registry_platform_config::{Posture, SecretProvider, SecretResolver};
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt as _;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let upstream = MockServer::start().await;
+    let schema: serde_json::Value = serde_json::from_str(CANONICAL_SCHEMA).unwrap();
+    let context = &schema["x-registry-review-context"];
+    let action = context["actionId"].as_str().unwrap();
+    let contract = json!({
+        "id": schema["$id"],
+        "revision": schema["x-registry-definition-revision"],
+        "schemaDigest": registry_platform_config::sha256_uri(CANONICAL_SCHEMA.as_bytes()),
+    });
+    let description = serde_json::to_vec(&json!({
+        "apiVersion": registry_casework_breg::DESCRIPTION_API_VERSION,
+        "kind": registry_casework_breg::DESCRIPTION_KIND,
+        "sourceNamespace": "facility-registry",
+        "actionId": action,
+        "contextId": context["contextId"],
+        "contract": contract,
+        "schema": schema,
+        "schemaBytes": CANONICAL_SCHEMA,
+    }))
+    .unwrap();
+    let provider = ReviewContextProviderPolicy {
+        id: "source".into(),
+        source_namespace: "facility-registry".into(),
+        description: None,
+        deployment_ref: "source".into(),
+        capabilities: vec![
+            ReviewContextCapability::HumanDisplay,
+            ReviewContextCapability::ServiceStatus,
+        ],
+        service_profiles: [(ReviewContextCapability::ServiceStatus, "status".into())].into(),
+    };
+    let binding = serde_json::from_value(json!({
+        "baseUrl": upstream.uri(),
+        "statusProfile": "status",
+        "tokenEndpoint": format!("{}/token", upstream.uri()),
+        "clientAssertionAudience": upstream.uri(),
+        "clientIdRef": "secret:file/client-id",
+        "clientAssertionKeyRef": "secret:file/client-key",
+    }))
+    .unwrap();
+    let secrets = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let secrets_path = secrets.path().canonicalize().unwrap();
+    let key = registry_platform_crypto::generate_private_jwk(
+        registry_platform_crypto::GeneratedKeyAlgorithm::Es256,
+    )
+    .unwrap();
+    let key = json!({"kty": key.kty, "alg": key.alg, "kid": key.kid,
+        "crv": key.crv, "x": key.x, "y": key.y, "d": key.d});
+    for (file, data) in [
+        ("client-id", "synthetic-client".into()),
+        ("client-key", key.to_string()),
+    ] {
+        let file = secrets_path.join(file);
+        std::fs::write(&file, data).unwrap();
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let resolver = SecretResolver::new([SecretProvider::File], secrets_path).unwrap();
+    let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let id = "00000000-0000-4000-8000-000000000001";
+    let subject = json!({"source":"facility-registry","subjectType":"proposal","id":id,
+        "version":"1","digest":digest});
+    let identity = ReviewContextIdentity {
+        subject: SubjectBinding {
+            source: "facility-registry".into(),
+            subject_type: "proposal".into(),
+            id: id.into(),
+            version: "1".into(),
+            digest: registry_casework_core::ContentDigest::parse(digest).unwrap(),
+        },
+        contract: serde_json::from_value(contract.clone()).unwrap(),
+    };
+    let response = |body| {
+        ResponseTemplate::new(200)
+            .insert_header("registry-posture", "development")
+            .insert_header(
+                "registry-engine-version",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )
+            .insert_header(
+                "traceparent",
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            )
+            .insert_header("cache-control", "no-store")
+            .insert_header("vary", "authorization, accept")
+            .set_body_json(body)
+    };
+    Mock::given(method("GET"))
+        .and(path("/v1/registry"))
+        .respond_with(response(
+            json!({"metadataVersion":"2","id":"facility-registry","version":"1",
+            "revision":digest,"recordTypes":[],"operations":[],"proposals":{"method":"GET",
+            "path":"/v1/proposals","accessProfiles":[],"get":{"method":"GET",
+            "path":"/v1/proposals/{proposal_id}","accessProfiles":[]},"actions":[{"actionId":action,
+            "accessProfile":"reviewer","operations":["get-review-context"],"readableInputs":[]}]}}),
+        ))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET")).and(path(format!("/v1/proposals/{id}/review-context")))
+        .respond_with(response(json!({"id":id,"actionId":action,"actionRevision":digest,
+            "submissionVersion":1,"revision":1,"effectDigest":digest,"subject":subject,
+            "context":{"reference":"native-proposal","contract":contract,"fields":{
+                "changes":[],"currentAddressLine":"Synthetic address","facilityId":id,"supportingDocument":null}},
+            "reviewable":true})))
+        .expect(1).mount(&upstream).await;
+    for posture in [Posture::Production, Posture::Development] {
+        let source = registry_casework_breg::build_provider(
+            &binding,
+            &provider,
+            &description,
+            &resolver,
+            posture,
+        )
+        .unwrap();
+        let outcome = source
+            .human_display(HumanDisplayRequest {
+                identity: &identity,
+                source_profile_id: "reviewer",
+                credential: EphemeralCredential::new("synthetic-human"),
+            })
+            .await;
+        match posture {
+            Posture::Production => {
+                assert_eq!(outcome.unwrap_err(), ReviewContextError::VersionUnavailable)
+            }
+            Posture::Development => assert_eq!(
+                outcome.unwrap().display_reference.as_deref(),
+                Some("native-proposal")
+            ),
+        }
+    }
 }

@@ -198,6 +198,8 @@ pub enum ExchangeAttributeKind {
     StringArray,
 }
 
+pub(crate) const POSTURE_CLAIM: &str = "registry_posture";
+
 /// Closed exchange-token profile. The issuer derives source issuer from verified
 /// `iss` and copies the remaining signed values. Consumers bind that issuer and
 /// the immutable client, resource, scope and deadline bounds.
@@ -217,6 +219,7 @@ pub const GRANT_ATTRIBUTES: &[&str] = &[
 pub(crate) fn protected_attribute(name: &str) -> bool {
     name.starts_with("registry_grant_")
         || name == ASSERTION_ISSUER_CLAIM
+        || name == POSTURE_CLAIM
         || matches!(name, "identity" | "registry_approver")
 }
 
@@ -1337,7 +1340,7 @@ mod tests {
             .iter()
             .copied()
             .filter(|name| protected_attribute(name))
-            .chain(["registry_grant_future_bound"])
+            .chain(["registry_grant_future_bound", POSTURE_CLAIM])
         {
             let mut description = exchange_description();
             description.schema_attributes.push(name.into());

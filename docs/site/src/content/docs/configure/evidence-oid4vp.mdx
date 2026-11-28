@@ -251,11 +251,11 @@ the same contract. `GET /v1/sessions/{reference}` reports `pending`, `received`,
 adds a `failureCategory` when the wallet reported an error; it never returns presented content.
 The token issuers and their key sets can use loopback HTTP in either posture. HTTP beyond loopback requires development and `allowInsecureHttp: true`.
 A successful `/ready` response includes `posture` and `developmentSettings` alongside `status`.
-In production, the verifier refuses a verified applicant token with a signed development mark
+In production, the verifier refuses a verified applicant token or Evidence credential with a signed development mark
 before evaluating its scope.
 
 {/* Evidence: crates/registry-evidence-oid4vp/src/auth.rs, authenticate;
-    crates/registry-evidence-oid4vp/tests/endpoints.rs, applicant_token_posture_follows_the_verifier_declaration. */}
+    crates/registry-evidence-oid4vp/tests/endpoints.rs, applicant_token_posture_follows_the_verifier_declaration, evidence_credential_posture_follows_the_verifier_declaration. */}
 
 `/health` answers while the process runs, and `/ready` tracks the local audit destination and the
 client identifier certificates: it answers `503` once an X.509 certificate is past its `notAfter`,

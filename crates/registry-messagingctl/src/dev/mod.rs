@@ -197,12 +197,17 @@ pub(crate) fn run(
                     source: PostureSource::Default,
                 },
                 Ok(declared) if declared.posture == Posture::Development => declared,
-                Ok(_) => {
+                Ok(declared) => {
+                    let action = if declared.source == PostureSource::Flag {
+                        "Drop --posture production, or run the runtime in production with messagingctl serve."
+                    } else {
+                        "Unset REGISTRY_STACK_POSTURE, or run the runtime in production with messagingctl serve."
+                    };
                     return finish(
                         &super::posture_refusal(
                             "platform.posture.conflict",
                             "messagingctl dev runs under the development posture, but production was declared",
-                            "Drop --posture production or unset REGISTRY_STACK_POSTURE, or run the runtime in production with messagingctl serve.",
+                            action,
                         ),
                         "dev", format, stdout, stderr,
                     );

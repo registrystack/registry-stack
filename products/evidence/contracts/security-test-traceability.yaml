@@ -44,6 +44,7 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: selector_values_outside_the_published_contract_create_no_exchange}
   - id: sec-signed-evidence-source
     tests:
+      - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_applies_runtime_posture_to_marked_responses}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_composes_two_authorized_services_with_fresh_values}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_caps_downstream_validity_at_the_upstream_deadline}
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_source_caps_each_sequential_request_batch_item}
@@ -59,6 +60,7 @@ entries:
       - {file: crates/registry-evidence/src/evidence_source_tests.rs, name: signed_evidence_pack_refuses_unauthenticated_protocol_before_io}
   - id: sec-wallet-presentation-source
     tests:
+      - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: wallet_source_applies_runtime_posture_to_marked_responses}
       - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_holder_presented_request_returns_a_signed_assertion_that_states_its_channel}
       - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: the_credential_age_bound_caps_the_assertion_validity}
       - {file: crates/registry-evidence/src/wallet_channel_tests.rs, name: a_source_profile_request_reaches_only_the_source_channel}
@@ -123,7 +125,7 @@ entries:
   - id: sec-assurance-profile-fixture-boundary
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: assurance_profile_is_explicit_and_strict_profiles_require_fixtures}
-      - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks}
+      - {file: crates/registry-evidence/src/config.rs, name: local_oidc_accepts_localhost_without_opt_in}
       - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
       - {file: crates/registry-evidence/src/bundle.rs, name: fixture_coverage_follows_bundle_assurance_profile}
       - {file: crates/registry-evidence/src/fixture.rs, name: focused_coverage_is_local_only}
@@ -131,6 +133,7 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_security_path}
   - id: sec-issuer-key-transport
     tests:
+      - {file: crates/registry-evidence/src/config.rs, name: deployable_oidc_requires_each_http_endpoint_to_be_loopback}
       - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_uses_the_shared_declared_endpoint_rule}
       - {file: crates/registry-evidence/src/config.rs, name: production_oidc_accepts_loopback_http_without_opt_in}
       - {file: crates/registry-evidence/src/config.rs, name: deployable_profiles_refuse_non_loopback_http_and_the_insecure_http_opt_in}
@@ -867,6 +870,7 @@ entries:
       - {file: crates/registry-evidence/src/holder_presented_tests.rs, name: a_presented_credential_without_issued_at_is_refused}
   - id: sec-oid4vp-verifier-negative-paths
     tests:
+      - {file: crates/registry-evidence-oid4vp/tests/endpoints.rs, name: evidence_credential_posture_follows_the_verifier_declaration}
       - {file: crates/registry-evidence-oid4vp/tests/endpoints.rs, name: applicant_token_posture_follows_the_verifier_declaration}
       - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_response_is_refused_for_the_wrong_state_session_key_or_encryption}
       - {file: crates/registry-evidence-oid4vp/tests/responses.rs, name: a_payload_that_repeats_a_member_is_refused}

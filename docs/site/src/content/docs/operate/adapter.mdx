@@ -112,17 +112,13 @@ An administrator that is not a superuser becomes a member of the roles it create
 
 Stop every Adapter process of an earlier release before starting this one
 against the same journal database. An earlier process's journal writes are
-refused once the journal migrates. The payment audit migration also refuses
-writes from earlier Adapter processes.
-{/* Evidence: crates/registry-adapter/src/journal/migrations/0600_declared_posture.sql;
-    crates/registry-adapter/src/payments/migrations/declared_posture.sql;
-    crates/registry-adapter/src/payments/migrations/g2p_declared_posture.sql. */}
+refused once the journal migrates.
+{/* Evidence: crates/registry-adapter/src/journal/migrations/0600_declared_posture.sql. */}
 
 Each new disbursement audit event records the process's declared posture.
-Existing disbursement events keep their original history with an empty posture.
 
 {/* Evidence: crates/registry-adapter/src/payments/g2p_store.rs migrate_g2p, event;
-    crates/registry-adapter/tests/postgres_journal_retention_served.rs served_disbursement_status_with_marked_peer. */}
+    crates/registry-adapter/tests/postgres_journal_retention_served.rs served_development_accepts_a_development_payment_peer, served_production_records_disbursement_observation_posture. */}
 
 The facade journals every request and, when it serves a write, keeps idempotency state in
 PostgreSQL.

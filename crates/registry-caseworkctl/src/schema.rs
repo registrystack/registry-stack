@@ -98,6 +98,12 @@ fn require_success_payloads(schema: &mut Value) {
                 | "apply"
                 | "status"
                 | "provider-add"
+                | "init"
+                | "explain"
+                | "test"
+                | "types"
+                | "package"
+                | "provider-pair"
         ) {
             variant["properties"]["posture"] = posture.clone();
         }

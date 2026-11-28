@@ -20,11 +20,10 @@
   `hmacSha256KeyRef`. The job sends two `v1,<base64>` entries, current first.
   Remove the previous reference after Coordinator holds the new key.
 
-- In the `adapter-job check` JSON report, `posture` is an object with `value`
-  and `source`. Select `.posture.value` if your script compared `.posture`
-  with a string. Scripts already reading the object need no change.
-- A job pass refuses to use a store recorded under a different deployment
-  posture. This also applies to previews and operator rescans.
+- A job pass records the declared posture when it takes the store lease.
+  A pass, preview, rescan or identity rebind refuses with
+  `adapter.job.posture-mismatch` when the store records a different posture.
+  Use the recorded posture or use a fresh store when you change posture.
 - BREAKING: an undeclared posture is production.
   Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
 - BREAKING: `check` without a declared posture reports development settings as errors.
@@ -54,7 +53,7 @@
 - `adapter-job check` reports `posture`, `developmentSettings` and
   `explicitProductionSettings`. The `posture` object includes its value and source.
 - `adapter-job status` reports `adapter.job.posture-mismatch` in `findings` when the
-  last pass was recorded under a different posture.
+  store records a different posture.
 - `adapter-job init-store` upgrades the job store to schema 105. Earlier binaries
   refuse the upgraded store.
 - The facade journal upgrades to schema 600. Each new journal row carries the
@@ -65,9 +64,8 @@
 - `adapterctl check` lists `anonymousHttps: operator-approved` in
   `explicitProductionSettings`. The acknowledgement passes `--deny-warnings`.
 
-- BREAKING: the upgraded journal (schema 600) and payment audit tables
-  refuse writes from earlier Adapter releases. An earlier payment host starts
-  against an upgraded database and refuses every payment request.
+- BREAKING: the upgraded journal (schema 600) refuses journal writes from
+  earlier Adapter releases.
   Migration: Stop every earlier Adapter process before upgrading the same
   database. Restore a backup before rolling back past this release.
 

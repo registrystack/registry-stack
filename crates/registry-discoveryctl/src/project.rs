@@ -931,9 +931,7 @@ fn check_runtime_file(
         return;
     };
     let checked = if inspect_package {
-        registry_discovery::check_runtime_with_package(&absolute, environment, declared, |host| {
-            registry_platform_httputil::loopback::loopback_host(host).is_some()
-        })
+        registry_discovery::check_runtime_with_package(&absolute, environment, declared)
     } else {
         check_runtime(&absolute, environment, declared)
     };

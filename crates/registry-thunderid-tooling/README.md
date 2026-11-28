@@ -70,9 +70,10 @@ machine-client `grants`; it changes no default token request or exported scope.
 Ordinary tokens carry no task grant and cannot authorize a guarded mutation.
 Client credentials uses `clientConfig`; exchange
 uses `userConfig`, whose closed allowlist carries the signed task fields,
-including JSON identity selectors, product-specific bounds and numeric expiry.
+including JSON identity selectors, product-specific bounds, numeric expiry, and
+the signed `registry_posture` claim when present.
 Static schemas and client attributes cannot contain `registry_grant_*`,
-`registry_assertion_issuer`, `identity`, or `registry_approver`. Ordinary
+`registry_assertion_issuer`, `registry_posture`, `identity`, or `registry_approver`. Ordinary
 actor-kind and purpose attributes remain available for non-grant service
 profiles.
 

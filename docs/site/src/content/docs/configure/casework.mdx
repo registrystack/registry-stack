@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -545,10 +545,15 @@ people:
 To generate one of the approval patterns for an existing Proposal-mode Action, use `caseworkctl provider add`:
 
 ```sh test-skip="needs a BReg project with a Proposal-mode Action and its package"
-caseworkctl provider add ./review --breg-project ./facility \
+caseworkctl provider add ./review --posture development --breg-project ./facility \
   --action correct-address --pattern single-reviewer-approval \
   --breg-package ./facility-package
 ```
+
+The command generates a runtime example for development, and production requires an explicit list of admitted OAuth clients.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_add.rs, write_yaml;
+    crates/registry-casework/src/config.rs, UNRESTRICTED_CLIENTS. */}
 
 The command reads BReg through the matching `bregctl` public CLI.
 Missing review requirements, context or reader grants produce `casework.provider-add.breg-changes-needed`, proposed YAML and no project.

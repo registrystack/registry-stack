@@ -15,7 +15,8 @@ use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     fs,
-    io::Read as _,
+    io::{Read as _, Write as _},
+    os::unix::fs::OpenOptionsExt as _,
     path::{Path, PathBuf},
 };
 pub(crate) const LOCAL_PACKAGE_DIRECTORY: &str = ".casework/package";
@@ -161,7 +162,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         .parent()
         .context("project destination has no parent")?;
     fs::create_dir_all(parent)?;
-    let stage = tempfile::tempdir_in(parent)?;
+    let stage = crate::trusted_tempdir_in(parent)?;
     fs::create_dir_all(stage.path().join("fixtures"))?;
     // Init owns this fresh staging directory and creates .casework owner-only.
     {
@@ -231,16 +232,19 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "database":{"runtimeUrlRef":"secret:file/runtime-database-url","migrationUrlRef":"secret:file/migration-database-url"},
         "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
         "audit":{"path":absolute.join("state/audit.ndjson"),"hashKeyRef":"secret:file/casework-audit-key"},"contextProviders":{}});
-    fs::write(
-        stage.path().join("runtime.example.yaml"),
-        format!(
-            "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n{}",
-            serde_norway::to_string(&runtime)?
-        ),
+    let runtime_path = stage.path().join("runtime.example.yaml");
+    write!(
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&runtime_path)?,
+        "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n{}",
+        serde_norway::to_string(&runtime)?
     )?;
     if canonical_review {
         fs::write(
-            stage.path().join("runtime.example.yaml"),
+            &runtime_path,
             format!(
                 "# yaml-language-server: $schema=.casework/schemas/runtime.schema.json\n{}",
                 include_str!(
@@ -827,8 +831,13 @@ impl ActivationInputs {
             .load_package()
             .context("verifying the configured Casework package")?;
         let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
-        let providers = registry_casework::build_context_providers(&config, &package, &resolver)
-            .context("building the Casework context providers")?;
+        let providers = registry_casework::build_context_providers(
+            &config,
+            &package,
+            &resolver,
+            declared.posture,
+        )
+        .context("building the Casework context providers")?;
         Ok(Self {
             posture: declared.posture,
             development: loaded.development,

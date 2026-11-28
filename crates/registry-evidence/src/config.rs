@@ -3487,53 +3487,19 @@ impl OidcAuthenticationConfig {
                 "authentication.oidc.allowInsecureHttp",
             ));
         }
-        if plain_http
-            && !self.provider.allow_insecure_http
-            && assurance_profile == AssuranceProfile::Local
-        {
-            // The local permission is for a supervised issuer on this
-            // deployment's own loopback: a canonical numeric origin, with the
-            // JWKS served from that exact origin. It is not a permission for
-            // private-network HTTP, and a JWKS origin or port other than the
-            // issuer's is not supervised by the issuer that vouches for it.
-            let origin = validate_local_issuer_origin(self.issuer())?;
-            if jwks_uri.scheme() != "http"
-                || jwks_uri.host_str() != Some("127.0.0.1")
-                || jwks_uri.port() != issuer.port()
-                || !jwks_uri.path().starts_with('/')
-                || jwks_uri.query().is_some()
-                || jwks_uri.fragment().is_some()
-                || !jwks_uri.username().is_empty()
-                || jwks_uri.password().is_some()
-                || self.jwks_uri() != format!("{origin}{}", jwks_uri.path())
-            {
-                return invalid(
-                    "local authentication JWKS URI must use the exact issuer origin, an absolute path, and no query or fragment",
-                );
+        if issuer.scheme() == "https" {
+            validate_https_issuer(self.issuer())?;
+        }
+        if jwks_uri.scheme() == "https" {
+            validate_https_url(self.jwks_uri(), false)?;
+        } else if jwks_uri.scheme() == "http" {
+            if jwks_uri.fragment().is_some() {
+                return invalid("authentication JWKS URI cannot carry a fragment");
             }
             if self.tls_trust_profile.is_some() {
                 return invalid(
-                    "a local HTTP authentication JWKS URI cannot use a TLS trust profile",
+                    "a plain HTTP authentication JWKS URI cannot use a TLS trust profile",
                 );
-            }
-        } else if issuer.scheme() == "https" && jwks_uri.scheme() == "https" {
-            validate_https_issuer(self.issuer())?;
-            validate_https_url(self.jwks_uri(), false)?;
-        } else {
-            if issuer.scheme() == "https" {
-                validate_https_issuer(self.issuer())?;
-            }
-            if jwks_uri.scheme() == "https" {
-                validate_https_url(self.jwks_uri(), false)?;
-            } else {
-                if jwks_uri.fragment().is_some() {
-                    return invalid("authentication JWKS URI cannot carry a fragment");
-                }
-                if self.tls_trust_profile.is_some() {
-                    return invalid(
-                        "a plain HTTP authentication JWKS URI cannot use a TLS trust profile",
-                    );
-                }
             }
         }
         self.provider.check("authentication.oidc").map_err(|error| {
@@ -3541,7 +3507,11 @@ impl OidcAuthenticationConfig {
                 && error.kind() == registry_platform_config::ConfigBlockErrorKind::InvalidUri
             {
                 ConfigError::InvalidField(
-                    "plain HTTP authentication requires a loopback issuer and JWKS URI wherever HTTP is used",
+                    if assurance_profile == AssuranceProfile::Local {
+                        "plain HTTP authentication requires loopback wherever HTTP is used; local development can opt in with authentication.oidc.allowInsecureHttp: true"
+                    } else {
+                        "plain HTTP authentication requires a loopback issuer and JWKS URI wherever HTTP is used"
+                    },
                     "authentication.oidc",
                 )
             } else {
@@ -3680,24 +3650,6 @@ impl OidcAuthenticationConfig {
 /// every authenticated request.
 const REGISTERED_JWT_CLAIMS: [&str; 8] =
     ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "cnf"];
-
-fn validate_local_issuer_origin(value: &str) -> Result<&str, ConfigError> {
-    let port = value
-        .strip_prefix("http://127.0.0.1:")
-        .filter(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
-        .filter(|port| !port.starts_with('0'))
-        .and_then(|port| port.parse::<u16>().ok())
-        .filter(|port| *port != 0)
-        .ok_or(ConfigError::Invalid(
-            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port; any other plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
-        ))?;
-    if value != format!("http://127.0.0.1:{port}") {
-        return invalid(
-            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port; any other plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
-        );
-    }
-    Ok(value)
-}
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum AccessTokenType {
@@ -7317,82 +7269,6 @@ mod tests {
         assert!(parsed.requirements[0].fixtures.is_none());
     }
 
-    /// The supervised-local issuer rule: a canonical numeric loopback origin
-    /// for the issuer, and a JWKS on that exact origin at any absolute path
-    /// without query or fragment. Local assurance only; strict profiles keep
-    /// the HTTPS requirement.
-    #[test]
-    fn only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks() {
-        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("strict fixture validates");
-        config.assurance_profile = AssuranceProfile::Local;
-        config.authentication.oidc.provider.issuer =
-            registry_platform_yaml::Url::new("http://127.0.0.1:8081").expect("valid URL");
-        config.authentication.oidc.provider.jwks_source =
-            registry_platform_config::JwksSource::Uri {
-                uri: registry_platform_yaml::Url::new(
-                    "http://127.0.0.1:8081/.well-known/jwks.json",
-                )
-                .expect("valid URL"),
-            };
-        config
-            .validate()
-            .expect("local profile accepts the supervised loopback identity");
-        // The JWKS path is the configured issuer's to choose.
-        config.authentication.oidc.provider.jwks_source =
-            registry_platform_config::JwksSource::Uri {
-                uri: registry_platform_yaml::Url::new("http://127.0.0.1:8081/oauth2/jwks")
-                    .expect("valid URL"),
-            };
-        config
-            .validate()
-            .expect("local profile accepts any same-origin absolute JWKS path");
-
-        EvidenceConfig::parse_projection(
-            &serde_json::to_value(&config).expect("configuration serializes"),
-        )
-        .expect("the valid configuration round-trips before invalid values are substituted");
-        for invalid in [
-            "http://localhost:8081",
-            "http://127.0.0.2:8081",
-            "http://127.0.0.1",
-            "http://127.0.0.1:0",
-            "http://127.0.0.1:08081",
-            "http://127.0.0.1:65536",
-            "http://user@127.0.0.1:8081",
-            "http://127.0.0.1:8081/",
-        ] {
-            let mut candidate = serde_json::to_value(&config).expect("configuration serializes");
-            candidate["authentication"]["oidc"]["issuer"] = serde_json::json!(invalid);
-            assert!(
-                EvidenceConfig::parse_projection(&candidate).is_err(),
-                "local assurance accepted issuer {invalid}"
-            );
-        }
-        for invalid in [
-            // A different port, host, or scheme is not the issuer's origin.
-            "http://127.0.0.1:8082/oauth2/jwks",
-            "http://localhost:8081/oauth2/jwks",
-            "https://127.0.0.1:8081/oauth2/jwks",
-            // No path stated at all, or one carrying a query, fragment, or
-            // userinfo. The root path itself is an absolute path and stays
-            // legal: the rule fixes the origin, not the route.
-            "http://127.0.0.1:8081",
-            "http://127.0.0.1:8081/oauth2/jwks?cache=1",
-            "http://127.0.0.1:8081/oauth2/jwks#fragment",
-            "http://user@127.0.0.1:8081/oauth2/jwks",
-        ] {
-            let mut candidate = serde_json::to_value(&config).expect("configuration serializes");
-            candidate["authentication"]["oidc"]["jwksSource"]["uri"] = serde_json::json!(invalid);
-            assert!(
-                EvidenceConfig::parse_projection(&candidate).is_err(),
-                "local assurance accepted JWKS URI {invalid}"
-            );
-        }
-    }
-
     #[test]
     fn production_oidc_accepts_loopback_http_without_opt_in() {
         let mut candidate = plain_http_issuer_candidate("local", false);
@@ -7415,6 +7291,91 @@ mod tests {
             .to_string();
         assert!(error.contains("loopback"), "{error}");
         assert!(!error.contains("identity.internal"), "{error}");
+    }
+
+    #[test]
+    fn deployable_oidc_requires_each_http_endpoint_to_be_loopback() {
+        let mut auth = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .unwrap()
+        .authentication
+        .oidc;
+        for profile in [
+            AssuranceProfile::Production,
+            AssuranceProfile::EvidenceGrade,
+        ] {
+            for (origin, accepted) in [
+                ("http://127.0.0.1:8080", true),
+                ("http://127.0.0.2:8080", true),
+                ("http://[::1]:8080", true),
+                ("http://localhost:8080", true),
+                ("http://10.0.0.5:8080", false),
+                ("http://192.168.1.10:8080", false),
+                ("http://169.254.169.254", false),
+                ("http://[::ffff:10.0.0.5]:8080", false),
+                ("http://0.0.0.0:8080", false),
+                ("http://identity.internal:8080", false),
+            ] {
+                auth.provider.issuer = registry_platform_yaml::Url::new(origin).unwrap();
+                auth.provider.jwks_source = JwksSource::Uri {
+                    uri: registry_platform_yaml::Url::new("https://identity.invalid/jwks").unwrap(),
+                };
+                assert_eq!(auth.validate(profile).is_ok(), accepted, "issuer {origin}");
+                auth.provider.issuer =
+                    registry_platform_yaml::Url::new("https://identity.invalid").unwrap();
+                auth.provider.jwks_source = JwksSource::Uri {
+                    uri: registry_platform_yaml::Url::new(format!("{origin}/jwks")).unwrap(),
+                };
+                assert_eq!(auth.validate(profile).is_ok(), accepted, "JWKS {origin}");
+            }
+        }
+    }
+
+    #[test]
+    fn bundle_contract_and_parser_agree_on_deployable_http_issuers() {
+        let schema = bundle_contract_validator();
+        for profile in ["production", "evidence-grade"] {
+            for (origin, accepted) in [
+                ("http://127.0.0.1:8080", true),
+                ("http://identity.internal:8080", false),
+            ] {
+                let mut candidate = bundle_contract_instance(include_bytes!(
+                    "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+                ));
+                candidate["assuranceProfile"] = serde_json::json!(profile);
+                candidate["authentication"]["oidc"]["issuer"] = serde_json::json!(origin);
+                candidate["authentication"]["oidc"]["jwksSource"]["uri"] =
+                    serde_json::json!(format!("{origin}/jwks"));
+                let yaml = serde_norway::to_string(&candidate).unwrap();
+                let parsed = EvidenceConfig::parse_yaml(yaml.as_bytes());
+                assert_eq!(
+                    parsed.is_ok(),
+                    accepted,
+                    "{profile}: {origin}: {:?}",
+                    parsed.err()
+                );
+                let validated = schema.validate(&candidate);
+                assert_eq!(
+                    validated.is_ok(),
+                    accepted,
+                    "{profile}: {origin}: {:?}",
+                    validated
+                        .err()
+                        .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn local_oidc_accepts_localhost_without_opt_in() {
+        let mut candidate = plain_http_issuer_candidate("local", false);
+        assert!(EvidenceConfig::parse_projection(&candidate).is_err());
+        candidate["authentication"]["oidc"]["issuer"] = serde_json::json!("http://localhost:8082");
+        candidate["authentication"]["oidc"]["jwksSource"]["uri"] =
+            serde_json::json!("http://localhost:8082/jwks");
+        assert!(EvidenceConfig::parse_projection(&candidate).is_ok());
     }
 
     fn plain_http_issuer_candidate(profile: &str, opt_in: bool) -> serde_json::Value {
@@ -7471,7 +7432,7 @@ mod tests {
             for opt_in in [false, true] {
                 let error =
                     EvidenceConfig::parse_projection(&plain_http_issuer_candidate(profile, opt_in))
-                        .expect_err("deployable bundles require HTTPS")
+                        .expect_err("deployable bundles refuse non-loopback HTTP")
                         .to_string();
                 assert!(error.contains("loopback"), "{profile}: {error}");
                 if opt_in {
@@ -7547,7 +7508,7 @@ mod tests {
         assert!(matches!(
             local.validate(),
             Err(ConfigError::Invalid(
-                "a local HTTP authentication JWKS URI cannot use a TLS trust profile"
+                "a plain HTTP authentication JWKS URI cannot use a TLS trust profile"
             ))
         ));
     }

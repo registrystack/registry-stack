@@ -582,7 +582,11 @@ struct Offline {
 /// Read and parse the secrets of a loaded configuration and compile the
 /// templates, failing on the first fault. It neither calls the provider nor
 /// opens the audit journal.
-fn offline(config: &RuntimeConfig, redirect_uri: Url) -> Result<Offline, RuntimeError> {
+fn offline(
+    config: &RuntimeConfig,
+    redirect_uri: Url,
+    posture: Posture,
+) -> Result<Offline, RuntimeError> {
     let secrets = config.secret_providers.resolver().map_err(|error| {
         RuntimeError::Secret(describe_secret_failure(
             "secretProviders",
@@ -615,11 +619,7 @@ fn offline(config: &RuntimeConfig, redirect_uri: Url) -> Result<Offline, Runtime
     // retries the original action under the same key from the retained view.
     // Client resends stacked under each submit would multiply the wait of a
     // person looking at the page.
-    let registry = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new_without_peer_policy(base_url)
-            .with_maximum_mutation_retries(0),
-    )
-    .map_err(|error| RuntimeError::Registry(error.to_string()))?;
+    let registry = registry_client(base_url, posture)?;
     let templates =
         Templates::load().map_err(|error| RuntimeError::Templates(error.to_string()))?;
     Ok(Offline {
@@ -631,6 +631,19 @@ fn offline(config: &RuntimeConfig, redirect_uri: Url) -> Result<Offline, Runtime
         per_citizen: limiter(config.rate_limits.per_citizen)?,
         global_sign_in: limiter(config.rate_limits.global_sign_in)?,
     })
+}
+
+fn registry_client(base_url: Url, posture: Posture) -> Result<BaseRegistryClient, RuntimeError> {
+    use registry_platform_httputil::PeerPolicy;
+
+    let peer_policy = match posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    };
+    BaseRegistryClient::new(
+        BaseRegistryClientConfig::new(base_url, peer_policy).with_maximum_mutation_retries(0),
+    )
+    .map_err(|error| RuntimeError::Registry(error.to_string()))
 }
 
 fn posture_refusal(posture: &PostureReport, source: &str) -> RuntimeError {
@@ -736,7 +749,7 @@ async fn build(
         templates,
         per_citizen,
         global_sign_in,
-    } = offline(&config, redirect_uri)?;
+    } = offline(&config, redirect_uri, posture.posture())?;
     let loopback_listener = config.loopback_listener();
     let issuer = config.sign_in.issuer.as_str().to_owned();
     // Sign-in sends client credentials to the token endpoint, so the page
@@ -996,6 +1009,45 @@ pub async fn serve_until(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_review_client_accepts_a_marked_registry_only_in_development() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let app = Router::new().fallback(|| async {
+            (
+                [
+                    ("Registry-Posture", "development"),
+                    (
+                        "traceparent",
+                        "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                    ),
+                    ("cache-control", "no-store"),
+                ],
+                axum::Json(serde_json::json!({})),
+            )
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for (posture, accepted) in [(Posture::Production, false), (Posture::Development, true)] {
+            let result = registry_client(origin.clone(), posture)
+                .unwrap()
+                .registry_metadata(None)
+                .await;
+            if accepted {
+                assert!(result.is_ok(), "{:?}", result.err());
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(registry_breg_client::BaseRegistryClientError::DevelopmentPeer)
+                    ),
+                    "{:?}",
+                    result.err()
+                );
+            }
+        }
+        server.abort();
+    }
 
     #[test]
     fn production_sign_in_refuses_plain_http_beyond_loopback() {

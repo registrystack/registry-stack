@@ -17,7 +17,9 @@ pub(crate) fn caseworkctl_command(arguments: &[&str]) -> Command {
         .or_else(|| option_env!("CARGO_BIN_EXE_caseworkctl").map(std::ffi::OsString::from))
         .expect("CASEWORKCTL_BIN must name the candidate outside the caseworkctl crate");
     let mut command = Command::new(candidate);
-    command.args(arguments);
+    command
+        .args(arguments)
+        .env_remove(registry_platform_config::POSTURE_ENV);
     configure_library_path(&mut command, &dependencies);
     command
 }

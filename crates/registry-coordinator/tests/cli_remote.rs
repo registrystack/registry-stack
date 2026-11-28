@@ -50,7 +50,17 @@ async fn start_as(server: &MockServer, root: &Path, format: &[&str]) -> std::pro
     .unwrap()
 }
 
+async fn healthy_peer(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
 async fn receiver(server: &MockServer, response: ResponseTemplate) {
+    healthy_peer(server).await;
     Mock::given(method("POST"))
         .and(path("/v1/runs"))
         .and(header("authorization", format!("Bearer {TOKEN}")))
@@ -275,7 +285,7 @@ async fn remote_admission_reports_outages_separately_without_repeating_the_reque
         assert!(!String::from_utf8_lossy(&output.stdout).contains(guidance));
         assert!(!String::from_utf8_lossy(&output.stdout).contains(TOKEN));
         server.verify().await;
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
         server.reset().await;
     }
     // A receiver without structured guidance must not turn an outage into
@@ -754,6 +764,7 @@ async fn check_now_posts_the_step_to_the_run_and_reports_the_answer() {
         "observations": 3,
         "observationLimit": 121
     });
+    healthy_peer(&server).await;
     Mock::given(method("POST"))
         .and(path(format!("/v1/runs/{RUN}/check")))
         .and(header("authorization", format!("Bearer {TOKEN}")))
@@ -788,6 +799,7 @@ async fn check_now_names_the_fix_for_a_step_that_is_not_waiting_and_a_run_not_vi
         (409, "check.not-waiting", "coordinatorctl inspect"),
         (404, "run.not-visible", "--run"),
     ] {
+        healthy_peer(&server).await;
         Mock::given(method("POST"))
             .and(path(format!("/v1/runs/{RUN}/check")))
             .respond_with(ResponseTemplate::new(status).set_body_json(json!({
@@ -848,16 +860,32 @@ async fn check_now_needs_a_run_and_a_step_and_calls_no_service_without_them() {
 #[tokio::test]
 async fn typed_commands_refuse_a_development_peer_only_in_production() {
     let status_path = format!("/v1/runs/{RUN}");
-    let cases: [(&[&str], &str, &str); 3] = [
+    let cancel_path = format!("/v1/runs/{RUN}/cancel");
+    let cases: [(&[&str], &str, &str); 4] = [
         (&["doctor"], "GET", "/v1/doctor"),
         (&["status", "--run", RUN], "GET", status_path.as_str()),
         (&["list", "--limit", "1"], "GET", "/v1/runs"),
+        (
+            &["cancel", "--run", RUN, "--reason", "incident-1"],
+            "POST",
+            &cancel_path,
+        ),
     ];
     for (arguments, verb, route) in cases {
         let server = MockServer::start().await;
         let root = tempfile::tempdir().unwrap();
         let token = root.path().join("token");
         fs::write(&token, TOKEN).unwrap();
+        if verb == "POST" {
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(
+                    ResponseTemplate::new(200).insert_header("Registry-Posture", "development"),
+                )
+                .expect(2)
+                .mount(&server)
+                .await;
+        }
         Mock::given(method(verb))
             .and(path(route))
             .respond_with(
@@ -865,7 +893,7 @@ async fn typed_commands_refuse_a_development_peer_only_in_production() {
                     .insert_header("Registry-Posture", "development")
                     .set_body_json(json!({"activationReady":true,"state":{}})),
             )
-            .expect(2)
+            .expect(if verb == "POST" { 1 } else { 2 })
             .mount(&server)
             .await;
         for (posture, success) in [("production", false), ("development", true)] {
@@ -884,6 +912,12 @@ async fn typed_commands_refuse_a_development_peer_only_in_production() {
             })
             .await
             .unwrap();
+            if verb == "POST" && !success {
+                let requests = server.received_requests().await.unwrap();
+                assert_eq!(requests.len(), 1, "production must only probe");
+                assert_eq!(requests[0].url.path(), "/health");
+                assert!(!requests[0].headers.contains_key("authorization"));
+            }
             let report: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(output.status.success(), success, "{arguments:?} {report}");
             if success {

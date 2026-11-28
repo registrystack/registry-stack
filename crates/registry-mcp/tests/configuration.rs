@@ -488,6 +488,16 @@ fn an_http_issuer_beyond_loopback_names_its_one_remedy() {
 }
 
 #[test]
+fn production_reports_http_review_url_posture_and_structure_together() {
+    let mut config = citizen();
+    let path = "/bindings/0/provider/service/reviewBaseUrl";
+    *config.pointer_mut(path).unwrap() =
+        json!("http://review.example.invalid/nested?example=value#fragment");
+    assert_code_and_path(&config, "breg.posture.review-http-public-origin", path);
+    assert_diagnostic(&config, "breg-review-origin-invalid", path);
+}
+
+#[test]
 fn malformed_configuration_still_reports_http_issuer_and_review_origin() {
     let mut config = citizen();
     config["unknown"] = json!(true);

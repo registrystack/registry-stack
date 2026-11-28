@@ -72,8 +72,6 @@ const RESERVED_CLAIMS: [&str; 11] = [
 ];
 
 static REQUEST_HEADERS: [HeaderName; 1] = [header::ACCEPT];
-static RESPONSE_HEADERS: [HeaderName; 2] =
-    [header::CONTENT_TYPE, HeaderName::from_static("traceparent")];
 
 /// Why a channel configuration was refused. Every message is fixed text; none
 /// carries a configured value.
@@ -216,7 +214,7 @@ fn validate_disclosed_claims(claims: &[String]) -> Result<(), WalletConfigError>
     }
 }
 
-pub(crate) struct WalletPresentationCompiler;
+pub(crate) struct WalletPresentationCompiler(pub(crate) registry_platform_httputil::PeerPolicy);
 
 impl HostProtocolCompiler for WalletPresentationCompiler {
     fn id(&self) -> &str {
@@ -248,12 +246,14 @@ impl HostProtocolCompiler for WalletPresentationCompiler {
         })?;
         Ok(Arc::new(WalletPresentationProtocol {
             config: Arc::new(config),
+            peer_policy: self.0,
         }))
     }
 }
 
 struct WalletPresentationProtocol {
     config: Arc<WalletPresentationConfig>,
+    peer_policy: registry_platform_httputil::PeerPolicy,
 }
 
 /// The only body the protocol sends, forwarded unchanged.
@@ -291,7 +291,7 @@ impl CompiledHostProtocol for WalletPresentationProtocol {
     }
 
     fn response_header_names(&self) -> &[HeaderName] {
-        &RESPONSE_HEADERS
+        &crate::host_protocol::VERIFIED_RESPONSE_HEADERS
     }
 
     fn allows_credential_refresh_retry(&self) -> bool {
@@ -319,6 +319,7 @@ impl CompiledHostProtocol for WalletPresentationProtocol {
             Box::new(WalletPresentationVerifier {
                 config: Arc::clone(&self.config),
                 principal: read.principal,
+                peer_policy: self.peer_policy,
             }),
         ))
     }
@@ -358,6 +359,7 @@ impl Drop for ReadResponse {
 
 struct WalletPresentationVerifier {
     config: Arc<WalletPresentationConfig>,
+    peer_policy: registry_platform_httputil::PeerPolicy,
     principal: Principal,
 }
 
@@ -366,16 +368,7 @@ impl HostProtocolResponseVerifier for WalletPresentationVerifier {
         self: Box<Self>,
         response: HostProtocolWireResponse,
     ) -> Result<VerifiedHostProtocolResponse, HostProtocolResponseRefusal> {
-        let mut trusted_headers = http::HeaderMap::new();
-        for (name, value) in response.headers() {
-            let name = HeaderName::from_bytes(name.as_bytes())
-                .map_err(|_| HostProtocolResponseRefusal::Protocol)?;
-            let value =
-                HeaderValue::from_str(value).map_err(|_| HostProtocolResponseRefusal::Protocol)?;
-            trusted_headers.append(name, value);
-        }
-        registry_platform_httpsec::response_trace_id(&trusted_headers)
-            .map_err(|_| HostProtocolResponseRefusal::Verification)?;
+        crate::host_protocol::verify_response_headers(&response, self.peer_policy)?;
         let mut media_types = response
             .headers()
             .iter()

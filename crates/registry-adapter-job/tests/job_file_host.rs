@@ -606,6 +606,7 @@ async fn legacy_file_and_raw_state_stop_before_source_or_destination_io() {
 fn run_host(store_url: &str, fixture: &FileFixture, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_adapter-job"))
         .env("JOB_TEST_DB", store_url)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(args)
         .arg(&fixture.job)
         .arg("--pack")
@@ -666,6 +667,45 @@ async fn rebind_identity_clears_the_fence_the_dry_run_reports() {
         .as_str()
         .expect("the fence refusal carries a next step");
     assert!(next.contains("adapter-job rebind-identity"), "{next}");
+
+    for (recorded, declared) in [("development", "production"), ("production", "development")] {
+        let previous_digest = vec![42_u8; 32];
+        client
+            .execute(
+                "UPDATE adapter_job_state SET last_pass_posture = $1, item_identity_digest = $2 \
+                 WHERE job_id = 'file-daily'",
+                &[&recorded, &previous_digest],
+            )
+            .await
+            .unwrap();
+        let refused = run_host(
+            &store_url,
+            &fixture,
+            &["rebind-identity", "--posture", declared],
+        );
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            !refused.status.success(),
+            "recorded {recorded}: {refused:?}"
+        );
+        assert!(stderr.contains("adapter.job.posture-mismatch"), "{stderr}");
+        let surviving: Vec<u8> = client
+            .query_one(
+                "SELECT item_identity_digest FROM adapter_job_state WHERE job_id = 'file-daily'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(surviving, previous_digest, "recorded {recorded}");
+    }
+    client
+        .batch_execute(
+            "UPDATE adapter_job_state SET last_pass_posture = NULL, item_identity_digest = NULL \
+             WHERE job_id = 'file-daily'",
+        )
+        .await
+        .unwrap();
 
     let rebound = run_host(&store_url, &fixture, &["rebind-identity"]);
     assert!(

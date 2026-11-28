@@ -41,6 +41,7 @@ pub const BREG_TOOL_NAMES: [&str; 7] = TOOL_NAMES;
 #[derive(Clone, Debug)]
 struct BRegProviderOptions {
     base_url: Url,
+    peer_policy: registry_platform_httputil::PeerPolicy,
     attempt_timeout: Duration,
     access_profile: String,
     details_record_type: String,
@@ -64,6 +65,11 @@ impl BRegProviderOptions {
             .to_url();
         Ok(Self {
             base_url: registry.base_url.to_url(),
+            peer_policy: if development.is_some() {
+                registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
+            } else {
+                registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+            },
             attempt_timeout: Duration::from_millis(registry.attempt_timeout_milliseconds.get()),
             access_profile: registry.access_profile.to_string(),
             details_record_type: service.details.record_type.to_string(),
@@ -84,8 +90,12 @@ pub(crate) struct BRegProvider {
 
 impl BRegProvider {
     fn new(options: BRegProviderOptions, keys: AuditKeyHasher) -> Result<Self, BRegBindingError> {
-        let client = BRegClientFactory::new(options.base_url, options.attempt_timeout)
-            .map_err(|_| BRegBindingError::Client)?;
+        let client = BRegClientFactory::new(
+            options.base_url,
+            options.attempt_timeout,
+            options.peer_policy,
+        )
+        .map_err(|_| BRegBindingError::Client)?;
         Ok(Self {
             gateway: Gateway::new(
                 client,
@@ -331,6 +341,7 @@ mod tests {
             BRegProviderOptions {
                 base_url: Url::parse("https://registry.example.test/").expect("registry URL"),
                 attempt_timeout: std::time::Duration::from_secs(10),
+                peer_policy: registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
                 access_profile: "citizen-agent".to_owned(),
                 details_record_type: "addresses".to_owned(),
                 action: "correct-address".to_owned(),

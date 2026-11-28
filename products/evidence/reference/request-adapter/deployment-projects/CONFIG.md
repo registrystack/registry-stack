@@ -173,12 +173,9 @@ the provider contract is still being written. This does not disable any other
 runtime boundary: the bundle and runtime remain immutable, inbound
 authentication and authorization remain required, source requests remain fixed
 and bounded, signing and both audit gates remain fail-closed, and assertions
-are visibly marked `local`. A supervised local issuer may use only the exact
-canonical issuer origin `http://127.0.0.1:<non-zero-port>`, and its JWKS must
-be served from that exact origin at an absolute path with no query or fragment;
-other authentication URLs remain HTTPS unless the local bundle sets
-`authentication.oidc.allowInsecureHttp: true`. The route is the issuer's to
-choose; the origin is not.
+are visibly marked `local`. The OIDC issuer and its JWKS endpoint can use HTTPS or loopback HTTP.
+A local bundle in development can permit HTTP beyond loopback by setting
+`authentication.oidc.allowInsecureHttp: true`.
 
 `production` and `evidence-grade` are deployable profiles. Every requirement
 must reference a fixture suite, and the existing complete coverage validation

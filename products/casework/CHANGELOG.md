@@ -36,6 +36,17 @@
   Runtime configuration refusals exit 1 and include diagnostic codes and pointers.
   This includes `casework.posture.unrestricted-clients` for production and
   `casework.runtime.invalid-assertion-issuers` for an invalid assertion-issuer map.
+- `caseworkctl init`, `explain`, `test`, `types`, `package` and `provider pair`
+  accept `--posture` or `REGISTRY_STACK_POSTURE`. Their JSON reports include
+  `posture.value` and `posture.source`. An invalid declaration exits 2
+  with `platform.posture.invalid-value`. Conflicting declarations exit 2 with
+  `platform.posture.conflict`.
+- Production `caseworkctl provider add` refuses runtime check warnings,
+  including `platform.runtime-config.check-incomplete`, with exit 1.
+  A refusal for a staged runtime example names the destination in `source.file`.
+- The unrestricted OAuth client refusal points to `/authentication/oidc/allowedClients`.
+- Casework's BReg context provider follows the deployment's peer policy.
+  Development accepts marked development BReg responses, and production refuses them.
 - BREAKING: `allowedClients: unrestricted` requires development on every
   listener. Migration: List the OAuth clients your production deployment admits.
 - BREAKING: Write `tlsTermination: loopback-plaintext` in place of

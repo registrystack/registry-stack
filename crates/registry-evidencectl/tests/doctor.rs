@@ -1225,8 +1225,10 @@ fn doctor_keeps_posture_conflict_and_reports_audit_findings() {
         format!(
             r#"#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'evidence {}\n'; exit 0; fi
-printf 'error[evidence.posture.assurance-profile-conflict] /assuranceProfile\n' >&2
-case " $* " in *" --offline-dependencies-only --require-audit-under "*) printf 'error[evidence.deployment.audit-root-refused] /audit\n' >&2;; esac
+case " $* " in *" --format json "*) ;; *) exit 2 ;; esac
+printf '%s' '{{"diagnostics":[{{"severity":"error","code":"evidence.posture.assurance-profile-conflict","path":"/assuranceProfile","artifact":"EvidenceBundle","message":"posture conflict","suggestedAction":"use development package"}}'
+case " $* " in *" --offline-dependencies-only --require-audit-under "*) printf '%s' ',{{"severity":"error","code":"evidence.deployment.audit-outside-root","path":"","artifact":"EvidenceRuntimeConfig","message":"audit root refused","suggestedAction":"correct the audit root"}}';; esac
+printf '%s\n' ']}}'
 exit 1
 "#,
             registry_platform_buildinfo::DISPLAY_VERSION,
@@ -1259,7 +1261,7 @@ exit 1
         "{rendered}"
     );
     assert!(
-        rendered.contains("evidence.deployment.audit-root-refused"),
+        rendered.contains("evidence.deployment.audit-outside-root"),
         "{rendered}"
     );
 }

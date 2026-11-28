@@ -714,7 +714,9 @@ mod tests {
             .iter()
             .any(|error| { matches!(error, ResourceServerConfigError::InsecureResource) }));
 
-        assert!(config.validate(true, &secret_providers(), None).is_empty());
+        assert!(config
+            .validate(true, &secret_providers(), Some(&development_witness()))
+            .is_empty());
     }
 
     #[test]

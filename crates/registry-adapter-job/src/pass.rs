@@ -980,8 +980,8 @@ fn identity_stop_reason(error: &store::StoreError) -> StopReason {
     }
 }
 
-/// The stop reason for a store refusal: [`STORE_REFUSED`] with the
-/// store's closed cause token, value-free.
+/// The value-free stop reason carries the posture mismatch code or
+/// [`STORE_REFUSED`] with the store's closed cause token.
 fn store_refused_reason(error: &store::StoreError) -> StopReason {
     if matches!(error, store::StoreError::PostureMismatch { .. }) {
         return StopReason::PageFault {

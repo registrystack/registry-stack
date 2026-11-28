@@ -1459,6 +1459,67 @@ fn development_logs_the_seals_not_served_setting_once() {
 }
 
 #[test]
+fn production_startup_reports_runtime_and_package_posture_together() {
+    let fixture = deployment(None);
+    let runtime = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    std::fs::write(
+        &fixture.runtime_path,
+        format!("{runtime}assuranceProfile: local\n"),
+    )
+    .unwrap();
+    let (exit, stderr) = refused_startup_with_posture(&fixture, "production");
+    assert_eq!(exit, Some(20), "{stderr}");
+    assert!(
+        stderr.contains("render.posture.local-assurance"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("render.posture.seals-not-served"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn runtime_check_reports_the_configured_packages_seals_without_bundle_flag() {
+    let fixture = deployment(None);
+    let check = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .args(["check", "--runtime-config"])
+            .arg(&fixture.runtime_path)
+            .args(["--format", "json"])
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output.status.code(), report)
+    };
+    let (exit, report) = check();
+    assert_eq!(exit, Some(1), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "render.posture.seals-not-served"),
+        "{report}"
+    );
+
+    let package = fixture.home.join("package");
+    std::fs::rename(&package, fixture.home.join("other-package")).unwrap();
+    let (exit, report) = check();
+    assert_eq!(exit, Some(0), "{report}");
+
+    std::fs::create_dir(&package).unwrap();
+    let (exit, report) = check();
+    assert_eq!(exit, Some(1), "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "render.runtime.package-refused"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/package/root");
+}
+
+#[test]
 fn posture_is_logged_and_combination_refused_before_authentication_starts() {
     let fixture = deployment(None);
     // Authentication cannot start without its key set. The posture block and

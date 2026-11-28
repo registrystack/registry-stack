@@ -770,6 +770,22 @@ fn completed_report(mut report: Value, command: &str, refusal: bool) -> Value {
             "message": message,
             "suggestedAction": action,
         });
+        if command == "plan" {
+            let posture_mismatch = report["refusals"].as_array().and_then(|refusals| {
+                refusals
+                    .iter()
+                    .find(|refusal| refusal["code"] == "platform.activation.posture-mismatch")
+            });
+            if let Some(refusal) = posture_mismatch {
+                let mut diagnostic = refusal.clone();
+                diagnostic["severity"] = json!("error");
+                diagnostic["artifact"] = json!("database");
+                match report["diagnostics"].as_array_mut() {
+                    Some(diagnostics) => diagnostics.insert(0, diagnostic),
+                    None => report["diagnostics"] = json!([diagnostic]),
+                }
+            }
+        }
         match report["diagnostics"].as_array_mut() {
             Some(diagnostics) => diagnostics.push(diagnostic),
             None => report["diagnostics"] = json!([diagnostic]),
@@ -1339,6 +1355,29 @@ mod tests {
     /// A plan that names a refusal keeps its own `refusals` member and
     /// points at it, so a caller reading only the envelope finds the next
     /// step; a plan that refuses nothing is complete.
+    #[test]
+    fn a_plan_posture_mismatch_has_the_shared_top_diagnostic() {
+        let report = completed_report(
+            json!({"refusals": [{
+                "code": "platform.activation.posture-mismatch",
+                "path": "/database",
+                "message": "Activation posture differs.",
+                "suggestedAction": "Use the matching deployment posture."
+            }]}),
+            "plan",
+            true,
+        );
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "platform.activation.posture-mismatch"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "/database");
+        assert_eq!(
+            report["diagnostics"][0]["suggestedAction"],
+            "Use the matching deployment posture."
+        );
+    }
+
     #[test]
     fn a_refused_plan_points_at_its_refusals() {
         let plan = json!({

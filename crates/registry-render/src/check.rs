@@ -242,7 +242,11 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
             path,
             request.environment,
             request.require_audit_under,
-            manifest.as_ref(),
+            if bundle_dir.is_some() {
+                crate::runtime::CheckPackage::Explicit(manifest.as_ref())
+            } else {
+                crate::runtime::CheckPackage::Configured
+            },
             request.declared,
         );
         if let (Some(dir), Some(manifest)) = (bundle_dir, manifest.as_ref()) {
@@ -819,7 +823,7 @@ fn check_runtime_file(
     path: &Path,
     environment: bool,
     audit_root: Option<&Path>,
-    manifest: Option<&Manifest>,
+    package: crate::runtime::CheckPackage<'_>,
     declared: DeclaredPosture,
 ) -> RuntimeCheck {
     let given = path.display().to_string();
@@ -843,11 +847,11 @@ fn check_runtime_file(
             explicit_production_settings: Vec::new(),
         };
     };
-    let mut checked = crate::runtime::check_runtime_with_bundle(
+    let mut checked = crate::runtime::check_runtime_package(
         &absolute,
         environment,
         audit_root,
-        manifest,
+        package,
         declared,
     );
     let absolute = absolute.display().to_string();

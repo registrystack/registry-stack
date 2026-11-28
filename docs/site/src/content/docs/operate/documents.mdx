@@ -106,7 +106,7 @@ backup space above the database size.
 authority over the schema. If the runtime role later loses `USAGE` on the schema, run `provision`
 again: it restores that grant, and `apply` does not. If the runtime role loses read access to the
 activation ledger, `serve` refuses to start and the operator commands answer
-`documentsctl.activation.ledger-unreadable` at `database.runtimeUrlRef`. Run `apply` again with the
+`documentsctl.activation.ledger-unreadable` at `/database/runtimeUrlRef`. Run `apply` again with the
 migration credential to restore those grants.
 
 {/* Evidence: crates/registry-documents/src/activation.rs, apply (grant_runtime_role and

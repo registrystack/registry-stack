@@ -382,11 +382,12 @@ async fn assemble_router(
                 authorization,
             } => {
                 let provider = CaseworkProvider::new(
-                    CaseworkOptions::new(
+                    CaseworkOptions::new_with_peer_policy(
                         base_url.to_url(),
                         reader_policy.to_string(),
                         source_profile.as_ref().map(|profile| profile.to_string()),
                         *page_size,
+                        peer_policy,
                     )
                     .map_err(|_| {
                         startup_failure(

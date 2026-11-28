@@ -35,7 +35,11 @@ server = [
 ]
 # The runtime configuration types and their offline check, without the
 # service.
-runtime-config = ["dep:registry-platform-config", "dep:registry-platform-yaml"]
+runtime-config = [
+  "dep:registry-platform-config",
+  "dep:registry-platform-loopback",
+  "dep:registry-platform-yaml",
+]
 schema = [
   "runtime-config",
   "dep:schemars",
@@ -51,6 +55,7 @@ registry-discovery-profile.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config = { workspace = true, optional = true }
 registry-platform-httpsec = { workspace = true, features = ["server"], optional = true }
+registry-platform-loopback = { workspace = true, optional = true }
 registry-platform-yaml = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 serde.workspace = true

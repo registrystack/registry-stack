@@ -582,7 +582,7 @@ fn retry_after_rounds_up_to_whole_seconds() {
 }
 
 #[tokio::test]
-async fn only_the_loopback_forms_are_a_development_resource_and_issuer() {
+async fn development_admits_loopback_http_and_production_refuses_all_http_resources() {
     let auth = authorization_server().await;
     for host in [
         "127.0.0.1",

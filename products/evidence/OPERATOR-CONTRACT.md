@@ -208,7 +208,9 @@ synthetic deployment subject, retain the signed response, verify it against an
 independently prepared `production` policy and trusted keys, and confirm that
 its access and disclosure audit entries reached the audit destination.
 
-Configure an HTTPS OIDC issuer independently of Evidence. Its client registration
+Configure an OIDC issuer independently of Evidence. Use HTTPS beyond loopback.
+Loopback HTTP trusts every process and container sharing that interface, so use HTTPS with a TLS trust profile on shared hosts and multi-container Pods.
+Its client registration
 must bind the approved resource and scopes; the governed bundle pins issuer,
 JWKS URI, audience, allowed algorithms, token types, and claim mappings.
 Inspect the installed package and target with `evidencectl artifact inspect <candidate>` and verify

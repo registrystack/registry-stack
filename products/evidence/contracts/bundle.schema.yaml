@@ -349,26 +349,6 @@ allOf:
   - if:
       properties:
         assuranceProfile:
-          const: local
-    then:
-      properties:
-        authentication:
-          properties:
-            oidc:
-              properties:
-                issuer:
-                  pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4})$
-                jwksSource:
-                  properties:
-                    uri:
-                      # Local development permits a supervised issuer on the exact
-                      # canonical loopback origin, serving its JWKS from that origin at
-                      # any absolute path without query or fragment. The route is the
-                      # issuer's to choose; the origin is not.
-                      pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4}/[^\s?#]*)$
-  - if:
-      properties:
-        assuranceProfile:
           enum:
             - production
             - evidence-grade
@@ -378,12 +358,14 @@ allOf:
           properties:
             oidc:
               properties:
+                allowInsecureHttp:
+                  const: false
                 issuer:
-                  pattern: ^https://
+                  $ref: '#/$defs/DeployableOidcEndpoint'
                 jwksSource:
                   properties:
                     uri:
-                      pattern: ^https://
+                      $ref: '#/$defs/DeployableOidcEndpoint'
         sourceConnections:
           additionalProperties:
             properties:
@@ -418,6 +400,10 @@ allOf:
               type: string
               pattern: ^https://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[1-9][0-9]{0,4})?$
 $defs:
+  DeployableOidcEndpoint:
+    # The runtime parses the URI and applies the exact loopback host rule.
+    pattern: '^(?:https://|http://(?:[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127\.[0-9.]+|\[::1\]|\[::[Ff]{4}:[0-9a-fA-F.:]+\])(?::[0-9]+)?(?:/|$))'
+
   Digest:
     type: string
     pattern: ^sha256:[0-9a-f]{64}$

@@ -1156,3 +1156,45 @@ fn external_policy_ids_receive_an_actionable_local_compatibility_refusal() {
         assert_eq!(files(&source), source_before);
     }
 }
+
+#[test]
+fn init_resolves_declared_posture_before_writing() {
+    let root = tempfile::tempdir().unwrap();
+    for (name, flag, environment, posture) in [
+        ("flag", Some("development"), None, Some("development")),
+        (
+            "environment",
+            None,
+            Some("development"),
+            Some("development"),
+        ),
+        ("default", None, None, Some("production")),
+        ("invalid-environment", None, Some("bogus"), None),
+        ("invalid-flag", Some("bogus"), None, None),
+    ] {
+        let project = root.path().join(name);
+        let mut command =
+            cli::caseworkctl_command(&["--format", "json", "init", project.to_str().unwrap()]);
+        command.env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(flag) = flag {
+            command.args(["--posture", flag]);
+        }
+        if let Some(environment) = environment {
+            command.env("REGISTRY_STACK_POSTURE", environment);
+        }
+        let output = command.output().unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        if let Some(posture) = posture {
+            assert!(output.status.success(), "{name}: {report}");
+            assert_eq!(report["posture"]["value"], posture);
+            assert!(project.join("casework.yaml").is_file());
+        } else {
+            assert_eq!(output.status.code(), Some(2), "{name}: {report}");
+            assert_eq!(
+                report["diagnostics"][0]["code"],
+                "platform.posture.invalid-value"
+            );
+            assert!(!project.exists());
+        }
+    }
+}

@@ -312,31 +312,31 @@ fn failure(path: &Path, declared: DeclaredPosture, error: RuntimeError) -> Outco
             view: View::Activation,
         },
         RuntimeError::Activation(activation @ ActivationError::NotActivated) => {
-            activation_refused(activation, "database")
+            activation_refused(activation, "/database")
         }
         RuntimeError::Activation(activation @ ActivationError::DatabaseIdMismatch) => {
-            activation_refused(activation, "identity.databaseId")
+            activation_refused(activation, "/identity/databaseId")
         }
         RuntimeError::Activation(activation @ ActivationError::PackageNotActive) => {
-            activation_refused(activation, "package")
+            activation_refused(activation, "/package")
         }
         RuntimeError::Activation(
             activation @ (ActivationError::RoleModeWeakened
             | ActivationError::GrantsStale
             | ActivationError::LedgerUnreadable),
-        ) => activation_refused(activation, "database.runtimeUrlRef"),
+        ) => activation_refused(activation, "/database/runtimeUrlRef"),
         RuntimeError::Activation(ActivationError::AppliedUnaudited { .. }) => {
-            refused(OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit")
+            refused(OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "/audit")
         }
         RuntimeError::Activation(ActivationError::OutcomeUnknown { .. }) => refused(
             OPERATIONAL_FAILURE_EXIT,
             "package.outcome-unknown",
-            "database",
+            "/database",
         ),
         RuntimeError::Activation(ActivationError::Audit(_))
         | RuntimeError::AuditSecret(_)
         | RuntimeError::AuditJournal(_) => {
-            refused(OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit")
+            refused(OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "/audit")
         }
         RuntimeError::Replay(refusal) => replay_refusal(Job::Verification, refusal, refused),
         RuntimeError::ErasureReplay(refusal) => replay_refusal(Job::Erasure, refusal, refused),
@@ -351,7 +351,7 @@ fn failure(path: &Path, declared: DeclaredPosture, error: RuntimeError) -> Outco
         } => refused(
             DOMAIN_REFUSAL_EXIT,
             "documentsctl.activation.schema-unresolved",
-            "database",
+            "/database",
         ),
         RuntimeError::Database {
             source: registry_documents::store::StoreError::Transport(error),
@@ -366,7 +366,11 @@ fn failure(path: &Path, declared: DeclaredPosture, error: RuntimeError) -> Outco
             Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &Report::new(vec![diagnostic]))
         }
         RuntimeError::Activation(ActivationError::Store(_)) | RuntimeError::Database { .. } => {
-            refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
+            refused(
+                OPERATIONAL_FAILURE_EXIT,
+                "database.unavailable",
+                "/database",
+            )
         }
         _ => refused(OPERATIONAL_FAILURE_EXIT, "runtime.unavailable", "/"),
     }
@@ -413,10 +417,10 @@ fn replay_failure(
 ) -> Outcome {
     match failure {
         ReplayFailure::AuditUnavailable => {
-            refused(OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit")
+            refused(OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "/audit")
         }
         ReplayFailure::Unaudited { .. } => {
-            refused(OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit")
+            refused(OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "/audit")
         }
         ReplayFailure::OutcomeUnknown { .. } => {
             let code = match job {
@@ -425,9 +429,11 @@ fn replay_failure(
             };
             refused(OPERATIONAL_FAILURE_EXIT, code, job.path())
         }
-        ReplayFailure::DatabaseUnavailable => {
-            refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
-        }
+        ReplayFailure::DatabaseUnavailable => refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "database.unavailable",
+            "/database",
+        ),
     }
 }
 
@@ -472,6 +478,31 @@ fn activation_diagnostics(refusals: &[ActivationRefusal]) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn operate_activation_refusals_use_json_pointers() {
+        let source = include_str!("operate.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let members = [
+            "database",
+            "identity.databaseId",
+            "database.runtimeUrlRef",
+            "package",
+            "audit",
+        ];
+        for member in members {
+            assert!(
+                !source.contains(&format!("\"{member}\"")),
+                "{member} must use a JSON pointer"
+            );
+            assert!(
+                source.contains(&format!("\"/{}\"", member.replace('.', "/"))),
+                "{member} must name a path"
+            );
+        }
+    }
+
     use std::cell::RefCell;
 
     use super::*;
@@ -541,14 +572,18 @@ mod tests {
                     "documents.verification.removal-requested",
                     "verification"
                 ),
-                (OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit"),
-                (OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit"),
+                (OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "/audit"),
+                (OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "/audit"),
                 (
                     OPERATIONAL_FAILURE_EXIT,
                     "documents.verification.outcome-unknown",
                     "verification"
                 ),
-                (OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database"),
+                (
+                    OPERATIONAL_FAILURE_EXIT,
+                    "database.unavailable",
+                    "/database"
+                ),
             ]
         );
         assert_eq!(
@@ -571,14 +606,18 @@ mod tests {
                 ),
                 (DOMAIN_REFUSAL_EXIT, "documents.erasure.changed", "erasure"),
                 (DOMAIN_REFUSAL_EXIT, "documents.erasure.changed", "erasure"),
-                (OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit"),
-                (OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit"),
+                (OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "/audit"),
+                (OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "/audit"),
                 (
                     OPERATIONAL_FAILURE_EXIT,
                     "documents.erasure.outcome-unknown",
                     "erasure"
                 ),
-                (OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database"),
+                (
+                    OPERATIONAL_FAILURE_EXIT,
+                    "database.unavailable",
+                    "/database"
+                ),
             ]
         );
     }

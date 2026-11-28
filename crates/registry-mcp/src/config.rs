@@ -379,9 +379,6 @@ impl RuntimeConfig {
                     service,
                 } => {
                     let provider = format!("{pointer}/provider");
-                    // A plain http origin read without the witness is the
-                    // posture report's finding.
-                    let review = service.review_base_url(development).ok().map(Url::to_url);
                     if resource
                         .is_some_and(|resource| registry.audience.as_str() == resource.as_str())
                     {
@@ -392,12 +389,7 @@ impl RuntimeConfig {
                             "Configure the distinct downstream audience admitted by BReg.",
                         );
                     }
-                    if review.is_some_and(|review| {
-                        review.path() != "/"
-                            || review.query().is_some()
-                            || review.fragment().is_some()
-                            || !matches!(review.scheme(), "https" | "http")
-                    }) {
+                    if !service.review_base_url_is_origin() {
                         reject(
                             "breg-review-origin-invalid",
                             &format!("{provider}/service/reviewBaseUrl"),
