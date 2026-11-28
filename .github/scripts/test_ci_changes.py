@@ -1817,8 +1817,10 @@ class CiChangesTest(unittest.TestCase):
             "\n  breg-evidence-composition:\n", 1
         )[0]
         tests = (
-            "dev::examples::tests::native_create_recovers_after_process_exit_without_duplicate_records",
-            "dev::examples::tests::native_invoke_recovers_original_conditions_after_restart",
+            "examples::recovery_tests::native_create_recovers_after_process_exit_without_duplicate_records",
+            "examples::recovery_tests::native_invoke_recovers_original_conditions_after_restart",
+            "examples::recovery_tests::native_proposal_recovers_start_submit_and_apply_after_restart",
+            "examples::recovery_tests::live_run_examples_replay_the_same_attempt",
         )
         self.assertIn('"$test" -- --ignored --exact', breg_job)
         # A renamed test would otherwise leave the step running zero tests.
@@ -1829,7 +1831,7 @@ class CiChangesTest(unittest.TestCase):
             '${test}"; exit 1; }',
             breg_job,
         )
-        source = Path("crates/registry-bregctl/src/dev/examples.rs").read_text()
+        source = Path("crates/registry-bregctl/src/examples/recovery_tests.rs").read_text()
         for test in tests:
             self.assertIn(test, breg_job)
             self.assertIn(f"fn {test.rsplit('::', 1)[1]}()", source)
@@ -1935,12 +1937,12 @@ class CiChangesTest(unittest.TestCase):
             "run: products/casework/scripts/test-backup-restore.sh", casework_job
         )
         # The BReg proof drives bregctl and breg; the Casework proof drives
-        # both development supervisors and both runtimes, so a change to
+        # the shared development runner and both runtimes, so a change to
         # either product or to either script selects the job that runs it.
         for path, outputs_required in (
             ("products/breg/scripts/test-backup-restore.sh", ("breg_contracts",)),
             ("crates/registry-breg/src/instance_claim.rs", ("breg_contracts", "casework_postgres")),
-            ("crates/registry-bregctl/src/dev/mod.rs", ("breg_contracts", "casework_postgres")),
+            ("crates/registry-bregctl/src/examples.rs", ("breg_contracts", "casework_postgres")),
             ("products/casework/scripts/test-backup-restore.sh", ("casework_postgres",)),
             ("crates/registry-casework/src/activation.rs", ("casework_postgres",)),
         ):
@@ -2135,6 +2137,7 @@ class CiChangesTest(unittest.TestCase):
 
     def test_breg_tutorial_routing(self) -> None:
         infrastructure = (
+            "products/platform/scripts/test-rstack-dev.py",
             "docs/site/scripts/run-tutorial.mjs",
             "docs/site/scripts/tutorial-runner/gate.mjs",
             "docs/site/src/content/docs/tutorials/first-breg.mdx",
@@ -2144,8 +2147,8 @@ class CiChangesTest(unittest.TestCase):
         for path in infrastructure:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
-        # The issuer tooling `bregctl dev` links, and any BReg product
-        # material, which selects the BReg packages the replay builds.
+        # Issuer tooling and BReg product changes select the replay that
+        # builds the BReg toolset and serves it through rstack dev.
         for path in (
             "crates/registry-thunderid-tooling/src/local.rs",
             "products/breg/quickstart/run.sh",
@@ -2162,7 +2165,7 @@ class CiChangesTest(unittest.TestCase):
                 "breg_tutorial"
             ]
         )
-        # `bregctl dev` mints the operator token the tutorial's first
+        # `rstack dev token` mints the operator token the tutorial's first
         # authenticated call carries.
         self.assertTrue(
             classify(self.workspace, ("crates/registry-thunderid-tooling/src/lib.rs",))[
@@ -2180,7 +2183,7 @@ class CiChangesTest(unittest.TestCase):
                 ),
             )["breg_tutorial"]
         )
-        # The replay starts `bregctl dev` and no Evidence binary, and
+        # The replay starts BReg through `rstack dev` without an Evidence binary, and
         # it does not replay the composition page. The offline composition proof
         # owns the Evidence toolset and that page's commands.
         for path in (
@@ -2247,7 +2250,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-casework/src/http.rs",
             "crates/registry-thunderid-tooling/src/lib.rs",
             "crates/registry-breg/src/lib.rs",
-            "crates/registry-bregctl/src/dev/mod.rs",
+            "crates/registry-bregctl/src/examples.rs",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])
@@ -2317,11 +2320,12 @@ class CiChangesTest(unittest.TestCase):
         for path in infrastructure:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
-        # The replay builds and runs messagingctl, which links the runtime in
-        # process for its local session.
+        # The replay builds Messaging and its CLI, and starts the service
+        # with the shared development runner.
         for path in (
             "crates/registry-messaging/src/runtime.rs",
-            "crates/registry-messagingctl/src/dev/mod.rs",
+            "crates/registry-rstack-dev/src/messaging.rs",
+            "crates/registry-messagingctl/src/lib.rs",
             "crates/registry-messagingctl/src/starter.rs",
         ):
             with self.subTest(path=path):

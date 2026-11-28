@@ -125,6 +125,7 @@ pub(super) async fn execute(
     input: &Value,
     directory: &Path,
     attempt: &mut Attempt,
+    origin: &str,
 ) -> Result<Value> {
     let key = BRegIdempotencyKey::parse(format!("examples-{}-{}", attempt.id, step.id))?;
     let mut waited = None;
@@ -135,7 +136,9 @@ pub(super) async fn execute(
             if pending.step != step.id {
                 bail!("resume the pending original Proposal step first");
             }
-            BRegPreparedAction::from_slice(&serde_json::to_vec(&pending.capsule)?)?
+            BRegPreparedAction::from_slice(
+                &pending.recovery_bytes(origin, "/binding/source_binding")?,
+            )?
         } else {
             let request = BRegActionInvocationRequest::new(&action, inputs.clone(), None)?;
             let prepared = client.prepare_action(&action, &request, &key)?;
@@ -186,8 +189,9 @@ pub(super) async fn execute(
                     if pending.step != step.id {
                         bail!("resume the pending original Proposal step first");
                     }
-                    let saved =
-                        BRegPreparedProposal::from_slice(&serde_json::to_vec(&pending.capsule)?)?;
+                    let saved = BRegPreparedProposal::from_slice(
+                        &pending.recovery_bytes(origin, "/source")?,
+                    )?;
                     client.recover_proposal(&current, &saved)?
                 } else {
                     let body = transition_body(step, &current, input, &attempt.captures)?;

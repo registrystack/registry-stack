@@ -224,7 +224,8 @@ class BRegQuickstartTests(unittest.TestCase):
         plan = yaml.safe_load((PRODUCT_ROOT / "examples/minimal/dev.yaml").read_text())
         self.assertLessEqual({"editor", "foreign-editor"}, set(plan["people"]))
         run_source = (QUICKSTART / "run.sh").read_text(encoding="utf-8")
-        self.assertIn("add-dev-plan", run_source)
+        self.assertIn('init "$run_dir/project"', run_source)
+        self.assertNotIn("add-dev-plan", run_source)
 
     def test_directory_refusal_uses_the_foreign_client_and_requires_concealment(self) -> None:
         helper = load_helper()

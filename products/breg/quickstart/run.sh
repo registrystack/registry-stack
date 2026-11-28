@@ -7,7 +7,7 @@ support="$quickstart_dir/support/quickstart.py"
 spatial=false; smoke=false; installed=false
 for arg in "$@"; do case "$arg" in --spatial) spatial=true;; --smoke) smoke=true;; --installed) installed=true;; *) echo 'usage: products/breg/quickstart/run.sh [--installed] [--spatial] [--smoke]' >&2; exit 2;; esac; done
 if [[ -L "$run_dir" || -e "$run_dir" ]]; then
-  printf '%s\n' "quickstart state path already exists: $run_dir. Run `rstack dev stop` for any run it started, then remove it." >&2
+  printf '%s\n' "quickstart state path already exists: $run_dir. Run rstack dev stop RUN_ID --clean with RSTACK_DEV_STATE_DIR=$run_dir/state, then remove it." >&2
   exit 2
 fi
 for cmd in docker python3; do command -v "$cmd" >/dev/null || { echo "$cmd is required." >&2; exit 2; }; done
@@ -39,14 +39,18 @@ if [[ "$spatial" == true ]]; then
   python3 "$support" prepare-spatial-project --fixture "$repository_root/products/breg/acceptance/spatial-service-sites" --project "$run_dir/project"
 else
   "$bregctl" --format json init "$run_dir/project" >"$run_dir/init-report.json"
-  python3 "$support" add-dev-plan --example "$repository_root/products/breg/examples/minimal" --project "$run_dir/project"
 fi
 run_id=""
 cleanup() {
   local exit_code=$?
-  # Stopping a run removes its services and database. A failed start keeps its logs under the state directory.
+  # Clean the managed database before deleting the state that identifies it.
   if [[ -n "$run_id" ]]; then
-    "$rstack" "${rstack_args[@]}" dev stop "$run_id" >/dev/null 2>&1 || true
+    if ! "$rstack" "${rstack_args[@]}" dev stop "$run_id" --clean >/dev/null; then
+      printf 'Cleanup failed. Retry with RSTACK_DEV_STATE_DIR=%q ' "$RSTACK_DEV_STATE_DIR" >&2
+      printf '%q ' "$rstack" "${rstack_args[@]}" dev stop "$run_id" --clean >&2
+      printf '\n' >&2
+      if [[ "$exit_code" -eq 0 ]]; then exit_code=1; fi
+    fi
   fi
   if [[ "$exit_code" -eq 0 ]] && [[ -f "$run_dir/.launcher-owned" ]] && [[ "$(cat "$run_dir/.launcher-owned")" == registry-stack-breg-quickstart-v1 ]]; then
     rm -rf -- "$run_dir"

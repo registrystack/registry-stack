@@ -66,8 +66,9 @@ export RSTACK_BREGCTL_BIN="$repository_root/target/$build_profile/bregctl"
 export RSTACK_DEV_STATE_DIR="$run_dir/state"
 unset RSTACK_DEV_DATABASE_URL RSTACK_DEV_DATABASE_CA
 bregctl="$RSTACK_BREGCTL_BIN"
+rstack_args=(--install-root "$repository_root/target/$build_profile" --format json)
 rstack_dev() {
-  "$rstack" --install-root "$repository_root/target/$build_profile" --format json dev "$@"
+  "$rstack" "${rstack_args[@]}" dev "$@"
 }
 run_id=""
 
@@ -75,8 +76,11 @@ cleanup_failed_start() {
   local status=$?
   if [[ "$status" -ne 0 && -n "$run_id" ]]; then
     printf '%s\n' 'Load-test startup failed; stopping only the run this script started.' >&2
-    rstack_dev stop "$run_id" --clean --clean >/dev/null 2>&1 ||
-      printf '%s\n' "Automatic cleanup failed. Run rstack dev stop $run_id --clean" >&2
+    if ! rstack_dev stop "$run_id" --clean >/dev/null; then
+      printf 'Automatic cleanup failed. Run RSTACK_DEV_STATE_DIR=%q ' "$RSTACK_DEV_STATE_DIR" >&2
+      printf '%q ' "$rstack" "${rstack_args[@]}" dev stop "$run_id" --clean >&2
+      printf '\n' >&2
+    fi
   fi
   exit "$status"
 }

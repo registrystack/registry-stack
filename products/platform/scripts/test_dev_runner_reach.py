@@ -14,6 +14,7 @@ from check_dev_runner_reach import (
 def metadata(package, dependency, kind=None):
     return {
         "workspace_members": ["host"],
+        "resolve": {"nodes": [{"id": "host", "deps": []}]},
         "packages": [
             {"id": "host", "name": package, "dependencies": [
                 {"name": dependency, "kind": kind, "optional": True},
@@ -23,6 +24,25 @@ def metadata(package, dependency, kind=None):
 
 
 class DevRunnerReachTests(unittest.TestCase):
+    def test_missing_resolution_graph_fails(self):
+        graph = metadata("registry-adapter-job", "registry-platform-testing")
+        del graph["resolve"]
+        self.assertEqual(dependency_violations(graph), ["Cargo metadata has no dependency resolution graph."])
+
+    def test_test_support_is_refused_in_the_default_closure(self):
+        graph = metadata("registry-adapter-job", "registry-platform-testing")
+        graph["packages"].append({
+            "id": "testing", "name": "registry-platform-testing", "dependencies": [],
+        })
+        graph["resolve"]["nodes"][0]["deps"] = [
+            {"pkg": "testing", "dep_kinds": [{"kind": None}]},
+        ]
+        graph["resolve"]["nodes"].append({"id": "testing", "deps": []})
+        self.assertEqual(dependency_violations(graph), [])
+        self.assertEqual(dependency_violations(graph, default_features=True), [
+            "Test-support dependency enabled by default: registry-adapter-job -> registry-platform-testing",
+        ])
+
     def test_approved_hosts(self):
         for package, dependency in (
             ("registry-discoveryctl", "registry-rstack-dev"),

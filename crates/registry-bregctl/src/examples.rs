@@ -5,6 +5,8 @@ use registry_rstack_dev::BregRun;
 
 const MAX_BYTES: u64 = 1024 * 1024;
 mod proposals;
+#[cfg(test)]
+mod recovery_tests;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
@@ -28,6 +30,16 @@ pub struct ExamplesArgs {
     #[command(subcommand)]
     action: ExamplesAction,
 }
+impl ExamplesArgs {
+    pub(super) fn run_posture_flag(&self) -> Option<Option<&str>> {
+        match &self.action {
+            ExamplesAction::List {
+                run_id, posture, ..
+            } => run_id.as_ref().map(|_| posture.as_deref()),
+            ExamplesAction::Run(args) => Some(args.posture.as_deref()),
+        }
+    }
+}
 #[derive(Debug, Subcommand)]
 enum ExamplesAction {
     /// Describe authored local scenarios without starting services or creating credentials.
@@ -38,6 +50,9 @@ enum ExamplesAction {
         /// Ready run whose retained example attempts to list.
         #[arg(long)]
         run_id: Option<String>,
+        /// Declare development posture for a ready run.
+        #[arg(long, value_name = "POSTURE", requires = "run_id")]
+        posture: Option<String>,
     },
     /// Run or resume an example against the project's ready owned development instance.
     Run(RunArgs),
@@ -52,6 +67,9 @@ struct RunArgs {
     /// Ready run serving the exact project.
     #[arg(long)]
     run_id: String,
+    /// Declare development posture for a ready run.
+    #[arg(long, value_name = "POSTURE")]
+    posture: Option<String>,
     /// Editable JSON input (default: the scenario's declared examples input file).
     #[arg(long)]
     input: Option<PathBuf>,
@@ -410,6 +428,39 @@ struct ProposalCapture {
 struct Pending {
     step: String,
     capsule: Value,
+}
+impl Pending {
+    /// A kept run can move to another loopback port. The caller has already
+    /// checked the attempt against the ready run's exact project, package,
+    /// database generation, identities and input. Rebind the transport only
+    /// and let the client verify the original request and current authority.
+    fn recovery_bytes(&self, origin: &str, source_pointer: &str) -> Result<Vec<u8>> {
+        let mut capsule = self.capsule.clone();
+        let source = capsule
+            .pointer_mut(source_pointer)
+            .context("retained example request has no source binding")?;
+        let old = source
+            .as_str()
+            .context("retained example request has an invalid source binding")?;
+        let current = reqwest::Url::parse(origin)?;
+        if old != current.as_str() {
+            let previous = reqwest::Url::parse(old)?;
+            let local_origin = |url: &reqwest::Url| {
+                url.scheme() == "http"
+                    && url.host_str() == Some("127.0.0.1")
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.path() == "/"
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+            };
+            if !local_origin(&previous) || !local_origin(&current) {
+                bail!("retained example request cannot move between these origins");
+            }
+            *source = json!(current.as_str());
+        }
+        Ok(serde_json::to_vec(&capsule)?)
+    }
 }
 impl Attempt {
     fn save(&self, directory: &Path) -> Result<()> {
@@ -1030,7 +1081,9 @@ fn inherit_captures(attempt: &mut Attempt, parent: &Attempt, catalogue: &Catalog
 
 pub fn run(args: ExamplesArgs) -> Result<Value> {
     match args.action {
-        ExamplesAction::List { project, run_id } => {
+        ExamplesAction::List {
+            project, run_id, ..
+        } => {
             let project = project.canonicalize()?;
             let (catalogue, _) = catalogue(&project)?;
             let retained = if let Some(run_id) = run_id {
@@ -1476,8 +1529,16 @@ async fn execute(
         let client = &native[&key];
         let contract = &metadata[&key];
         if step.operation.is_proposal() {
-            let result =
-                proposals::execute(step, client, contract, input, directory, attempt).await?;
+            let result = proposals::execute(
+                step,
+                client,
+                contract,
+                input,
+                directory,
+                attempt,
+                &run.origin,
+            )
+            .await?;
             results.insert(step.id.clone(), result);
             continue;
         }
@@ -1491,7 +1552,9 @@ async fn execute(
                 if pending.step != step.id {
                     bail!("resume the pending original action first");
                 }
-                BRegPreparedAction::from_slice(&serde_json::to_vec(&pending.capsule)?)?
+                BRegPreparedAction::from_slice(
+                    &pending.recovery_bytes(&run.origin, "/binding/source_binding")?,
+                )?
             } else {
                 let conditions = if action.required_condition_keys().is_empty() {
                     None
@@ -1549,7 +1612,7 @@ async fn execute(
                 if pending.step != step.id {
                     bail!("resume the pending original step first");
                 }
-                BRegPreparedCreate::from_slice(&serde_json::to_vec(&pending.capsule)?)?
+                BRegPreparedCreate::from_slice(&pending.recovery_bytes(&run.origin, "/source")?)?
             } else {
                 let request = payload(step, input, &attempt.captures)?;
                 let key =
@@ -1743,35 +1806,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a ready rstack dev BReg run of the minimal project"]
-    fn live_run_examples_replay_the_same_attempt() {
-        let project = PathBuf::from(std::env::var_os("BREG_EXAMPLE_PROJECT").unwrap());
-        let run_id = std::env::var("BREG_EXAMPLE_RUN_ID").unwrap();
-        let args = RunArgs {
-            scenario: "contact".to_owned(),
-            project,
-            run_id,
-            input: None,
-            attempt: None,
-            new_attempt: true,
-            from_attempt: None,
-        };
-        let first = run_example(args).unwrap();
-        let next = RunArgs {
-            scenario: first["scenario"].as_str().unwrap().to_owned(),
-            project: PathBuf::from(first["project"].as_str().unwrap()),
-            run_id: std::env::var("BREG_EXAMPLE_RUN_ID").unwrap(),
-            input: None,
-            attempt: Some(first["attempt"].as_str().unwrap().parse().unwrap()),
-            new_attempt: false,
-            from_attempt: None,
-        };
-        let replay = run_example(next).unwrap();
-        assert_eq!(first["attempt"], replay["attempt"]);
-        assert_eq!(first["captures"], replay["captures"]);
-    }
-
-    #[test]
     fn listing_is_offline_and_does_not_create_dev_state() {
         let temp = tempfile::tempdir().unwrap();
         copy_tree(&assets(), temp.path());
@@ -1779,6 +1813,7 @@ mod tests {
             action: ExamplesAction::List {
                 project: temp.path().into(),
                 run_id: None,
+                posture: None,
             },
         })
         .unwrap();

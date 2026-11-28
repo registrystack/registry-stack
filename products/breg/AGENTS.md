@@ -168,12 +168,15 @@ PostGIS container. It reads `PROVISION_TEST_DATABASE_URL` (the superuser URL wit
 `sslmode=verify-full`) and `PROVISION_TEST_DATABASE_CA` (the `BREG_TEST_TLS_CA_PEM_PATH` file) and
 fails when either is missing.
 
-Native development lifecycle change. The test owns a PostgreSQL container, so
-it needs Docker:
+Retained development lifecycle changes need Docker and a source-built
+`rstack`, `bregctl`, and `breg`. Run the BReg restart proof:
 
 ```sh
-cargo test --locked -p registry-bregctl --test dev_lifecycle -- --ignored --test-threads=1
+python3 products/platform/scripts/test-rstack-dev.py --bin-dir target/debug --restart breg
 ```
+
+The `breg-tutorial` CI job also runs each ignored example recovery test by its
+exact name against a managed `rstack dev` run.
 
 Evidence export change. The proof drives the three native binaries over
 `products/breg/evidence/` offline and starts no container:

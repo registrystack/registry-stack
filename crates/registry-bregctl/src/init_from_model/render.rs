@@ -1388,7 +1388,7 @@ fn readme(plan: &Plan) -> String {
     );
     let _ = writeln!(
         out,
-        "2. Write a development plan and run `rstack dev start .` to serve the registry locally."
+        "2. Review `dev.yaml` and run `rstack dev start .` to serve the registry locally."
     );
     let _ = writeln!(
         out,

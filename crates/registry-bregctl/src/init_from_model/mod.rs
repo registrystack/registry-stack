@@ -295,8 +295,8 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
     }
     steps.extend([
         format!(
-            "write a dev.yaml for {} and run 'rstack dev start {}' to serve the registry locally",
-            destination.display(),
+            "review {} and run 'rstack dev start {}' to serve the registry locally",
+            destination.join("dev.yaml").display(),
             destination.display()
         ),
         format!(
