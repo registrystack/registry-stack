@@ -54,75 +54,75 @@ expectedFailures:
   - journey: own-provider
     product: breg
     step: database.provision
-    code: product.breg.runtime.package-root-unavailable
+    code: journey.needs.certificate
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "prepare and issuer pass (bregctl check accepts the loopback Keycloak issuer with RS256 and JWT access tokens). bregctl provision now exists (c722c8f35) and loads the runtime file with load_runtime_config, which requires package.root to be an existing readable directory (breg.runtime.package-root-unavailable) even though provision reads nothing from it; own-provider points package.root at work/breg/package without creating it because bregctl package needs a bregctl test receipt."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "prepare and issuer pass (bregctl check accepts the loopback Keycloak issuer with RS256 and JWT access tokens). bregctl provision (added in PR #2798 and updated to allow provisioning before package.root exists) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: casework
-    step: issuer
-    code: product.casework.posture.unrestricted-clients
+    step: database.provision
+    code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "prepare passes, and caseworkctl init writes runtime.example.yaml with allowedClients: unrestricted. Under the default production posture (7c2c6140a, updated to issuer entries in d4c61e994), caseworkctl check refuses unrestricted clients at /authentication/oidc/issuers/main/allowedClients unless development is declared."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "prepare and issuer pass (caseworkctl check accepts the scaffolded explicit client under the default production posture of PR #2798). caseworkctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: messaging
     step: database.provision
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "prepare and issuer pass (messagingctl check). messagingctl provision now exists (1681dc780, c722c8f35) and requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "prepare and issuer pass (messagingctl check). messagingctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: scheduling
     step: database.provision
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "prepare and issuer pass (schedulingctl check). schedulingctl provision now exists (1681dc780, c722c8f35) and requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "prepare and issuer pass (schedulingctl check). schedulingctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: documents
     step: database.provision
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "prepare and issuer pass (documentsctl check). documentsctl provision now exists (1681dc780, c722c8f35) and requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "prepare and issuer pass (documentsctl check). documentsctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: coordinator
     step: database.provision
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "prepare and issuer pass (coordinatorctl check, with the deployment block written by hand). coordinatorctl provision now exists (1681dc780, c722c8f35) and requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "prepare and issuer pass (coordinatorctl check, with the deployment block written by hand). coordinatorctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: adapter
     step: database.provision
     code: product.config.refused
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "prepare and issuer pass (adapterctl check of the facade-recovery example with the breg-records profile). adapterctl provision now exists (17db7bc0b) and resolves database.migrationUrlRef from the runtime file's secret provider; runtime.example.yaml references secret:env/ADAPTER_DB_MIGRATION while own-provider writes secret files and leaves that environment variable unset, so provision refuses with config.refused."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "prepare and issuer pass (adapterctl check of the facade-recovery example with the breg-records profile). adapterctl provision (added in PR #2798) resolves database.migrationUrlRef from the runtime file's secret provider; runtime.example.yaml references secret:env/ADAPTER_DB_MIGRATION while own-provider writes secret files and leaves that environment variable unset, so provision refuses with config.refused."
   - journey: own-provider
     product: evidence
     step: issuer
     code: product.evidence.posture.local-assurance
     removedBy: posture
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "prepare runs evidencectl init --profile local, writing local-target.yaml with assuranceProfile: local. Under the default production posture (7c2c6140a), evidencectl check refuses local assurance at /assuranceProfile because locally held signing keys are accepted only when development is declared."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "prepare runs evidencectl init --profile local, writing local-target.yaml with assuranceProfile: local. Under the default production posture of PR #2798, evidencectl check refuses local assurance at /assuranceProfile because locally held signing keys are accepted only when development is declared."
   - journey: own-provider
     product: render
     step: call
     code: http.401.token-type
     removedBy: caller-contract
     basis: observed
-    observedOn: "2014c191ee, journey run 20261128101428-4465"
-    reason: "No database. Start, ready and the client-credentials token pass (RS256, audience urn:example:render, scope render:render, client portal). POST /v1/render/letter still answers 401 with problem render.unauthorized, and Render now logs failed_check=token-type through the shared refusal recorder (fe73445eb) because the issuer entry defaults to accessTokenType at+jwt (a31c7de90) against Keycloak's typ JWT."
+    observedOn: "PR #2798, journey run 20261128120405-7e2e"
+    reason: "No database. Start, ready and the client-credentials token pass (RS256, audience urn:example:render, scope render:render, client portal). POST /v1/render/letter still answers 401 with problem render.unauthorized, and Render logs failed_check=token-type through the shared refusal recorder added in PR #2798 because the issuer entry defaults to accessTokenType at+jwt against Keycloak's typ JWT."
 
   - journey: rstack-dev
     product: breg
@@ -130,7 +130,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128035909-a07d"
+    observedOn: "PR #2798, journey run 20261128035909-a07d"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: casework
@@ -138,7 +138,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128035838-f991"
+    observedOn: "PR #2798, journey run 20261128035838-f991"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: messaging
@@ -146,7 +146,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128040034-0116"
+    observedOn: "PR #2798, journey run 20261128040034-0116"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: scheduling
@@ -154,7 +154,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128035900-3bec"
+    observedOn: "PR #2798, journey run 20261128035900-3bec"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: documents
@@ -162,7 +162,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128035908-2c40"
+    observedOn: "PR #2798, journey run 20261128035908-2c40"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: coordinator
@@ -170,7 +170,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128040126-31dd"
+    observedOn: "PR #2798, journey run 20261128040126-31dd"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: adapter
@@ -178,7 +178,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128035921-56a4"
+    observedOn: "PR #2798, journey run 20261128035921-56a4"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
 
   - journey: promote
@@ -187,7 +187,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: casework
@@ -195,7 +195,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: messaging
@@ -203,7 +203,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: evidence
@@ -211,7 +211,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: scheduling
@@ -219,7 +219,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: documents
@@ -227,7 +227,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: coordinator
@@ -235,7 +235,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: adapter
@@ -243,7 +243,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: render
@@ -251,7 +251,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: discovery
@@ -259,7 +259,7 @@ expectedFailures:
     code: journey.promote.no-input
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "The own-provider cell of discovery is unreached (it verifies no token and keeps no database), so there are no files to promote."
 
 unreached:
@@ -267,115 +267,115 @@ unreached:
     product: discovery
     step: prepare
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127021546-ddef"
     reason: "Discovery verifies no token and keeps no database, so the reader's own provider and PostgreSQL have nothing to serve it. Its tutorial packages from a publication origin served by products/discovery/tutorial/publication_server.py, which a journey does not run."
   - journey: own-provider
     product: breg-mcp
     step: prepare
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127021546-ddef"
     reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: breg-review
     step: prepare
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127021546-ddef"
     reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: registry-mcp
     step: prepare
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127021546-ddef"
     reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: evidence-oid4vci
     step: prepare
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127021546-ddef"
     reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: evidence-oid4vp
     step: prepare
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127021546-ddef"
     reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: adapter-job
     step: prepare
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127021546-ddef"
     reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: rstack-dev
     product: breg-mcp
     step: init
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
+    observedOn: "origin/main cd83550e, journey run 20261127014337-dc92"
     reason: "Supporting runtime. It has no rstack dev plan type and starts beside its parent."
   - journey: rstack-dev
     product: breg-review
     step: init
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
+    observedOn: "origin/main cd83550e, journey run 20261127014337-dc92"
     reason: "Supporting runtime. It has no rstack dev plan type and starts beside its parent."
   - journey: rstack-dev
     product: registry-mcp
     step: init
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
+    observedOn: "origin/main cd83550e, journey run 20261127014337-dc92"
     reason: "Supporting runtime. It has no rstack dev plan type and starts beside its parent."
   - journey: rstack-dev
     product: evidence-oid4vci
     step: init
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
+    observedOn: "origin/main cd83550e, journey run 20261127014337-dc92"
     reason: "Supporting runtime. It has no rstack dev plan type and starts beside its parent."
   - journey: rstack-dev
     product: evidence-oid4vp
     step: init
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
+    observedOn: "origin/main cd83550e, journey run 20261127014337-dc92"
     reason: "Supporting runtime. It has no rstack dev plan type and starts beside its parent."
   - journey: rstack-dev
     product: adapter-job
     step: init
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
+    observedOn: "origin/main cd83550e, journey run 20261127014337-dc92"
     reason: "Supporting runtime. It has no rstack dev plan type and starts beside its parent."
   - journey: promote
     product: breg-mcp
     step: input
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: breg-review
     step: input
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: registry-mcp
     step: input
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: evidence-oid4vci
     step: input
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: evidence-oid4vp
     step: input
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: adapter-job
     step: input
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
     reason: "Supporting runtime. It is promoted with its parent."
 
 # The scheduling row above is the unassisted outcome, which the ratchet checks
@@ -389,18 +389,18 @@ unreached:
 #     code: journey.promote.nothing-refused
 #     removedBy: posture
 #     basis: observed
-#     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), promote run 20261127025000-816f on own-provider run 20261127024425-265d (assisted: sql, certificate, token-type, mapper)"
+#     observedOn: "origin/main cd83550e, promote run 20261127025000-816f on own-provider run 20261127024425-265d (assisted: sql, certificate, token-type, mapper)"
 #     reason: "The assisted Scheduling cell reached T1. Started with no development declaration, schedulingctl check (which has no --production flag) lists no refusal and the server starts and answers /readyz, so zero refusals are listed. No shared posture exists on main, so nothing can refuse. The count becomes meaningful once the posture change lands."
 passes:
   - journey: rstack-dev
     product: evidence
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128035856-afe8"
+    observedOn: "PR #2798, journey run 20261128035856-afe8"
   - journey: rstack-dev
     product: render
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128035150-fad4"
+    observedOn: "PR #2798, journey run 20261128035150-fad4"
   - journey: rstack-dev
     product: discovery
     basis: observed
-    observedOn: "68a24502f8, journey run 20261128035152-674a"
+    observedOn: "PR #2798, journey run 20261128035152-674a"
