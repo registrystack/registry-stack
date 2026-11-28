@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import advisory_renewal
+import client_registry
 import release_candidate
 import release_notes
 import release_roster
@@ -1969,6 +1970,30 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
                 f"@registrystack/client-{platform} at version {version}"
             )
         surfaces.append(platform_path)
+
+    if client_registry.web_npm_tarball(version) is not None:
+        web_root = repo / "clients/typescript"
+        web_manifest_path = web_root / "package.json"
+        web_lock_path = web_root / "package-lock.json"
+        web_manifest = required_json(web_manifest_path)
+        web_lock = required_json(web_lock_path)
+        web_packages = web_lock.get("packages") if isinstance(web_lock, dict) else None
+        web_lock_root = web_packages.get("") if isinstance(web_packages, dict) else None
+        if (
+            not isinstance(web_manifest, dict)
+            or web_manifest.get("name") != client_registry.WEB_NPM_NAME
+            or web_manifest.get("version") != version
+            or web_manifest.get("private")
+            or not isinstance(web_lock_root, dict)
+            or web_lock_root.get("name") != client_registry.WEB_NPM_NAME
+            or web_lock_root.get("version") != version
+            or web_lock.get("version") != version
+        ):
+            raise ReleasePlanError(
+                f"clients/typescript package and lock must identify "
+                f"{client_registry.WEB_NPM_NAME} at version {version} as a public package"
+            )
+        surfaces.extend((web_manifest_path, web_lock_path))
 
     for relative_root, expected_name, dependency_name in PYTHON_CLIENT_RELEASE_SURFACES:
         root = repo / relative_root

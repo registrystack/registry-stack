@@ -121,6 +121,8 @@ test('describeError uses only the caller-supplied label for a refused guard', ()
   assert.equal(describeError(guard), 'The action is not possible in the current state.')
   assert.equal(describeError(guard, { guardLabels: { 'case-closed': 'Only open cases can be closed.' } }),
     'Only open cases can be closed.')
+  assert.equal(describeError(guard, { clientSentences: { 'availability.guard-not-satisfied': 'Ask your supervisor.' } }),
+    'Ask your supervisor.')
   assert.equal(describeError(guard, { guardLabels: { 'other-guard': 'Other.' } }),
     'The action is not possible in the current state.')
   assert.equal(describeError(guard, { guardLabels: Object.create({ 'case-closed': 'Inherited.' }) }),

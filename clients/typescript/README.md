@@ -7,8 +7,7 @@ dependencies. The package and source generator require Node 24 or later. The bro
 
 ## Call a product
 
-One generated file per service holds the two entry points. A service is one Base
-Registry Engine (BReg) register and the products installed beside it. The
+One generated file per service holds the two entry points. A service has named Base Registry Engine (BReg) registers and shared products. The
 examples in `generated/services/` are a facility register with Documents,
 Casework and Evidence, and one with every product.
 
@@ -20,7 +19,7 @@ import { createRegistryClient } from './generated/services/breg-facility-documen
 
 const registry = createRegistryClient({ baseUrl: '/registry' })
 
-const answer = await registry.list('facility', { accessProfile: 'facility-reader', top: 25 })
+const answer = await registry.facility.list('facility', { accessProfile: 'facility-reader', top: 25 })
 console.log(answer.items)
 await registry.casework.call('describeCasework')
 ```
@@ -38,14 +37,14 @@ const registry = createRegistryServerClient({
 })
 ```
 
-The object has the register's methods at the top level and each installed
-product's typed operation client at `registry.<product>`, such as
+Register methods live under their member names, even for a service with one register. Each installed
+product's typed operation client is at `registry.<product>`, such as
 `registry.casework.call(...)`. Every module of one service shares one transport,
-so they share one base URL, one token call per request, and the same deadlines.
+so they share one gateway base URL, one token call per request, and the same deadlines.
 A product module exports its `Client` class and types, and no factory. A
 `Client` is built from a `Transport`.
 
-Both entry points accept `profile` as a default for routes with an
+Both entry points accept `registers.<member>.routePrefix` for the member's path under the gateway base. Products use the gateway base directly. Both entry points accept `registers.<member>.profile` as a default for routes with an
 `accessProfile` query parameter. An explicit `accessProfile` on a call takes
 precedence. Routes without that parameter receive no default. The default
 reaches every route that takes the parameter. `list` and `read` refuse before
@@ -53,7 +52,7 @@ sending when a record type does not publish the default, and say so. Name a
 profile on that call. `call()` sends the default, and the register decides. A
 route whose `accessProfile` parameter is required refuses with a `TypeError`
 before anything is sent when neither the call nor the client names a profile.
-This holds for `call()`, `invoke`, `targetConditions`, `list` and `read`. See
+This holds for `call()`, `available`, `invoke`, `conditions`, `list` and `read`. See
 [the service tests](tests/service.test.ts).
 
 The server entry refuses to construct where `globalThis.document` exists, with a
@@ -63,13 +62,74 @@ keeps Coordinator, Messaging and OID4VCI server-only, in the type and at run tim
 `createRegistryClient` and `createRegistryServerClient` have no audience
 parameter yet.
 
-The generated file attaches the task helpers. `registry.proposals` is `proposalCommands` over the
-register client, under the `authorProfile` of the service description, and `registry.documents` is
-`documentCommands` over the Document Store client when that product is installed. It keeps the Document
-Store's typed `call` and page methods, so every other operation stays reachable. A service
-without the Document Store has no `documents` member, in the type and at run time. The generator refuses
-a register that has Proposals when the description gives no `authorProfile`, and the message names the
-missing member. The command line takes it as `--author-profile`.
+The generated file attaches the task helpers. `registry.facility.proposals` uses the first
+profile in the member's `authorProfiles` list. If your register has Proposals, declare at
+least one profile. The generator checks that every declared profile can start
+Proposals on at least one Action and names the granted profiles if a check fails.
+
+When you install Document Store, `registry.documents` adds the document commands
+and keeps the typed `call` and page methods.
+
+### Several Proposal author profiles
+
+List the author profiles per register, with the default first. The following example assumes the facility register grants both profiles Proposal start.
+
+```ts
+import { createRegistryClient } from './service.ts'
+
+const registry = createRegistryClient({ baseUrl: '/registry' })
+const author = registry.facility.proposals
+const counter = registry.facility.proposalsAs('facility-correction-applier')
+```
+
+With several profiles, `proposalsAs` accepts only the declared profile names.
+Each client reuses one command object per profile, including the default, so
+writes under the same profile share a queue.
+
+### Proposal forms
+
+Import `Proposal`, `ProposalStatus`, `ProposalSlot` and `ProposalListRow` from
+the generated service file. Start with the Action's input and attach files
+using the slot names on that Action.
+
+```ts
+const draft = await registry.facility.proposals.start('correct-address', { city: 'Springfield' })
+const updated = await registry.facility.proposals.attach(draft, 'supporting-document', file)
+```
+
+When you read a Proposal, use its `actionId` and `can.attach` to decide
+whether to offer an attachment. Pass the narrowed Proposal to `attach` so
+TypeScript can check the slot against that Action.
+
+```ts
+const proposal = await registry.facility.proposals.get(proposalId)
+if (proposal.actionId === 'correct-address' && proposal.can.attach.available) {
+  await registry.facility.proposals.attach(proposal, 'supporting-document', file)
+}
+```
+
+Use `sentence('proposal.status.' + proposal.status)` from `core.ts` for the default status text.
+
+### File types for attachments and uploads
+
+Proposal `attach` and `resubmit` and Document Store `upload` normalise
+`image/jpg` and `image/pjpeg` to `image/jpeg`, and `application/x-pdf` to
+`application/pdf`. If the reported type is missing or unaccepted, they try the
+file name extension, such as `.pdf`, `.jpg` or `.csv`, and use it only if the
+slot or policy accepts the resolved type. If resolution fails, the error names
+the accepted types. The server still verifies the uploaded bytes.
+
+### Access profiles and refusal reasons
+
+Each generated register module exports `profiles`, the profile IDs from the
+register's OpenAPI operations, and `reasons`, the published Action availability
+reason codes with their default sentences. Select a profile your session can use.
+The facility register has separate profiles for reading, editing, and reviewing.
+The minimal register uses one profile for directory editing and Proposal authoring.
+
+Supply project guard labels with `guardLabels` in `available` or
+`describeError`. Supply replacement sentences under `availability.<reason>`
+in `clientSentences`.
 
 ## Create a credential offer
 
@@ -98,16 +158,52 @@ Wallet exchanges and discovery metadata use the OID4VCI protocol directly.
 
 ## Generate a service
 
+Install the package in your application with Node 24.
+
 ```sh
-node generate-service.ts --register breg-facility --products documents,casework,evidence \
-  generated/services/my-service.ts
+npm install @registrystack/web-client
 ```
 
-The register is a BReg module in `generated/`. The products are any subset of
-`casework`, `coordinator`, `documents`, `evidence`, `evidence-oid4vci`, `messaging` and `scheduling`.
-Pass `--check` to compare the output with the file on disk. `npm run generate`
-rewrites every committed example, and `npm run check:generated` fails when one
-drifts.
+Run the generator from your application directory with `bregctl` on `PATH`.
+You can also set `RSTACK_BREGCTL_BIN` to the executable path.
+
+```sh
+npx registry-generate \
+  --register facility=./projects/facility \
+  --author-profile facility=facility-correction-author \
+  --route-prefix facility=/facilities \
+  --register directory=./projects/directory \
+  --author-profile directory=directory-editor \
+  --route-prefix directory=/directory \
+  --products documents,casework,evidence \
+  --output ./src/service.ts
+```
+
+The command runs `bregctl generate openapi` for each project and writes
+`service.ts`, `service.facility.ts` and `service.directory.ts` in your application.
+The generated files import the installed web client package.
+Import the factories from `./service.ts`. Repeat `--author-profile member=profile`
+for additional author profiles. The first profile for a member is the default
+for its Proposal commands. The optional `--route-prefix` sets the member's path
+under the service's gateway base. Supply a path such as `/facilities`. Products
+share the gateway base directly.
+
+The command reports a missing compiler, a project that fails to compile, and an
+output inside the installed package. You can generate a single register with one
+`--register` flag and still use `registry.facility` in your application.
+
+Every generated register and service records the Stack and web client versions.
+The web client follows the Stack release version.
+Before 1.0, the client versions must share a minor version, so `0.48.1` works with `0.48.4`.
+From 1.0, they must share a major version.
+Patch differences are always accepted.
+
+Before writing files, the generator checks any installed package it can resolve from the output directory.
+The runtime checks the recorded client version when you construct a client.
+If either check fails, regenerate with the command from your installed package.
+You can also install the matching package version named in the error.
+
+Use `npm run generate` and `npm run check:generated` in this repository to maintain its committed examples.
 
 Successful calls return an object
 with `data`, HTTP `status` and `headers`, and the request's `idempotencyKey`
@@ -205,7 +301,9 @@ A page whose session part signs its calls uses `createRegistryClient`, which tak
 const registry = createRegistryClient({ baseUrl: '/registry' })
 ```
 
-Page mode works only on the page's own origin. The page calls its own origin's
+A base path such as `/registry` resolves on the same origin as the page.
+You can also use an absolute URL on that origin. Use an absolute URL in a
+runtime without a page origin. The page calls its own origin's
 session part, which forwards the call to the registry with the bearer token. No
 registry answers a cross-origin page call, and the browser refuses one. A page
 client whose base is an absolute URL on another origin refuses the call with a
@@ -343,7 +441,8 @@ pass must only read a page, because a retry runs it again.
 
 ```ts
 const walk = pages(cursor => client.records_contact_listPage({}, cursor))
-const first = await walk.next()
+const { value } = await walk.next()
+if (value) console.log(value.items)
 ```
 
 Use `list(recordType, options)` for the register's top-level list of a record
@@ -391,7 +490,7 @@ Each item is `{ id, revision, data }`. The fields come from the record's
 `read` to load the detail page in the same shape.
 
 ```ts
-const row = await registry.read('facility', id, { accessProfile: 'facility-reader' })
+const row = await registry.facility.read('facility', id, { accessProfile: 'facility-reader' })
 console.log(row.data.name)
 ```
 
@@ -401,16 +500,23 @@ service default unless the call names its own. If the route requires a profile
 and neither is set, the client refuses before sending. A valid 404 problem
 remains a refusal.
 
-`invoke` takes Actions that apply at once. Use `call` with the start operation
-ID to start a reviewed Action. If an untyped caller passes a reviewed Action
+`invoke` takes Actions that apply at once. Use `proposals.start` to start a
+Proposal Action. If an untyped caller passes a reviewed Action
 to `invoke`, it gets a fixed message pointing to proposals before dispatch.
 
 ```ts
 const input = { contactId, email: 'alice@example.org' }
-const preconditions = await client.targetConditions('update-contact-email', {
-  contactId: input.contactId,
-})
-const receipt = await client.invoke('update-contact-email', input, { preconditions })
+// When the form opens, retain the conditions for the version the person sees.
+const preconditions = await client.conditions('update-contact-email', { contactId })
+
+// When the form has its inputs, check whether to offer the action.
+const { available, reason } = await client.available('update-contact-email', input)
+showReason(reason)
+
+// On confirmation, use the conditions from when the form opened.
+if (available === true) {
+  await client.invoke('update-contact-email', input, { preconditions })
+}
 ```
 
 Action IDs, input members, access profiles, and Record fields come from the
@@ -421,14 +527,26 @@ them and disallows them for Actions with no required conditions. `invoke` never
 reads target conditions by itself. The `ifMatch` it sends is the one the person
 saw, so a change made since then is refused rather than overwritten.
 
-An Action with an availability route is a typed call. Its answer reports
-`available`, `observedRevision`, an optional `guardReason` with its optional
-`guardLabel`, and `missingInputs` as the document declares them.
+Pass the target input and any answers you already have to `available`. Offer
+the Action when `available` is `true`. A `null` means availability is unknown.
+Show `reason` and use `missingInputs` to mark fields the person needs to fill in.
+If the Action has multiple reference inputs, select one with `targetInput` in the
+options and supply its value. The helper accepts Actions with an availability route.
 
 ```ts
-const { data } = await client.call('actions.register-facility.availability', {
-  body: { input: { operatorId }, targetInput: 'operatorId' },
-})
+const check = await registry.facility.available('register-facility', { operatorId })
+if (check.missingInputs) highlight(check.missingInputs)
+```
+
+When the register supplies a `guardReason`, the helper returns it and uses the
+matching label from your `guardLabels` before falling back to the words table.
+
+For `list` and `read`, generated types follow the response schema's required
+fields. A `domainData` field can be absent when the access profile does not
+disclose it or your `$select` leaves it out.
+
+```ts
+showText(row.data.name ?? 'Not shared')
 ```
 
 Each BReg module exports `actionInputs`, keyed by Action ID. It is empty for a
@@ -534,11 +652,11 @@ npm --prefix clients/typescript run build
 under Deno and needs Deno installed.
 
 Use Node 24 to generate a module from the OpenAPI document produced by
-`bregctl` for your own project. The generated module imports the shared runtime
-using paths relative to its output location.
+`bregctl` for your own project. The generated module imports the installed package by default. For a repository
+example, pass `--local-imports` to use paths relative to the output file.
 
 ```sh
-node clients/typescript/generate.ts --breg \
+node clients/typescript/generate.ts --breg --local-imports \
   /path/to/project/generated/openapi.json clients/typescript/generated/my-registry.ts
 ```
 

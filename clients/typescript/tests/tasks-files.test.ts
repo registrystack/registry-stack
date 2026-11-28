@@ -96,6 +96,30 @@ test('upload checks the policy, reserves with the digest, then sends the bytes t
   assert.equal(put.headers.get('authorization'), 'Bearer fixture')
 })
 
+test('upload uses the resolved media type in the reservation and byte transfer', async () => {
+  for (const file of [
+    new File(['x'], 'support.pdf'),
+    new File(['x'], 'support.unknown', { type: 'application/x-pdf' }),
+  ]) {
+    const { commands, seen } = server(uploadRoutes())
+    await commands.upload(file, { policy: 'licence-evidence' })
+    assert.equal(JSON.parse(posts(seen)[0]!.body).mediaType, 'application/pdf')
+    assert.equal(seen.find(request => request.method === 'PUT')?.headers.get('content-type'), 'application/pdf')
+  }
+})
+
+test('upload infers CSV when the browser reports an unaccepted spreadsheet type', async () => {
+  const items = (policies.items as Record<string, unknown>[]).map(policy => ({ ...policy, allowedContentTypes: ['text/csv'] }))
+  const reserved = { ...reservation, document: { ...(reservation.document as object),
+    version: { ...versionOf(reservation.document as Record<string, unknown>), mediaType: 'text/csv' } } }
+  const { commands, seen } = server({
+    ...uploadRoutes(), 'GET /v1/document-policies': json({ items }), 'POST /v1/documents': json(reserved, 201),
+  })
+  await commands.upload(new File(['x'], 'rows.csv', { type: 'application/vnd.ms-excel' }), { policy: 'licence-evidence' })
+  assert.equal(JSON.parse(posts(seen)[0]!.body).mediaType, 'text/csv')
+  assert.equal(seen.find(request => request.method === 'PUT')?.headers.get('content-type'), 'text/csv')
+})
+
 test('the PUT content type is the reserved media type from the reservation', async () => {
   const reserved = { ...reservation, document: { ...(reservation.document as object), version: { ...versionOf(reservation.document as Record<string, unknown>), mediaType: 'image/png' } } }
   const { commands, seen } = server({ ...uploadRoutes(), 'POST /v1/documents': json(reserved, 201) })

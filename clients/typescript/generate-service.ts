@@ -1,21 +1,17 @@
 import { readFileSync, writeFileSync } from 'node:fs'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { checkOutput } from './generate.ts'
+import { generatedVersionComment, packageName, packageVersion } from './generator-package.ts'
 
-// One service is one BReg register plus the products installed beside it. The generated file
-// holds the only `createRegistryClient` and `createRegistryServerClient` of that service.
+export interface RegisterDescription {
+  register: string
+  /** The Proposal author profiles, with the default first. */
+  authorProfiles?: readonly string[]
+}
 
 export interface ServiceDescription {
-  /** The BReg project module, such as `breg-facility`. */
-  register: string
-  /** The installed products, in any order and any subset. */
+  registers: Readonly<Record<string, RegisterDescription>>
   products: readonly string[]
-  /**
-   * The access profile the Proposals helper runs under, such as `facility-correction-author`. Required
-   * when the register has Proposal operations, because the helper names its profile on every call.
-   */
-  authorProfile?: string
 }
 
 export interface ServiceSettings {
@@ -26,7 +22,9 @@ export interface ServiceSettings {
   /** Import path of the task helpers (`tasks/index.ts`) from the generated file. */
   tasksImport?: string
   /** File path of the register's generated module, read to see whether it has Proposal operations. */
-  registerSource?: string
+  registers?: Readonly<Record<string, { source?: string; import?: string; routePrefix?: string }>>
+  /** Suffix of generated product imports. */
+  modulesExtension?: string
 }
 
 // Canonical order. The page entry offers every product except the ones listed in `serverOnly`.
@@ -41,11 +39,46 @@ const productClients = {
 } as const
 const serverOnly: readonly string[] = ['coordinator', 'evidence-oid4vci', 'messaging']
 
-export function generateService(description: ServiceDescription, settings: ServiceSettings = {}): string {
-  const { register, products } = description
+function registerDetails(description: RegisterDescription, source: string) {
+  const { register } = description
   if (!/^breg-[a-z0-9]+(-[a-z0-9]+)*$/u.test(register)) {
-    throw new Error('The register must be a BReg project module such as breg-facility')
+    throw new Error('Invalid BReg register module ' + register)
   }
+  const registerText = readFileSync(source, 'utf8')
+  // The operations table declares the profiles for each start, independently of Proposal reads.
+  const startRows = registerText.match(/^ {2}"actions\.[^"]+\.start": .*$/gmu) ?? []
+  const hasProposals = startRows.length > 0 || /^ {2}"proposals\.get": /mu.test(registerText)
+  const authors = description.authorProfiles ?? []
+  if (hasProposals && authors.length === 0) {
+    throw new Error('The register ' + register + ' has Proposals, so the service description needs authorProfiles.')
+  }
+  const granted = new Set<string>()
+  for (const row of startRows) {
+    const type = /"accessProfile"\??: ([^;}]+)/u.exec(row)?.[1]
+    for (const literal of type?.match(/"(?:[^"\\]|\\.)*"/gu) ?? []) granted.add(JSON.parse(literal))
+  }
+  for (const author of authors) {
+    if (!granted.has(author)) {
+      throw new Error('The authorProfile ' + JSON.stringify(author) + ' cannot start Proposals in ' + register
+        + '. Profiles granted Proposal start: ' + ([...granted].sort().join(', ') || 'none') + '.')
+    }
+  }
+  if (new Set(authors).size !== authors.length) throw new Error('List each author profile only once.')
+  const hasTypedProposals = registerText.includes('export interface ProposalActions {')
+  return { authors, hasTypedProposals }
+}
+
+const productField = (product: string) => product === 'evidence-oid4vci' ? 'oid4vci' : product
+
+export function checkRegisterMember(name: string): void {
+  const products = Object.keys(productClients)
+  const reserved = [...products, ...products.map(productField), ...Object.getOwnPropertyNames(Object.prototype), 'then']
+  if (reserved.includes(name)) throw new Error('Register member name clashes with ' + name)
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*$/u.test(name)) throw new Error('Invalid register member name ' + name)
+}
+
+export function generateService(description: ServiceDescription, settings: ServiceSettings = {}): string {
+  const { registers, products } = description
   const known = Object.keys(productClients)
   for (const product of products) {
     if (!known.includes(product)) throw new Error('Unknown product ' + product)
@@ -56,42 +89,90 @@ export function generateService(description: ServiceDescription, settings: Servi
   const installed = known.filter(product => products.includes(product)) as Array<keyof typeof productClients>
   const shared = installed.filter(product => !serverOnly.includes(product))
   const server = installed.filter(product => serverOnly.includes(product))
-  const registerSource = settings.registerSource ?? fileURLToPath(new URL('./generated/' + register + '.ts', import.meta.url))
-  const registerText = readFileSync(registerSource, 'utf8')
-  // The operations table has one row per operation, so the row for reading a Proposal says the register has them.
-  const proposalRow = /^ {2}"proposals\.get": .*$/mu.exec(registerText)?.[0]
-  const hasProposals = proposalRow !== undefined
-  if (hasProposals && !description.authorProfile) {
-    throw new Error('The register ' + register + ' has Proposals, so the service description needs an authorProfile: the access profile its Proposals helper runs under.')
-  }
-  // Every call of the helper names the profile, so one the register's Proposal routes do not accept would be refused each time.
-  const accepted = /"accessProfile"\??: ([^;}]+)/u.exec(proposalRow ?? '')?.[1]?.match(/"[^"]+"/gu)?.map(name => name.slice(1, -1))
-  if (hasProposals && accepted !== undefined && !accepted.includes(description.authorProfile!)) {
-    throw new Error('The authorProfile ' + JSON.stringify(description.authorProfile) + ' is not an access profile the Proposal routes of ' + register
-      + ' accept. They accept: ' + accepted.join(', ') + '.')
-  }
-  const profile = hasProposals ? JSON.stringify(description.authorProfile) : undefined
-  const core = settings.coreImport ?? '../../core.ts'
-  const modules = settings.modulesImport ?? '../'
-  const tasks = settings.tasksImport ?? '../../tasks/index.ts'
-  const helpers = [...(profile === undefined ? [] : ['proposalCommands']), ...(installed.includes('documents') ? ['documentCommands'] : [])]
+  if (Object.keys(registers).length === 0) throw new Error('Declare at least one register member.')
+  const members = Object.entries(registers).map(([name, entry], index) => {
+    checkRegisterMember(name)
+    const setting = Object.hasOwn(settings.registers ?? {}, name) ? settings.registers?.[name] : undefined
+    const source = setting?.source ?? fileURLToPath(new URL('./generated/' + entry.register + '.ts', import.meta.url))
+    return { name, entry, index, setting, ...registerDetails(entry, source) }
+  })
+  const typed = members.filter(member => member.hasTypedProposals)
+  const hasAuthors = members.some(member => member.authors.length > 0)
+  const core = settings.coreImport ?? packageName + '/core'
+  const modules = settings.modulesImport ?? packageName + '/products/'
+  const tasks = settings.tasksImport ?? packageName + '/tasks'
+  const extension = settings.modulesExtension ?? ''
+  const registerImports = members.map(({ entry, index, setting, hasTypedProposals }) =>
+    'import { Client as Register' + index + ', type AccessProfile as Profile' + index
+    + (hasTypedProposals ? ', type ProposalActions as Actions' + index : '') + ' } from '
+    + JSON.stringify(setting?.import ?? modules + entry.register + extension))
+  const memberFactories = members.flatMap(({ name, index, setting, authors, hasTypedProposals }) => {
+    const commandType = hasTypedProposals ? ' as TypedProposalCommands<Actions' + index + '>' : ''
+    return [
+      'function member' + index + '(transport: Transport, options?: RegisterOptions<Profile' + index + '>) {',
+      '  const register = new Register' + index + '(transport.register(options?.routePrefix ?? '
+        + JSON.stringify(setting?.routePrefix ?? '') + ', options?.profile))',
+      ...(authors.length === 0 ? ['  return register'] : [
+        '  type AuthorProfile = ' + authors.map(author => JSON.stringify(author)).join(' | '),
+        '  const allowedProfiles: readonly AuthorProfile[] = ' + JSON.stringify(authors),
+        '  const commandsFor = (accessProfile: AuthorProfile) => proposalCommands(register, { accessProfile })' + commandType,
+        '  const commands = new Map<AuthorProfile, ReturnType<typeof commandsFor>>()',
+        '  function proposalsAs(profile: AuthorProfile) {',
+        '    if (!allowedProfiles.includes(profile)) throw new TypeError("Choose a declared Proposal author profile for ' + name + '.")',
+        '    let proposals = commands.get(profile)',
+        '    if (proposals === undefined) {',
+        '      proposals = commandsFor(profile)',
+        '      commands.set(profile, proposals)',
+        '    }',
+        '    return proposals',
+        '  }',
+        '  return Object.assign(register, { proposals: proposalsAs(' + JSON.stringify(authors[0]) + '), proposalsAs })',
+      ]),
+      '}',
+      '',
+    ]
+  })
+  const helpers = [...(hasAuthors ? ['proposalCommands'] : []), ...(typed.length ? ['type TypedProposalCommands'] : []),
+    ...(installed.includes('documents') ? ['documentCommands'] : [])]
   const construct = (product: keyof typeof productClients) =>
     product === 'documents' ? 'documentCommands(new ' + productClients[product] + '(transport))' : 'new ' + productClients[product] + '(transport)'
   const fields = (list: readonly (keyof typeof productClients)[]) =>
-    list.map(product => '    ' + (product === 'evidence-oid4vci' ? 'oid4vci' : product) + ': ' + construct(product) + ',')
+    list.map(product => '    ' + productField(product) + ': ' + construct(product) + ',')
   return [
     '// Generated by generate-service.ts. Do not edit.',
-    '// Register: ' + register + '. Products: ' + (installed.length ? installed.join(', ') : 'none') + '.',
-    "import { Transport, type ClientOptions } from '" + core + "'",
-    "import { Client as RegisterClient } from '" + modules + register + ".ts'",
-    ...installed.map(product => "import { Client as " + productClients[product] + " } from '" + modules + product + ".ts'"),
+    generatedVersionComment,
+    '// Registers: ' + members.map(member => member.name).join(', ') + '. Products: ' + (installed.length ? installed.join(', ') : 'none') + '.',
+    "import { assertClientVersion, Transport, type ClientOptions } from '" + core + "'",
+    ...registerImports,
+    ...installed.map(product => 'import { Client as ' + productClients[product] + ' } from '
+      + JSON.stringify(modules + product + extension)),
     ...(helpers.length ? ["import { " + helpers.join(', ') + " } from '" + tasks + "'"] : []),
     '',
+    ...(typed.length ? [
+      "export type { Proposal, ProposalStatus, AttachmentView } from '" + tasks + "'",
+      'export interface RegisterProposalActions {',
+      ...typed.map(({ name, index }) => '  ' + name + ': Actions' + index),
+      '}',
+      ...(members.length === 1 ? [
+        'export type ProposalActions = Actions0',
+        'export type ProposalListRow = Awaited<ReturnType<TypedProposalCommands<ProposalActions>["list"]>>["items"][number]',
+        'export type ProposalSlot<Action extends keyof ProposalActions = keyof ProposalActions> = ProposalActions[Action]["slot"]',
+      ] : []),
+      '',
+    ] : []),
+    'type RegisterOptions<Profile> = { routePrefix?: string; profile?: Profile }',
+    'type ServiceClientOptions = Omit<ClientOptions, "token" | "profile"> & {',
+    ...(members.length === 1 ? ['  profile?: Profile0'] : []),
+    '  registers?: {',
+    ...members.map(({ name, index }) => '    ' + name + '?: RegisterOptions<Profile' + index + '>'),
+    '  }',
+    '}',
+    '',
     '/** The options a page client takes. There is no `token`: the page\'s session part signs each call. */',
-    "export type PageClientOptions = Omit<ClientOptions, 'token'>",
+    "export type PageClientOptions = ServiceClientOptions",
     '',
     '/** The options a server client takes. `token` runs on each call for a bearer credential. */',
-    "export type ServerClientOptions = Omit<ClientOptions, 'token'> & { token: () => string | Promise<string> }",
+    "export type ServerClientOptions = ServiceClientOptions & { token: () => string | Promise<string> }",
     '',
     'function pageProducts(transport: Transport) {',
     '  return {',
@@ -106,19 +187,15 @@ export function generateService(description: ServiceDescription, settings: Servi
     '  }',
     '}',
     '',
-    ...(profile === undefined ? [] : [
-      '/** The Proposals helper, over the register client, under the service\'s author profile. */',
-      'function taskHelpers(register: RegisterClient) {',
-      '  return { proposals: proposalCommands(register, { accessProfile: ' + profile + ' }) }',
-      '}',
-      '',
-    ]),
-    '/**',
-    ' * The register\'s methods at the top level, and each installed product\'s client by name.',
-    ...(installed.includes('documents') ? [' * The Document Store client is `documentCommands` over it, which keeps its typed `call` and page methods.'] : []),
-    ' */',
-    'export type RegistryClient = RegisterClient & ReturnType<typeof pageProducts>' + (profile === undefined ? '' : ' & ReturnType<typeof taskHelpers>'),
-    'export type RegistryServerClient = RegisterClient & ReturnType<typeof serverProducts>' + (profile === undefined ? '' : ' & ReturnType<typeof taskHelpers>'),
+    ...memberFactories,
+    'function registerMembers(transport: Transport, options: ServiceClientOptions) {',
+    '  return {',
+    ...members.map(({ name, index }) => '    ' + name + ': member' + index + '(transport, options.registers?.' + name + '),'),
+    '  }',
+    '}',
+    '',
+    'export type RegistryClient = ReturnType<typeof registerMembers> & ReturnType<typeof pageProducts>',
+    'export type RegistryServerClient = ReturnType<typeof registerMembers> & ReturnType<typeof serverProducts>',
     '',
     '/**',
     ' * The client for a page. It sends no `Authorization`, sends cookies to the page\'s own origin',
@@ -127,9 +204,9 @@ export function generateService(description: ServiceDescription, settings: Servi
     ' */',
     'export function createRegistryClient(options: PageClientOptions): RegistryClient {',
     "  if ('token' in options) throw new TypeError('A page client takes no token, so use createRegistryServerClient on a server.')",
+    '  assertClientVersion(' + JSON.stringify(packageVersion) + ')',
     '  const transport = new Transport(options)',
-    '  const register = new RegisterClient(transport)',
-    '  return Object.assign(register, pageProducts(transport)' + (profile === undefined ? '' : ', taskHelpers(register)') + ')',
+    '  return { ...registerMembers(transport, options), ...pageProducts(transport) }',
     '}',
     '',
     '/**',
@@ -142,9 +219,9 @@ export function generateService(description: ServiceDescription, settings: Servi
     "    throw new TypeError('A server client cannot run in a page, so use createRegistryClient in a page.')",
     '  }',
     "  if (typeof options.token !== 'function') throw new TypeError('A server client needs a token function.')",
+    '  assertClientVersion(' + JSON.stringify(packageVersion) + ')',
     '  const transport = new Transport(options)',
-    '  const register = new RegisterClient(transport)',
-    '  return Object.assign(register, serverProducts(transport)' + (profile === undefined ? '' : ', taskHelpers(register)') + ')',
+    '  return { ...registerMembers(transport, options), ...serverProducts(transport) }',
     '}',
     '',
   ].join('\n')
@@ -156,24 +233,4 @@ export function generateServiceFile(
   const result = generateService(description, settings)
   if (check) checkOutput(result, readFileSync(output, 'utf8'), output)
   else writeFileSync(output, result)
-}
-
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  const usage = 'Usage: node generate-service.ts [--check] --register breg-facility --products documents,casework [--author-profile facility-correction-author] service.ts'
-  try {
-    const args = process.argv.slice(2)
-    const check = args.includes('--check')
-    const rest = args.filter(arg => arg !== '--check')
-    const profileAt = rest.indexOf('--author-profile')
-    const authorProfile = profileAt === -1 ? undefined : rest[profileAt + 1]
-    if (profileAt !== -1 && authorProfile === undefined) throw new Error(usage)
-    const [flagA, register, flagB, products, output, ...extra] = profileAt === -1 ? rest : rest.filter((_, i) => i !== profileAt && i !== profileAt + 1)
-    if (flagA !== '--register' || flagB !== '--products' || !register || products === undefined || !output || extra.length) {
-      throw new Error(usage)
-    }
-    generateServiceFile({ register, products: products === '' ? [] : products.split(','), ...(authorProfile === undefined ? {} : { authorProfile }) }, output, check)
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error)
-    process.exitCode = 1
-  }
 }

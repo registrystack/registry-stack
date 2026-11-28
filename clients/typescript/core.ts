@@ -1,3 +1,5 @@
+export { assertClientVersion } from './version.ts'
+
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /**
@@ -571,7 +573,20 @@ export class Transport {
 
   get profile(): string | undefined { return this.#options.profile }
 
-  async call<T>(operation: Operation, values: RequestValues = {}): Promise<Answer<T>> {
+  register(routePrefix: string, profile = this.profile): Pick<Transport, 'call' | 'profile'> {
+    if (routePrefix !== '' && (!/^\/(?!\/)[a-zA-Z0-9_./:-]+$/u.test(routePrefix)
+      || routePrefix.includes('//') || routePrefix.split('/').some(part => part === '.' || part === '..'))) {
+      throw new TypeError('Invalid register route prefix')
+    }
+    const base = this.#base + routePrefix.replace(/\/$/u, '')
+    return { profile, call: (operation, values) => this.#call(base, profile, operation, values) }
+  }
+
+  call<T>(operation: Operation, values?: RequestValues): Promise<Answer<T>> {
+    return this.#call(this.#base, this.profile, operation, values)
+  }
+
+  async #call<T>(base: string, profile: string | undefined, operation: Operation, values: RequestValues = {}): Promise<Answer<T>> {
     const deadline = new AbortController()
     // A JSON call has one deadline for the whole exchange. A byte transfer restarts it
     // while bytes move, so it fails only when the transfer stalls.
@@ -623,7 +638,7 @@ export class Transport {
         }
         idempotencyKey ??= crypto.randomUUID()
       }
-      const url = endpoint(this.#base, operation, values, this.#options.profile)
+      const url = endpoint(base, operation, values, profile)
       // The session part forwards a page's calls, so a page client stays on the page's own origin.
       const pageOrigin = (globalThis as { location?: { origin?: unknown } }).location?.origin
       if (pageMode && typeof pageOrigin === 'string' && url.origin !== pageOrigin) {
@@ -939,7 +954,7 @@ export function listPage<T>(data: { items: T[]; pageInfo: { nextCursor?: string 
  */
 export function pages<T>(
   load: (cursor?: string) => Promise<Page<T>>, cap = 100,
-): AsyncIterableIterator<Page<T>> {
+): AsyncIterableIterator<Page<T>, void, undefined> {
   if (!Number.isSafeInteger(cap) || cap < 1) throw new RangeError('Invalid page cap')
   let cursor: string | undefined
   const seen = new Set<string>()
@@ -964,7 +979,7 @@ export function pages<T>(
     } else done = true
     return { done: false, value: page }
   }
-  const walk: AsyncIterableIterator<Page<T>> = {
+  const walk: AsyncIterableIterator<Page<T>, void, undefined> = {
     next() {
       const result = tail.then(step, step)
       tail = result.catch(() => undefined)
@@ -997,7 +1012,7 @@ export interface DescribeOptions {
    * Only these constants are shown for a refused guard.
    */
   guardLabels?: Readonly<Record<string, string>>
-  /** Replaces the sentence for a `client.` code the client raised itself, keyed by that code. */
+  /** Replaces a default sentence by its key in the words table. */
   clientSentences?: Readonly<Record<string, string>>
 }
 
@@ -1020,6 +1035,7 @@ export const availabilityMessages: Readonly<Record<string, string>> = {
   'already-applied': 'This application has already been applied.',
 }
 
+const availableSentence = 'Available.'
 const configurationSentence = 'This page is not set up correctly for this request.'
 const developerSentence = 'This page could not complete the request.'
 const unexpectedAnswerSentence = 'The answer was not what this page expected, so this page stopped for safety.'
@@ -1034,8 +1050,20 @@ export const clientFallbackSentence = 'The request could not be completed from t
  */
 export const clientSentences: Readonly<Record<string, string>> = {
   ...availabilityMessages,
-  available: 'Available.',
+  available: availableSentence,
+  'availability.available': availableSentence,
   unavailable: 'This is not available right now.',
+  'availability.guard-not-satisfied': 'The action is not possible in the current state.',
+  'availability.input-required': 'Complete the required fields to check whether this action is available.',
+  'availability.not-disclosed': 'It is unclear whether this action is available.',
+  'proposal.status.draft': 'Draft.',
+  'proposal.status.awaiting-party': 'Waiting for the applicant.',
+  'proposal.status.in-review': 'Under review.',
+  'proposal.status.approved': 'Approved.',
+  'proposal.status.processing': 'Being processed.',
+  'proposal.status.applied': 'Applied.',
+  'proposal.status.rejected': 'Rejected.',
+  'proposal.status.cancelled': 'Cancelled.',
   'client.fallback': clientFallbackSentence,
   'client.file-type': 'This kind of file is not accepted here, so choose another file.',
   'client.file-too-large': 'This file is too large, so choose a smaller file.',
@@ -1077,6 +1105,32 @@ export function sentence(key: string, options: DescribeOptions = {}): string {
   return replacement(key) ?? (Object.hasOwn(clientSentences, key) ? clientSentences[key]! : replacement('client.fallback') ?? clientFallbackSentence)
 }
 
+export interface ActionAvailability<Input extends string = string> {
+  available: boolean | null
+  reason: string
+  missingInputs?: Input[]
+  guardReason?: string
+}
+
+function guardLabel(reason: unknown, options: DescribeOptions): string | undefined {
+  const labels = options.guardLabels
+  const label = typeof reason === 'string' && labels && Object.hasOwn(labels, reason) ? labels[reason] : undefined
+  return typeof label === 'string' && label !== '' ? label : undefined
+}
+
+export function actionAvailability<Input extends string>(
+  answer: { available: boolean | null; reason?: string; missingInputs?: Input[]; guardReason?: string },
+  options: DescribeOptions,
+): ActionAvailability<Input> {
+  const { available, missingInputs, guardReason } = answer
+  return {
+    available,
+    reason: guardLabel(guardReason, options) ?? sentence('availability.' + (available ? 'available' : answer.reason), options),
+    ...(missingInputs === undefined ? {} : { missingInputs }),
+    ...(guardReason === undefined ? {} : { guardReason }),
+  }
+}
+
 const unreadable = 'The registry sent an answer that could not be read.'
 const notBuilt = 'The request could not be built from the given values.'
 
@@ -1098,10 +1152,7 @@ export function describeError(error: unknown, options: DescribeOptions = {}): st
   }
   if (error.outcomeUnknown) return 'The change may or may not have been made, so check before trying again.'
   if (error.kind === 'refused' && error.code === 'action.guard_failed') {
-    const reason = error.problem?.guardReason
-    const labels = options.guardLabels
-    const label = typeof reason === 'string' && labels && Object.hasOwn(labels, reason) ? labels[reason] : undefined
-    return typeof label === 'string' && label !== '' ? label : 'The action is not possible in the current state.'
+    return guardLabel(error.problem?.guardReason, options) ?? sentence('availability.guard-not-satisfied', options)
   }
   switch (error.reason) {
     case 'configuration': return 'This service is not available from this page right now, so try again later.'

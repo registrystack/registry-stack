@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { generate, checkOutput } from '../generate.ts'
 
 function document(schema: object) {
@@ -24,7 +29,7 @@ test('BReg refuses paths outside the route scheme', () => {
 test('a generated module exports its Client over a Transport and no factory', () => {
   const output = generate(JSON.stringify({ ...document({ type: 'string' }), info: { title: 'licence-registry' } }))
   assert.match(output, /^export class Client \{$/mu)
-  assert.match(output, /^  constructor\(transport: Transport\) \{ this\.#transport = transport \}$/mu)
+  assert.match(output, /^  constructor\(transport: Transport\) \{$/mu)
   assert.doesNotMatch(output, /export function create\w*Client\b/u)
 })
 test('determinism and drift', () => {
@@ -164,4 +169,65 @@ test('a BReg module always exports actionInputs, and generated comments hold no 
 test('rejects patterns invalid under Unicode mode at the pattern pointer', () => {
   assert.throws(() => generate(JSON.stringify(document({ type: 'string', pattern: '\\q' }))),
     /\/components\/schemas\/Thing\/pattern/u)
+})
+
+test('availability input types come from the request schema independently of invoke metadata', () => {
+  const source = JSON.parse(readFileSync(new URL('../../../products/breg/generated/minimal/generated/openapi.json', import.meta.url), 'utf8'))
+  delete source.paths['/v1/actions/update-contact-email']
+  const output = generate(JSON.stringify(source), { breg: true })
+  assert.match(output, /available\(action: "update-contact-email", input: \{ "contactId": \(string\); "email"\?: \(string\) \}/u)
+})
+
+test('availability requires the selected reference to be non-null and allows other references to be null', () => {
+  const source = JSON.parse(readFileSync(new URL('../../../products/breg/generated/minimal/generated/openapi.json', import.meta.url), 'utf8'))
+  const request = source.components.schemas['action-update-contact-email-availability-input']
+  const { contactId } = request.oneOf[0].properties.input.properties
+  request.properties.input.properties.contactId = { ...contactId, type: ['string', 'null'] }
+  request.properties.input.properties.alternateId = { ...contactId, type: ['string', 'null'] }
+  request.properties.targetInput.enum.push('alternateId')
+  request.oneOf.push({ properties: {
+    targetInput: { const: 'alternateId' },
+    input: { required: ['alternateId'], properties: { alternateId: contactId } },
+  } })
+
+  const entry = fileURLToPath(new URL('../generated/breg-minimal.ts', import.meta.url))
+  const output = generate(JSON.stringify(source), {
+    breg: true, coreImport: '../core.ts', schemaImport: '../schema.ts',
+  }) + `
+declare const client: Client
+client.available('update-contact-email', { contactId: 'contact' }, { targetInput: 'contactId' })
+client.available('update-contact-email', { contactId: 'contact', alternateId: null }, { targetInput: 'contactId' })
+client.available('update-contact-email', { contactId: null, alternateId: 'alternate' }, { targetInput: 'alternateId' })
+// @ts-expect-error the selected reference cannot be null
+client.available('update-contact-email', { contactId: null }, { targetInput: 'contactId' })
+// @ts-expect-error selecting the alternate reference makes it non-null too
+client.available('update-contact-email', { contactId: 'contact', alternateId: null }, { targetInput: 'alternateId' })
+`
+  const options: ts.CompilerOptions = {
+    strict: true, noEmit: true, skipLibCheck: true, types: [],
+    target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.NodeNext, allowImportingTsExtensions: true,
+  }
+  const host = ts.createCompilerHost(options)
+  const readFile = host.readFile
+  host.readFile = path => path === entry ? output : readFile(path)
+  const program = ts.createProgram([entry], options, host)
+  assert.equal(ts.formatDiagnostics(ts.getPreEmitDiagnostics(program), host), '')
+})
+
+
+test('register generation defaults to package imports and supports explicit local imports', t => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'registry-imports-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const root = dirname(fileURLToPath(new URL('../generate.ts', import.meta.url)))
+  const input = fileURLToPath(new URL('./fixtures/breg-list.openapi.json', import.meta.url))
+  const { name } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name: string }
+  const output = join(dir, 'register.ts')
+  const imports = (...flags: string[]) => {
+    execFileSync(process.execPath, [join(root, 'generate.ts'), '--breg', ...flags, input, output])
+    return new Set(readFileSync(output, 'utf8').split('\n').filter(line => line.startsWith('import '))
+      .map(line => line.split(' from ')[1]))
+  }
+  assert.deepEqual(imports(), new Set([JSON.stringify(name + '/core'), JSON.stringify(name + '/schema')]))
+  assert.deepEqual(imports('--local-imports'), new Set(['core.ts', 'schema.ts']
+    .map(file => JSON.stringify(relative(dir, join(root, file))))))
 })

@@ -1556,6 +1556,32 @@ jobs:
             fi
           done
 
+      - name: Pack and smoke the web client
+        if: matrix.asset == 'linux-amd64-glibc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f clients/typescript/generate-project.ts ]]; then
+            exit 0
+          fi
+          web_package="$(python3 release/scripts/client_registry.py web-npm-name \
+            --version "${CLIENT_VERSION}")"
+          if [[ -z "${web_package}" ]]; then
+            exit 0
+          fi
+          client_dir="${GITHUB_WORKSPACE}/clients/typescript"
+          destination="${GITHUB_WORKSPACE}/candidate-client-package/clients"
+          npm --prefix "${client_dir}" ci --no-audit --no-fund
+          npm --prefix "${client_dir}" run build
+          (cd "${client_dir}" && npm pack --ignore-scripts --pack-destination "${destination}")
+          python3 release/scripts/client_registry.py validate-web-npm \
+            --directory "${destination}" --version "${CLIENT_VERSION}"
+          smoke="${RUNNER_TEMP}/web-client-smoke"
+          mkdir -p "${smoke}"
+          npm --prefix "${smoke}" install --offline --ignore-scripts --no-audit --no-fund \
+            "${destination}/${web_package}"
+          "${smoke}/node_modules/.bin/registry-generate" --help
+
       - name: Upload native client packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -1915,6 +1941,10 @@ jobs:
             cp "inputs/candidate-distribution-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/registry-stack-${{ needs.validate.outputs.asset_tag }}-distribution.json" candidate/bundle-root/
           fi
           version="${{ needs.validate.outputs.version }}"
+          web_package=
+          if [[ -f clients/typescript/generate-project.ts ]]; then
+            web_package="$(python3 release/scripts/client_registry.py web-npm-name --version "${version}")"
+          fi
           IFS=. read -r client_major client_minor client_patch <<<"${version}"
           if (( client_major > 0 || client_minor >= 33 )); then
             cp THIRD_PARTY_NOTICES candidate/bundle-root/
@@ -1959,10 +1989,16 @@ jobs:
                 fi
               fi
             fi
+            if [[ "${platform}" == linux-amd64-glibc && -n "${web_package}" ]]; then
+              expected_client_assets=$((expected_client_assets + 1))
+            fi
             test "$(find "${client_root}" -maxdepth 1 -type f | wc -l)" -eq "${expected_client_assets}"
             cp "${client_root}"/* candidate/bundle-root/
           done
           {
+            if [[ -n "${web_package}" ]]; then
+              echo "${web_package}"
+            fi
             if [[ "${include_unified_client}" -eq 1 ]]; then
               echo "registrystack-client-${version}.tgz"
               for platform in darwin-arm64 linux-arm64-gnu linux-x64-gnu; do
@@ -2014,6 +2050,7 @@ jobs:
                -o -name 'discovery-client-node-*.tgz' \
                -o -name 'registrystack-discovery-client-*.tgz' \
                -o -name 'registry_discovery_client-*.whl' \
+               -o -name "${web_package:-no-web-client-package}" \
                -o -name 'registrystack-client-*.tgz' \
                -o -name 'registry_stack_client-*.whl' \) \
             -printf '%f\n' | sort > "${RUNNER_TEMP}/actual-client-assets"
@@ -2036,6 +2073,10 @@ jobs:
                 --version "${version}" \
                 --client "${client}"
             done
+          fi
+          if [[ -n "${web_package}" ]]; then
+            python3 release/scripts/client_registry.py validate-web-npm \
+              --directory candidate/bundle-root --version "${version}"
           fi
           component_args=()
           if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then
@@ -2306,6 +2347,10 @@ jobs:
           tag="${{ needs.validate.outputs.asset_tag }}"
           prefix="${{ needs.validate.outputs.prefix }}"
           version="${{ needs.validate.outputs.version }}"
+          web_package=
+          if [[ -f clients/typescript/generate-project.ts ]]; then
+            web_package="$(python3 release/scripts/client_registry.py web-npm-name --version "${version}")"
+          fi
           bundle="candidate/${{ needs.validate.outputs.bundle_name }}"
           created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           expires_at="$(date -u -d "${created_at} + 7 days" +%Y-%m-%dT%H:%M:%SZ)"
@@ -2326,7 +2371,7 @@ jobs:
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
                     THIRD_PARTY_NOTICES) kind=notice ;;
-                    discovery-client-node-*.tgz|evidence-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_stack_client-*.whl) kind=client-package ;;
+                    "${web_package}"|discovery-client-node-*.tgz|evidence-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_stack_client-*.whl) kind=client-package ;;
                     *) kind=binary ;;
                   esac
                   jq -n \

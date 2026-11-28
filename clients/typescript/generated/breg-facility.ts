@@ -1,7 +1,10 @@
+// Generated for Stack version 0.49.0, client version 0.49.0.
 // Source SHA-256 d2216ede609675ae3d6fadc656bb5a72454e9e05f20647a36d2051bc37ede48a
 // Unconstrained JSON /paths/~1v1~1records~1directory-entries~1{record_id}/patch/requestBody/content/application~1json-patch+json/schema/items/properties/value
 // Unconstrained JSON /paths/~1v1~1records~1operators~1{record_id}/patch/requestBody/content/application~1json-patch+json/schema/items/properties/value
-import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+import { assertClientVersion, type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+import { actionAvailability, type ActionAvailability, type DescribeOptions } from "../core.ts"
+import { sentence } from "../core.ts"
 import { validator } from "../schema.ts"
 import { listPage, listQuery, type FieldValue, type Filter, type ListPage, type ListRequest, type ListRules } from "../core.ts"
 
@@ -59,6 +62,11 @@ export interface Operations {
   "records.operator.get": { input: CallOptions & { path: { "record_id": (string) } } & { query?: { "accessProfile"?: "facility-reader" | "operator-editor"; "$select"?: (string) } } & { headers?: { "traceparent"?: (string); "Accept"?: ("application/json" | "application/ld+json") & (string) } } & { accept?: "application/json" | "application/ld+json" | "*/*" }; required: true; output: ({ "data": ({ "domainData": ({ "jurisdiction"?: (string); "operatorCode"?: (string); "status"?: ("active" | "inactive") & (string) }); "recordIdentifier": (string); "revisionIdentifier": (string) }); "meta": ({ "datasetIdentifier": "facility-registry"; "recordTypeIdentifier": "operator"; "registryIdentifier": "facility-registry" }) }) | ({ "@context": "https://id.registrystack.org/contexts/registry-record/v1"; "data": ({ "domainData": ({ "jurisdiction"?: (string); "operatorCode"?: (string); "status"?: ("active" | "inactive") & (string) }); "recordIdentifier": (string); "revisionIdentifier": (string) }); "meta": ({ "datasetIdentifier": "facility-registry"; "recordTypeIdentifier": "operator"; "registryIdentifier": "facility-registry" }) }) }
   "records.operator.patch": { input: CallOptions & { path: { "record_id": (string) } } & { query?: { "accessProfile"?: "operator-editor" } } & { headers: { "traceparent"?: (string); "If-Match": (string); "Accept"?: ("application/json" | "application/ld+json") & (string) } } & ({ body: (Array<({ "op": ("add" | "replace" | "remove" | "test") & (string); "path": (string); "value"?: JsonValue })>) }) & { accept?: "application/json" | "application/ld+json" | "*/*" }; required: true; output: ({ "data": ({ "domainData": Schema_operator; "recordIdentifier": (string); "revisionIdentifier": (string) }); "meta": ({ "datasetIdentifier": "facility-registry"; "recordTypeIdentifier": "operator"; "registryIdentifier": "facility-registry" }) }) | ({ "@context": "https://id.registrystack.org/contexts/registry-record/v1"; "data": ({ "domainData": Schema_operator; "recordIdentifier": (string); "revisionIdentifier": (string) }); "meta": ({ "datasetIdentifier": "facility-registry"; "recordTypeIdentifier": "operator"; "registryIdentifier": "facility-registry" }) }) }
   "receiveReviewCompletion": { input: CallOptions & { headers: { "Registry-Recipient-Binding": (string); "webhook-id": (string); "webhook-timestamp": (string); "webhook-signature": (string) } } & ({ body: Uint8Array }); required: true; output: undefined }
+}
+
+export interface ProposalActions {
+  "correct-address": { input: Operations["actions.correct-address.start"]["input"]["body"]["input"]; slot: "supporting-document" }
+  "deactivate-facility": { input: Operations["actions.deactivate-facility.start"]["input"]["body"]["input"]; slot: never }
 }
 
 // The row each list returns, and the list options its query profiles allow.
@@ -322,8 +330,11 @@ for (const [id, definition] of Object.entries(definitions)) {
 }
 
 export class Client {
-  readonly #transport: Transport
-  constructor(transport: Transport) { this.#transport = transport }
+  readonly #transport: Pick<Transport, "call" | "profile">
+  constructor(transport: Pick<Transport, "call" | "profile">) {
+    assertClientVersion("0.49.0")
+    this.#transport = transport
+  }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<Answer<Operations[K]["output"]>> {
     return this.#call(operation, args[0])
   }
@@ -396,7 +407,26 @@ export class Client {
       default: throw new TypeError("Unknown Action")
     }
   }
+  available(action: "register-facility", input: { "addressLine"?: (string); "city"?: (string); "facilityCode"?: (string); "jurisdiction"?: (string); "name"?: (string); "operatorId": (string); "postalCode"?: (string) }, options?: CallOptions & DescribeOptions & { accessProfile?: "facility-registrar"; targetInput?: "operatorId" }): Promise<ActionAvailability<Extract<Operations["actions.register-facility.availability"]["output"]["availability"], { missingInputs: string[] }>["missingInputs"][number]>>
+  async available(action: string, input: object, options: CallOptions & DescribeOptions & { accessProfile?: string; targetInput?: string } = {}): Promise<ActionAvailability> {
+    const { accessProfile, targetInput, clientSentences, guardLabels, ...call } = options
+    switch (action) {
+      case "register-facility": {
+        const { data: { availability } } = await this.#call<Operations["actions.register-facility.availability"]["output"]>("actions.register-facility.availability", { ...call, query: { accessProfile }, body: { input, targetInput: targetInput ?? "operatorId" } })
+        return actionAvailability(availability, { clientSentences, guardLabels })
+      }
+      default: throw new TypeError("Unknown Action availability")
+    }
+  }
 }
+
+export const profiles = ["casework-review-status","directory-editor","facility-correction-applier","facility-correction-author","facility-reader","facility-registrar","operator-editor","proposal-reviewer"] as const
+export type AccessProfile = typeof profiles[number]
+export const reasons = {
+  "guard-not-satisfied": sentence("availability.guard-not-satisfied"),
+  "input-required": sentence("availability.input-required"),
+  "not-disclosed": sentence("availability.not-disclosed"),
+} as const
 
 // Each Action's display text and inputs exactly as the source document declares them.
 export const actionInputs = {

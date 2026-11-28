@@ -1,4 +1,5 @@
-// Source SHA-256 892c0b4fb4e0e8bbc2b4ae611d34104966fd7f2458f2139b04526033b39934c0
+// Generated for Stack version 0.49.0, client version 0.49.0.
+// Source SHA-256 55863bf8358332f13f54d3ba6e33ad3604bb306fbca37b1409ea8ef77291097f
 // Unconstrained JSON /components/schemas/ReviewHistoryEntry/properties/detail
 // Unconstrained JSON /components/schemas/ReviewPolicy/properties/displaySchema
 // Unconstrained JSON /components/schemas/ReviewPolicy/properties/resultSchema
@@ -10,7 +11,7 @@
 // Unconstrained JSON /components/schemas/ReviewTaskDraftInput/properties/body
 // Unconstrained JSON /components/schemas/RoutingPredicate/oneOf/0/properties/equals
 // Unconstrained JSON /components/schemas/RoutingPredicate/oneOf/1/properties/oneOf/items
-import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+import { assertClientVersion, type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
 import { validator } from "../schema.ts"
 
 export type Schema_AbsenceInput = ({ "cover": Schema_InputIssuerPrincipal; "from": (string); "person": Schema_InputIssuerPrincipal; "until": (string) })
@@ -110,7 +111,7 @@ export type Schema_ProblemSourceVersionUnavailable = (Schema_Problem & ({ "code"
 export type Schema_ProducerRetention = ({ "receiptRetentionDays": (number) })
 export type Schema_QueuePolicy = ({ "id": Schema_LocalId; "label": Schema_DisplayText })
 export type Schema_QueueRecord = ({ "id": (string); "label": (string) })
-export type Schema_ReadyStatus = ({ "status": ("ready") & (string) })
+export type Schema_ReadyStatus = ({ "developmentSettings": (Array<({ "code": (string); "pointer"?: (string) })>); "posture": ("development" | "production") & (string); "status": ("ready") & (string) })
 export type Schema_ReviewAccountabilityRecord = ({ "actor": Schema_IssuerPrincipal; "actorRef": (string); "decision": (string); "decisionReceipt"?: (Schema_ReviewDecisionReceipt | (null)); "eventId": (string); "occurredAt": (string); "privateReason"?: (string | null); "profileId": (string); "requestId": (string); "resultDigest"?: (string | null); "retainedUntil": (string); "taskId": (string) })
 export type Schema_ReviewCancelRequest = ({ "reason": (string); "subject": Schema_InputSubjectBinding })
 export type Schema_ReviewCancelResponse = (({ "outcome": "cancelled" & (string); "result": Schema_ReviewResult }) | ({ "outcome": "already-terminal" & (string); "result": Schema_ReviewResult }))
@@ -357,7 +358,7 @@ const rules: Record<string, unknown> = Object.fromEntries([
   ["/components/schemas/ProducerRetention", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"receiptRetentionDays\":{\"maximum\":365,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"receiptRetentionDays\"],\"type\":\"object\"}")],
   ["/components/schemas/QueuePolicy", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"id\":{\"$ref\":\"/components/schemas/LocalId\"},\"label\":{\"$ref\":\"/components/schemas/DisplayText\"}},\"required\":[\"id\",\"label\"],\"type\":\"object\"}")],
   ["/components/schemas/QueueRecord", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"}},\"required\":[\"id\",\"label\"],\"type\":\"object\"}")],
-  ["/components/schemas/ReadyStatus", JSON.parse("{\"properties\":{\"status\":{\"enum\":[\"ready\"],\"type\":\"string\"}},\"required\":[\"status\"],\"type\":\"object\"}")],
+  ["/components/schemas/ReadyStatus", JSON.parse("{\"properties\":{\"developmentSettings\":{\"items\":{\"properties\":{\"code\":{\"type\":\"string\"},\"pointer\":{\"type\":\"string\"}},\"required\":[\"code\"],\"type\":\"object\"},\"type\":\"array\"},\"posture\":{\"enum\":[\"development\",\"production\"],\"type\":\"string\"},\"status\":{\"enum\":[\"ready\"],\"type\":\"string\"}},\"required\":[\"status\",\"posture\",\"developmentSettings\"],\"type\":\"object\"}")],
   ["/components/schemas/ReviewAccountabilityRecord", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"actor\":{\"$ref\":\"/components/schemas/IssuerPrincipal\"},\"actorRef\":{\"type\":\"string\"},\"decision\":{\"type\":\"string\"},\"decisionReceipt\":{\"anyOf\":[{\"$ref\":\"/components/schemas/ReviewDecisionReceipt\"},{\"type\":\"null\"}]},\"eventId\":{\"type\":\"string\"},\"occurredAt\":{\"type\":\"string\"},\"privateReason\":{\"type\":[\"string\",\"null\"]},\"profileId\":{\"type\":\"string\"},\"requestId\":{\"type\":\"string\"},\"resultDigest\":{\"type\":[\"string\",\"null\"]},\"retainedUntil\":{\"type\":\"string\"},\"taskId\":{\"type\":\"string\"}},\"required\":[\"eventId\",\"requestId\",\"taskId\",\"actorRef\",\"actor\",\"profileId\",\"decision\",\"occurredAt\",\"retainedUntil\"],\"type\":\"object\"}")],
   ["/components/schemas/ReviewCancelRequest", JSON.parse("{\"additionalProperties\":false,\"properties\":{\"reason\":{\"type\":\"string\"},\"subject\":{\"$ref\":\"/components/schemas/InputSubjectBinding\"}},\"required\":[\"subject\",\"reason\"],\"type\":\"object\"}")],
   ["/components/schemas/ReviewCancelResponse", JSON.parse("{\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"outcome\":{\"const\":\"cancelled\",\"type\":\"string\"},\"result\":{\"$ref\":\"/components/schemas/ReviewResult\"}},\"required\":[\"outcome\",\"result\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"outcome\":{\"const\":\"already-terminal\",\"type\":\"string\"},\"result\":{\"$ref\":\"/components/schemas/ReviewResult\"}},\"required\":[\"outcome\",\"result\"],\"type\":\"object\"}]}")],
@@ -1189,7 +1190,10 @@ for (const [id, definition] of Object.entries(definitions)) {
 
 export class Client {
   readonly #transport: Transport
-  constructor(transport: Transport) { this.#transport = transport }
+  constructor(transport: Transport) {
+    assertClientVersion("0.49.0")
+    this.#transport = transport
+  }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<Answer<Operations[K]["output"]>> {
     return this.#call(operation, args[0])
   }

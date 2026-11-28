@@ -690,6 +690,46 @@ class ClientRegistryTest(unittest.TestCase):
             )
 
 
+class WebPackageTest(unittest.TestCase):
+    def test_web_archive_has_exact_identity_and_excludes_source_fixtures(self) -> None:
+        registry = load_module()
+        version = "0.49.0"
+        metadata = {
+            "name": registry.WEB_NPM_NAME, "version": version, "license": "Apache-2.0",
+            "types": "./dist/browser.d.ts", "bin": {"registry-generate": "./dist/generate-project.js"},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / registry.web_npm_tarball(version)
+
+            def write_archive(extra: str) -> None:
+                files = {
+                    "package/package.json": json.dumps(metadata).encode(),
+                    "package/LICENSE": b"", "package/README.md": b"",
+                    "package/dist/browser.js": b"", "package/dist/browser.d.ts": b"",
+                    "package/dist/generate-project.js": b"",
+                    "package/dist/generate.js": b"", "package/dist/generate-service.js": b"",
+                    extra: b"",
+                }
+                with tarfile.open(path, "w:gz") as archive:
+                    for name, payload in files.items():
+                        member = tarfile.TarInfo(name)
+                        member.size = len(payload)
+                        archive.addfile(member, io.BytesIO(payload))
+
+            write_archive("package/dist/core.js")
+            self.assertEqual(path, registry.validate_web_npm(directory, version))
+            with self.assertRaisesRegex(registry.ClientRegistryError, "outside the release roster"):
+                registry.validate_web_npm(directory, "0.48.0")
+            write_archive("package/tests/fixtures/project.json")
+            with self.assertRaisesRegex(registry.ClientRegistryError, "invalid web client payload"):
+                registry.validate_web_npm(directory, version)
+            metadata["version"] = "0.48.0"
+            write_archive("package/dist/core.js")
+            with self.assertRaisesRegex(registry.ClientRegistryError, "invalid web client metadata"):
+                registry.validate_web_npm(directory, version)
+
+
 class BindOptionalDependenciesTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()

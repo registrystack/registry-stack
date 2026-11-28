@@ -1392,6 +1392,14 @@ class ReleaseCandidateTest(TestCase):
                     )
                     self.assertFalse(any("adapter" in name for name in required))
 
+    def test_web_client_package_starts_with_v0_49_0(self) -> None:
+        name = "registrystack-web-client"
+        self.assertNotIn(f"{name}-0.48.0.tgz", self.module._release_payload_inventory("0.48.0"))
+        self.assertEqual(
+            "client-package",
+            self.module._release_payload_inventory("0.49.0")[f"{name}-0.49.0.tgz"],
+        )
+
     @roster_patch("release_roster.ADAPTER_IMAGE_FIRST_RELEASE", (0, 49, 0))
     def test_adapter_image_joins_the_rosters_from_its_first_release(self) -> None:
         self.hold_out("COORDINATOR_FIRST_RELEASE")
@@ -1424,13 +1432,12 @@ class ReleaseCandidateTest(TestCase):
             )
         )
         self.assertTrue(evidence.issubset(self.module.SECURITY_EVIDENCE_REQUIRED_FILES))
-        # The binaries already ship on their own gate, so the payload inventory
-        # does not change when the image joins.
+        # The binaries already ship on their own gate. Only the web client joins.
         self.assertEqual(
             {
                 name.replace("0.48.0", "0.49.0"): kind
                 for name, kind in self.module._release_payload_inventory("0.48.0").items()
-            },
+            } | {self.module.client_registry.web_npm_tarball("0.49.0"): "client-package"},
             self.module._release_payload_inventory("0.49.0"),
         )
 

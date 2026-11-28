@@ -1,5 +1,5 @@
 import { RegistryError, type Page } from '../core.ts'
-import { clientError, downloadedBlob, refusal as refuse, sha256Hex, type ProgressCallback } from './shared.ts'
+import { clientError, downloadedBlob, refusal as refuse, resolveFileType, sha256Hex, type ProgressCallback } from './shared.ts'
 import type {
   Schema_DocumentGrantView,
   Schema_DocumentPolicyView,
@@ -205,7 +205,8 @@ export function documentCommands<C extends DocumentClient>(client: C, options: {
         const known = await policyList(signal)
         const chosen = known.find(item => item.id === policy)
         if (!chosen) throw refuse('client.unknown-policy', `Unknown document policy "${policy}". Known policies: ${known.map(item => item.id).join(', ') || 'none'}.`)
-        if (!chosen.allowedContentTypes.includes(file.type)) {
+        const contentType = resolveFileType(file, chosen.allowedContentTypes)
+        if (contentType === undefined) {
           throw refuse('client.file-type', `This policy accepts only: ${chosen.allowedContentTypes.join(', ')}.`)
         }
         if (file.size > chosen.maximumDocumentBytes) {
@@ -215,7 +216,7 @@ export function documentCommands<C extends DocumentClient>(client: C, options: {
         // With no custodian the request leaves it out and the register takes the caller's own subject.
         const subject = custodian ?? options.custodian
         const digest = `sha256:${await sha256Hex(await file.arrayBuffer())}`
-        const key = resolve([digest, file.size, file.type, policy, label ?? null, subject ?? null])
+        const key = resolve([digest, file.size, contentType, policy, label ?? null, subject ?? null])
         const { data: reserved } = await guarded('reserveDocument', client.call('reserveDocument', {
           signal,
           idempotencyKey: key,
@@ -223,7 +224,7 @@ export function documentCommands<C extends DocumentClient>(client: C, options: {
             ...(subject === undefined ? {} : { custodian: { subject } }),
             expectedDigest: digest,
             length: file.size,
-            mediaType: file.type,
+            mediaType: contentType,
             policyId: policy,
             ...(label === undefined ? {} : { label }),
           },

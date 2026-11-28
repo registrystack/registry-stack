@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import client_registry  # noqa: E402
 import release_roster  # noqa: E402
 import rstack_components  # noqa: E402
 import release_units  # noqa: E402
@@ -488,6 +489,8 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
             inventory[
                 f"registry_stack_client-{version}-{wheel_abi_tag}-{platform}.whl"
             ] = "client-package"
+    if web_package := client_registry.web_npm_tarball(version):
+        inventory[web_package] = "client-package"
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory[f"discovery-{tag}-linux-amd64"] = "binary"
     if release_roster.discoveryctl_in_release(version_tuple):
@@ -570,10 +573,11 @@ def stack_payload_inventory(
     component_units = {component["unit"] for component in validated}
     if "discovery" in component_units:
         registry = release_units.load_registry()
+        web_package = client_registry.web_npm_tarball(version)
         inventory = {
             name: kind
             for name, kind in inventory.items()
-            if registry.artifact_owner(name) != "discovery"
+            if name == web_package or registry.artifact_owner(name) != "discovery"
         }
     inventory[distribution_lock_name(version)] = "distribution"
     return inventory

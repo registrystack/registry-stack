@@ -19,6 +19,7 @@ export type {
   ProposalClient,
   ProposalCommands,
   ProposalListFilter,
+  ProposalListRow,
   ProposalState,
   ProposalStatus,
   ServedApplication,
@@ -27,6 +28,7 @@ export type {
   ServedProposal,
   ServedSlot,
   Turn,
+  TypedProposalCommands,
 } from './proposals.ts'
 
 export { documentCommands, saveBlob } from './files.ts'

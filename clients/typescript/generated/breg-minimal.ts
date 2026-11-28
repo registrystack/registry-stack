@@ -1,6 +1,9 @@
+// Generated for Stack version 0.49.0, client version 0.49.0.
 // Source SHA-256 bf2d3da90cd99ae5751294e42728988a0e63e19a5e021d0aedc86ab53702b964
 // Unconstrained JSON /paths/~1v1~1records~1contacts~1{record_id}/patch/requestBody/content/application~1json-patch+json/schema/items/properties/value
-import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+import { assertClientVersion, type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+import { actionAvailability, type ActionAvailability, type DescribeOptions } from "../core.ts"
+import { sentence } from "../core.ts"
 import { validator } from "../schema.ts"
 import { listPage, listQuery, type FieldValue, type Filter, type ListPage, type ListRequest, type ListRules } from "../core.ts"
 
@@ -35,6 +38,10 @@ export interface Operations {
   "records.contact.get": { input: CallOptions & { path: { "record_id": (string) } } & { query?: { "accessProfile"?: "directory-editor"; "$select"?: (string) } } & { headers?: { "traceparent"?: (string); "Accept"?: ("application/json" | "application/ld+json") & (string) } } & { accept?: "application/json" | "application/ld+json" | "*/*" }; required: true; output: ({ "data": ({ "domainData": ({ "email"?: (string); "jurisdiction"?: (string); "name"?: (string) }); "recordIdentifier": (string); "revisionIdentifier": (string) }); "meta": ({ "datasetIdentifier": "directory"; "recordTypeIdentifier": "contact"; "registryIdentifier": "local-directory" }) }) | ({ "@context": "https://id.registrystack.org/contexts/registry-record/v1"; "data": ({ "domainData": ({ "email"?: (string); "jurisdiction"?: (string); "name"?: (string) }); "recordIdentifier": (string); "revisionIdentifier": (string) }); "meta": ({ "datasetIdentifier": "directory"; "recordTypeIdentifier": "contact"; "registryIdentifier": "local-directory" }) }) }
   "records.contact.patch": { input: CallOptions & { path: { "record_id": (string) } } & { query?: { "accessProfile"?: "directory-editor" } } & { headers: { "traceparent"?: (string); "If-Match": (string); "Accept"?: ("application/json" | "application/ld+json") & (string) } } & ({ body: (Array<({ "op": ("add" | "replace" | "remove" | "test") & (string); "path": (string); "value"?: JsonValue })>) }) & { accept?: "application/json" | "application/ld+json" | "*/*" }; required: true; output: ({ "data": ({ "domainData": Schema_contact; "recordIdentifier": (string); "revisionIdentifier": (string) }); "meta": ({ "datasetIdentifier": "directory"; "recordTypeIdentifier": "contact"; "registryIdentifier": "local-directory" }) }) | ({ "@context": "https://id.registrystack.org/contexts/registry-record/v1"; "data": ({ "domainData": Schema_contact; "recordIdentifier": (string); "revisionIdentifier": (string) }); "meta": ({ "datasetIdentifier": "directory"; "recordTypeIdentifier": "contact"; "registryIdentifier": "local-directory" }) }) }
   "receiveReviewCompletion": { input: CallOptions & { headers: { "Registry-Recipient-Binding": (string); "webhook-id": (string); "webhook-timestamp": (string); "webhook-signature": (string) } } & ({ body: Uint8Array }); required: true; output: undefined }
+}
+
+export interface ProposalActions {
+  "register-contact": { input: Operations["actions.register-contact.start"]["input"]["body"]["input"]; slot: never }
 }
 
 // The row each list returns, and the list options its query profiles allow.
@@ -180,8 +187,11 @@ for (const [id, definition] of Object.entries(definitions)) {
 }
 
 export class Client {
-  readonly #transport: Transport
-  constructor(transport: Transport) { this.#transport = transport }
+  readonly #transport: Pick<Transport, "call" | "profile">
+  constructor(transport: Pick<Transport, "call" | "profile">) {
+    assertClientVersion("0.49.0")
+    this.#transport = transport
+  }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<Answer<Operations[K]["output"]>> {
     return this.#call(operation, args[0])
   }
@@ -237,6 +247,18 @@ export class Client {
       default: throw new TypeError("Unknown Action")
     }
   }
+  available(action: "update-contact-email", input: { "contactId": (string); "email"?: (string) }, options?: CallOptions & DescribeOptions & { accessProfile?: "directory-editor"; targetInput?: "contactId" }): Promise<ActionAvailability<Extract<Operations["actions.update-contact-email.availability"]["output"]["availability"], { missingInputs: string[] }>["missingInputs"][number]>>
+  async available(action: string, input: object, options: CallOptions & DescribeOptions & { accessProfile?: string; targetInput?: string } = {}): Promise<ActionAvailability> {
+    const { accessProfile, targetInput, clientSentences, guardLabels, ...call } = options
+    switch (action) {
+      case "update-contact-email": {
+        const { data: { availability } } = await this.#call<Operations["actions.update-contact-email.availability"]["output"]>("actions.update-contact-email.availability", { ...call, query: { accessProfile }, body: { input, targetInput: targetInput ?? "contactId" } })
+        return actionAvailability(availability, { clientSentences, guardLabels })
+      }
+      default: throw new TypeError("Unknown Action availability")
+    }
+  }
+  get conditions(): Client["targetConditions"] { return this.targetConditions.bind(this) }
   targetConditions(action: "update-contact-email", input: (Schema_action_update_contact_email_target_conditions_input)["input"], options?: CallOptions & { accessProfile?: "directory-editor" }): Promise<(Schema_action_update_contact_email_target_conditions_response)["preconditions"]>
   async targetConditions(action: string, input: object, options: CallOptions & { accessProfile?: string } = {}): Promise<unknown> {
     switch (action) {
@@ -245,6 +267,14 @@ export class Client {
     }
   }
 }
+
+export const profiles = ["directory-editor"] as const
+export type AccessProfile = typeof profiles[number]
+export const reasons = {
+  "guard-not-satisfied": sentence("availability.guard-not-satisfied"),
+  "input-required": sentence("availability.input-required"),
+  "not-disclosed": sentence("availability.not-disclosed"),
+} as const
 
 // Each Action's display text and inputs exactly as the source document declares them.
 export const actionInputs = {
