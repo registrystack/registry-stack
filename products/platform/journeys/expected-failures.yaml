@@ -54,74 +54,75 @@ expectedFailures:
   - journey: own-provider
     product: breg
     step: database.provision
-    code: journey.needs.hand-written-sql
+    code: product.breg.runtime.package-root-unavailable
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "prepare and issuer pass (bregctl check accepts the Keycloak issuer with RS256). bregctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "prepare and issuer pass (bregctl check accepts the loopback Keycloak issuer with RS256 and JWT access tokens). bregctl provision now exists (c722c8f35) and loads the runtime file with load_runtime_config, which requires package.root to be an existing readable directory (breg.runtime.package-root-unavailable) even though provision reads nothing from it; own-provider points package.root at work/breg/package without creating it because bregctl package needs a bregctl test receipt."
   - journey: own-provider
     product: casework
-    step: database.provision
-    code: journey.needs.hand-written-sql
-    removedBy: rstack-dev-products
+    step: issuer
+    code: product.casework.posture.unrestricted-clients
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "prepare and issuer pass (caseworkctl check). caseworkctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "prepare passes, and caseworkctl init writes runtime.example.yaml with allowedClients: unrestricted. Under the default production posture (7c2c6140a, updated to issuer entries in d4c61e994), caseworkctl check refuses unrestricted clients at /authentication/oidc/issuers/main/allowedClients unless development is declared."
   - journey: own-provider
     product: messaging
     step: database.provision
-    code: journey.needs.hand-written-sql
-    removedBy: rstack-dev-products
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "prepare and issuer pass (messagingctl check). messagingctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "prepare and issuer pass (messagingctl check). messagingctl provision now exists (1681dc780, c722c8f35) and requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: scheduling
     step: database.provision
-    code: journey.needs.hand-written-sql
-    removedBy: rstack-dev-products
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "prepare and issuer pass (schedulingctl check). schedulingctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "prepare and issuer pass (schedulingctl check). schedulingctl provision now exists (1681dc780, c722c8f35) and requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: documents
     step: database.provision
-    code: journey.needs.hand-written-sql
-    removedBy: rstack-dev-products
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "prepare and issuer pass (documentsctl check). documentsctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "prepare and issuer pass (documentsctl check). documentsctl provision now exists (1681dc780, c722c8f35) and requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: coordinator
     step: database.provision
-    code: journey.needs.hand-written-sql
-    removedBy: rstack-dev-products
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "prepare and issuer pass (coordinatorctl check, with the deployment block written by hand). coordinatorctl provision is refused with coordinator.cli.usage (unrecognized command), so roles, the database and grants are made by hand."
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "prepare and issuer pass (coordinatorctl check, with the deployment block written by hand). coordinatorctl provision now exists (1681dc780, c722c8f35) and requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
   - journey: own-provider
     product: adapter
     step: database.provision
-    code: journey.needs.hand-written-sql
+    code: product.config.refused
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "prepare and issuer pass (adapterctl check of the facade-recovery example with the breg-records profile). adapterctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "prepare and issuer pass (adapterctl check of the facade-recovery example with the breg-records profile). adapterctl provision now exists (17db7bc0b) and resolves database.migrationUrlRef from the runtime file's secret provider; runtime.example.yaml references secret:env/ADAPTER_DB_MIGRATION while own-provider writes secret files and leaves that environment variable unset, so provision refuses with config.refused."
   - journey: own-provider
     product: evidence
-    step: call
-    code: http.401.token-type
-    removedBy: caller-contract
-    basis: predicted
-    reason: "The local profile accepts the loopback Keycloak issuer with its realm path. The protected call is expected to refuse the access token because Keycloak sends typ JWT and Evidence requires at+jwt."
+    step: issuer
+    code: product.evidence.posture.local-assurance
+    removedBy: posture
+    basis: observed
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "prepare runs evidencectl init --profile local, writing local-target.yaml with assuranceProfile: local. Under the default production posture (7c2c6140a), evidencectl check refuses local assurance at /assuranceProfile because locally held signing keys are accepted only when development is declared."
   - journey: own-provider
     product: render
     step: call
-    code: product.render.unauthorized
+    code: http.401.token-type
     removedBy: caller-contract
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
-    reason: "No database. Start, ready and the client-credentials token pass (RS256, audience urn:example:render, scope render:render, client portal). POST /v1/render/letter answers 401 with problem render.unauthorized. Render logs no authentication stage, so the code is the problem code. Inferred cause: the token type fixed at at+jwt (registry-render/src/auth.rs:71 on main) against Keycloak's typ JWT."
+    observedOn: "2014c191ee, journey run 20261128101428-4465"
+    reason: "No database. Start, ready and the client-credentials token pass (RS256, audience urn:example:render, scope render:render, client portal). POST /v1/render/letter still answers 401 with problem render.unauthorized, and Render now logs failed_check=token-type through the shared refusal recorder (fe73445eb) because the issuer entry defaults to accessTokenType at+jwt (a31c7de90) against Keycloak's typ JWT."
 
   - journey: rstack-dev
     product: breg
