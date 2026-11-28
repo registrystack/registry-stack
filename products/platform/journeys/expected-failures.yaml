@@ -48,14 +48,14 @@ journeyCodeSuffixes:
 authenticationStages: [header, algorithm, token-type, key, signature, issuer, audience, time, client, scope, profile, unavailable]
 
 # Changes that can remove a row.
-changes: [posture, rstack-dev-products, caller-contract]
+changes: [posture, postgres-tls-requirement, rstack-dev-products, caller-contract]
 
 expectedFailures:
   - journey: own-provider
     product: breg
     step: database.provision
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128120405-7e2e"
     reason: "prepare and issuer pass (bregctl check accepts the loopback Keycloak issuer with RS256 and JWT access tokens). bregctl provision (added in PR #2798 and updated to allow provisioning before package.root exists) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
@@ -63,7 +63,7 @@ expectedFailures:
     product: casework
     step: database.provision
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128120405-7e2e"
     reason: "prepare and issuer pass (caseworkctl check accepts the scaffolded explicit client under the default production posture of PR #2798). caseworkctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
@@ -71,7 +71,7 @@ expectedFailures:
     product: messaging
     step: database.provision
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128120405-7e2e"
     reason: "prepare and issuer pass (messagingctl check). messagingctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
@@ -79,7 +79,7 @@ expectedFailures:
     product: scheduling
     step: database.provision
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128120405-7e2e"
     reason: "prepare and issuer pass (schedulingctl check). schedulingctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
@@ -87,7 +87,7 @@ expectedFailures:
     product: documents
     step: database.provision
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128120405-7e2e"
     reason: "prepare and issuer pass (documentsctl check). documentsctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
@@ -95,7 +95,7 @@ expectedFailures:
     product: coordinator
     step: database.provision
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128120405-7e2e"
     reason: "prepare and issuer pass (coordinatorctl check, with the deployment block written by hand). coordinatorctl provision (added in PR #2798) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
@@ -115,20 +115,12 @@ expectedFailures:
     basis: observed
     observedOn: "PR #2798, journey run 20261128120405-7e2e"
     reason: "prepare runs evidencectl init --profile local, writing local-target.yaml with assuranceProfile: local. Under the default production posture of PR #2798, evidencectl check refuses local assurance at /assuranceProfile because locally held signing keys are accepted only when development is declared."
-  - journey: own-provider
-    product: render
-    step: call
-    code: http.401.token-type
-    removedBy: caller-contract
-    basis: observed
-    observedOn: "PR #2798, journey run 20261128120405-7e2e"
-    reason: "No database. Start, ready and the client-credentials token pass (RS256, audience urn:example:render, scope render:render, client portal). POST /v1/render/letter still answers 401 with problem render.unauthorized, and Render logs failed_check=token-type through the shared refusal recorder added in PR #2798 because the issuer entry defaults to accessTokenType at+jwt against Keycloak's typ JWT."
 
   - journey: rstack-dev
     product: breg
     step: attach
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128035909-a07d"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
@@ -136,7 +128,7 @@ expectedFailures:
     product: casework
     step: attach
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128035838-f991"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
@@ -144,7 +136,7 @@ expectedFailures:
     product: messaging
     step: attach
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128040034-0116"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
@@ -152,7 +144,7 @@ expectedFailures:
     product: scheduling
     step: attach
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128035900-3bec"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
@@ -160,7 +152,7 @@ expectedFailures:
     product: documents
     step: attach
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128035908-2c40"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
@@ -168,7 +160,7 @@ expectedFailures:
     product: coordinator
     step: attach
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128040126-31dd"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
@@ -176,7 +168,7 @@ expectedFailures:
     product: adapter
     step: attach
     code: journey.needs.certificate
-    removedBy: posture
+    removedBy: postgres-tls-requirement
     basis: observed
     observedOn: "PR #2798, journey run 20261128035921-56a4"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
@@ -247,12 +239,12 @@ expectedFailures:
     reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: render
-    step: input
-    code: journey.promote.no-input
+    step: refusals
+    code: journey.promote.nothing-refused
     removedBy: rstack-dev-products
     basis: observed
-    observedOn: "origin/main cd83550e, journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
-    reason: "The development journey did not finish for this product, so there are no files to promote."
+    observedOn: "PR #2798, promote run 20261128133333-b78e on own-provider run 20261128133312-c739"
+    reason: "Render passes own-provider with a runtime file that carries no development-only setting (loopback listener, loopback HTTP issuer, explicit allowedClients, no database), so registry-render check and serve accept it under the default production posture and refuse nothing."
   - journey: promote
     product: discovery
     step: input
@@ -392,6 +384,10 @@ unreached:
 #     observedOn: "origin/main cd83550e, promote run 20261127025000-816f on own-provider run 20261127024425-265d (assisted: sql, certificate, token-type, mapper)"
 #     reason: "The assisted Scheduling cell reached T1. Started with no development declaration, schedulingctl check (which has no --production flag) lists no refusal and the server starts and answers /readyz, so zero refusals are listed. No shared posture exists on main, so nothing can refuse. The count becomes meaningful once the posture change lands."
 passes:
+  - journey: own-provider
+    product: render
+    basis: observed
+    observedOn: "PR #2798, journey run 20261128133312-c739"
   - journey: rstack-dev
     product: evidence
     basis: observed

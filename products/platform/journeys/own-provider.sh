@@ -1104,13 +1104,13 @@ step_call() {
 	CELL_OVER=1
 }
 
-# hook: the products whose runtime format has hook destinations need the
-# receiver container the private-network-destinations change adds; the others deliver nothing, so
-# the step has no command for them.
+# hook: the products whose runtime format has hook destinations need a hook
+# receiver in this journey once their cells pass database.provision and call;
+# the others deliver nothing, so the step has no command for them.
 step_hook() {
 	case "$CELL" in
 	breg | scheduling | documents)
-		journey_unreached hook "The product delivers hooks, and the journey has no receiver for them until the private-network-destinations change adds one."
+		journey_unreached hook "The product delivers hooks, and this journey does not start a hook receiver yet."
 		CELL_OVER=1
 		;;
 	*) journey_pass hook ;;
