@@ -85,22 +85,52 @@ impl SelectedDestination {
     }
 
     /// Whether `authority`, the value of a `Host` header, names the
-    /// selection's own host and port. It is read as a URL authority under the
-    /// selection's scheme, so case, a default port written or elided, and the
-    /// textual form of an IPv6 literal do not matter. A value carrying
-    /// userinfo, a path, a query, a fragment, whitespace or a control
-    /// character is refused.
+    /// selection's own host and port. It is read with a bounded grammar and
+    /// never through a URL parser, so no spelling is normalized into a match:
+    ///
+    /// - a name is ASCII letters, digits, `-`, `.` and `_`, compared as
+    ///   written without case, root dot included, and a name whose last
+    ///   label (ignoring one root dot) is a number, decimal or `0x` hex, is
+    ///   refused unless it is an IPv4 address;
+    /// - an IPv4 address is in dotted decimal with no leading zeros;
+    /// - an IPv6 address is bracketed, with no zone, and compared as an
+    ///   address, so its textual form does not matter;
+    /// - a port, when written, is digits naming a port from 1 to 65535,
+    ///   compared as a number whatever its leading zeros, and an elided port
+    ///   is the scheme's default.
+    ///
+    /// Anything else, including an empty port, a percent-encoded byte,
+    /// userinfo, a path, whitespace or a control character, is refused.
     pub(crate) fn admits_authority(&self, authority: &str) -> bool {
-        if authority.is_empty()
-            || authority.contains(['@', '/', '?', '#', '\\'])
-            || authority
-                .bytes()
-                .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
-        {
+        let Some((host, port)) = split_authority(authority) else {
+            return false;
+        };
+        let Some(selected_port) = self.url.port_or_known_default() else {
+            return false;
+        };
+        let port = match port {
+            None => match self.url.scheme() {
+                "http" => Some(80),
+                "https" => Some(443),
+                _ => None,
+            },
+            Some(digits) => parse_port(digits),
+        };
+        if port != Some(selected_port) {
             return false;
         }
-        Url::parse(&format!("{}://{authority}/", self.url.scheme()))
-            .is_ok_and(|named| named.origin() == self.url.origin())
+        match (self.url.host(), host) {
+            (Some(::url::Host::Domain(selected)), AuthorityHost::Name(name)) => {
+                selected.eq_ignore_ascii_case(name)
+            }
+            (Some(::url::Host::Ipv4(selected)), AuthorityHost::Ipv4(address)) => {
+                selected == address
+            }
+            (Some(::url::Host::Ipv6(selected)), AuthorityHost::Ipv6(address)) => {
+                selected == address
+            }
+            _ => false,
+        }
     }
 
     /// Whether `name` is the selection's own host name, compared without
@@ -120,6 +150,88 @@ impl SelectedDestination {
     pub(crate) fn url(&self) -> &Url {
         &self.url
     }
+}
+
+/// The host of a `Host` header value, read by
+/// [`SelectedDestination::admits_authority`].
+enum AuthorityHost<'a> {
+    Name(&'a str),
+    Ipv4(std::net::Ipv4Addr),
+    Ipv6(std::net::Ipv6Addr),
+}
+
+/// Split a `Host` value into its host and its written port, refusing any
+/// spelling outside the bounded grammar `admits_authority` documents.
+fn split_authority(authority: &str) -> Option<(AuthorityHost<'_>, Option<&str>)> {
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let (inner, after) = rest.split_once(']')?;
+        let port = match after {
+            "" => None,
+            _ => Some(after.strip_prefix(':')?),
+        };
+        if !inner
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b':' || byte == b'.')
+        {
+            return None;
+        }
+        (AuthorityHost::Ipv6(inner.parse().ok()?), port)
+    } else {
+        let (host, port) = match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        };
+        (authority_name_or_ipv4(host)?, port)
+    };
+    if port.is_some_and(|digits| parse_port(digits).is_none()) {
+        return None;
+    }
+    Some((host, port))
+}
+
+/// A registered name, kept as written (root dot included), or an IPv4
+/// address in dotted decimal. URL parsers read a host as IPv4 when its last
+/// label, ignoring one terminal dot, is a number: all decimal digits, or `0x`
+/// followed by hex digits. Such a host must be a dotted-decimal address here,
+/// spelled without a root dot, or it is refused. Only one root dot is read:
+/// a final label left empty after it, as in `objects.example..`, is refused.
+fn authority_name_or_ipv4(host: &str) -> Option<AuthorityHost<'_>> {
+    if host.is_empty()
+        || !host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_'))
+    {
+        return None;
+    }
+    let unrooted = host.strip_suffix('.').unwrap_or(host);
+    let last = unrooted.rsplit('.').next().unwrap_or(unrooted);
+    if last.is_empty() {
+        return None;
+    }
+    let numeric = last.bytes().all(|byte| byte.is_ascii_digit())
+        || last
+            .strip_prefix("0x")
+            .or_else(|| last.strip_prefix("0X"))
+            .is_some_and(|digits| digits.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if !numeric {
+        return Some(AuthorityHost::Name(host));
+    }
+    // `Ipv4Addr` parses exactly four decimal octets and refuses a leading zero
+    // or a root dot.
+    host.parse().ok().map(AuthorityHost::Ipv4)
+}
+
+/// A written port: ASCII digits naming a port from 1 to 65535, read as a
+/// number, so leading zeros do not change it.
+fn parse_port(digits: &str) -> Option<u16> {
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let significant = digits.trim_start_matches('0');
+    if significant.is_empty() {
+        return None;
+    }
+    significant.parse().ok()
 }
 
 impl fmt::Debug for SelectedDestination {

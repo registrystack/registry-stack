@@ -1717,10 +1717,12 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 
-    /// A `Host` value is compared with the selected authority as a URL
-    /// authority: case-insensitive, with the scheme's default port elided
-    /// either way and IPv6 bracketed. Anything that is not exactly one
-    /// authority is refused.
+    /// A `Host` value is read with a bounded grammar, never normalized as a
+    /// URL: a DNS name is compared as written (root dot included) without
+    /// case, an IPv4 address must be dotted decimal, an IPv6 address is
+    /// bracketed and compared as an address, and a port is compared as a
+    /// number with an elided port meaning the scheme's default. Any other
+    /// spelling is refused, even one a URL parser would normalize to a match.
     #[test]
     fn a_host_header_matches_the_selected_authority_as_an_authority() {
         let named = selection("https://receiver.example/", None, &[]);
@@ -1745,17 +1747,127 @@ mod tests {
             assert!(!named.admits_authority(refused), "{refused}");
         }
 
+        // Spellings a URL parser would normalize to the selected host are
+        // refused as written: an empty port, a percent-encoded byte, a port
+        // with no number, and an IPv4 address not in dotted decimal.
+        for refused in [
+            "receiver.example:",
+            "receiver%2Eexample",
+            "%72eceiver.example",
+            "receiver.example:+443",
+            "receiver.example:0443x",
+            "receiver.example:65980",
+        ] {
+            assert!(!named.admits_authority(refused), "{refused}");
+        }
+        // A port is compared as a number, however many leading zeros.
+        for admitted in ["receiver.example:0443", "receiver.example:000443"] {
+            assert!(named.admits_authority(admitted), "{admitted}");
+        }
+        for refused in [
+            "receiver.example:0",
+            "receiver.example:000000",
+            "receiver.example:65536",
+            "receiver.example:0065536",
+        ] {
+            assert!(!named.admits_authority(refused), "{refused}");
+        }
+
+        // A DNS name keeps its root dot, and a last label that is not a
+        // number keeps a name a name, so each matches its own spelling.
+        let rooted = selection("https://objects.example./", None, &[]);
+        for admitted in [
+            "objects.example.",
+            "OBJECTS.example.",
+            "objects.example.:443",
+        ] {
+            assert!(rooted.admits_authority(admitted), "{admitted}");
+        }
+        for refused in ["objects.example", "objects.example..", "objects.example.:"] {
+            assert!(!rooted.admits_authority(refused), "{refused}");
+        }
+        let relay = selection("https://objects.0xrelay/", None, &[]);
+        assert!(relay.admits_authority("objects.0xrelay"));
+        assert!(relay.admits_authority("objects.0xrelay:443"));
+        assert!(!relay.admits_authority("objects.0xrelay."));
+        // Only one root dot is read: a second terminal dot leaves an empty
+        // final label, which no Host may carry, even when the selection is
+        // spelled the same way.
+        let doubled = selection("https://objects.example../", None, &[]);
+        for refused in ["objects.example..", "objects.example..:443"] {
+            assert!(!doubled.admits_authority(refused), "{refused}");
+        }
+        let numeric_doubled = selection("https://127.0.0.1../", None, &[]);
+        assert!(!numeric_doubled.admits_authority("127.0.0.1.."));
+
         let explicit = selection("https://receiver.example:443/", None, &[]);
         assert!(explicit.admits_authority("receiver.example"));
         assert!(explicit.admits_authority("receiver.example:443"));
+
+        let ipv4 = selection("http://127.0.0.1:8080/", None, &[]);
+        assert!(ipv4.admits_authority("127.0.0.1:8080"));
+        for refused in [
+            "0x7f.0.0.1:8080",
+            "0x7f.1:8080",
+            "2130706433:8080",
+            "127.1:8080",
+            "0177.0.0.1:8080",
+            "127.0.0.01:8080",
+            "127.0.0.1.:8080",
+            "127.0.0.1:",
+            "127.0.0.1",
+            "127%2E0.0.1:8080",
+        ] {
+            assert!(!ipv4.admits_authority(refused), "{refused}");
+        }
 
         let ipv6 = selection("https://[::1]:9443/", None, &[]);
         for admitted in ["[::1]:9443", "[0:0:0:0:0:0:0:1]:9443"] {
             assert!(ipv6.admits_authority(admitted), "{admitted}");
         }
-        for refused in ["[::1]", "::1:9443", "[::2]:9443", "127.0.0.1:9443"] {
+        for refused in [
+            "[::1]",
+            "::1:9443",
+            "[::2]:9443",
+            "127.0.0.1:9443",
+            "[::1]:",
+            "[::1%25lo]:9443",
+            "[::1]x:9443",
+        ] {
             assert!(!ipv6.admits_authority(refused), "{refused}");
         }
+    }
+
+    /// The S3 signer's `Host` for a path-style endpoint written with a root
+    /// dot is that name, root dot included. The selected client sends it:
+    /// the request fails only at resolution, not at the `Host` check.
+    #[tokio::test]
+    async fn a_root_dot_name_passes_its_own_signed_host_header() {
+        let client = OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(200))
+            .destination_resolved_by(
+                &selection("https://objects.example./", None, &[]),
+                std::sync::Arc::new(FixedAnswers(Vec::new())),
+            )
+            .try_build()
+            .expect("a named https selection builds a client");
+        let url: reqwest::Url = "https://objects.example./bucket/key"
+            .parse()
+            .expect("test URL parses");
+        let mut request = reqwest::Request::new(reqwest::Method::GET, url.clone());
+        request.headers_mut().insert(
+            header::HOST,
+            reqwest::header::HeaderValue::from_str(url.host_str().expect("a host"))
+                .expect("test host header"),
+        );
+        let error = client
+            .execute(request)
+            .await
+            .expect_err("no address answers the name");
+        assert!(
+            matches!(error, DestinationClientError::Request(_)),
+            "{error:?}"
+        );
     }
 
     /// D2 (b) for the client family: a built client carries any header the

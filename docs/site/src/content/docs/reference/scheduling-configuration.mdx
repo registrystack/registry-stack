@@ -654,8 +654,13 @@ URLs use the same HTTPS and explicit-loopback rules as the reminder destination,
 addition: an `https` URL to a loopback address or the exact name `localhost`, such as
 `https://localhost:9443/hooks`, is accepted.
 `localhost` is delivered to only when every address it resolves to is loopback.
-A name under `localhost`, the absolute name `localhost.`, or port zero is refused by `schedulingctl check`
-and at startup with `config.invalid-value` at the destination's `url`.
+A name under `localhost` or the absolute name `localhost.` is refused by `schedulingctl check`
+and at startup with `config.invalid-value` at the destination's `url`, for example
+`/destinations/hooks/appointment-events/url`.
+Port zero, such as `https://localhost:0/hooks`, is refused by both with
+`scheduling.runtime.invalid-destination-url` at the same pointer.
+Startup names the same code and pointer as `schedulingctl check` for a refused hook destination
+`url`, `transport` or private range.
 The key size, rotation field, and distinct-key requirement are the same as for the
 [reminder destination](#reminder-destination).
 

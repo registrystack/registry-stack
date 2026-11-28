@@ -3230,6 +3230,105 @@ holdPolicy:
         }
     }
 
+    /// Startup names the code and the pointer the offline check reports for
+    /// the same runtime document: from the load when scheduling refuses the
+    /// member itself, and from hook activation otherwise.
+    #[test]
+    fn startup_reports_the_hook_refusal_the_offline_check_reports() {
+        const URL: &str = "/destinations/hooks/appointment-events/url";
+        let mut documents = Vec::new();
+        for (id, url, expected) in [
+            (
+                "appointment-events",
+                "https://localhost.:9443/hooks",
+                Some(("config.invalid-value", URL)),
+            ),
+            (
+                "appointment-events",
+                "https://localhost:0/hooks",
+                Some(("scheduling.runtime.invalid-destination-url", URL)),
+            ),
+            (
+                "appointment-events",
+                "https://receiver.localhost:9443/hooks",
+                Some(("config.invalid-value", URL)),
+            ),
+            (
+                "appointment-events",
+                "ftp://receiver.example.test/hooks",
+                None,
+            ),
+            (
+                "a/b~c",
+                "https://events.example.test/hooks",
+                Some(("config.invalid-value", "/destinations/hooks/a~1b~0c")),
+            ),
+        ] {
+            let hooks = serde_json::json!({id: {
+                "url": url,
+                "hmacSha256KeyRef": "secret:file/hook"
+            }});
+            let expected = expected.map(|(code, pointer)| vec![format!("{code} {pointer}")]);
+            documents.push((hooks, expected));
+        }
+        for (hooks, expected) in documents {
+            let root = canonical_tempdir();
+            let mut document =
+                operator_value(&root.path().join("missing-package"), "development-loopback");
+            document["destinations"]["hooks"] = hooks.clone();
+            let path = write_operator(root.path(), document.clone());
+            let offline = check_runtime(&path, None, false, DEFAULT_POSTURE)
+                .diagnostics
+                .iter()
+                .map(|d| format!("{} {}", d.code, d.path))
+                .collect::<Vec<_>>();
+            assert!(!offline.is_empty(), "{hooks}");
+            if let Some(expected) = expected {
+                assert_eq!(offline, expected, "{hooks}");
+            }
+            assert_eq!(startup_refusal(&document), offline, "{hooks}");
+        }
+    }
+
+    /// What startup reports for `document`: the load's refusals, or the code
+    /// and pointer of the hook activation refusal.
+    fn startup_refusal(document: &serde_json::Value) -> Vec<String> {
+        let config = match parse_runtime(document) {
+            Ok(config) => config,
+            Err(RuntimeConfigError::Load(error)) => {
+                return error
+                    .diagnostics()
+                    .iter()
+                    .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.path))
+                    .collect();
+            }
+            Err(other) => panic!("an unexpected load refusal: {other}"),
+        };
+        let findings = config.findings(None);
+        if !findings.is_empty() {
+            return findings
+                .iter()
+                .map(|finding| format!("{} {}", finding.code(), finding.pointer()))
+                .collect();
+        }
+        let secrets = registry_platform_config::SecretResolver::new(
+            [registry_platform_config::SecretProvider::Environment],
+            "/",
+        )
+        .expect("the test secret resolver");
+        let error = crate::hooks::activate_destinations(
+            &std::collections::BTreeSet::new(),
+            &config.destinations.hooks,
+            &secrets,
+        )
+        .map(drop)
+        .expect_err("startup refuses the destination");
+        match (error.code(), error.pointer()) {
+            (Some(code), Some(pointer)) => vec![format!("{code} {pointer}")],
+            _ => panic!("an unpositioned activation refusal: {error}"),
+        }
+    }
+
     #[test]
     fn cfg_check_1_deferred_status_values_leave_unrelated_rules_checked() {
         let root = canonical_tempdir();

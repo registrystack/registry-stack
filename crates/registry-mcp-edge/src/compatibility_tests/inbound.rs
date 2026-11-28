@@ -556,7 +556,8 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
 }
 
 #[tokio::test]
-async fn a_production_key_set_on_a_loopback_address_is_refused_before_any_fetch() {
+async fn strict_fetch_policy_refuses_a_loopback_key_set_before_any_fetch() {
+    // This test selects the strict fetch policy explicitly.
     let auth = authorization_server().await;
     let token = auth.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
