@@ -34,8 +34,8 @@ check the registry's answer to each, and finish with three contacts in the regis
 
 Open a terminal in the directory that holds `tutorial-work` and go to the project. The run from
 the first tutorial holds one contact. This tutorial adds two scenarios to the project's scenario
-file, so you restart the run to send them. Stopping a run deletes its data, and the new run starts
-from the scenario file again:
+file, so you stop and restart the run to send them. Stopping a run keeps its development data, so
+the next start skips the first scenario and runs the two new ones:
 
 ```sh test-cwd="tutorial-work/project"
 RUN="$(awk '$1 == "Run" {print $2}' dev-run.txt)"
@@ -204,9 +204,10 @@ rstack dev start . --ttl 4h | tee dev-run.txt
 Development plan is valid
 0 errors, 0 warnings in 1 file
 Run <run-id> ready
+  Development data is kept after stop in <data-directory>; start this project with --clean to clear it.
   breg http://127.0.0.1:<port>
   Runtime config breg <runtime-config>
-  Scenario directory-contact passed
+  Scenario directory-contact skipped
   Scenario update-contact-email passed
   Scenario register-contact passed
   Logs <logs-directory>
@@ -214,7 +215,8 @@ Run <run-id> ready
   rstack dev token <run-id> --as foreign-editor
 ```
 
-All three scenarios passed. Their steps expected the registry's own answers, so the Action's receipt
+The first scenario was skipped because the kept database already holds its contact, and both new
+scenarios passed. Their steps expected the registry's own answers, so the Action's receipt
 and the applied Proposal were checked as the scenario ran.
 
 ## Read the new contact
