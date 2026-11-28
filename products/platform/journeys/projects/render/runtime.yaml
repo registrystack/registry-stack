@@ -16,6 +16,7 @@ authentication:
       main:
         issuer: https://identity.example.test/realms/registry
         audience: urn:example:render
+        accessTokenType: JWT
         allowedClients: [portal]
 audit:
   path: @WORK@/audit.jsonl
