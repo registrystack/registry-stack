@@ -1,0 +1,232 @@
+---
+title: Deployment posture
+description: How Registry Stack processes declare production or development posture, which settings each posture accepts, how development marks appear, and how the activation ledger enforces posture.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-platform
+  - registry-stack
+last_reviewed: "2026-11-28"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Every Registry Stack runtime and posture-aware CLI tool runs in one of two deployment postures:
+`production` or `development`.
+Use this page to understand how posture is declared, which configuration settings each posture
+accepts, how development processes mark their outputs, and why production and development
+databases stay separate.
+
+## Production is the default
+
+Every runtime and posture-aware tool reads its posture from two inputs: the `--posture` flag and
+the `REGISTRY_STACK_POSTURE` environment variable.
+When you supply neither input, the process declares `production`.
+
+Accepted values are exact, case-sensitive `production` and `development`.
+An empty, unknown, or differently cased value stops the process before it reads any configuration
+file, under code `platform.posture.invalid-value`.
+If you set both `--posture` (or a tool's `--production` alias) and `REGISTRY_STACK_POSTURE`, they
+must declare the same posture.
+Any disagreement stops the process under code `platform.posture.conflict`.
+
+{/* Evidence: crates/registry-platform-posture/src/lib.rs, declared_from,
+    declared_from_with_production_alias, PostureError. */}
+
+## Declare development
+
+To run a process with development-only settings on a workstation or in a test environment, declare
+development in one of three ways:
+
+- Pass `--posture development` on the command line.
+- Set `REGISTRY_STACK_POSTURE=development` in the process environment.
+- Start the project with [`rstack dev`](../../configure/run-a-project-with-rstack-dev/), which sets
+  `REGISTRY_STACK_POSTURE=development` on every Registry Stack product and tool it starts.
+
+Both `rstack dev check` and `rstack dev start` refuse to run when `REGISTRY_STACK_POSTURE` is set
+to `production`.
+Unset the variable or set it to `development` before running either command.
+
+{/* Evidence: crates/registry-platform-posture/src/lib.rs, POSTURE_ENV, POSTURE_FLAG;
+    crates/registry-rstack-dev/src/lib.rs, require_development. */}
+
+## Three classes of setting
+
+Every configuration setting a posture-aware runtime reads belongs to one of three classes.
+
+### Valid in every posture
+
+Standard deployment settings are valid in both `production` and `development` with no posture
+diagnostic.
+Examples include TLS database connections (`verified-tls`), HTTPS token issuers, explicit
+`allowedClients` lists, Vault or OpenBao Transit signing, and loopback HTTP listeners or loopback
+HTTP issuers where a product permits them.
+
+### Development-only settings
+
+Development-only settings relax a security boundary for local development or automated tests.
+Examples include non-loopback plain HTTP issuers (`allowInsecureHttp: true`),
+`private-network-plaintext` database transport, development-generated audit hash keys, local
+field-encryption key custody, disabled document content verification, and Registry Evidence
+`assuranceProfile: local`.
+
+Each development-only setting carries a stable `<owner>.posture.<setting>` code:
+
+- In `production`, `check` and startup refuse every development-only setting as an error diagnostic.
+  Each diagnostic names the configuration pointer and the production replacement.
+- In `development`, `check` and startup accept the setting and report it as a warning under the
+  same code.
+  The `--deny-warnings` flag does not fail on posture warnings.
+  Startup also writes one warning log line for each active development-only setting.
+
+### Explicit production settings
+
+Explicit production settings are valid in every posture.
+They represent deliberate operator choices that relax a stricter default, such as
+`accessTokenType: JWT`, a custom `scopeClaim`, issuer-level `actorKind` or `clientActorKinds`,
+loopback HTTP issuer URLs, `private-network-plaintext` hook destinations, or
+`anonymousHttps: operator-approved` in Registry Adapter.
+
+Explicit production settings never refuse and are never diagnostics or warnings:
+
+- `check --format json` lists each active one under `explicitProductionSettings`.
+- Startup logs one `info` record for each active one.
+- Unauthenticated readiness responses omit explicit production settings so callers without
+  credentials cannot inspect internal deployment choices.
+
+{/* Evidence: crates/registry-platform-config/src/posture.rs, DevelopmentClass, Gated,
+    ExplicitClass, Stated, PostureReport, ready_member, log_startup, has_denied_warnings;
+    crates/registry-platform-config/src/blocks.rs, DatabaseTransport;
+    crates/registry-platform-config/src/caller_issuers.rs, ExplicitProductionSetting;
+    crates/registry-platform-config/src/destination.rs, private-network-plaintext;
+    crates/registry-cli-report/tests/envelope.rs, explicitProductionSettings. */}
+
+## What production refuses
+
+A process running in `production` enforces three boundaries:
+
+- **Development-only settings.** Configuration checks and startup refuse every development-only
+  setting before opening a listener or modifying a database.
+- **Development-marked peers.** When a production runtime calls another Registry Stack product's
+  API, it refuses any HTTP response whose `Registry-Posture` header carries `development`, including
+  as one comma-separated value.
+  Run every service in a composed stack under one posture.
+- **Development-marked tokens and task grants.** A production runtime refuses a verified token or
+  task grant that carries the `registry_posture: "development"` claim, under code
+  `platform.task-grant.development-assertion`.
+
+{/* Evidence: crates/registry-platform-config/src/posture.rs, PostureReport::decide;
+    crates/registry-platform-httputil/src/lib.rs, PeerPolicy, validate_response_headers,
+    ResponseHeaderError::DevelopmentPeer;
+    crates/registry-platform-oidc/src/authorization_claims.rs, POSTURE_CLAIM,
+    DEVELOPMENT_ASSERTION_CODE, refuses_development_assertion, GrantContextError. */}
+
+## The development mark
+
+Processes running in `development` mark their runtime outputs so peers, operators, and logs can
+distinguish them from production:
+
+- **HTTP responses.** A development runtime adds `Registry-Posture: development` to its HTTP
+  responses.
+  A production runtime sends no `Registry-Posture` header.
+- **Readiness responses.** A successful `GET /ready` (or `GET /readyz` on Registry Scheduling)
+  returns `posture` and `developmentSettings`, listing the code and configuration pointer of each
+  active development-only setting.
+- **Refusal bodies.** In `development`, JSON refusal bodies include a `failedCheck` member naming
+  the check that failed.
+  Production refusal bodies omit `failedCheck`.
+- **Audit journal lines.** Every audit entry records `"posture": "production"` or
+  `"posture": "development"`.
+- **Startup logs.** Startup logs a `posture declared` record with `posture`, `posture_source`
+  (`flag`, `environment`, or `default`), `development_settings`, and
+  `explicit_production_settings`.
+- **Task grants.** Task grants signed in `development` include `registry_posture: "development"`.
+  Task grants signed in `production` omit that claim.
+
+Signed hook and webhook deliveries use the same wire format in both postures.
+Use separate signing keys for development and production deployments, and never give production
+delivery keys to development producers.
+
+{/* Evidence: crates/registry-platform-httpsec/src/server.rs, security_headers, posture_mark;
+    crates/registry-platform-httpsec/src/refusal_detail.rs, name_failed_check;
+    crates/registry-platform-config/src/posture.rs, ready_member, log_startup;
+    crates/registry-platform-audit/src/writer.rs, AuditWriter;
+    crates/registry-casework/src/task_grants.rs, POSTURE_CLAIM;
+    docs/site/src/content/docs/security/hardening-checklist.mdx. */}
+
+## Activation ledger and fresh-database limit
+
+Every PostgreSQL-backed product that uses the shared package activation ledger records the
+activating process's declared `posture` in each activation row.
+Activation rows recorded before the `posture` column existed are read as `production`.
+
+When you run `plan`, `apply`, or startup, the product compares its declared posture with the
+active ledger row.
+If they differ, the command refuses the database under `platform.activation.posture-mismatch`.
+Status and doctor commands report the mismatch alongside the ledger rather than serving.
+
+:::caution
+A database activated in one posture is refused in the other.
+You cannot switch an activated database in place between `development` and `production`.
+Provision and apply to a fresh database for production, and recreate development databases when
+you need a fresh development run.
+:::
+
+{/* Evidence: crates/registry-platform-activation/src/lib.rs, Activation, read_columns,
+    append_activation, check_active_package, ActivePackageError::PostureMismatch. */}
+
+## Per-product posture pages
+
+Each product's operations and configuration pages list the settings and runtime behaviours that
+depend on posture:
+
+- [Run a project with rstack dev](../../configure/run-a-project-with-rstack-dev/#deployment-posture)
+- [Environment variable reference](../../reference/environment-variables/#deployment-posture)
+- [Production hardening checklist](../../security/hardening-checklist/)
+- [Deploy and serve Base Registry Engine (BReg)](../breg/)
+- [Build and deploy a Registry Evidence project](../../tutorials/build-and-deploy-evidence-project/)
+- [Deploy Casework](../casework/) and
+  [Casework configuration reference](../../reference/casework-configuration/#deployment-posture)
+- [Package and run a Registry Discovery index](../../configure/discovery/)
+
+<DocsetProduct product="registry-scheduling">
+
+- [Deploy and operate Scheduling](../scheduling/#declare-the-deployment-posture) and
+  [Scheduling configuration reference](../../reference/scheduling-configuration/#deployment-posture)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-messaging">
+
+- [Deploy Messaging](../messaging/#declare-the-deployment-posture) and
+  [Messaging configuration reference](../../reference/messaging-configuration/#deployment-posture)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-documents">
+
+- [Deploy and operate the Document Store](../documents/#check-apply-and-start) and
+  [Document Store configuration reference](../../reference/documents-configuration/#deployment-posture)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-coordinator">
+
+- [Deploy Coordinator](../coordinator/) and
+  [Coordinator configuration reference](../../reference/coordinator-configuration/#deployment-posture)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-render">
+
+- [Deploy Render](../registry-render/)
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-adapter">
+
+- [Configure an Adapter project](../../configure/adapter/#deployment-posture) and
+  [Operate the Adapter](../adapter/)
+
+</DocsetProduct>
