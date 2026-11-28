@@ -639,39 +639,8 @@
       ],
       "type": "object"
     },
-    "ReviewCompletionAuthConfig": {
-      "additionalProperties": false,
-      "description": "How a completion destination presents its secret. Without `header` the\nsecret is sent as `Authorization: Bearer`; with one, the raw secret is the\nvalue of that header and no `Authorization` header is sent.",
-      "properties": {
-        "header": {
-          "maxLength": 64,
-          "minLength": 1,
-          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
-          "type": "string"
-        },
-        "secretRef": {
-          "$ref": "#/$defs/SecretReference"
-        }
-      },
-      "required": [
-        "secretRef"
-      ],
-      "type": "object"
-    },
     "ReviewCompletionRuntimeConfig": {
       "additionalProperties": false,
-      "oneOf": [
-        {
-          "required": [
-            "bearerTokenRef"
-          ]
-        },
-        {
-          "required": [
-            "auth"
-          ]
-        }
-      ],
       "properties": {
         "attemptTimeoutMilliseconds": {
           "default": 5000,
@@ -680,12 +649,9 @@
           "minimum": 100,
           "type": "integer"
         },
-        "auth": {
-          "$ref": "#/$defs/ReviewCompletionAuthConfig"
-        },
-        "bearerTokenRef": {
+        "hmacSha256KeyRef": {
           "$ref": "#/$defs/SecretReference",
-          "description": "Shorthand for `auth` with no header: the secret is presented as\n`Authorization: Bearer`. Exactly one of this and `auth` is configured."
+          "description": "Exact bytes of the current Standard Webhooks signing key."
         },
         "maximumAttempts": {
           "default": 12,
@@ -693,6 +659,10 @@
           "maximum": 100,
           "minimum": 1,
           "type": "integer"
+        },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Exact bytes of the previous signing key during rotation."
         },
         "retryDelaySeconds": {
           "default": 30,
@@ -706,7 +676,8 @@
         }
       },
       "required": [
-        "url"
+        "url",
+        "hmacSha256KeyRef"
       ],
       "type": "object"
     },
@@ -925,16 +896,12 @@
           "reviewCompletionDestinations": {
             "additionalProperties": {
               "properties": {
-                "auth": {
-                  "properties": {
-                    "secretRef": {
-                      "not": {
-                        "pattern": "^secret:env/"
-                      }
-                    }
+                "hmacSha256KeyRef": {
+                  "not": {
+                    "pattern": "^secret:env/"
                   }
                 },
-                "bearerTokenRef": {
+                "previousHmacSha256KeyRef": {
                   "not": {
                     "pattern": "^secret:env/"
                   }
@@ -1049,16 +1016,12 @@
           "reviewCompletionDestinations": {
             "additionalProperties": {
               "properties": {
-                "auth": {
-                  "properties": {
-                    "secretRef": {
-                      "not": {
-                        "pattern": "^secret:file/"
-                      }
-                    }
+                "hmacSha256KeyRef": {
+                  "not": {
+                    "pattern": "^secret:file/"
                   }
                 },
-                "bearerTokenRef": {
+                "previousHmacSha256KeyRef": {
                   "not": {
                     "pattern": "^secret:file/"
                   }

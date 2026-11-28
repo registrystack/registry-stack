@@ -174,9 +174,10 @@ Three values in the registry's binding must agree with that entry:
 exact Proposal version and its `effectDigest`, and the registry accepts only a
 [ReviewResult](../../reference/glossary/#review-result) that matches them.
 
-By default the registry polls Casework for results. To be called instead, add
-`completionTokenRef` and `completionRecipient` to the binding together, and give the producer a
-completion destination, the registry URL Casework calls, that presents the same token.
+By default the registry polls Casework for results. For push delivery, configure the registry
+as a [completion receiver](../../configure/casework-completion-receivers/).
+Set the Casework destination's `hmacSha256KeyRef` to resolve to the same signing key bytes
+that the registry uses to verify that recipient's wakes.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, RawReviewAuthorityConfig;
     crates/registry-breg/src/review_store.rs, MAXIMUM_REVIEW_RECOVERY_DAYS and enqueue_submission;

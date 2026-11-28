@@ -29,10 +29,7 @@ stay with the owning product.
 - The envelope: one canonical JSON document (RFC 8785 through
   `registry-platform-canonical-json`) with `id`, `type`, `source`, `time`,
   `subject`, `dataschema`, `data`, and `causation` (`root`, `parent`, `hop`).
-  Delivery attributes (`attempt`, `generation`, `delivery_time`,
-  `idempotency_key`, `signature`) are explicitly not envelope fields; they stay
-  on the transport headers. The envelope is what the handler reasons over; the
-  attributes are what the worker reasons over. `id`, `causation.root`, and
+  `id`, `causation.root`, and
   `causation.parent` are UUIDs and the closed subject is either
   `{recordReference, recordRevision}` or `{proposalReference,
   proposalRevision}`, with its revision greater than zero, refused on both
@@ -53,7 +50,7 @@ stay with the owning product.
 
 ## Budgets
 
-- The envelope carries the 1 MiB Version 1 signable bound (1,048,576 bytes,
+- The envelope carries the 1 MiB delivery signature bound (1,048,576 bytes,
   the delivery signature's `MAX_BODY_BYTES`), so every envelope can be signed
   and verified. The delivery store's 2 MiB payload column is a looser outer
   bound. A per-delivery bound can only tighten it:
@@ -113,9 +110,35 @@ work, a dead letter, or an expired lease under its exact generation. Discard
 never rebinds or sends the work, refuses a live lease or recovered proposal
 receipt, and preserves the shared envelope while another delivery needs it.
 
-The simple URL hook destination block, `UrlHookDestinationConfig` (a `url`, an
-`hmacSha256KeyRef`, and a delivery budget), is defined in
-`registry-platform-config` and re-exported from `delivery`.
+A URL delivery posts the canonical envelope with `accept: application/json`,
+`content-type: application/json`, `webhook-id`, `webhook-timestamp`, and
+`webhook-signature`. The envelope id stays the same across retries and operator
+replays and is the receiver's idempotency key. The timestamp is the attempt's
+lease time in Unix seconds from the database clock. Database clock skew
+counts against the receiver's freshness window. The signature covers the id,
+timestamp, and exact body bytes, joined by periods. It carries one `v1,<base64>` HMAC-SHA256 entry
+per active signing key, current first, separated by a single space. Each key
+contains 32 to 64 exact secret bytes. Activation of a shared URL destination
+inventory refuses key reuse across current and previous keys. Adding or
+removing the previous key leaves the binding digest intact. To rotate,
+keep the current reference `hmacSha256KeyRef` unchanged and write the new
+bytes behind it. Store the old bytes separately and set
+`previousHmacSha256KeyRef` to that secret. Changing the current reference
+changes the binding digest and prevents delivery of work retained under
+the earlier binding.
+
+With the `receiver` feature, `verify_hook_delivery` checks that each required
+header occurs once, requires the JSON content type, verifies the signature,
+and decodes the canonical envelope. It requires the envelope id to
+match `webhook-id`. Freshness is checked under `DeliveryFreshness::Within`,
+with a default window of 300 seconds in either direction. Callers using
+`CallerEnforced` check the timestamp themselves. Receivers deduplicate on
+`webhook-id` per endpoint and own source trust and handler effects.
+
+The simple URL hook destination block, `UrlHookDestinationConfig`, defines
+`url`, `hmacSha256KeyRef`, optional `previousHmacSha256KeyRef`, and a delivery
+budget. It is defined in `registry-platform-config` and re-exported from
+`delivery`.
 `activate_url_hook_destinations` turns a map of them into signing destinations
 under a fixed outbound policy (https, or http on a loopback host, no private
 address range, no client certificate) and records the binding digest. Scheduling

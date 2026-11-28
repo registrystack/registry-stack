@@ -153,10 +153,11 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   `paused` stops every erasure and the sweep of orphaned objects; a removal request still stops release at once, and lapsed uploads are still expired.
 - `destinations.hooks` is the shared URL hook destination block, keyed by the destination id that `documents.yaml` names.
   Each entry takes `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 10000, 5000 when omitted), and `maximumAttempts` (1 to 20, 8 when omitted), with at most 128 destinations.
-  Startup refuses a project hook whose destination is not bound here and a signing key it cannot resolve.
+  Set the optional `previousHmacSha256KeyRef` to keep signing with the previous key during rotation.
+  Startup refuses a project hook whose destination is not bound here and any unavailable, invalid, or repeated signing key.
   Plain `http` needs both a loopback address (`127.0.0.1`, `localhost`, or `[::1]`) and `listener.tlsTermination: development-loopback`.
   Without the listener mode it is refused with `documents.runtime.insecure-url`, and a non-loopback `http` address is refused at startup.
-  A pending or leased delivery pins the binding it was captured under (id, URL, key reference, timeout, attempts), so startup refuses while one remains whose binding is no longer here.
+  A pending or leased delivery pins the binding it was captured under (id, URL, current key reference, timeout, attempts), so startup refuses while one remains whose binding is no longer here.
   To move a hook, bind a new destination id, point the hook at it and apply, and remove the old entry once its deliveries have drained or expired.
 - `retention.receiptRetentionDays` is 1 to 365, default 7: how long a replay of an `Idempotency-Key` on a reservation or a grant is answered with the original outcome.
   After it the key stays spent: a replay answers `idempotency.expired`, and the row keeps only the key and request digests and the resource id.
@@ -175,6 +176,7 @@ Set the retention of backups, archived WAL, and bucket replicas to the longest p
 {/* Evidence: crates/registry-documents/src/config.rs, DATABASE_MAXIMUM_DOCUMENT_BYTES,
     S3_MAXIMUM_DOCUMENT_BYTES, MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS, AuditConfig and
     ContentVerificationConfig;
+    crates/registry-platform-hooks/src/delivery/url_binding.rs, activate_url_hook_destination and activate_url_hook_destinations;
     crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and DEFAULT_AUDIT_RETAIN_DAYS;
     products/documents/generated/runtime/runtime.schema.json. */}
 {/* TODO[evidence]: the transfer deadline bounds, the 128-destination cap, the destination attempt bounds and the erasure-pause semantics need cited constants or tests. */}

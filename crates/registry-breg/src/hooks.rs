@@ -55,7 +55,6 @@ pub use registry_platform_hooks::delivery::{
     MAX_DELIVERY_STATUS_RESULTS as MAX_HOOK_STATUS_RESULTS,
 };
 
-const IDEMPOTENCY_DOMAIN: &[u8] = b"breg-webhook-idempotency-v1";
 /// The schema Base Registry Engine installs the platform delivery tables
 /// into, and the one the worker and the capture INSERT read and write.
 pub(crate) const DELIVERY_SCHEMA: &str = "registry_internal";
@@ -1011,7 +1010,6 @@ impl HookDeliveryService {
     ) -> Self {
         let config = DeliveryConfig {
             schema: DELIVERY_SCHEMA.to_owned(),
-            idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
             delivery_source: delivery_source(&expected.package_id, instance_id),
         };
         let last_success = Arc::<crate::metrics::LastSuccess>::default();

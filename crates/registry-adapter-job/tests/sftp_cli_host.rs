@@ -177,7 +177,7 @@ fn runtime_json(server: &SftpSourceServer) -> Vec<u8> {
         "destinations": {"coordinator-test": {
             "type": "signed-coordinator-event",
             "baseUrl": "http://127.0.0.1:9/events",
-            "signingKeyRef": "secret:env/JOB_TEST_SIGNING_KEY",
+            "hmacSha256KeyRef": "secret:env/JOB_TEST_SIGNING_KEY",
             "attemptTimeoutMilliseconds": 1000
         }}
     }))

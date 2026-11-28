@@ -166,6 +166,7 @@ impl MaintainedKoboSource {
                 .as_bytes(),
         );
         private_file(&root.path().join("event-key"), &[0x5a; 32]);
+        private_file(&root.path().join("revised-event-key"), &[0x6a; 32]);
         let runtime = root.path().join("runtime.json");
         let base_url = format!("http://{address}{}", DATA_PATH.trim_end_matches('/'));
         private_file(
@@ -186,7 +187,8 @@ impl MaintainedKoboSource {
                 "destinations": {"household-workflow": {
                     "type": "signed-coordinator-event",
                     "baseUrl": "http://127.0.0.1:9/",
-                    "signingKeyRef": "secret:file/event-key",
+                    "hmacSha256KeyRef": "secret:file/event-key",
+                    "revisedReceiver": {"hmacSha256KeyRef": "secret:file/revised-event-key"},
                     "attemptTimeoutMilliseconds": 1000
                 }},
                 "store": {

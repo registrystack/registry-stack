@@ -6,9 +6,8 @@
 //!
 //! Everything product-owned enters here, and it enters through one trait so a
 //! product implements its side as a unit. The worker carries no product name
-//! and no product policy: the signing scheme and its key material, the
-//! idempotency domain, the audit vocabulary, the operational vocabulary, and
-//! the identity check all stay with the product, expressed as the neutral
+//! and no product policy: the destination and its key material, the audit vocabulary,
+//! the operational vocabulary, and the identity check stay with the product, expressed as the neutral
 //! contracts below.
 
 use std::ops::DerefMut;
@@ -16,7 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use registry_platform_httputil::destination::{
-    DestinationRequestError, DestinationSendError, EventDeliveryHeaders, EventDestinationRequest,
+    DestinationRequestError, DestinationSendError, EventDestinationRequest, SignedEventHeaders,
 };
 use tokio_postgres::Transaction;
 use uuid::Uuid;
@@ -205,10 +204,7 @@ pub trait DeliverySeams: Send + Sync + 'static {
 /// One activated delivery destination, resolved by the product for a
 /// compiled logical destination id.
 ///
-/// Signing and sending stay with the product: the key material never leaves
-/// the destination, and the product's mapping fills the signature's method,
-/// request target, and content type from the same binding the transport
-/// uses, so signing and transport cannot disagree.
+/// The destination signs and sends each attempt using its activated keys.
 #[async_trait]
 pub trait HookDestination: Send + Sync {
     /// Digest of the exact binding this destination was activated under.
@@ -220,7 +216,7 @@ pub trait HookDestination: Send + Sync {
     /// Deployed maximum attempt count.
     fn maximum_attempts(&self) -> u8;
 
-    /// Sign one delivery with the product's scheme and key material.
+    /// Sign the identity, attempt timestamp and body using Standard Webhooks.
     fn sign_delivery(
         &self,
         fields: DeliverySignatureFields<'_>,
@@ -229,7 +225,7 @@ pub trait HookDestination: Send + Sync {
     /// Render the signed request for transport.
     fn render_delivery(
         &self,
-        headers: EventDeliveryHeaders<'_>,
+        headers: SignedEventHeaders<'_>,
         body: Vec<u8>,
     ) -> Result<EventDestinationRequest, DestinationRequestError>;
 
@@ -241,25 +237,15 @@ pub trait HookDestination: Send + Sync {
     ) -> Result<DestinationAnswer, DestinationSendError>;
 }
 
-/// The neutral signing input for one delivery attempt.
-///
-/// The product maps this onto its own scheme. The values are exactly the
-/// ones the wire carries: changing any of them changes wire bytes.
-#[derive(Clone, Copy, Debug)]
+/// Standard Webhooks signing input for one attempt.
+#[derive(Clone, Copy)]
 pub struct DeliverySignatureFields<'a> {
     pub id: &'a str,
-    pub source: &'a str,
-    pub event_type: &'a str,
-    pub time: &'a str,
-    pub data_schema: &'a str,
-    pub generation: &'a str,
-    pub attempt: &'a str,
-    pub delivery_time: &'a str,
-    pub idempotency_key: &'a str,
+    pub timestamp: u64,
     pub body: &'a [u8],
 }
 
-/// The product's signing scheme refused the input.
+/// The delivery signature refused the input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeliverySignatureRefused;
 

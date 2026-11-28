@@ -100,7 +100,6 @@ fn install_runtime_constraints(schema: &mut Value) {
         Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
     );
     set_secret_provider_requirements(schema);
-    set_review_completion_auth_constraints(schema);
     set_audit_destination_constraints(schema);
 }
 
@@ -131,29 +130,6 @@ fn set_audit_destination_constraints(schema: &mut Value) {
         );
         audit.insert("else".to_owned(), serde_json::json!({"required": ["path"]}));
     }
-}
-
-/// State the shape `RuntimeConfig::validate_secret_references` requires of a
-/// completion destination: exactly one of `bearerTokenRef` and `auth`, and a
-/// header name made of HTTP token characters. The reserved header set is
-/// enforced at load, where names compare case-insensitively.
-fn set_review_completion_auth_constraints(schema: &mut Value) {
-    if let Some(destination) = schema
-        .pointer_mut("/$defs/ReviewCompletionRuntimeConfig")
-        .and_then(Value::as_object_mut)
-    {
-        destination.insert(
-            "oneOf".to_owned(),
-            serde_json::json!([{"required": ["bearerTokenRef"]}, {"required": ["auth"]}]),
-        );
-    }
-    set_definition_property(
-        schema,
-        "ReviewCompletionAuthConfig",
-        "header",
-        "pattern",
-        Value::String("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$".to_owned()),
-    );
 }
 
 /// Every secret reference names its provider by its prefix. When a provider
@@ -226,10 +202,8 @@ fn absent_secret_provider_requirement(provider: &str, reference_pattern: &str) -
                 "reviewCompletionDestinations": {
                     "additionalProperties": {
                         "properties": {
-                            "bearerTokenRef": forbidden,
-                            "auth": {
-                                "properties": {"secretRef": forbidden}
-                            }
+                            "hmacSha256KeyRef": forbidden,
+                            "previousHmacSha256KeyRef": forbidden
                         }
                     }
                 }
@@ -597,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_destination_schema_names_exactly_one_secret_and_a_token_header() {
+    fn completion_destination_schema_requires_a_current_signing_key() {
         let schema = runtime_schema();
         let with = |destination: Value| {
             let mut instance = runtime_instance("secret:file/jwks.json", "file");
@@ -607,52 +581,26 @@ mod tests {
         };
         let url = "https://requester.example.test/completions";
         for accepted in [
-            serde_json::json!({"url": url, "bearerTokenRef": "secret:file/completion-token"}),
-            serde_json::json!({"url": url, "auth": {"secretRef": "secret:file/completion-key"}}),
-            serde_json::json!({
-                "url": url,
-                "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key"}
-            }),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current"}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current",
+                "previousHmacSha256KeyRef": "secret:file/previous"}),
         ] {
-            assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
-        }
-        // An explicit null is refused, by the schema and by the reader alike.
-        for nulled in [
-            serde_json::json!({
-                "url": url,
-                "bearerTokenRef": null,
-                "auth": {"secretRef": "secret:file/completion-key"}
-            }),
-            serde_json::json!({
-                "url": url,
-                "bearerTokenRef": "secret:file/completion-token",
-                "auth": null
-            }),
-        ] {
-            assert!(!schema.is_valid(&with(nulled.clone())), "{nulled}");
-            assert!(read(&with(nulled.clone())).is_err(), "{nulled}");
+            let instance = with(accepted);
+            assert!(schema.is_valid(&instance));
+            assert!(read(&instance).is_ok());
         }
         for refused in [
             serde_json::json!({"url": url}),
-            serde_json::json!({"url": url, "bearerTokenRef": null}),
-            serde_json::json!({"url": url, "auth": null}),
-            serde_json::json!({"url": url, "bearerTokenRef": null, "auth": null}),
-            serde_json::json!({
-                "url": url,
-                "bearerTokenRef": "secret:file/completion-token",
-                "auth": {"secretRef": "secret:file/completion-key"}
-            }),
-            serde_json::json!({
-                "url": url,
-                "auth": {"header": "x api key", "secretRef": "secret:file/completion-key"}
-            }),
-            serde_json::json!({
-                "url": url,
-                "auth": {"header": "x-api-key", "secretRef": "completion-key"}
-            }),
-            serde_json::json!({"url": url, "auth": {"header": "x-api-key"}}),
+            serde_json::json!({"url": url, "previousHmacSha256KeyRef": "secret:file/previous"}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": null}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current",
+                "previousHmacSha256KeyRef": null}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current", "bearerTokenRef": "secret:file/retired"}),
+            serde_json::json!({"url": url, "auth": {"secretRef": "secret:file/retired"}}),
         ] {
-            assert!(!schema.is_valid(&with(refused.clone())), "{refused}");
+            let instance = with(refused);
+            assert!(!schema.is_valid(&instance));
+            assert!(read(&instance).is_err());
         }
     }
 
@@ -664,7 +612,7 @@ mod tests {
             instance["reviewCompletionDestinations"] = serde_json::json!({
                 "review-requester": {
                     "url": "https://requester.example.test/completions",
-                    "bearerTokenRef": "secret:file/completion-token",
+                    "hmacSha256KeyRef": "secret:file/completion-key",
                     "attemptTimeoutMilliseconds": timeout_milliseconds,
                     "maximumAttempts": maximum_attempts,
                     "retryDelaySeconds": retry_seconds
@@ -816,16 +764,10 @@ mod tests {
             }
         });
         instance["reviewCompletionDestinations"] = serde_json::json!({
-            "bearer": {
+            "receiver": {
                 "url": "https://producer.example.test/completions",
-                "bearerTokenRef": "secret:file/completion-token"
-            },
-            "header": {
-                "url": "https://another-producer.example.test/completions",
-                "auth": {
-                    "header": "x-api-key",
-                    "secretRef": "secret:env/COMPLETION_API_KEY"
-                }
+                "hmacSha256KeyRef": "secret:file/completion-key",
+                "previousHmacSha256KeyRef": "secret:env/PREVIOUS_COMPLETION_KEY"
             }
         });
         instance["taskAuthority"] = serde_json::json!({
@@ -879,8 +821,8 @@ mod tests {
             "/contextProviders/facility-registry/clientAssertionKeyRef",
             "/contextProviders/facility-registry/delegatedDisplayExchange/clientIdRef",
             "/contextProviders/facility-registry/delegatedDisplayExchange/clientAssertionKeyRef",
-            "/reviewCompletionDestinations/bearer/bearerTokenRef",
-            "/reviewCompletionDestinations/header/auth/secretRef",
+            "/reviewCompletionDestinations/receiver/hmacSha256KeyRef",
+            "/reviewCompletionDestinations/receiver/previousHmacSha256KeyRef",
             "/taskAuthority/signingKeyRef",
         ];
         for &pointer in &pointers {

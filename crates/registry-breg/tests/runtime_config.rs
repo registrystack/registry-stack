@@ -24,7 +24,7 @@ use registry_platform_config::package::{write_sum_file, PackageLimits};
 use registry_platform_config::MetricsBindError;
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::destination::{
-    DestinationDnsFamily, DestinationSendError, EventDeliveryHeaders,
+    DestinationDnsFamily, DestinationSendError, SignedEventHeaders,
 };
 use registry_platform_oidc::StaticJwksError;
 use serde_json::{json, Value};
@@ -719,18 +719,11 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
     compile_project(&parsed, &[], CompileProfile::Authoring).expect("hooks compile")
 }
 
-fn event_headers() -> EventDeliveryHeaders<'static> {
-    EventDeliveryHeaders {
-        id: b"event-id",
-        source: b"urn:registrystack:registry:example:instance:primary",
-        event_type: b"case.created",
-        time: b"2026-08-30T00:00:00Z",
-        dataschema: b"urn:registrystack:registry:example:event:case.created:schema:sha256:aaa",
-        generation: b"1",
-        attempt: b"1",
-        delivery_time: b"2026-08-30T00:00:01Z",
-        idempotency_key: b"delivery-key",
-        signature: b"v1=signature",
+fn event_headers() -> SignedEventHeaders<'static> {
+    SignedEventHeaders {
+        id: b"event",
+        timestamp: b"1000",
+        signature: b"v1,caller-owned-signature",
     }
 }
 
@@ -4483,7 +4476,7 @@ async fn pinned_loopback_https_event_profile_activates_with_exact_test_tls_and_c
 
     let request = destination
         .request_template()
-        .render_event(event_headers(), br#"{"label":"value"}"#.to_vec())
+        .render_signed_event(event_headers(), br#"{"label":"value"}"#.to_vec())
         .expect("closed event request renders");
     assert_eq!(
         destination
@@ -4548,10 +4541,41 @@ fn activation_constructs_the_exact_platform_policy_template_and_signing_material
     assert!(destination.binding_digest().starts_with("sha256:"));
     assert_eq!(destination.binding_digest().len(), 71);
     let destination_binding_digest = destination.binding_digest().to_owned();
-    destination.with_hmac_sha256_key(|key| assert_eq!(key, KEY_CANARY));
+    use registry_platform_crypto::delivery_signature::{
+        verify_authenticity, DeliveryKey, DeliveryKeys, SignedContent,
+    };
+    use registry_platform_hooks::delivery::{
+        DeliverySignatureFields, HookDestination, SharedUrlDestination,
+    };
+    let shared = SharedUrlDestination(
+        activated
+            .lookup_shared(DESTINATION_CANARY)
+            .expect("active destination"),
+    );
+    let body = br#"{"label":"value"}"#;
+    let signature = shared
+        .sign_delivery(DeliverySignatureFields {
+            id: "event",
+            timestamp: 1000,
+            body,
+        })
+        .unwrap();
+    let keys = DeliveryKeys::new(DeliveryKey::new(KEY_CANARY).unwrap(), None).unwrap();
+    assert_eq!(
+        verify_authenticity(
+            &keys,
+            SignedContent {
+                id: "event",
+                timestamp: "1000",
+                signature: &signature,
+                body
+            }
+        ),
+        Ok(1000)
+    );
     let request = destination
         .request_template()
-        .render_event(event_headers(), br#"{"label":"value"}"#.to_vec())
+        .render_signed_event(event_headers(), br#"{"label":"value"}"#.to_vec())
         .expect("closed event request renders");
 
     let diagnostic = format!("{config:?} {activated:?} {destination:?} {request:?}");
@@ -5020,7 +5044,7 @@ async fn production_event_policy_refuses_literal_metadata_and_unallowed_private_
             .expect("compiled destination is active");
         let request = destination
             .request_template()
-            .render_event(event_headers(), br#"{"label":"value"}"#.to_vec())
+            .render_signed_event(event_headers(), br#"{"label":"value"}"#.to_vec())
             .expect("event request renders");
         let error = destination
             .policy()

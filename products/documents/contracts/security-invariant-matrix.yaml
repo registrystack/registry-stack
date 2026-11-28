@@ -946,14 +946,18 @@ invariants:
       reference, the timeout, and the attempt budget come from
       destinations.hooks in the operator's runtime configuration, through
       the shared URL hook destination block. Activation requires every named
-      destination to be bound and every signing key to resolve, and retained
-      deliveries must match their current binding before the worker starts.
+      destination to be bound and every signing key to resolve to 32 to 64
+      exact bytes without trimming or decoding. No two destinations may share
+      signing key bytes. Retained deliveries must match their current binding
+      before the worker starts.
     refusal: >-
-      Refuse startup naming the unbound destination or the unresolved key,
-      or a retained delivery whose binding is no longer configured.
+      Refuse startup for an unbound destination, an unresolved or invalid
+      signing key, signing keys with identical bytes, or a retained delivery
+      whose binding is no longer configured. Name the configuration paths
+      involved in a signing key refusal.
     negativeTest:
-      path: crates/registry-documents/tests/postgres_hooks.rs
-      name: startup_refuses_a_project_hook_whose_destination_is_not_bound
+      path: crates/registry-documents/src/config.rs
+      name: hook_signing_keys_report_both_destinations_when_their_keys_match
   - id: DOCUMENTS-SEC-54
     state: enforced
     threat: >-

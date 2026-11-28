@@ -73,6 +73,14 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "Rename audit.retainDays to audit.retentionDays",
     },
     RemovedKey {
+        path: "reviewCompletionDestinations.*.bearerTokenRef",
+        replacement: "Configure hmacSha256KeyRef with a Standard Webhooks signing key",
+    },
+    RemovedKey {
+        path: "reviewCompletionDestinations.*.auth",
+        replacement: "Configure hmacSha256KeyRef with a Standard Webhooks signing key",
+    },
+    RemovedKey {
         path: "reviewCompletionDestinations.*.timeoutMilliseconds",
         replacement: "Rename timeoutMilliseconds to attemptTimeoutMilliseconds",
     },
@@ -336,13 +344,14 @@ where
     SecretReference::deserialize(deserializer).map(|reference| reference.as_str().to_owned())
 }
 
-/// An optional member holding a secret reference; absent reads as `None`
-/// through `serde(default)`.
-fn optional_secret_reference<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+pub(crate) const CURRENT_COMPLETION_KEY: &str = "hmacSha256KeyRef";
+pub(crate) const PREVIOUS_COMPLETION_KEY: &str = "previousHmacSha256KeyRef";
+
+fn optional_secret_reference<'de, D>(deserializer: D) -> Result<Option<SecretReference>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    secret_reference(deserializer).map(Some)
+    SecretReference::deserialize(deserializer).map(Some)
 }
 
 fn valid_database_id(value: &str) -> bool {
@@ -359,13 +368,11 @@ pub struct ReviewCompletionRuntimeConfig {
     #[serde(deserialize_with = "registry_casework_core::typed::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub url: String,
-    /// Shorthand for `auth` with no header: the secret is presented as
-    /// `Authorization: Bearer`. Exactly one of this and `auth` is configured.
+    /// Exact bytes of the current Standard Webhooks signing key.
+    pub hmac_sha256_key_ref: SecretReference,
+    /// Exact bytes of the previous signing key during rotation.
     #[serde(default, deserialize_with = "optional_secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
-    pub bearer_token_ref: Option<String>,
-    #[serde(default)]
-    pub auth: Option<ReviewCompletionAuthConfig>,
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
     #[serde(
         default = "default_review_completion_timeout_ms",
         deserialize_with = "registry_casework_core::typed::bounded_u64::<_, MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS, MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS>"
@@ -402,136 +409,6 @@ pub struct ReviewCompletionRuntimeConfig {
         ))
     )]
     pub retry_delay_seconds: u64,
-}
-
-/// How a completion destination presents its secret. Without `header` the
-/// secret is sent as `Authorization: Bearer`; with one, the raw secret is the
-/// value of that header and no `Authorization` header is sent.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReviewCompletionAuthConfig {
-    #[serde(default)]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(length(min = 1, max = MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES))
-    )]
-    pub header: Option<String>,
-    #[serde(deserialize_with = "secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
-    pub secret_ref: String,
-}
-
-impl ReviewCompletionRuntimeConfig {
-    /// The secret reference this destination presents, when exactly one of
-    /// `bearerTokenRef` and `auth` names it.
-    #[must_use]
-    pub fn secret_ref(&self) -> Option<&str> {
-        match (&self.bearer_token_ref, &self.auth) {
-            (Some(reference), None) => Some(reference),
-            (None, Some(auth)) => Some(&auth.secret_ref),
-            _ => None,
-        }
-    }
-
-    /// The header that carries the secret instead of `Authorization: Bearer`.
-    #[must_use]
-    pub fn secret_header(&self) -> Option<&str> {
-        self.auth.as_ref().and_then(|auth| auth.header.as_deref())
-    }
-}
-
-const MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES: usize = 64;
-
-/// Header names a completion destination may not carry its secret in.
-///
-/// Authentication, host and routing, cookie, framing, hop-by-hop, forwarding,
-/// proxy, and tracing headers belong to the runtime or the operator's network
-/// path, the same closed set Evidence refuses for its source headers. The
-/// `idempotency-key` and `registry-` headers are the completion contract's own.
-const RESERVED_REVIEW_COMPLETION_HEADER_NAMES: [&str; 39] = [
-    "authorization",
-    "proxy-authorization",
-    "www-authenticate",
-    "proxy-authenticate",
-    "host",
-    "cookie",
-    "set-cookie",
-    "content-length",
-    "content-type",
-    "transfer-encoding",
-    "expect",
-    "connection",
-    "keep-alive",
-    "te",
-    "trailer",
-    "upgrade",
-    "proxy-connection",
-    "forwarded",
-    "via",
-    "x-real-ip",
-    "x-client-ip",
-    "x-cluster-client-ip",
-    "true-client-ip",
-    "cf-connecting-ip",
-    "fastly-client-ip",
-    "x-appengine-user-ip",
-    "x-azure-clientip",
-    "traceparent",
-    "tracestate",
-    "baggage",
-    "b3",
-    "x-cloud-trace-context",
-    "x-request-id",
-    "x-correlation-id",
-    "x-amzn-trace-id",
-    "x-original-url",
-    "x-rewrite-url",
-    "x-original-method",
-    "idempotency-key",
-];
-
-const RESERVED_REVIEW_COMPLETION_HEADER_PREFIXES: [&str; 8] = [
-    "x-forwarded-",
-    "proxy-",
-    "sec-",
-    "x-b3-",
-    "x-envoy-",
-    "x-datadog-",
-    "x-http-method",
-    "registry-",
-];
-
-fn valid_review_completion_header_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    !name.is_empty()
-        && name.len() <= MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES
-        && name.bytes().all(is_http_token_byte)
-        && !RESERVED_REVIEW_COMPLETION_HEADER_PREFIXES
-            .iter()
-            .any(|prefix| lower.starts_with(prefix))
-        && !RESERVED_REVIEW_COMPLETION_HEADER_NAMES.contains(&lower.as_str())
-}
-
-fn is_http_token_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric()
-        || matches!(
-            byte,
-            b'!' | b'#'
-                | b'$'
-                | b'%'
-                | b'&'
-                | b'\''
-                | b'*'
-                | b'+'
-                | b'-'
-                | b'.'
-                | b'^'
-                | b'_'
-                | b'`'
-                | b'|'
-                | b'~'
-        )
 }
 
 fn default_review_completion_timeout_ms() -> u64 {
@@ -1115,39 +992,39 @@ impl RuntimeConfig {
                 }
             }
         }
-        for (destination_id, destination) in &self.review_completion_destinations {
-            match (&destination.bearer_token_ref, &destination.auth) {
-                (Some(reference), None) => {
-                    references.push((
-                        vec![
-                            "reviewCompletionDestinations",
-                            destination_id.as_str(),
-                            "bearerTokenRef",
-                        ],
-                        reference.as_str(),
-                    ));
-                }
-                (None, Some(auth)) => {
-                    references.push((
-                        vec![
-                            "reviewCompletionDestinations",
-                            destination_id.as_str(),
-                            "auth",
-                            "secretRef",
-                        ],
-                        auth.secret_ref.as_str(),
-                    ));
-                }
-                _ => {}
-            }
-        }
         references
+    }
+
+    fn completion_key_references(&self) -> impl Iterator<Item = ([&str; 3], &SecretReference)> {
+        self.review_completion_destinations
+            .iter()
+            .flat_map(|(id, destination)| {
+                [
+                    (
+                        CURRENT_COMPLETION_KEY,
+                        Some(&destination.hmac_sha256_key_ref),
+                    ),
+                    (
+                        PREVIOUS_COMPLETION_KEY,
+                        destination.previous_hmac_sha256_key_ref.as_ref(),
+                    ),
+                ]
+                .into_iter()
+                .filter_map(move |(member, reference)| {
+                    reference.map(|reference| {
+                        (
+                            ["reviewCompletionDestinations", id.as_str(), member],
+                            reference,
+                        )
+                    })
+                })
+            })
     }
 
     /// Resolve serving secrets without contacting their consumers or retaining
     /// their values. Migration credentials may remain off the serving host and
-    /// are resolved only by `caseworkctl apply`. This checks provider/file
-    /// availability and bounded secret text, not key formats or remote services.
+    /// are resolved only by `caseworkctl apply`. This checks provider and file
+    /// availability, bounded secret material, and completion signing key policy.
     pub fn check_runtime_secrets(&self, resolver: &SecretResolver) -> Result<(), Report> {
         let references =
             self.direct_secret_references()
@@ -1168,6 +1045,33 @@ impl RuntimeConfig {
                     pointer,
                     describe_secret_failure(&field, reference, &error),
                     "Provision a runtime-readable secret through the configured provider and retry doctor.",
+                ));
+            }
+        }
+        if let Err(errors) = crate::runtime::review_completion_targets(
+            &self.review_completion_destinations,
+            resolver,
+        ) {
+            use crate::runtime::CompletionKeyError;
+
+            for error in errors {
+                let (field, code) = match &error {
+                    CompletionKeyError::Unavailable { path, .. } => {
+                        (path, "casework.runtime.secret-unavailable")
+                    }
+                    CompletionKeyError::Invalid { path, .. }
+                    | CompletionKeyError::Repeated { second: path, .. }
+                    | CompletionKeyError::PreviousEqualsCurrent { previous: path, .. } => {
+                        (path, "casework.runtime.invalid-completion-key")
+                    }
+                };
+                let (section, field) = field.split_once('.').expect("completion key section");
+                let (destination, member) = field.rsplit_once('.').expect("completion key member");
+                diagnostics.push(Diagnostic::error(
+                    code,
+                    pointer_to(&[section, destination, member]),
+                    error.to_string(),
+                    "Retry doctor after correcting the completion signing key configuration.",
                 ));
             }
         }
@@ -1192,31 +1096,8 @@ impl RuntimeConfig {
         for (segments, raw) in self.binding_secret_references() {
             self.check_binding_reference(findings, &segments, raw);
         }
-        for (destination_id, destination) in &self.review_completion_destinations {
-            let at = ["reviewCompletionDestinations", destination_id.as_str()];
-            match (&destination.bearer_token_ref, &destination.auth) {
-                (Some(_), None) => {}
-                (None, Some(auth)) => {
-                    if auth
-                        .header
-                        .as_deref()
-                        .is_some_and(|header| !valid_review_completion_header_name(header))
-                    {
-                        let segments = [at[0], at[1], "auth", "header"];
-                        findings.push(RuntimeConfigError::InvalidReviewCompletionAuth {
-                            path: segments.join("."),
-                            pointer: pointer_to(&segments),
-                        });
-                    }
-                }
-                _ => {
-                    let segments = [at[0], at[1], "auth"];
-                    findings.push(RuntimeConfigError::InvalidReviewCompletionAuth {
-                        path: segments.join("."),
-                        pointer: pointer_to(&segments),
-                    });
-                }
-            }
+        for (segments, reference) in self.completion_key_references() {
+            self.check_binding_reference(findings, &segments, reference.as_str());
         }
     }
 
@@ -2760,8 +2641,7 @@ mod tests {
             }
         }});
         value["reviewCompletionDestinations"] = json!({
-            "bearer":{"url":"https://completion.example.test/reviews","bearerTokenRef":"secret:file/bearer"},
-            "header./receiver":{"url":"https://completion.example.test/reviews","auth":{"header":"x-api-key","secretRef":"secret:file/header"}}
+            "receiver./key":{"url":"https://completion.example.test/reviews","hmacSha256KeyRef":"secret:file/current","previousHmacSha256KeyRef":"secret:file/previous"}
         });
         let config = read_operator(&value, root.path());
         let resolver = SecretResolver::new(
@@ -2787,8 +2667,8 @@ mod tests {
                 "/contextProviders/facility/clientAssertionKeyRef",
                 "/contextProviders/facility/delegatedDisplayExchange/clientIdRef",
                 "/contextProviders/facility/delegatedDisplayExchange/clientAssertionKeyRef",
-                "/reviewCompletionDestinations/bearer/bearerTokenRef",
-                "/reviewCompletionDestinations/header.~1receiver/auth/secretRef"
+                "/reviewCompletionDestinations/receiver.~1key/hmacSha256KeyRef",
+                "/reviewCompletionDestinations/receiver.~1key/previousHmacSha256KeyRef"
             ]
         );
         assert!(!report.render_human().contains("secret:file/"));
@@ -3312,10 +3192,6 @@ pub enum RuntimeConfigError {
         pointer: String,
         reason: String,
     },
-    #[error(
-        "{path} must name exactly one completion secret, in a header the runtime does not reserve"
-    )]
-    InvalidReviewCompletionAuth { path: String, pointer: String },
     #[error("{path} {reason}")]
     InvalidReviewCompletionDestination {
         path: String,
@@ -3371,7 +3247,6 @@ impl RuntimeConfigError {
             // Located by `pointer` itself.
             Self::Load(_)
             | Self::BindingSecret { .. }
-            | Self::InvalidReviewCompletionAuth { .. }
             | Self::InvalidReviewCompletionDestination { .. }
             | Self::InvalidContextProvider { .. }
             | Self::InvalidTaskAuthority { .. }
@@ -3395,7 +3270,6 @@ impl RuntimeConfigError {
         match self {
             Self::Load(error) => error.deciding_diagnostic().path.clone(),
             Self::BindingSecret { pointer, .. }
-            | Self::InvalidReviewCompletionAuth { pointer, .. }
             | Self::InvalidReviewCompletionDestination { pointer, .. }
             | Self::InvalidContextProvider { pointer, .. }
             | Self::InvalidTaskAuthority { pointer, .. }
@@ -3447,9 +3321,6 @@ impl RuntimeConfigError {
             Self::InvalidAuditDestination(_) => "casework.runtime.invalid-audit",
             Self::InvalidContextProviders => "casework.runtime.context-providers-mismatch",
             Self::InvalidContextProvider { .. } => "casework.runtime.invalid-context-provider",
-            Self::InvalidReviewCompletionAuth { .. } => {
-                "casework.runtime.invalid-review-completion-auth"
-            }
             Self::InvalidReviewCompletionDestination { .. } => {
                 "casework.runtime.invalid-review-completion-destination"
             }
@@ -3524,9 +3395,6 @@ impl RuntimeConfigError {
             }
             Self::InvalidContextProvider { .. } => {
                 "Correct the context provider member so it meets the rule the message names."
-            }
-            Self::InvalidReviewCompletionAuth { .. } => {
-                "Configure exactly one of bearerTokenRef and auth.secretRef, and name in auth.header only a header the runtime does not reserve."
             }
             Self::InvalidReviewCompletionDestination { .. } => {
                 "Give the destination a non-empty id and an https URL with a host, or an http URL on a loopback literal (127.0.0.0/8, ::1 or ::ffff:127.0.0.0/104) for local development."

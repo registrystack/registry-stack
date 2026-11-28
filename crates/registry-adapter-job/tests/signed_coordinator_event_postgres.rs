@@ -35,17 +35,47 @@ use registry_adapter_job::signed_coordinator_event::{
 };
 use registry_adapter_job::store::{self, ItemStatus};
 use registry_platform_config::{SecretProvider, SecretResolver};
-use registry_platform_hooks::receiver::{verify_delivery, DeliveryFreshness, SignedDelivery};
-use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
+use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
+use registry_platform_hooks::receiver::{verify_hook_delivery, DeliveryFreshness, HookDelivery};
+use registry_platform_hooks::HookEnvelope;
 use registry_platform_httputil::destination::{DestinationProfile, EventDestinationPolicy};
 use serde_json::json;
 use tokio_postgres::{Config as PgConfig, NoTls};
 
 const KEY: &[u8] = &[0x5a; 32];
+const REVISED_KEY: &[u8] = &[0x6a; 32];
+
+fn delivery_keys(key: &[u8]) -> DeliveryKeys {
+    DeliveryKeys::new(DeliveryKey::new(key).unwrap(), None).unwrap()
+}
+
 const TARGET: &str = "/v1/events/case-ingestion/submitted";
 const SOURCE: &str = "urn:registrystack:adapter:synthetic";
 const EVENT_TYPE: &str = "case.submitted";
 const DATA_SCHEMA: &str = "urn:example:case-submitted:v1";
+
+fn trigger_key(trigger: &str) -> &'static [u8] {
+    if trigger == "submitted" {
+        KEY
+    } else {
+        REVISED_KEY
+    }
+}
+
+fn verify_event(headers: &HeaderMap, body: &[u8], key: &[u8]) -> HookEnvelope {
+    verify_hook_delivery(
+        HookDelivery {
+            headers: headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_bytes())),
+            body,
+            keys: &delivery_keys(key),
+        },
+        DeliveryFreshness::default_at(SystemTime::now()),
+    )
+    .expect("the job sent a valid platform signature")
+    .envelope
+}
 
 #[derive(Clone, Default)]
 struct Receiver {
@@ -58,28 +88,7 @@ async fn admit(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let pairs = headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_bytes()))
-        .collect::<Vec<_>>();
-    let verified = verify_delivery(
-        SignedDelivery {
-            method: "POST",
-            request_target: TARGET,
-            headers: pairs,
-            body: &body,
-            key: KEY,
-        },
-        DeliveryFreshness::CallerEnforced,
-    )
-    .expect("the job sent a valid platform signature");
-    let envelope = HookEnvelope::from_canonical_bytes(&body, &EnvelopeLimits::default())
-        .expect("the job sent a canonical hook envelope");
-    assert_eq!(verified.id, envelope.id);
-    assert_eq!(verified.source, envelope.source);
-    assert_eq!(verified.event_type, envelope.event_type);
-    assert_eq!(verified.data_schema, envelope.dataschema);
-    assert_eq!(verified.idempotency_key, envelope.id);
+    let envelope = verify_event(&headers, &body, KEY);
 
     let mut runs = receiver.runs.lock().expect("the receiver run lock");
     let first = !runs.contains_key(&envelope.id);
@@ -180,7 +189,7 @@ async fn runtime_binding_activates_the_signed_destination_without_fallback() {
         "coordinator-test": {
             "type": "signed-coordinator-event",
             "baseUrl": format!("http://127.0.0.1:{}/", address.port()),
-            "signingKeyRef": format!("secret:env/{KEY_ENV}"),
+            "hmacSha256KeyRef": format!("secret:env/{KEY_ENV}"),
             "attemptTimeoutMilliseconds": 2000
         }
     });
@@ -256,7 +265,7 @@ async fn a_lost_signed_event_answer_recovers_one_run_through_the_job_store() {
         .expect("the loopback event policy freezes"),
     );
     let connector = Arc::new(
-        CoordinatorEventConnector::new(policy, SOURCE, KEY.to_vec(), Duration::from_secs(2))
+        CoordinatorEventConnector::new(policy, SOURCE, Duration::from_secs(2))
             .expect("the signed event connector freezes"),
     );
     let fixture = job_fixture::JobFixture::start(
@@ -273,9 +282,14 @@ async fn a_lost_signed_event_answer_recovers_one_run_through_the_job_store() {
     .await;
     let program =
         compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the job compiles");
-    let event_receiver =
-        CoordinatorEventReceiver::new("case-ingestion", "submitted", EVENT_TYPE, DATA_SCHEMA)
-            .expect("the primary receiver freezes");
+    let event_receiver = CoordinatorEventReceiver::new(
+        "case-ingestion",
+        "submitted",
+        EVENT_TYPE,
+        DATA_SCHEMA,
+        delivery_keys(KEY),
+    )
+    .expect("the primary receiver freezes");
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(event_receiver, [0x11; 32]),
@@ -349,7 +363,6 @@ async fn pending_job_version_drift_stops_before_wire_and_restore_recovers() {
                 .expect("the event policy freezes"),
             ),
             SOURCE,
-            KEY.to_vec(),
             Duration::from_secs(2),
         )
         .expect("the signed event connector freezes"),
@@ -371,8 +384,14 @@ async fn pending_job_version_drift_stops_before_wire_and_restore_recovers() {
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(
-            CoordinatorEventReceiver::new("case-ingestion", "submitted", EVENT_TYPE, DATA_SCHEMA)
-                .expect("the primary receiver freezes"),
+            CoordinatorEventReceiver::new(
+                "case-ingestion",
+                "submitted",
+                EVENT_TYPE,
+                DATA_SCHEMA,
+                delivery_keys(KEY),
+            )
+            .expect("the primary receiver freezes"),
             [0x11; 32],
         ),
         None,
@@ -481,7 +500,6 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
                 .expect("the event policy freezes"),
             ),
             SOURCE,
-            KEY.to_vec(),
             Duration::from_secs(2),
         )
         .expect("the signed event connector freezes"),
@@ -489,8 +507,14 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(
-            CoordinatorEventReceiver::new("case-ingestion", "submitted", EVENT_TYPE, DATA_SCHEMA)
-                .expect("the primary receiver freezes"),
+            CoordinatorEventReceiver::new(
+                "case-ingestion",
+                "submitted",
+                EVENT_TYPE,
+                DATA_SCHEMA,
+                delivery_keys(KEY),
+            )
+            .expect("the primary receiver freezes"),
             [0x11; 32],
         ),
         None,
@@ -684,14 +708,18 @@ async fn coordinator_item_and_deployment_failures_never_fall_back() {
                 .expect("the problem event policy freezes"),
             ),
             SOURCE,
-            KEY.to_vec(),
             Duration::from_secs(2),
         )
         .expect("the problem connector freezes"),
     );
-    let event_receiver =
-        CoordinatorEventReceiver::new("case-ingestion", "submitted", EVENT_TYPE, DATA_SCHEMA)
-            .expect("the primary receiver freezes");
+    let event_receiver = CoordinatorEventReceiver::new(
+        "case-ingestion",
+        "submitted",
+        EVENT_TYPE,
+        DATA_SCHEMA,
+        delivery_keys(KEY),
+    )
+    .expect("the primary receiver freezes");
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(event_receiver, [0x11; 32]),
@@ -772,21 +800,8 @@ async fn scripted(
     headers: HeaderMap,
     body: Bytes,
 ) -> axum::response::Response {
-    let pairs = headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_bytes()))
-        .collect::<Vec<_>>();
-    verify_delivery(
-        SignedDelivery {
-            method: "POST",
-            request_target: uri.path(),
-            headers: pairs,
-            body: &body,
-            key: KEY,
-        },
-        DeliveryFreshness::CallerEnforced,
-    )
-    .expect("the job sent a valid platform signature");
+    let trigger = uri.path().rsplit('/').next().unwrap();
+    verify_event(&headers, &body, trigger_key(trigger));
     receiver
         .targets
         .lock()
@@ -853,23 +868,34 @@ async fn scripted_destination(
                 .expect("the event policy freezes"),
             ),
             SOURCE,
-            KEY.to_vec(),
             Duration::from_secs(2),
         )
         .expect("the signed event connector freezes"),
     );
     let revised = revised_trigger.then(|| {
         SignedCoordinatorEventReceiver::new(
-            CoordinatorEventReceiver::new("case-ingestion", "revised", "case.revised", DATA_SCHEMA)
-                .expect("the revised receiver freezes"),
+            CoordinatorEventReceiver::new(
+                "case-ingestion",
+                "revised",
+                "case.revised",
+                DATA_SCHEMA,
+                delivery_keys(REVISED_KEY),
+            )
+            .expect("the revised receiver freezes"),
             [0x22; 32],
         )
     });
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(
-            CoordinatorEventReceiver::new("case-ingestion", "submitted", EVENT_TYPE, DATA_SCHEMA)
-                .expect("the primary receiver freezes"),
+            CoordinatorEventReceiver::new(
+                "case-ingestion",
+                "submitted",
+                EVENT_TYPE,
+                DATA_SCHEMA,
+                delivery_keys(KEY),
+            )
+            .expect("the primary receiver freezes"),
             [0x11; 32],
         ),
         revised,
@@ -1365,29 +1391,13 @@ async fn admitting(
     headers: HeaderMap,
     body: Bytes,
 ) -> axum::response::Response {
-    let pairs = headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_bytes()))
-        .collect::<Vec<_>>();
-    verify_delivery(
-        SignedDelivery {
-            method: "POST",
-            request_target: uri.path(),
-            headers: pairs,
-            body: &body,
-            key: KEY,
-        },
-        DeliveryFreshness::CallerEnforced,
-    )
-    .expect("the job sent a valid platform signature");
-    let envelope = HookEnvelope::from_canonical_bytes(&body, &EnvelopeLimits::default())
-        .expect("the job sent a canonical hook envelope");
     let trigger = uri
         .path()
         .rsplit('/')
         .next()
         .expect("the path names a trigger")
         .to_string();
+    let envelope = verify_event(&headers, &body, trigger_key(&trigger));
     receiver
         .requests
         .lock()
@@ -1467,8 +1477,14 @@ async fn start_admitting_receiver(
 fn revision_destination(base_url: &str, revised: &str) -> SignedCoordinatorEventDestination {
     let receiver = |trigger: &str, event_type: &str| {
         SignedCoordinatorEventReceiver::new(
-            CoordinatorEventReceiver::new("case-ingestion", trigger, event_type, DATA_SCHEMA)
-                .expect("the receiver freezes"),
+            CoordinatorEventReceiver::new(
+                "case-ingestion",
+                trigger,
+                event_type,
+                DATA_SCHEMA,
+                delivery_keys(trigger_key(trigger)),
+            )
+            .expect("the receiver freezes"),
             receiver_identity(&CoordinatorReceiverDigestContext {
                 binding: REVISION_BINDING,
                 base_url,
@@ -1493,7 +1509,6 @@ fn revision_destination(base_url: &str, revised: &str) -> SignedCoordinatorEvent
                 .expect("the event policy freezes"),
             ),
             SOURCE,
-            KEY.to_vec(),
             Duration::from_secs(2),
         )
         .expect("the signed event connector freezes"),

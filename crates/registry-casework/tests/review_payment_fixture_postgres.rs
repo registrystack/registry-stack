@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -11,7 +12,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
-    Json, Router,
+    Router,
 };
 use registry_casework::{
     router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
@@ -27,6 +28,9 @@ use registry_casework_core::{
     CASEWORK_PROFILE_HEADER, REVIEW_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_crypto::delivery_signature::{
+    sign, verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
+};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
@@ -38,7 +42,7 @@ use uuid::Uuid;
 const ISSUER: &str = "https://payments.example.test";
 const BATCH_ID: &str = "batch-2026-09";
 const AUDIENCE: &str = "urn:test:casework-payment-review";
-const RECEIVER_TOKEN: &str = "payment-sender-secret-canary";
+const RECEIVER_KEY: &str = "synthetic-payment-signing-key!!!";
 const RECEIVER_BINDING: &str = "payment-service-recipient-canary";
 const PRIVATE_REFERENCE: &str = "private-payment-reference-canary";
 
@@ -114,30 +118,71 @@ struct ReceiverHttpState {
     store: ReceiverStore,
 }
 
+fn completion_keys(key: &str) -> DeliveryKeys {
+    DeliveryKeys::new(DeliveryKey::new(key.as_bytes()).unwrap(), None).unwrap()
+}
+
+fn signed_completion(
+    request: reqwest::RequestBuilder,
+    event: &ReviewCompletion,
+    key: &str,
+    binding: &str,
+) -> reqwest::RequestBuilder {
+    let body = serde_json::to_vec(event).unwrap();
+    let id = event.event_id.to_string();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let signature = sign(&completion_keys(key), &id, timestamp, &body).unwrap();
+    request
+        .header("accept", "application/json")
+        .header("content-type", "application/json")
+        .header("webhook-id", id)
+        .header("webhook-timestamp", timestamp.to_string())
+        .header("webhook-signature", signature)
+        .header("registry-recipient-binding", binding)
+        .body(body)
+}
+
 async fn receive_completion(
     State(state): State<ReceiverHttpState>,
     headers: HeaderMap,
-    Json(event): Json<ReviewCompletion>,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    let authenticated = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == format!("Bearer {RECEIVER_TOKEN}"));
-    if !authenticated {
+    let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
+    if header("registry-recipient-binding") != Some(RECEIVER_BINDING) {
         return StatusCode::UNAUTHORIZED;
     }
-    let intended_recipient = headers
-        .get("registry-recipient-binding")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == RECEIVER_BINDING);
-    if !intended_recipient {
-        return StatusCode::FORBIDDEN;
+    let (Some(id), Some(timestamp), Some(signature)) = (
+        header("webhook-id"),
+        header("webhook-timestamp"),
+        header("webhook-signature"),
+    ) else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    if verify(
+        &completion_keys(RECEIVER_KEY),
+        SignedContent {
+            id,
+            timestamp,
+            signature,
+            body: &body,
+        },
+        SystemTime::now(),
+        DELIVERY_TOLERANCE,
+    )
+    .is_err()
+    {
+        return StatusCode::UNAUTHORIZED;
     }
-    let idempotency_matches = headers
-        .get("idempotency-key")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == event.event_id.to_string());
-    if !idempotency_matches {
+    if header("content-type") != Some("application/json") {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE;
+    }
+    let Ok(event) = serde_json::from_slice::<ReviewCompletion>(&body) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    if id != event.event_id.to_string() {
         return StatusCode::BAD_REQUEST;
     }
 
@@ -769,12 +814,7 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
         completed_at: result.completed_at,
     };
     let completion_body = serde_json::to_string(&completion).expect("completion JSON");
-    for canary in [
-        RECEIVER_TOKEN,
-        RECEIVER_BINDING,
-        PRIVATE_REFERENCE,
-        BATCH_ID,
-    ] {
+    for canary in [RECEIVER_KEY, RECEIVER_BINDING, PRIVATE_REFERENCE, BATCH_ID] {
         assert!(!completion_body.contains(canary));
     }
 
@@ -787,34 +827,31 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
             }),
     )
     .await;
-    let wrong_sender = client
-        .post(format!("{}/completion", receiver.base_url))
-        .bearer_auth("wrong-sender-secret-canary")
-        .header("registry-recipient-binding", RECEIVER_BINDING)
-        .header("idempotency-key", completion.event_id.to_string())
-        .json(&completion)
-        .send()
-        .await
-        .expect("wrong sender completion response");
+    let wrong_sender = signed_completion(
+        client.post(format!("{}/completion", receiver.base_url)),
+        &completion,
+        "synthetic-invalid-signing-key!!!",
+        RECEIVER_BINDING,
+    )
+    .send()
+    .await
+    .expect("wrong sender completion response");
     assert_eq!(wrong_sender.status(), StatusCode::UNAUTHORIZED);
     assert!(wrong_sender
         .bytes()
         .await
         .expect("wrong sender body")
         .is_empty());
-    let wrong_recipient = client
-        .post(format!("{}/completion", receiver.base_url))
-        .bearer_auth(RECEIVER_TOKEN)
-        .header(
-            "registry-recipient-binding",
-            "different-payment-recipient-canary",
-        )
-        .header("idempotency-key", completion.event_id.to_string())
-        .json(&completion)
-        .send()
-        .await
-        .expect("wrong recipient completion response");
-    assert_eq!(wrong_recipient.status(), StatusCode::FORBIDDEN);
+    let wrong_recipient = signed_completion(
+        client.post(format!("{}/completion", receiver.base_url)),
+        &completion,
+        RECEIVER_KEY,
+        "different-payment-recipient-canary",
+    )
+    .send()
+    .await
+    .expect("wrong recipient completion response");
+    assert_eq!(wrong_recipient.status(), StatusCode::UNAUTHORIZED);
     assert!(wrong_recipient
         .bytes()
         .await
@@ -825,15 +862,15 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
         0
     );
 
-    let lost_ack = client
-        .post(format!("{}/completion", receiver.base_url))
-        .bearer_auth(RECEIVER_TOKEN)
-        .header("registry-recipient-binding", RECEIVER_BINDING)
-        .header("idempotency-key", completion.event_id.to_string())
-        .json(&completion)
-        .send()
-        .await
-        .expect("lost acknowledgement completion response");
+    let lost_ack = signed_completion(
+        client.post(format!("{}/completion", receiver.base_url)),
+        &completion,
+        RECEIVER_KEY,
+        RECEIVER_BINDING,
+    )
+    .send()
+    .await
+    .expect("lost acknowledgement completion response");
     assert_eq!(lost_ack.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(receiver_store.unmatched_count(), 1);
     receiver.stop().await;
@@ -846,15 +883,15 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
             }),
     )
     .await;
-    let duplicate = client
-        .post(format!("{}/completion", restarted_receiver.base_url))
-        .bearer_auth(RECEIVER_TOKEN)
-        .header("registry-recipient-binding", RECEIVER_BINDING)
-        .header("idempotency-key", completion.event_id.to_string())
-        .json(&completion)
-        .send()
-        .await
-        .expect("duplicate completion after receiver restart");
+    let duplicate = signed_completion(
+        client.post(format!("{}/completion", restarted_receiver.base_url)),
+        &completion,
+        RECEIVER_KEY,
+        RECEIVER_BINDING,
+    )
+    .send()
+    .await
+    .expect("duplicate completion after receiver restart");
     assert_eq!(duplicate.status(), StatusCode::NO_CONTENT);
     assert_eq!(
         receiver_store.inbox.lock().expect("receiver inbox").len(),
@@ -960,11 +997,11 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
 
     let diagnostics = receiver_store.diagnostics();
     for canary in [
-        RECEIVER_TOKEN,
+        RECEIVER_KEY,
         RECEIVER_BINDING,
         PRIVATE_REFERENCE,
         BATCH_ID,
-        "wrong-sender-secret-canary",
+        "synthetic-invalid-signing-key!!!",
         "different-payment-recipient-canary",
     ] {
         assert!(!String::from_utf8_lossy(&first_feed_bytes).contains(canary));

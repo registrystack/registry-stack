@@ -408,7 +408,7 @@ The same producer reads `GET /v1/review-requests/{requestId}/result` or its resu
 A `ReviewResult` repeats the subject, policy and submission digest, and carries a terminal status such as `approved`, `rejected`, `answered`, `cancelled` or `superseded`.
 A decided result names its `outcome` and any `publicReason`; a cancelled or superseded one carries neither.
 
-A completion destination, when configured, receives an authenticated wake with event, request and result identifiers.
+A completion destination, when configured, receives a Standard Webhooks-signed wake with event, request and result identifiers.
 Delivery is at-least-once.
 A wake carries no decision payload; the producer fetches the result and authorises any later mutation independently.
 [Receive Casework completion wakes](../casework-completion-receivers/) defines the wake.

@@ -58,7 +58,6 @@ use crate::store::PostgresStore;
 
 const DESTINATION_BINDING_SCHEMA: &str = "registry.documents-hook-destinations/v1";
 const COMPILED_HOOK_SCHEMA: &str = "registry.documents-hooks/v1";
-const IDEMPOTENCY_DOMAIN: &[u8] = b"documents-hook-idempotency-v1";
 /// The refusal code retained with a delivery whose destination answered with
 /// a proposal. Each dotted segment is lowercase kebab-case.
 const PROPOSAL_UNSUPPORTED_CODE: &str = "documents.hook.proposal-unsupported";
@@ -74,7 +73,7 @@ const MAXIMUM_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const _: () = assert!(MAXIMUM_PAYLOAD_BYTES <= MAX_DESTINATION_REQUEST_BODY_BYTES);
 
 /// Value-free refusal from hook compilation or deployment activation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HookActivationError {
     #[error("the Document Store hook declaration is invalid")]
     InvalidDeclaration,
@@ -101,8 +100,8 @@ pub enum HookActivationError {
     InvalidDestination,
     #[error("a Document Store hook destination widens the fixed delivery budget")]
     DeliveryBudgetWidening,
-    #[error("a Document Store hook signing secret is unavailable or invalid")]
-    InvalidSigningMaterial,
+    #[error("{}", signing_material_refusal(.0))]
+    InvalidSigningMaterial(#[source] UrlHookActivationError),
     #[error("the Document Store hook runtime identity is invalid")]
     InvalidIdentity,
 }
@@ -691,7 +690,6 @@ impl ActivatedHooks {
                 seams,
                 DeliveryConfig {
                     schema: self.schema.clone(),
-                    idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
                     delivery_source: self.delivery_source.clone(),
                 },
             ),
@@ -725,10 +723,60 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
             HookActivationError::DeliveryBudgetWidening
         }
         UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
-        UrlHookActivationError::InvalidSigningMaterial => {
-            HookActivationError::InvalidSigningMaterial
+        UrlHookActivationError::SigningKeyUnavailable { .. }
+        | UrlHookActivationError::InvalidSigningKey { .. }
+        | UrlHookActivationError::RepeatedSigningKey { .. } => {
+            HookActivationError::InvalidSigningMaterial(error)
         }
     }
+}
+
+fn signing_material_refusal(error: &UrlHookActivationError) -> String {
+    match error {
+        UrlHookActivationError::SigningKeyUnavailable {
+            destination,
+            member,
+            reason,
+        } => format!(
+            "destinations.hooks.{destination}.{member}: {reason}. {}",
+            reason.suggested_action()
+        ),
+        UrlHookActivationError::InvalidSigningKey {
+            destination,
+            member,
+            length,
+            trailing_newline,
+            reason,
+        } => match reason.code() {
+            "previous-key-equals-current" => {
+                let current = format!("destinations.hooks.{destination}.hmacSha256KeyRef");
+                let previous = format!("destinations.hooks.{destination}.{member}");
+                format!(
+                    "{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."
+                )
+            }
+            "key-is-secret-text" => format!(
+                "destinations.hooks.{destination}.{member}: the delivery key starts with whsec_. Supply the exact key bytes without the whsec_ encoding."
+            ),
+            _ => format!(
+                "destinations.hooks.{destination}.{member} has {length} bytes (trailing newline: {trailing_newline}). Supply 32 to 64 exact key bytes."
+            ),
+        },
+        UrlHookActivationError::RepeatedSigningKey { first, second } => {
+            shared_signing_key_refusal(first, second)
+        }
+        UrlHookActivationError::DeliveryBudgetWidening | UrlHookActivationError::InvalidDestination => {
+            error.to_string()
+        }
+    }
+}
+
+fn shared_signing_key_refusal(first: &str, second: &str) -> String {
+    let first = format!("destinations.hooks.{first}");
+    let second = format!("destinations.hooks.{second}");
+    format!(
+        "{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there."
+    )
 }
 
 /// The delays between attempts: from 30 seconds, doubling, capped at one
@@ -885,6 +933,18 @@ pub struct HookDeliveryService {
 impl HookDeliveryService {
     pub async fn deliver_once(&self) -> Result<DeliveryOutcome, DeliveryError> {
         self.inner.deliver_once().await
+    }
+
+    #[cfg(feature = "postgres-test")]
+    pub(crate) async fn replay_for_test(
+        &self,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+        generation: i64,
+    ) -> Result<i64, DeliveryError> {
+        self.inner
+            .replay(event_id, compiled_delivery_id, generation)
+            .await
     }
 
     pub async fn verify_retained_bindings(&self) -> Result<(), DeliveryError> {

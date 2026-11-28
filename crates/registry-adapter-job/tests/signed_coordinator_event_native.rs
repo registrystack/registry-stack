@@ -46,6 +46,7 @@ use registry_adapter_job::signed_coordinator_event::{
     SignedCoordinatorEventDestination, SignedCoordinatorEventReceiver,
 };
 use registry_adapter_job::store::{self, ItemStatus};
+use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use registry_platform_httputil::destination::{DestinationProfile, EventDestinationPolicy};
 use registry_platform_testing::{fixtures, TestActorKind, TestAuthorizationServer, TestClient};
@@ -53,6 +54,12 @@ use serde_json::{json, Value};
 use tokio_postgres::{Config as PgConfig, NoTls};
 
 const KEY: &[u8] = &[0x5a; 32];
+const REVISED_KEY: &[u8] = &[0x6a; 32];
+
+fn delivery_keys(key: &[u8]) -> DeliveryKeys {
+    DeliveryKeys::new(DeliveryKey::new(key).unwrap(), None).unwrap()
+}
+
 const WORKFLOW: &str = "register-household";
 const PRIMARY_TRIGGER: &str = "submission-received";
 const REVISED_TRIGGER: &str = "submission-revised";
@@ -410,7 +417,7 @@ impl NativeCoordinator {
                     "resultCheckSeconds": 900
                 }
             },
-            "eventSources": {"adapter": {"source": SOURCE, "signingKeyRef": "secret:file/event-key"}},
+            "eventSources": {"adapter": {"source": SOURCE, "hmacSha256KeyRef": "secret:file/event-key"}},
             "deployment": {
                 "databaseId": format!("adapter-native-{suffix}"), "runtimeRole": role,
                 "packages": [{"root": package, "expectedDigest": package_digest}],
@@ -750,14 +757,20 @@ fn maintained_destination(base_url: &str, policy_name: &str) -> SignedCoordinato
             .expect("the maintained event policy freezes"),
     );
     let connector = Arc::new(
-        CoordinatorEventConnector::new(policy, SOURCE, KEY.to_vec(), Duration::from_secs(3))
+        CoordinatorEventConnector::new(policy, SOURCE, Duration::from_secs(3))
             .expect("the maintained event connector freezes"),
     );
     SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(
-            CoordinatorEventReceiver::new(WORKFLOW, PRIMARY_TRIGGER, EVENT_TYPE, DATA_SCHEMA)
-                .expect("the maintained primary receiver freezes"),
+            CoordinatorEventReceiver::new(
+                WORKFLOW,
+                PRIMARY_TRIGGER,
+                EVENT_TYPE,
+                DATA_SCHEMA,
+                delivery_keys(KEY),
+            )
+            .expect("the maintained primary receiver freezes"),
             [0x11; 32],
         ),
         Some(SignedCoordinatorEventReceiver::new(
@@ -766,6 +779,7 @@ fn maintained_destination(base_url: &str, policy_name: &str) -> SignedCoordinato
                 REVISED_TRIGGER,
                 REVISED_EVENT_TYPE,
                 REVISED_DATA_SCHEMA,
+                delivery_keys(REVISED_KEY),
             )
             .expect("the maintained revised receiver freezes"),
             [0x12; 32],
@@ -886,7 +900,7 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
         .expect("the native event policy freezes"),
     );
     let connector = Arc::new(
-        CoordinatorEventConnector::new(policy, SOURCE, KEY.to_vec(), Duration::from_secs(3))
+        CoordinatorEventConnector::new(policy, SOURCE, Duration::from_secs(3))
             .expect("the native event connector freezes"),
     );
     let fixture = job_fixture::JobFixture::start(
@@ -903,9 +917,14 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
     configure_maintained_job(&fixture.job);
     let program = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
         .expect("the native job compiles");
-    let receiver =
-        CoordinatorEventReceiver::new(WORKFLOW, PRIMARY_TRIGGER, EVENT_TYPE, DATA_SCHEMA)
-            .expect("the native primary receiver freezes");
+    let receiver = CoordinatorEventReceiver::new(
+        WORKFLOW,
+        PRIMARY_TRIGGER,
+        EVENT_TYPE,
+        DATA_SCHEMA,
+        delivery_keys(KEY),
+    )
+    .expect("the native primary receiver freezes");
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(receiver, [0x11; 32]),
@@ -915,6 +934,7 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
                 REVISED_TRIGGER,
                 REVISED_EVENT_TYPE,
                 REVISED_DATA_SCHEMA,
+                delivery_keys(REVISED_KEY),
             )
             .expect("the revised receiver freezes"),
             [0x12; 32],
@@ -1194,7 +1214,7 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
         .expect("the native PostgreSQL event policy freezes"),
     );
     let connector = Arc::new(
-        CoordinatorEventConnector::new(policy, SOURCE, KEY.to_vec(), Duration::from_secs(3))
+        CoordinatorEventConnector::new(policy, SOURCE, Duration::from_secs(3))
             .expect("the native PostgreSQL event connector freezes"),
     );
     let fixture = job_fixture::JobFixture::start(
@@ -1214,9 +1234,14 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
         compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the SQL job compiles");
     activate_postgres_sources(&mut program, &source.resolver())
         .expect("the production PostgreSQL source host activates");
-    let receiver =
-        CoordinatorEventReceiver::new(WORKFLOW, PRIMARY_TRIGGER, EVENT_TYPE, DATA_SCHEMA)
-            .expect("the native primary receiver freezes");
+    let receiver = CoordinatorEventReceiver::new(
+        WORKFLOW,
+        PRIMARY_TRIGGER,
+        EVENT_TYPE,
+        DATA_SCHEMA,
+        delivery_keys(KEY),
+    )
+    .expect("the native primary receiver freezes");
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(receiver, [0x11; 32]),
@@ -1226,6 +1251,7 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
                 REVISED_TRIGGER,
                 REVISED_EVENT_TYPE,
                 REVISED_DATA_SCHEMA,
+                delivery_keys(REVISED_KEY),
             )
             .expect("the native revised receiver freezes"),
             [0x12; 32],

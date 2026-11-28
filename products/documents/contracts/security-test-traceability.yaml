@@ -313,6 +313,12 @@ entries:
       - {path: crates/registry-documents/src/hooks_tests.rs, name: an_observer_proposal_is_refused_with_a_kebab_case_code}
   - id: DOCUMENTS-SEC-53
     tests:
+      - {path: crates/registry-documents/src/config.rs, name: hook_signing_keys_report_both_destinations_when_their_keys_match}
+      - {path: crates/registry-documents/src/config.rs, name: hook_signing_keys_refuse_a_previous_key_equal_to_the_current_key}
+      - {path: crates/registry-documents/src/config.rs, name: hook_signing_keys_refuse_previous_key_secret_text}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_reports_invalid_hook_key_bytes_after_the_offline_reference_check}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_reports_an_empty_hook_key_file}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_refuses_a_project_hook_whose_destination_is_not_bound}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains}
       - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_hook_whose_destination_is_not_bound}

@@ -413,6 +413,7 @@ def job_feature_violations(metadata: dict) -> list[str]:
     signed = set(features.get("signed-coordinator-event", []))
     expected_signed = {
         f"dep:{CONNECTOR}",
+        "dep:registry-platform-crypto",
         "dep:registry-platform-httputil",
         f"{CONNECTOR}/coordinator-event",
     }

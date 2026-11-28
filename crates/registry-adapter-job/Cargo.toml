@@ -64,6 +64,7 @@ direct-breg = [
 # Enables only the job host's platform-signed Coordinator event
 # destination. No Coordinator crate or client is linked.
 signed-coordinator-event = [
+    "dep:registry-platform-crypto",
     "dep:registry-adapter-connectors",
     "dep:registry-platform-httputil",
     "registry-adapter-connectors/coordinator-event",

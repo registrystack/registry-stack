@@ -299,8 +299,12 @@ Prepare the source and one destination:
    narrowly scoped BReg credential.
    The `kobotoolbox-breg` example is the BReg project that matches the job's mapping and access
    profile.
-4. For the Coordinator job, configure the reviewed event trigger and workflow, provision its signing
-   key, and keep the host clock within 30 seconds of Coordinator's.
+4. For the Coordinator job, configure the reviewed workflow and its event triggers. Provision a separate
+   private file of 32 to 64 exact key bytes per trigger. Give each receiving Coordinator trigger
+   the same key file as the job uses for it.
+   Keep the host clock synchronized with Coordinator's. See
+   [Signed event to Coordinator](../../configure/adapter-jobs/#signed-event-to-coordinator)
+   for the runtime key references and rotation.
 
 Choose one destination before the first pass.
 Do not run both jobs against one form, and do not fall back from a refusal to the other destination.
