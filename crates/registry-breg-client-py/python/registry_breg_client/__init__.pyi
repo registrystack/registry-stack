@@ -236,9 +236,14 @@ def verify_hook_delivery(
     headers: Sequence[tuple[str, str]],
     body: bytes,
     key: bytes,
+    max_skew_seconds: int | None = None,
+    caller_enforced_freshness: bool = False,
 ) -> VerifiedHookDelivery:
     """Authenticate one exact Base Registry Engine Version 1 hook delivery.
-    Apply delivery-time skew and deduplication policy before acting on the body."""
+    The delivery time must be within 300 seconds of the receiver clock unless
+    `max_skew_seconds` (1 to 3600) names another window or
+    `caller_enforced_freshness` leaves the bound to the caller. A time outside
+    the window raises code `stale-delivery`. Deduplicate before acting on the body."""
     ...
 
 def event_record_view(arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:

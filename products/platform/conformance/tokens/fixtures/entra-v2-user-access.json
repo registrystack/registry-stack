@@ -1,0 +1,51 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "entra-v2-user-access",
+  "class": "positive",
+  "provider": "entra",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://learn.microsoft.com/en-us/entra/identity-platform/access-token-claims-reference",
+    "note": "Header typ is always JWT. The version 2.0 token carries azp and scp. aud is the API's own client ID, written here as the bound audience."
+  },
+  "header": {
+    "alg": "RS256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": {
+      "bind": "issuer"
+    },
+    "aud": {
+      "bind": "audience"
+    },
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "azp": "journey-app",
+    "scp": "journey.read",
+    "ver": "2.0",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 3600
+    }
+  },
+  "omits": [
+    "scope",
+    "roles",
+    "client_id",
+    "appid",
+    "registry_actor_kind"
+  ],
+  "notes": "The documentation gives no lifetime. 3600 seconds is a test choice."
+}

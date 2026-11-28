@@ -50,14 +50,17 @@ Body and key buffers must not use a shared backing store. Accepted buffers are
 copied before native verification so another worker cannot change the bytes
 being authenticated.
 
-The helper does not apply clock-skew or deduplication policy. Bound the returned
-`deliveryTime` against the receiver clock. `idempotencyKey` collapses automatic
+The helper refuses a delivery time more than 300 seconds from the receiver clock
+(code `stale-delivery`). Pass `maxSkewSeconds` (a whole number from 1 to 3600) for
+another window, or `callerEnforcedFreshness: true` to check only that the time is
+well formed and bound `deliveryTime` yourself, but not both. The helper applies no
+deduplication policy. `idempotencyKey` collapses automatic
 retries within one delivery generation; an effect that must remain once-only
 across operator replay uses a durable apply-once operation keyed by authenticated
 `source` plus `id`, or by an application business key, before acting on `body`.
 
 Refusal throws `BaseRegistryClientError` with kind `hook-verification` and a
-code from `missing-header`, `invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`.
+code from `missing-header`, `invalid-delivery-time`, `stale-delivery`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`.
 The message names the input to check and never includes a header value, body,
 or key.
 

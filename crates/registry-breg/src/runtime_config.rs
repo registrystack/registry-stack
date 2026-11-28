@@ -20,14 +20,15 @@ use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
     TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
-use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
+use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
 use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, AccessTokenAlgorithm, ClaimNames,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, public_jwks_document, AccessTokenAlgorithm,
+    ClaimNames, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    StaticJwksError, TokenVerifierConfig,
 };
 use registry_platform_yaml::{
     lookalike_local_id_pairs, Diagnostic, Report, RetiredApiVersion, Severity, Source, Url,
@@ -365,6 +366,8 @@ pub enum RuntimeConfigError {
     UnsafePackageRoot,
     #[error("runtime configuration contains an invalid OIDC binding")]
     InvalidOidc,
+    #[error("the static OIDC key set was refused: {0}")]
+    InvalidStaticJwks(StaticJwksError),
     #[error("the OIDC leeway must be a whole number of seconds from 0 to 300000 milliseconds")]
     InvalidOidcLeeway,
     #[error("runtime configuration contains an invalid audit binding")]
@@ -435,7 +438,7 @@ impl RuntimeConfigError {
             Self::InvalidPackage => "breg.runtime.invalid-package",
             Self::PackageRootUnavailable => "breg.runtime.package-root-unavailable",
             Self::UnsafePackageRoot => "breg.runtime.unsafe-package-root",
-            Self::InvalidOidc => "breg.runtime.invalid-oidc",
+            Self::InvalidOidc | Self::InvalidStaticJwks(_) => "breg.runtime.invalid-oidc",
             Self::InvalidOidcLeeway => "breg.runtime.invalid-oidc-leeway",
             Self::InvalidAudit => "breg.runtime.invalid-audit",
             Self::InvalidCursor => "breg.runtime.invalid-cursor",
@@ -477,7 +480,7 @@ impl RuntimeConfigError {
             Self::PlaintextDatabase => "/database/testOnlyPlaintext",
             Self::InvalidPackage => "/package",
             Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
-            Self::InvalidOidc => "/authentication/oidc",
+            Self::InvalidOidc | Self::InvalidStaticJwks(_) => "/authentication/oidc",
             Self::InvalidOidcLeeway => "/authentication/oidc/leewayMilliseconds",
             Self::InvalidAudit => "/audit",
             Self::InvalidCursor => "/cursor",
@@ -549,6 +552,8 @@ impl RuntimeConfigError {
             Self::InvalidOidc => {
                 "Correct authentication.oidc and authentication.authorityClaims: use an https issuer, loopback http, or set authentication.oidc.allowInsecureHttp: true for a declared non-loopback http issuer; keep values bounded without whitespace, list entries distinct, and claim names non-repeating."
             }
+            // The remedy is the cause's own text, which `diagnostics` states.
+            Self::InvalidStaticJwks(_) => "",
             Self::InvalidOidcLeeway => {
                 "Set authentication.oidc.leewayMilliseconds to a multiple of 1000 no greater than 300000."
             }
@@ -604,6 +609,7 @@ impl RuntimeConfigError {
         }
         let action = match self {
             Self::InvalidMetricsListener(cause) => cause.remedy(METRICS_NETWORK_EXPOSURE_KEY),
+            Self::InvalidStaticJwks(cause) => cause.to_string(),
             other => other.suggested_action().to_owned(),
         };
         let mut diagnostic = Diagnostic::error(self.code(), self.path(), self.to_string(), action);
@@ -1838,10 +1844,7 @@ impl PublicOrigin {
             .host()
             .trim_start_matches('[')
             .trim_end_matches(']');
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback());
+        let loopback = registry_platform_httputil::loopback::loopback_host(host).is_some();
         let scheme_allowed = match uri.scheme_str() {
             Some("https") => true,
             Some("http") => loopback,
@@ -2421,11 +2424,8 @@ fn validate_static_jwks(
     allowed_algorithm: AccessTokenAlgorithm,
     denied_kids: &[String],
 ) -> Result<JwkSet> {
-    let value = parse_json_strict(bytes).map_err(|_| RuntimeConfigError::InvalidOidc)?;
+    let value = public_jwks_document(bytes).map_err(RuntimeConfigError::InvalidStaticJwks)?;
     let object = value.as_object().ok_or(RuntimeConfigError::InvalidOidc)?;
-    if object.len() != 1 || !object.contains_key("keys") {
-        return Err(RuntimeConfigError::InvalidOidc);
-    }
     let keys = object
         .get("keys")
         .and_then(Value::as_array)
@@ -2433,9 +2433,8 @@ fn validate_static_jwks(
     if keys.is_empty() || keys.len() > MAX_LIST_ITEMS {
         return Err(RuntimeConfigError::InvalidOidc);
     }
-    let mut kids = HashSet::new();
     for key in keys {
-        validate_static_jwk(key, allowed_algorithm, denied_kids, &mut kids)?;
+        validate_static_jwk(key, allowed_algorithm, denied_kids)?;
     }
     serde_json::from_value::<JwkSet>(value).map_err(|_| RuntimeConfigError::InvalidOidc)
 }
@@ -2444,10 +2443,8 @@ fn validate_static_jwk(
     value: &Value,
     allowed_algorithm: AccessTokenAlgorithm,
     denied_kids: &[String],
-    kids: &mut HashSet<String>,
 ) -> Result<()> {
     let object = value.as_object().ok_or(RuntimeConfigError::InvalidOidc)?;
-    validate_static_jwk_members(object)?;
     validate_static_jwk_use(object)?;
     validate_static_jwk_key_ops(object)?;
     let kid = object
@@ -2455,7 +2452,7 @@ fn validate_static_jwk(
         .and_then(Value::as_str)
         .ok_or(RuntimeConfigError::InvalidOidc)?;
     validate_bounded_list(&[kid.to_owned()])?;
-    if denied_kids.iter().any(|denied| denied == kid) || !kids.insert(kid.to_owned()) {
+    if denied_kids.iter().any(|denied| denied == kid) {
         return Err(RuntimeConfigError::InvalidOidc);
     }
     if object.get("alg").and_then(Value::as_str) != Some(allowed_algorithm.jwa_name()) {
@@ -2476,19 +2473,6 @@ fn validate_static_jwk(
         return Err(RuntimeConfigError::InvalidOidc);
     }
     validate_static_jwk_shape(object, allowed_algorithm)?;
-    Ok(())
-}
-
-fn validate_static_jwk_members(object: &Map<String, Value>) -> Result<()> {
-    const ALLOWED: &[&str] = &[
-        "kty", "kid", "alg", "use", "key_ops", "crv", "x", "y", "n", "e",
-    ];
-    if object
-        .keys()
-        .any(|member| !ALLOWED.contains(&member.as_str()))
-    {
-        return Err(RuntimeConfigError::InvalidOidc);
-    }
     Ok(())
 }
 

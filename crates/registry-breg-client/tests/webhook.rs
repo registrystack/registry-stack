@@ -1,7 +1,14 @@
-use registry_breg_client::{verify_hook_delivery, BRegHookDelivery, BRegHookVerificationError};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use registry_breg_client::{
+    verify_hook_delivery, verify_hook_delivery_at, BRegHookDelivery, BRegHookFreshness,
+    BRegHookVerificationError,
+};
 
 const KEY: &[u8] = b"webhook-delivery-signing-key-0123456789abcdef";
 const BODY: &[u8] = br#"{"entity":"case","values":{"label":"value"}}"#;
+/// Unix seconds of the vector's signed delivery time, 2026-08-30T00:00:01Z.
+const DELIVERY_EPOCH: u64 = 1_788_048_001;
 const SIGNATURE: &str = "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM";
 
 fn headers() -> Vec<(String, String)> {
@@ -44,7 +51,22 @@ fn delivery<'a>(
         headers,
         body,
         key,
+        freshness: BRegHookFreshness::CallerEnforced,
     }
+}
+
+fn delivery_with<'a>(
+    headers: &'a [(String, String)],
+    freshness: BRegHookFreshness,
+) -> BRegHookDelivery<'a> {
+    BRegHookDelivery {
+        freshness,
+        ..delivery(headers, BODY, KEY)
+    }
+}
+
+fn at(offset_seconds: i64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(DELIVERY_EPOCH.checked_add_signed(offset_seconds).unwrap())
 }
 
 fn set_header(headers: &mut [(String, String)], name: &str, value: impl Into<String>) {
@@ -58,7 +80,11 @@ fn set_header(headers: &mut [(String, String)], name: &str, value: impl Into<Str
 #[test]
 fn fixed_vector_verifies_and_returns_exact_delivery() {
     let headers = headers();
-    let verified = verify_hook_delivery(delivery(&headers, BODY, KEY)).unwrap();
+    let verified = verify_hook_delivery_at(
+        delivery_with(&headers, BRegHookFreshness::DefaultWindow),
+        at(0),
+    )
+    .unwrap();
 
     assert_eq!(verified.id, "00000000-0000-4000-8000-000000000001");
     assert_eq!(
@@ -198,4 +224,64 @@ fn invalid_key_names_the_key_configuration_fix() {
         "the Base Registry Engine hook verification key is too short; configure a key of at least 32 bytes"
     );
     assert!(!error.to_string().contains("short-key"));
+}
+
+#[test]
+fn the_default_window_is_300_seconds_in_both_directions() {
+    let headers = headers();
+    let default = || delivery_with(&headers, BRegHookFreshness::DefaultWindow);
+    assert_eq!(
+        BRegHookFreshness::default(),
+        BRegHookFreshness::DefaultWindow
+    );
+    for offset in [299, -299, 0] {
+        verify_hook_delivery_at(default(), at(offset)).expect("inside the window");
+    }
+    for offset in [301, -301] {
+        let error = verify_hook_delivery_at(default(), at(offset)).unwrap_err();
+        assert_eq!(error, BRegHookVerificationError::StaleDelivery, "{offset}");
+        assert_eq!(error.code(), "stale-delivery");
+    }
+}
+
+#[test]
+fn the_system_clock_default_refuses_the_old_fixed_vector() {
+    let headers = headers();
+    assert_eq!(
+        verify_hook_delivery(delivery_with(&headers, BRegHookFreshness::DefaultWindow)),
+        Err(BRegHookVerificationError::StaleDelivery)
+    );
+}
+
+#[test]
+fn a_named_window_replaces_the_default() {
+    let headers = headers();
+    let within = |skew| delivery_with(&headers, BRegHookFreshness::Within { skew });
+    let ten = Duration::from_secs(10);
+    verify_hook_delivery_at(within(ten), at(10)).expect("at the edge");
+    assert_eq!(
+        verify_hook_delivery_at(within(ten), at(11)),
+        Err(BRegHookVerificationError::StaleDelivery)
+    );
+    verify_hook_delivery_at(within(Duration::from_secs(3600)), at(3600)).expect("wide window");
+}
+
+#[test]
+fn caller_enforced_freshness_accepts_a_year_old_delivery() {
+    let headers = headers();
+    let year = 365 * 24 * 3600;
+    verify_hook_delivery_at(
+        delivery_with(&headers, BRegHookFreshness::CallerEnforced),
+        at(year),
+    )
+    .expect("the caller owns the window");
+}
+
+#[test]
+fn stale_delivery_names_the_clock_fix() {
+    let error = BRegHookVerificationError::StaleDelivery;
+    assert_eq!(
+        error.to_string(),
+        "the Base Registry Engine hook delivery time is outside the freshness window; check the receiver clock, or pass a wider window"
+    );
 }

@@ -53,7 +53,12 @@ def _verify_webhook_request(
     # generation and attempt are positive decimals. The checks below apply this
     # receiver's own contract and clock policy to the authenticated values.
     verified = breg.verify_hook_delivery(
-        method="POST", path=path, headers=header_pairs, body=body, key=key
+        method="POST",
+        path=path,
+        headers=header_pairs,
+        body=body,
+        key=key,
+        caller_enforced_freshness=True,
     )
     headers: dict[str, str] = {}
     for name, value in header_pairs:

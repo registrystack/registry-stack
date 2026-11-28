@@ -493,9 +493,21 @@ The residuals refer to these obligations by number.
    Loopback HTTP is accepted for an issuer; anything else needs
    `authentication.oidc.allowInsecureHttp: true`, which is logged at startup and reported by
    `bregctl doctor` (`BREG-RES-17`).
-   {/* Evidence: crates/registry-breg/src/runtime_config.rs, PlaintextDatabase;
+   Loopback means an address in `127.0.0.0/8`, `::1`, an IPv4-mapped form of a `127.0.0.0/8`
+   address, or the exact name `localhost`.
+   A pinned key set (`authentication.oidc.jwksSource.type: static`) holds public keys only.
+   BReg refuses a key that carries a private or symmetric member (`d`, `p`, `q`, `dp`, `dq`, `qi`,
+   `oth`, `k`), a repeated member name, a missing or repeated `kid`, or a key that does not match
+   `allowedAlgorithm`.
+   It ignores members it does not name, such as `x5c` or `ext`.
+   A refusal names the rule and the key's position, never a value.
+   {/* Evidence: crates/registry-breg/src/runtime_config.rs, PlaintextDatabase,
+        validate_static_jwks, PublicOrigin::parse;
         crates/registry-breg/tests/runtime_config.rs,
-        non_loopback_http_issuer_refusal_names_the_opt_in;
+        non_loopback_http_issuer_refusal_names_the_opt_in,
+        static_jwks_validation_refuses_unsafe_documents_value_free,
+        a_static_key_set_with_unknown_public_members_loads,
+        public_origin_accepts_only_explicit_web_origins_and_redacts_debug;
         crates/registry-bregctl/src/doctor.rs, insecure_http_warning. */}
 8. Keep the metrics listener private.
    `metricsListener.bind` must be a loopback or private address; it carries no authentication.

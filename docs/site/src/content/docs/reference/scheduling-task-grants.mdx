@@ -97,7 +97,7 @@ Inside the transaction, after every lock wait and immediately before commit, Reg
 A credential that expires after the status answer cannot take capacity through a delayed transaction.
 
 {/* Evidence: crates/registry-scheduling/src/service.rs
-    the_offline_path_accepts_only_an_unexpired_grant_with_at_most_fifteen_minutes_left;
+    the_offline_path_tells_a_grant_with_too_much_lifetime_from_an_expired_one;
     crates/registry-platform-oidc/src/authorization_claims.rs
     expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline;
     crates/registry-scheduling/tests/postgres_commitments.rs
@@ -127,6 +127,8 @@ The answer is a fresh observation, not a distributed transaction with the author
 
 `taskGrantStatus: unchecked-final-fifteen-minutes` selects the offline path.
 No authority is asked, no revocation is observed, and Registry Scheduling accepts a grant only while it is unexpired with no more than 900 seconds remaining at request entry.
+An unexpired grant with more than 900 seconds remaining answers `grant.lifetime-too-long`, so the caller knows to present a grant that expires sooner. An expired grant answers `operation.not-authorized`.
+The lifetime answer follows the bounds match: a caller with no grant, or whose grant does not cover the offering, still answers `operation.not-authorized`. A listed authority never answers `grant.lifetime-too-long`.
 A list of authorities disables that path for every source, including an unlisted one, which is refused even with less than 15 minutes left.
 The token does not name its authorisation mode, so the final 15 minutes of an originally deferred grant can use the offline path on a deployment that writes the keyword.
 List the task authorities for every deployment that accepts deferred grants.

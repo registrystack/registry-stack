@@ -280,8 +280,18 @@ pub async fn relation_exists(client: &impl GenericClient, relation: &str) -> Res
     Ok(row.get(1))
 }
 
+/// Lowest `server_version_num` every Registry Stack product that uses this
+/// ledger accepts (PostgreSQL 17).
+///
+/// The recorded reason is the maintained database support floor
+/// (`README.md`). The one technical reason found is BReg's: its closed-catalog
+/// check expects every managed table to grant the MAINTAIN privilege, which
+/// PostgreSQL introduced in version 17
+/// (`registry-breg/src/postgres/schema.rs`, `MIN_POSTGRES_VERSION_NUM`).
+pub const MINIMUM_SERVER_VERSION_NUM: i32 = 170_000;
+
 fn verify_postgres_version(version_num: i32) -> Result<(), Error> {
-    if version_num < 170_000 {
+    if version_num < MINIMUM_SERVER_VERSION_NUM {
         return Err(Error::UnsupportedPostgres);
     }
     Ok(())
@@ -1017,6 +1027,11 @@ mod tests {
         for version in [170_000, 170_011, 180_000] {
             assert!(verify_postgres_version(version).is_ok());
         }
+    }
+
+    #[test]
+    fn postgres_floor_constant_is_version_17() {
+        assert_eq!(MINIMUM_SERVER_VERSION_NUM, 170_000);
     }
 
     #[test]

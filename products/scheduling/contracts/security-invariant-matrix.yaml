@@ -56,7 +56,9 @@ invariants:
       capacity transaction and receipt replay, without holding a database
       lock, and refuses a grant from an unlisted source rather than falling
       back to the offline path. The unchecked-final-fifteen-minutes keyword
-      admits only grants with at most 900 seconds remaining. The transaction
+      admits only grants with at most 900 seconds remaining, and answers an
+      unexpired grant with more left with grant.lifetime-too-long once the
+      bounds have matched. The transaction
       re-checks the earlier of the verified access-token and grant
       deadlines after every lock wait and immediately before commit. Status is
       an observation, not a distributed transaction: withdrawal after a

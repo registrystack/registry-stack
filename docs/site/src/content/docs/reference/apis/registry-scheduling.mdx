@@ -164,7 +164,9 @@ also obtains a fresh exact answer from the authority selected by the signed sour
 commitment and idempotent receipt replay. The authority must say the grant is active and reproduce its
 exact identity, bounds, signed subjects, and deadline. An inactive,
 mismatched, unlisted, or incompletely bound grant answers `operation.not-authorized`; an authority or service
-credential outage, including an unusable authority response, answers `service.unavailable`. Positive answers
+credential outage, including an unusable authority response, answers `service.unavailable`. On the offline path
+(`unchecked-final-fifteen-minutes`), an unexpired grant with more than 900 seconds left answers
+`grant.lifetime-too-long` once its bounds have matched; an expired grant answers `operation.not-authorized`. Positive answers
 are not cached, and the complete attempt is limited to ten seconds. No capacity lock is held during the outbound call.
 This is a fresh observation rather than a distributed transaction: withdrawal after a positive answer can race
 the in-flight local commit.

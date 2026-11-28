@@ -15,6 +15,7 @@ export type SafeInteger = number
 export type HookVerificationRefusalCode =
   | 'missing-header'
   | 'invalid-delivery-time'
+  | 'stale-delivery'
   | 'duplicate-header'
   | 'body-too-large'
   | 'invalid-key'
@@ -30,6 +31,17 @@ export interface HookDeliveryInput {
   body: Buffer
   /** Secret bytes in a non-shared backing store. */
   key: Buffer
+  /**
+   * Window around the receiver clock, in whole seconds from 1 to 3600. With
+   * neither this nor `callerEnforcedFreshness`, the window is 300 seconds.
+   * Cannot be combined with `callerEnforcedFreshness`.
+   */
+  maxSkewSeconds?: number
+  /**
+   * Check only that the delivery time is well formed. The caller enforces its
+   * own window. Cannot be combined with `maxSkewSeconds`.
+   */
+  callerEnforcedFreshness?: boolean
 }
 
 export interface VerifiedHookDelivery {
@@ -46,8 +58,11 @@ export interface VerifiedHookDelivery {
 }
 
 /**
- * Authenticate one exact Base Registry Engine Version 1 hook delivery.
- * Apply delivery-time skew and idempotency policy before acting on the body.
+ * Authenticate one exact Base Registry Engine Version 1 hook delivery. The
+ * delivery time must be within 300 seconds of the receiver clock unless
+ * `maxSkewSeconds` or `callerEnforcedFreshness` says otherwise; a time outside
+ * the window is refused with code `stale-delivery`. Apply idempotency policy
+ * before acting on the body.
  */
 export declare function verifyHookDelivery(input: HookDeliveryInput): VerifiedHookDelivery
 

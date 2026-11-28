@@ -42,6 +42,7 @@ registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-provision.workspace = true
 registry-platform-yaml.workspace = true
 reqwest.workspace = true
 rustix.workspace = true

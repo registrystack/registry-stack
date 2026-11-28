@@ -3,6 +3,8 @@
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use registry_platform_authcommon::FailedCheck;
+
 use crate::OidcError;
 
 /// Fixed verification stages suitable for operational logs.
@@ -64,11 +66,51 @@ impl OidcError {
             | Self::Parse
             | Self::InvalidJwk
             | Self::EmptyKeySet
+            | Self::StaticKeySet(_)
             | Self::MissingIssuer
             | Self::ConflictingEndpointConfiguration
             | Self::InsecureHttpRequiresOptIn
             | Self::EndpointRefused { .. } => AuthenticationStage::Unavailable,
         }
+    }
+}
+
+impl OidcError {
+    /// The check a verification failure maps to. Never format the underlying
+    /// error to diagnose a public authentication failure.
+    pub fn failed_check(&self) -> FailedCheck {
+        match self {
+            Self::MalformedToken | Self::InvalidToken => FailedCheck::CredentialMalformed,
+            Self::AlgorithmNotAllowed => FailedCheck::TokenAlgorithm,
+            Self::TokenTypeNotAllowed => FailedCheck::TokenType,
+            Self::MissingKid | Self::KidTooLong | Self::UnknownKid => FailedCheck::TokenKey,
+            Self::SignatureInvalid => FailedCheck::TokenSignature,
+            Self::IssuerMismatch { .. } => FailedCheck::TokenIssuer,
+            Self::AudienceMismatch => FailedCheck::TokenAudience,
+            Self::TokenExpired | Self::TokenNotYetValid | Self::InvalidTimeClaims => {
+                FailedCheck::TokenTime
+            }
+            Self::ClientNotAllowed => FailedCheck::TokenClient,
+            Self::AssertionIssuerNotAllowed => FailedCheck::TokenAssertionIssuer,
+            Self::Transport(_)
+            | Self::BoundedRead(_)
+            | Self::FetchUrl(_)
+            | Self::HttpStatus(_)
+            | Self::InvalidUrl
+            | Self::Parse
+            | Self::InvalidJwk
+            | Self::EmptyKeySet
+            | Self::StaticKeySet(_)
+            | Self::MissingIssuer
+            | Self::ConflictingEndpointConfiguration
+            | Self::InsecureHttpRequiresOptIn
+            | Self::EndpointRefused { .. } => FailedCheck::KeySourceUnavailable,
+        }
+    }
+
+    /// True when the verifier could not reach or use its key source.
+    pub fn is_key_source_unavailable(&self) -> bool {
+        self.failed_check() == FailedCheck::KeySourceUnavailable
     }
 }
 
@@ -154,5 +196,66 @@ mod tests {
         }));
         assert!(poisoned.is_err());
         assert!(diagnostics.admit(AuthenticationStage::Header));
+    }
+}
+
+#[cfg(test)]
+mod failed_check_tests {
+    use crate::OidcError;
+    use registry_platform_authcommon::FailedCheck;
+
+    #[test]
+    fn issuer_mismatch_maps_without_the_issuers() {
+        let error = OidcError::IssuerMismatch {
+            expected: "canary-expected-issuer".into(),
+            actual: "canary-actual-issuer".into(),
+        };
+        let check = error.failed_check();
+        assert_eq!(check, FailedCheck::TokenIssuer);
+        assert!(!format!("{check:?}{}", check.as_str()).contains("canary"));
+    }
+
+    #[test]
+    fn key_source_failures_are_unavailable() {
+        assert!(OidcError::EmptyKeySet.is_key_source_unavailable());
+        assert!(OidcError::InvalidUrl.is_key_source_unavailable());
+        assert!(!OidcError::SignatureInvalid.is_key_source_unavailable());
+    }
+
+    #[test]
+    fn every_simple_variant_maps_to_its_member() {
+        let table = [
+            (OidcError::MalformedToken, FailedCheck::CredentialMalformed),
+            (OidcError::InvalidToken, FailedCheck::CredentialMalformed),
+            (OidcError::AlgorithmNotAllowed, FailedCheck::TokenAlgorithm),
+            (OidcError::TokenTypeNotAllowed, FailedCheck::TokenType),
+            (OidcError::MissingKid, FailedCheck::TokenKey),
+            (OidcError::KidTooLong, FailedCheck::TokenKey),
+            (OidcError::UnknownKid, FailedCheck::TokenKey),
+            (OidcError::SignatureInvalid, FailedCheck::TokenSignature),
+            (OidcError::AudienceMismatch, FailedCheck::TokenAudience),
+            (OidcError::TokenExpired, FailedCheck::TokenTime),
+            (OidcError::TokenNotYetValid, FailedCheck::TokenTime),
+            (OidcError::InvalidTimeClaims, FailedCheck::TokenTime),
+            (OidcError::ClientNotAllowed, FailedCheck::TokenClient),
+            (
+                OidcError::AssertionIssuerNotAllowed,
+                FailedCheck::TokenAssertionIssuer,
+            ),
+            (OidcError::Parse, FailedCheck::KeySourceUnavailable),
+            (OidcError::InvalidJwk, FailedCheck::KeySourceUnavailable),
+            (OidcError::MissingIssuer, FailedCheck::KeySourceUnavailable),
+            (
+                OidcError::ConflictingEndpointConfiguration,
+                FailedCheck::KeySourceUnavailable,
+            ),
+            (
+                OidcError::InsecureHttpRequiresOptIn,
+                FailedCheck::KeySourceUnavailable,
+            ),
+        ];
+        for (error, expected) in table {
+            assert_eq!(error.failed_check(), expected, "{error:?}");
+        }
     }
 }

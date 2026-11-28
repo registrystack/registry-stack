@@ -1,0 +1,46 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "rstack-dev-run-user",
+  "class": "positive",
+  "provider": "rstack-dev",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "code",
+    "path": "crates/registry-rstack-dev/src/issuer.rs",
+    "lines": "232-244",
+    "observedOn": "2026-11-27"
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "at+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": {
+      "bind": "issuer"
+    },
+    "aud": {
+      "bind": "audience"
+    },
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "client_id": "journey-service",
+    "scope": "records:get",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 300
+    },
+    "jti": "synthetic-jti-0011"
+  },
+  "omits": [
+    "azp",
+    "registry_actor_kind"
+  ],
+  "notes": "The shape the development runner signs for a product it starts, read from the signing code. Its lifetime constant is 300 seconds. No capture exists because the runner was read, not run."
+}

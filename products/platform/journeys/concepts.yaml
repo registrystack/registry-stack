@@ -1,0 +1,96 @@
+# The closed list of concepts the first-hour pass rule counts (counter 6).
+#
+# A concept is something the reader must type a name for or choose a value for.
+# The first 24 entries are the terms the BReg first-hour measurement found in
+# the two hand-written files and the prose before the first call (the journey
+# and step identifiers, and the run identifier with its time to live, are each
+# one entry). The rest are the terms the runtime files of the other products
+# add. Each journey step declares the concepts it introduces. A declaration
+# outside this list is a defect in the journey, so a new term is added here
+# first and in the same change as the step that needs it.
+
+schema: registry.journey-concepts/v1
+
+concepts:
+  - id: project
+    meaning: A product's project directory and the files `init` writes.
+  - id: record-type
+    meaning: A BReg Record type.
+  - id: field-classification
+    meaning: The classification a field carries.
+  - id: dataset
+    meaning: A BReg dataset.
+  - id: access-profile
+    meaning: An access profile that a caller's token selects.
+  - id: principal-claim
+    meaning: The token claim that names the calling principal.
+  - id: required-scopes
+    meaning: The scopes a profile requires.
+  - id: required-purposes
+    meaning: The purposes a profile requires.
+  - id: row-boundary
+    meaning: The rule that limits which rows a caller sees.
+  - id: development-plan
+    meaning: The `dev.yaml` plan that `rstack dev` reads.
+  - id: issuer-name
+    meaning: The name a plan gives an issuer.
+  - id: audience
+    meaning: The audience a token names for the API.
+  - id: test-person
+    meaning: A person a development scenario signs in as.
+  - id: client
+    meaning: An OAuth client.
+  - id: grant
+    meaning: The grant type a client uses.
+  - id: scopes
+    meaning: The scopes a client requests.
+  - id: extra-claims
+    meaning: Claims a plan adds to a token.
+  - id: registry-actor-kind
+    meaning: The `registry_actor_kind` claim.
+  - id: registry-purpose
+    meaning: The `registry_purpose` claim.
+  - id: scenario-file
+    meaning: The scenario file a plan names.
+  - id: scenario-journey-and-step-ids
+    meaning: The journey and step identifiers inside a scenario.
+  - id: run-id-and-ttl
+    meaning: The run identifier and its time to live.
+  - id: header-file
+    meaning: The file that holds a ready authorisation header.
+  - id: short-lived-token
+    meaning: A token with a five minute lifetime.
+  - id: runtime-file
+    meaning: The runtime file a product loads at start.
+  - id: issuer-url
+    meaning: The issuer URL a product trusts.
+  - id: jwks-uri
+    meaning: The key set address a product fetches.
+  - id: token-type
+    meaning: The `typ` header value a product accepts.
+  - id: scope-claim
+    meaning: The claim a product reads scopes from.
+  - id: allowed-clients
+    meaning: The list of clients a product admits.
+  - id: database-url
+    meaning: The PostgreSQL address a product connects to.
+  - id: database-role
+    meaning: The PostgreSQL role a product connects as.
+  - id: database-tls
+    meaning: How a product verifies its PostgreSQL server.
+  - id: listener-bind
+    meaning: The address and port a product listens on.
+  - id: tls-termination
+    meaning: Where TLS ends for a product's listener.
+  - id: public-origin
+    meaning: The origin a product tells callers it has.
+  - id: secret-file
+    meaning: A file that holds a secret a runtime file refers to.
+  - id: package
+    meaning: A verified package directory a product loads.
+  - id: hook-destination
+    meaning: The URL a hook delivers to.
+  - id: hook-secret
+    meaning: The secret that signs or authenticates a hook delivery.
+  - id: posture
+    meaning: Whether a run declares development or production.

@@ -8,6 +8,8 @@ use thiserror::Error;
 
 pub mod client;
 pub mod destination;
+pub mod probe;
+pub use registry_platform_httpsec::loopback;
 
 pub use client::{
     exchange_authorization_from_json, valid_resource_uri, valid_scope_token,
@@ -84,6 +86,9 @@ pub fn retry_after_seconds(headers: &HeaderMap, maximum_seconds: u64) -> Option<
 pub const DEFAULT_VALIDATED_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_OUTBOUND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The one host name pinned to the loopback addresses in every built client.
+const LOCALHOST_NAME: &str = "localhost";
 
 /// Builder for outbound HTTP clients used by platform fetchers.
 #[derive(Clone)]
@@ -199,6 +204,16 @@ impl OutboundClientBuilder {
             }
             builder = builder.tls_built_in_root_certs(false);
         }
+        // The name `localhost` is pinned to the loopback addresses, so no resolver
+        // is asked for it and a cleartext credential sent to it cannot leave the
+        // host. The port 0 takes the port of each request URL.
+        builder = builder.resolve_to_addrs(
+            LOCALHOST_NAME,
+            &[
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            ],
+        );
         if let Some((host, addrs)) = self.resolved_host {
             builder = builder.resolve_to_addrs(&host, &addrs);
         }
@@ -735,12 +750,11 @@ fn resolve_host(url: &reqwest::Url) -> Result<Vec<SocketAddr>, FetchUrlError> {
 
 fn host_is_allowed_localhost(host: ::url::Host<&str>, resolved: &[IpAddr]) -> bool {
     match host {
-        ::url::Host::Ipv4(ip) => ip.is_loopback(),
-        ::url::Host::Ipv6(ip) => ip == Ipv6Addr::LOCALHOST,
-        ::url::Host::Domain(host) if host.eq_ignore_ascii_case("localhost") => {
-            resolved.iter().all(|ip| is_loopback_ip(*ip))
+        ::url::Host::Ipv4(ip) => loopback::loopback_address(IpAddr::V4(ip)),
+        ::url::Host::Ipv6(ip) => loopback::loopback_address(IpAddr::V6(ip)),
+        ::url::Host::Domain(name) => {
+            loopback::loopback_host(name).is_some_and(|claim| claim.pinned_by(resolved))
         }
-        ::url::Host::Domain(_) => false,
     }
 }
 
@@ -762,10 +776,7 @@ pub fn is_cloud_metadata_ip(ip: IpAddr) -> bool {
 }
 
 fn is_loopback_ip(ip: IpAddr) -> bool {
-    match normalize_ipv4_mapped(ip) {
-        IpAddr::V4(ip) => ip.is_loopback(),
-        IpAddr::V6(ip) => ip.is_loopback(),
-    }
+    loopback::loopback_address(ip)
 }
 
 fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
@@ -1045,6 +1056,78 @@ mod tests {
             .await
             .expect("request succeeds");
         assert_eq!(response.status(), StatusCode::FOUND);
+    }
+
+    /// Serve one route on `address` and return its URL with the host name
+    /// `localhost` and the bound port.
+    async fn serve_on(address: &str) -> String {
+        let listener = TcpListener::bind(address).await.expect("bind test server");
+        let port = listener.local_addr().expect("read listener addr").port();
+        let router = Router::new().route("/", get(|| async { "ok" }));
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        format!("http://localhost:{port}/")
+    }
+
+    async fn reaches(client: &reqwest::Client, url: &str) -> bool {
+        match client.get(url).send().await {
+            Ok(response) => response.status() == StatusCode::OK,
+            Err(_) => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_override_with_port_zero_follows_the_url_port_and_only_the_listed_addresses() {
+        let v4_only = serve_on("127.0.0.1:0").await;
+        let v6_only = serve_on("[::1]:0").await;
+        let pinned_v4 = OutboundClientBuilder::new()
+            .resolve_to_addrs(
+                "localhost".to_string(),
+                vec!["127.0.0.1:0".parse().unwrap()],
+            )
+            .try_build()
+            .expect("client");
+        assert!(
+            reaches(&pinned_v4, &v4_only).await,
+            "port 0 takes the URL port"
+        );
+        assert!(
+            !reaches(&pinned_v4, &v6_only).await,
+            "an address outside the override is never tried"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_service_client_reaches_localhost_on_either_loopback_family() {
+        let v4_only = serve_on("127.0.0.1:0").await;
+        let v6_only = serve_on("[::1]:0").await;
+        let client = OutboundClientBuilder::new().try_build().expect("client");
+        assert!(reaches(&client, &v4_only).await, "IPv4-only listener");
+        assert!(reaches(&client, &v6_only).await, "IPv6-only listener");
+    }
+
+    #[test]
+    fn the_localhost_name_is_allowed_only_when_every_answer_is_loopback() {
+        let name = ::url::Host::Domain("localhost");
+        let other: IpAddr = "10.0.0.1".parse().unwrap();
+        let v4: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(host_is_allowed_localhost(name.clone(), &[v4]));
+        assert!(!host_is_allowed_localhost(name.clone(), &[v4, other]));
+        assert!(!host_is_allowed_localhost(name, &[]));
+        assert!(!host_is_allowed_localhost(
+            ::url::Host::Domain("a.localhost"),
+            &[v4]
+        ));
+    }
+
+    #[test]
+    fn an_ipv4_mapped_loopback_literal_is_loopback_for_a_dev_fetch_only() {
+        let url = reqwest::Url::parse("http://[::ffff:127.0.0.1]:8080/jwks").expect("url parses");
+        FetchUrlPolicy::dev()
+            .validate(&url)
+            .expect("a mapped loopback literal is loopback");
+        assert!(FetchUrlPolicy::strict().validate(&url).is_err());
     }
 
     #[test]
@@ -1513,6 +1596,7 @@ mod tests {
             "http://127.42.0.1/jwks",
             "http://[::1]/jwks",
             "http://localhost/jwks",
+            "http://[::ffff:127.0.0.1]/jwks",
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
             FetchUrlPolicy::dev()
@@ -1523,7 +1607,10 @@ mod tests {
         for raw in [
             "http://93.184.216.34/jwks",
             "http://10.0.0.1/jwks",
-            "http://[::ffff:127.0.0.1]/jwks",
+            "http://[::ffff:10.0.0.1]/jwks",
+            "http://[::ffff:93.184.216.34]/jwks",
+            "http://[::ffff:169.254.169.254]/jwks",
+            "http://[::ffff:0.0.0.0]/jwks",
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
             assert!(

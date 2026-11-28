@@ -100,8 +100,8 @@ impl S3Settings {
         let mut url = Url::parse(text).map_err(|_| ObjectStoreError::InvalidConfiguration)?;
         let loopback = url
             .host_str()
-            .and_then(|host| host.trim_matches(['[', ']']).parse::<IpAddr>().ok())
-            .is_some_and(|ip| ip.is_loopback());
+            .and_then(registry_platform_httputil::loopback::loopback_literal)
+            .is_some();
         let bucket = config.bucket.as_str();
         let region = config.region.as_str();
         if text.len() > MAXIMUM_URL_BYTES

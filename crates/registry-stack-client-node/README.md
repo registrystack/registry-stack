@@ -127,8 +127,10 @@ See [Unknown outcomes](https://docs.registrystack.org/reference/client-api/#unkn
 
 `breg.verifyHookDelivery({ method, path, headers, body, key })` authenticates
 the exact bytes of one Version 1 hook delivery. The result returns
-`deliveryTime` and `idempotencyKey`; the receiver must bound clock skew and
-deduplicate once-only effects on authenticated `source` plus `id`, or on an
+`deliveryTime` and `idempotencyKey`. The verifier refuses a delivery time more
+than 300 seconds from the receiver clock (code `stale-delivery`); `maxSkewSeconds`
+(1 to 3600) names another window and `callerEnforcedFreshness: true` leaves the
+bound to the receiver. The receiver must deduplicate once-only effects on authenticated `source` plus `id`, or on an
 application business key. See
 [Verify a hook delivery](https://docs.registrystack.org/reference/client-api/#verify-a-hook-delivery)
 for a receiver example.

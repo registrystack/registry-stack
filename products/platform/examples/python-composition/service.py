@@ -154,8 +154,14 @@ class Inbox:
         if not body or len(body) > MAXIMUM_BODY:
             raise WakeRefused("hook body was refused")
         try:
+            # The window below uses this receiver's own clock, which tests inject.
             verified = verify_hook_delivery(
-                method=method, path=path, headers=headers, body=body, key=key
+                method=method,
+                path=path,
+                headers=headers,
+                body=body,
+                key=key,
+                caller_enforced_freshness=True,
             )
             delivered = datetime.fromisoformat(verified["delivery_time"])
             instant = datetime.now(UTC) if now is None else now

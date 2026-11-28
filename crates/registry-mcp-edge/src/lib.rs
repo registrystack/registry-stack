@@ -43,3 +43,6 @@ mod tests;
 
 #[cfg(test)]
 mod compatibility_tests;
+
+#[cfg(test)]
+mod token_characterisation;

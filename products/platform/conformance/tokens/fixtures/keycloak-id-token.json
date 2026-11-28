@@ -1,0 +1,55 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "keycloak-id-token",
+  "class": "negative",
+  "provider": "keycloak",
+  "kind": "user-id",
+  "tokenUse": "id",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "capture",
+    "observedOn": "2026-11-27",
+    "version": "26.8.2",
+    "image": "quay.io/keycloak/keycloak:26.8.2@sha256:7e66a96e4739239070aeaf72e4c5decf0f7f682cfc725b9f7ea2b336eaba38b3",
+    "captureFile": "keycloak-user-id.json"
+  },
+  "header": {
+    "alg": "RS256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "exp": {
+      "offsetSeconds": 300
+    },
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "jti": "synthetic-jti-0022",
+    "iss": {
+      "bind": "issuer"
+    },
+    "aud": "journey-app",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "typ": "ID",
+    "azp": "journey-app",
+    "sid": "synthetic-sid",
+    "at_hash": "synthetic-at-hash",
+    "acr": "1",
+    "email_verified": true,
+    "name": "Journey User",
+    "preferred_username": "journey-user",
+    "given_name": "Journey",
+    "family_name": "User",
+    "email": "journey-user@example.test"
+  },
+  "omits": [
+    "scope",
+    "realm_access",
+    "resource_access"
+  ],
+  "notes": "The header equals an access token's header. The payload typ ID and the client audience tell it apart."
+}

@@ -3646,6 +3646,37 @@ formats:
     conformance: none
     securityMembers: []
     restrictingMembers: []
+  - id: platform/cli-database-provision-report
+    product: platform
+    title: Shared CLI database provision report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1
+      kind: PlatformCliDatabaseProvisionReport
+      checkedBy:
+        file: crates/registry-platform-provision/src/cli.rs
+        symbol: REPORT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1
+      kind: PlatformCliDatabaseProvisionReport
+    schema:
+      path: crates/registry-platform-provision/schema/provision-report.schema.json
+      id: https://id.registrystack.org/schemas/platform/cli-database-provision-report/cli-database-provision-report.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-platform-provision --features schema --example provision-report-schema -- --output crates/registry-platform-provision/schema/provision-report.schema.json
+      driftCheck: crates/registry-platform-provision/src/cli.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-platform-provision/src/cli.rs
+      symbol: run_provision
+    check: none
+    example: crates/registry-platform-provision/example/provision-report.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
   - id: platform/task-connection
     product: platform
     title: Task-grant operator connection file

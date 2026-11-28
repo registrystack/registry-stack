@@ -3,7 +3,11 @@
 `registry-platform-activation` is the single PostgreSQL implementation of the
 package activation ledger and its runtime-role boundary for the stateful
 Registry Stack products. Activation and runtime checks require PostgreSQL 17
-or newer, matching the maintained database support floor.
+or newer, matching the maintained database support floor. The crate exports
+the floor as `MINIMUM_SERVER_VERSION_NUM` (`170_000`). The one technical
+reason found for it is BReg's: its closed-catalog check expects every managed
+table to grant the `MAINTAIN` privilege, which PostgreSQL introduced in
+version 17 (`registry-breg/src/postgres/schema.rs`).
 
 The crate owns the product-neutral parts of activation: ledger reads and
 appends, deployment database identity checks, active-package startup checks,

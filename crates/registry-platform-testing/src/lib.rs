@@ -24,6 +24,16 @@ pub use migration_pins::{assert_migration_pins, verify_migration_pins, MIGRATION
 #[cfg(feature = "postgres-catalog")]
 mod postgres_catalog;
 
+#[cfg(feature = "token-fixtures")]
+mod token_fixtures;
+
+#[cfg(feature = "token-fixtures")]
+pub use token_fixtures::{
+    Against, Basis, BindTarget, Binding, ClaimValue, Comparison, Configuration, Expectations,
+    ExpectedCell, ExpectedRow, FixtureCase, FixtureClass, FixtureHeader, Outcome, ProductReport,
+    RowReport, SignedToken, Stage, TokenCorpus, TokenFixture, TokenFixtureError, TokenSigner,
+};
+
 #[cfg(feature = "postgres-catalog")]
 pub use postgres_catalog::verify_postgres_schema_equivalence;
 

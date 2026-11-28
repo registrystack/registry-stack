@@ -227,6 +227,14 @@
       "description": "Product-scoped CLI API connections and project selections."
     },
     {
+      "glob": "crates/registry-platform-provision/schema/*.schema.json",
+      "sourcePath": "crates/registry-platform-provision/src/cli.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Report of the shared `provision` command that creates a product's PostgreSQL roles, database, schemas and extensions."
+    },
+    {
       "glob": "products/platform/generated/mcp-runtime/*.schema.json",
       "sourcePath": "crates/registry-mcp/src/schema.rs",
       "owner": "platform",

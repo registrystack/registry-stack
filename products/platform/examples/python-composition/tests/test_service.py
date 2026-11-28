@@ -111,6 +111,7 @@ def verified_proposal(envelope=None):
         headers=headers(),
         body=BODY,
         key=CANARY_KEY,
+        caller_enforced_freshness=True,
     )
     verified.update(
         {

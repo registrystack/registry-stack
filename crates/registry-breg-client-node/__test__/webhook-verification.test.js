@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { createHmac } = require('node:crypto');
 const { test } = require('node:test');
 
 const {
@@ -37,8 +38,41 @@ function input(overrides = {}) {
     headers: headers(),
     body,
     key,
+    // The fixed vector is dated 2026-08-30, outside any default window.
+    callerEnforcedFreshness: true,
     ...overrides,
   };
+}
+
+// The fixed headers re-signed for `deliveryTime` with the vector's key.
+function signedHeaders(deliveryTime) {
+  const values = {
+    ...headers(),
+    'x-registry-delivery-time': deliveryTime.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+  };
+  const parts = [
+    values['Ce-Specversion'], values['CE-ID'], values['ce-source'], values['ce-type'],
+    values['ce-time'], values['ce-dataschema'], values['x-registry-event-generation'],
+    values['x-registry-delivery-attempt'], values['x-registry-delivery-time'],
+    'POST', '/hooks/registry', 'application/json', values['idempotency-key'], body,
+  ].map((part) => Buffer.from(part));
+  const signed = [Buffer.from('breg-webhook-signature-v1')];
+  for (const part of parts) {
+    const length = Buffer.alloc(8);
+    length.writeBigUInt64BE(BigInt(part.length));
+    signed.push(length, part);
+  }
+  values['x-registry-signature'] = `v1=${createHmac('sha256', key)
+    .update(Buffer.concat(signed)).digest('base64url')}`;
+  return values;
+}
+
+function fresh(offsetSeconds, overrides = {}) {
+  return input({
+    headers: signedHeaders(new Date(Date.now() + offsetSeconds * 1000)),
+    callerEnforcedFreshness: undefined,
+    ...overrides,
+  });
 }
 
 test('shared language vectors authenticate exact RFC3339 fractions', () => {
@@ -171,6 +205,55 @@ test('refuses shared backing stores before native verification', () => {
     assert.throws(
       () => verifyHookDelivery(input({ [field]: shared })),
       (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
+    );
+  }
+});
+
+test('the default window is 300 seconds in both directions', () => {
+  for (const offset of [0, -290, 290]) {
+    assert.equal(verifyHookDelivery(fresh(offset)).attempt, '1');
+  }
+  for (const offset of [-310, 310]) {
+    assert.throws(() => verifyHookDelivery(fresh(offset)), assertRefusal('stale-delivery'));
+  }
+});
+
+test('an application that names no window refuses the old fixed vector', () => {
+  const { callerEnforcedFreshness, ...bare } = input();
+  assert.equal(callerEnforcedFreshness, true);
+  assert.throws(() => verifyHookDelivery(bare), assertRefusal('stale-delivery'));
+});
+
+test('maxSkewSeconds replaces the default window', () => {
+  assert.equal(verifyHookDelivery(fresh(-600, { maxSkewSeconds: 900 })).attempt, '1');
+  assert.throws(
+    () => verifyHookDelivery(fresh(-60, { maxSkewSeconds: 10 })),
+    assertRefusal('stale-delivery'),
+  );
+  for (const edge of [1, 3600]) {
+    assert.equal(verifyHookDelivery(fresh(0, { maxSkewSeconds: edge })).attempt, '1');
+  }
+});
+
+test('callerEnforcedFreshness accepts an old delivery', () => {
+  assert.equal(verifyHookDelivery(input()).attempt, '1');
+});
+
+test('refuses freshness options out of range, mistyped or combined', () => {
+  for (const overrides of [
+    { maxSkewSeconds: 0 },
+    { maxSkewSeconds: 3601 },
+    { maxSkewSeconds: -1 },
+    { maxSkewSeconds: 1.5 },
+    { maxSkewSeconds: Number.NaN },
+    { maxSkewSeconds: '10' },
+    { callerEnforcedFreshness: 'yes' },
+    { maxSkewSeconds: 10, callerEnforcedFreshness: true },
+  ]) {
+    assert.throws(
+      () => verifyHookDelivery(fresh(0, overrides)),
+      (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
+      JSON.stringify(overrides),
     );
   }
 });
