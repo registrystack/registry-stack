@@ -149,7 +149,9 @@ async fn serve(answers: &[Answer]) -> (String, Script, tokio::task::JoinHandle<(
 }
 
 fn config(address: &str) -> SchedulingClientConfig {
-    SchedulingClientConfig::new(Url::parse(&format!("http://{address}/")).expect("fixture URL"))
+    SchedulingClientConfig::new_without_peer_policy(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    )
 }
 
 fn client(config: SchedulingClientConfig) -> SchedulingClient {

@@ -101,6 +101,11 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             status: Some(status),
             ..MappedError::default()
         },
+        RustClientError::DevelopmentPeer => MappedError {
+            kind: "development-peer",
+            message: "the peer declared the development posture; a production runtime refuses its responses",
+            ..MappedError::default()
+        },
         RustClientError::Protocol { status, failure } => MappedError {
             kind: "protocol",
             message: "Registry Coordinator returned an invalid response",
@@ -283,7 +288,10 @@ impl CoordinatorClient {
         maximum_mutation_retries: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let base_url = Url::parse(base_url).map_err(|_| invalid_configuration(py))?;
-        let mut config = CoordinatorClientConfig::new(base_url);
+        let mut config = CoordinatorClientConfig::new(
+            base_url,
+            coordinator_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(value) = attempt_timeout_seconds {
             config = config.with_attempt_timeout(duration(py, value)?);
         }

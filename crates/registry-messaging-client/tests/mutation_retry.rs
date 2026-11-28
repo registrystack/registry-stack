@@ -140,7 +140,9 @@ async fn serve(answers: &[Answer]) -> (String, Script, tokio::task::JoinHandle<(
 }
 
 fn config(address: &str) -> MessagingClientConfig {
-    MessagingClientConfig::new(Url::parse(&format!("http://{address}/")).expect("fixture URL"))
+    MessagingClientConfig::new_without_peer_policy(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    )
 }
 
 fn client(config: MessagingClientConfig) -> MessagingClient {

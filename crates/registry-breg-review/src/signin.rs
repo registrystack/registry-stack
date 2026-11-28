@@ -393,7 +393,7 @@ mod tests {
     async fn cancelling_terminal_audit_rolls_back_the_unreleased_session() {
         let store = Store::new(1, 1);
         let cookie = random_token().unwrap();
-        let registry = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        let registry = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
             url::Url::parse("https://registry.example").unwrap(),
         ))
         .unwrap();
@@ -427,10 +427,11 @@ mod tests {
     fn a_rolled_back_sign_in_past_the_share_restores_the_session_it_replaced() {
         let store = Store::new(10, 1);
         let session = || {
-            let registry = BaseRegistryClient::new(BaseRegistryClientConfig::new(
-                url::Url::parse("https://registry.example").unwrap(),
-            ))
-            .unwrap();
+            let registry =
+                BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+                    url::Url::parse("https://registry.example").unwrap(),
+                ))
+                .unwrap();
             Session::new(
                 "citizen".to_owned(),
                 Arc::new(registry),

@@ -369,7 +369,7 @@ fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
         .as_deref()
         .ok_or_else(|| anyhow!("progressive preparation requires a public Requirement URI"))?;
     let (selectors, subjects) = progressive_subject_inputs(&args)?;
-    let client = EvidenceClient::from_profile_path(profile)
+    let client = EvidenceClient::from_profile_path_without_peer_policy(profile)
         .map_err(|_| anyhow!("progressive request preparation failed"))?;
     let mut request = AudienceScopedRequest::for_requirement_uri(requirement, selectors);
     if let Some(subjects) = subjects {
@@ -610,12 +610,13 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
         .build()
         .context("failed to start the Evidence discovery runtime")?;
     let catalog = {
-        let discovery =
-            NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
+        let discovery = NonVerifyingEvidenceClient::new(
+            EvidenceClientConfig::without_verification_without_peer_policy(
                 evidence_origin.clone(),
                 token_provider.clone(),
-            ))
-            .context("the Evidence discovery client is invalid")?;
+            ),
+        )
+        .context("the Evidence discovery client is invalid")?;
         runtime_threads
             .block_on(discovery.discover())
             .context("Evidence definition discovery failed")?
@@ -647,7 +648,7 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
         .context("failed to remove the private relying procedure input")?;
     validate_local_relying_procedure(&procedure, definition, audience, args.format)?;
 
-    let client_config = EvidenceClientConfig::new(
+    let client_config = EvidenceClientConfig::new_without_peer_policy(
         evidence_origin,
         token_provider,
         procedure.trusted_jwks.clone(),

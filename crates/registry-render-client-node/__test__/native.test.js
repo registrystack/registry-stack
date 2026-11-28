@@ -4,7 +4,7 @@ const {createServer} = require('node:http');
 const {createHash} = require('node:crypto');
 const {RenderClient} = require('../client');
 
-test('provider authenticates one document; invalid input precedes acquisition', async () => {
+test('provider authenticates one document from a development peer and invalid input precedes acquisition', async () => {
   const pdf=Buffer.from('%PDF-native-client');
   let requests=0;let tokens=0;
   const server=createServer((request,response) => {
@@ -12,7 +12,7 @@ test('provider authenticates one document; invalid input precedes acquisition', 
     assert.equal(request.url,'/v1/render/receipt');
     assert.equal(request.headers.authorization,'Bearer canary-render-token');
     request.resume();request.on('end',()=> {
-      response.writeHead(200,{'content-type':'application/json','traceparent':'00-1234567890abcdef1234567890abcdef-1234567890abcdef-01'});
+      response.writeHead(200,{'registry-posture':'development','content-type':'application/json','traceparent':'00-1234567890abcdef1234567890abcdef-1234567890abcdef-01'});
       const pdfHex=createHash('sha256').update(pdf).digest('hex');
       response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),pdfDigest:`sha256:${pdfHex}`,dataDigest:`sha256:${'0'.repeat(64)}`,documentVersion:'receipt v1',warnings:[]}));
     });

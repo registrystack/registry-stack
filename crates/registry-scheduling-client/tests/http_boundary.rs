@@ -125,7 +125,7 @@ async fn spawn(app: Router) -> (String, tokio::task::JoinHandle<()>) {
 }
 
 fn client(address: &str) -> SchedulingClient {
-    SchedulingClient::new(SchedulingClientConfig::new(
+    SchedulingClient::new(SchedulingClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client")
@@ -1112,7 +1112,7 @@ async fn oversized_answers_stay_bounded() {
 
     let token = BearerToken::new("fixture-secret").expect("fixture token");
     let bounded = SchedulingClient::new(
-        SchedulingClientConfig::new(
+        SchedulingClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/")).expect("fixture URL"),
         )
         .with_maximum_response_bytes(64),
@@ -1133,7 +1133,7 @@ async fn oversized_answers_stay_bounded() {
 async fn invalid_client_input_never_reaches_the_wire() {
     // Port 1 refuses every connection, so any attempted round trip would
     // surface as a transport failure instead of a request defect.
-    let client = SchedulingClient::new(SchedulingClientConfig::new(
+    let client = SchedulingClient::new(SchedulingClientConfig::new_without_peer_policy(
         Url::parse("http://127.0.0.1:1/").expect("fixture URL"),
     ))
     .expect("client");

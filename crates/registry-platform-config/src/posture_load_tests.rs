@@ -380,6 +380,10 @@ fn database(transport: Option<&str>, test_only_plaintext: bool) -> DatabaseConfi
 
 fn resolve(name: &str) -> std::io::Result<Vec<IpAddr>> {
     match name {
+        "localhost" => Ok(vec![
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+        ]),
         "db.internal" => Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))]),
         "db.mixed" => Ok(vec![
             IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3)),
@@ -474,6 +478,51 @@ fn plaintext_permitted_answers_each_host_for_each_transport() {
     assert_eq!(
         plaintext_permitted_with(&config, &tcp("10.0.0.5"), witness, &resolve),
         Ok(PrivateNetworkPlaintext)
+    );
+}
+
+#[test]
+fn localhost_is_a_plaintext_loopback_host_only_when_it_resolves_only_to_loopback() {
+    use DatabaseTransport::LoopbackPlaintext;
+    let config = database(Some("loopback-plaintext"), false);
+    let loopback_only = |_: &str| -> std::io::Result<Vec<IpAddr>> {
+        Ok(vec![
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+        ])
+    };
+    assert_eq!(
+        plaintext_permitted_with(&config, &tcp("localhost"), None, &loopback_only),
+        Ok(LoopbackPlaintext)
+    );
+    let elsewhere = |_: &str| -> std::io::Result<Vec<IpAddr>> {
+        Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))])
+    };
+    let mixed = |_: &str| -> std::io::Result<Vec<IpAddr>> {
+        Ok(vec![
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3)),
+        ])
+    };
+    let nothing = |_: &str| -> std::io::Result<Vec<IpAddr>> { Ok(Vec::new()) };
+    let failing =
+        |_: &str| -> std::io::Result<Vec<IpAddr>> { Err(std::io::Error::other("no answer")) };
+    for (label, resolver) in [
+        ("a non-loopback address", &elsewhere as &dyn Fn(&str) -> _),
+        ("a mix of loopback and other addresses", &mixed),
+        ("no address", &nothing),
+        ("a failed lookup", &failing),
+    ] {
+        assert_eq!(
+            plaintext_permitted_with(&config, &tcp("localhost"), None, resolver),
+            Err(DatabaseTransportError::HostMismatch(LoopbackPlaintext)),
+            "localhost resolving to {label}"
+        );
+    }
+    // An address literal is never looked up.
+    assert_eq!(
+        plaintext_permitted_with(&config, &tcp("127.0.0.1"), None, &failing),
+        Ok(LoopbackPlaintext)
     );
 }
 

@@ -143,7 +143,7 @@ fn breg_client(
     tokens: Arc<dyn TokenProvider>,
 ) -> std::result::Result<BaseRegistryClient, BaseRegistryClientError> {
     BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(url)
+        BaseRegistryClientConfig::new_without_peer_policy(url)
             .with_token_provider(tokens)
             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
             .with_attempt_timeout(REQUEST_TIMEOUT)
@@ -277,7 +277,7 @@ impl HttpAdapters {
                         None
                     };
                     let client = SchedulingClient::new(
-                        SchedulingClientConfig::new(binding.base_url.clone())
+                        SchedulingClientConfig::new_without_peer_policy(binding.base_url.clone())
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -300,7 +300,7 @@ impl HttpAdapters {
                             .map_err(|_| config_error())?,
                     );
                     let client = MessagingClient::new(
-                        MessagingClientConfig::new(binding.base_url.clone())
+                        MessagingClientConfig::new_without_peer_policy(binding.base_url.clone())
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -321,13 +321,16 @@ impl HttpAdapters {
                         .cloned()
                         .ok_or_else(config_error)?;
                     let client = PaymentClient::new(
-                        PaymentClientConfig::new(binding.base_url.clone(), payment_connection)
-                            .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
-                            .with_attempt_timeout(REQUEST_TIMEOUT)
-                            .with_connect_timeout(Duration::from_millis(
-                                crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
-                            ))
-                            .with_maximum_response_bytes(FILE_BOUND),
+                        PaymentClientConfig::new_without_peer_policy(
+                            binding.base_url.clone(),
+                            payment_connection,
+                        )
+                        .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
+                        .with_attempt_timeout(REQUEST_TIMEOUT)
+                        .with_connect_timeout(Duration::from_millis(
+                            crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+                        ))
+                        .with_maximum_response_bytes(FILE_BOUND),
                     )
                     .map_err(|_| config_error())?;
                     Connection::Payments(Box::new(PaymentConnection {
@@ -367,7 +370,7 @@ impl HttpAdapters {
                     let tokens = tokens(&auth, key, &auth.resource, &auth.scopes)
                         .map_err(|_| config_error())?;
                     let client = CaseworkClient::new(
-                        CaseworkClientConfig::new(binding.base_url.clone())
+                        CaseworkClientConfig::new_without_peer_policy(binding.base_url.clone())
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -484,7 +487,9 @@ fn payment_failure(error: PaymentClientError, operation: Operation) -> CallOutco
                     code: PaymentProblemCode::ProviderProtocol,
                     ..
                 } => "payment-invalid-response",
-                PaymentClientError::Protocol { .. } => "payment-invalid-response",
+                PaymentClientError::Protocol { .. } | PaymentClientError::DevelopmentPeer => {
+                    "payment-invalid-response"
+                }
                 _ => "transport-uncertain",
             }
             .into(),
@@ -517,6 +522,7 @@ fn payment_failure(error: PaymentClientError, operation: Operation) -> CallOutco
         } => refused("payment-correlation-mismatch"),
         PaymentClientError::InvalidRequest { .. } => refused("invalid-command"),
         PaymentClientError::Protocol { .. }
+        | PaymentClientError::DevelopmentPeer
         | PaymentClientError::Problem {
             code: PaymentProblemCode::ProviderProtocol,
             ..
@@ -863,7 +869,7 @@ fn task_provider(
     )
     .map_err(|error| token_failure(&error))?;
     let casework = CaseworkClient::new(
-        CaseworkClientConfig::new(authority.base_url.clone())
+        CaseworkClientConfig::new_without_peer_policy(authority.base_url.clone())
             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
             .with_attempt_timeout(REQUEST_TIMEOUT)
             .with_connect_timeout(Duration::from_millis(
@@ -953,7 +959,9 @@ pub(crate) fn read_failure(error: BaseRegistryClientError) -> CallOutcome {
             retryable("transport-unavailable")
         }
         BaseRegistryClientError::InvalidRequest { .. } => refused("invalid-command"),
-        BaseRegistryClientError::Protocol { .. } => refused("invalid-response"),
+        BaseRegistryClientError::Protocol { .. } | BaseRegistryClientError::DevelopmentPeer => {
+            refused("invalid-response")
+        }
         _ => refused("product-refused"),
     }
 }
@@ -1656,7 +1664,9 @@ fn scheduling_failure(error: SchedulingClientError, operation: Operation) -> Cal
             ..
         } => retryable("transport-unavailable"),
         SchedulingClientError::InvalidRequest { .. } => refused("invalid-command"),
-        SchedulingClientError::Protocol { .. } => refused("invalid-response"),
+        SchedulingClientError::Protocol { .. } | SchedulingClientError::DevelopmentPeer => {
+            refused("invalid-response")
+        }
         _ => refused("product-refused"),
     }
 }
@@ -1927,6 +1937,14 @@ fn unresolved(code: &str) -> ReconciliationOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_development_breg_peer_is_an_invalid_response() {
+        assert!(matches!(
+            read_failure(BaseRegistryClientError::DevelopmentPeer),
+            CallOutcome::Refused { code, .. } if code == "invalid-response"
+        ));
+    }
 
     #[test]
     fn reviewed_https_peers_allow_private_networks_and_metadata_and_cleartext_stay_denied() {

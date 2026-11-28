@@ -945,7 +945,7 @@ mod shape_authority {
                 axum::serve(listener, router).await.unwrap();
             });
             let client = registry_review_client::ReviewClient::new(
-                registry_review_client::ReviewClientConfig::new(
+                registry_review_client::ReviewClientConfig::new_without_peer_policy(
                     format!("http://{address}/").parse().unwrap(),
                 ),
             )

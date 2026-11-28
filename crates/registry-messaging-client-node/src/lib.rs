@@ -57,7 +57,10 @@ impl MessagingClient {
         let base_url = Url::parse(&config.base_url).map_err(|_| {
             binding_error("configuration", "Messaging client configuration is invalid")
         })?;
-        let mut core = CoreConfig::new(base_url);
+        let mut core = CoreConfig::new(
+            base_url,
+            registry_messaging_client::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(value) = config.attempt_timeout_milliseconds {
             core = core.with_attempt_timeout(Duration::from_millis(whole_number(value)?));
         }
@@ -247,6 +250,10 @@ fn error_envelope(error: MessagingClientError) -> Value {
             "title": code.title(),
             "detail": code.detail(),
             "message": code.detail(),
+        }),
+        MessagingClientError::DevelopmentPeer => json!({
+            "kind": "development-peer",
+            "message": MessagingClientError::DevelopmentPeer.to_string(),
         }),
         MessagingClientError::Protocol {
             status,

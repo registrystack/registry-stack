@@ -332,7 +332,7 @@ async fn owner_authorized_current_detail_is_the_export_source() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = SchedulingClient::new(SchedulingClientConfig::new(
+    let client = SchedulingClient::new(SchedulingClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");

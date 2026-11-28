@@ -104,7 +104,8 @@ impl AttachmentStorageConfig {
         match raw {
             RawAttachmentStorageConfig::Database {} => Ok(Self::default()),
             RawAttachmentStorageConfig::S3(config) => {
-                S3Settings::from_config(&config).map(|settings| Self(Some(settings)))
+                S3Settings::from_config_without_peer_policy(&config)
+                    .map(|settings| Self(Some(settings)))
             }
         }
     }

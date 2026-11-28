@@ -187,7 +187,7 @@ impl BregBridge {
         let provider = StaticToken::new(token.to_owned()).map_err(|_| Error::Unavailable)?;
         let url = url::Url::parse(&binding.registry.base_url).map_err(|_| Error::Unavailable)?;
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(url)
+            BaseRegistryClientConfig::new_without_peer_policy(url)
                 .with_token_provider(Arc::new(provider))
                 .with_attempt_timeout(Duration::from_secs(15))
                 .with_connect_timeout(Duration::from_secs(5))

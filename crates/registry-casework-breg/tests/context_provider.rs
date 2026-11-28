@@ -191,7 +191,7 @@ async fn mocks(server: &MockServer, profile: &str, bearer: &str, display: bool, 
 }
 fn provider(server: &MockServer, export: BregContextExport) -> BregContextProvider {
     let client = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(server.uri().parse().unwrap())
+        BaseRegistryClientConfig::new_without_peer_policy(server.uri().parse().unwrap())
             .with_token_provider(Arc::new(StaticToken::new("status-bearer").unwrap())),
     )
     .unwrap();

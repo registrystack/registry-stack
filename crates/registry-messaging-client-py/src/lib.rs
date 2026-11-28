@@ -126,6 +126,11 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             retry_after_seconds,
             ..MappedError::default()
         },
+        RustClientError::DevelopmentPeer => MappedError {
+            kind: "development-peer",
+            message: RustClientError::DevelopmentPeer.to_string(),
+            ..MappedError::default()
+        },
         RustClientError::Protocol {
             status,
             failure,
@@ -310,7 +315,10 @@ impl MessagingClient {
                 "Messaging client configuration is invalid",
             )
         })?;
-        let mut config = MessagingClientConfig::new(base_url);
+        let mut config = MessagingClientConfig::new(
+            base_url,
+            messaging_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(value) = attempt_timeout_seconds {
             config = config.with_attempt_timeout(duration(py, value)?);
         }

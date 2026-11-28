@@ -20,9 +20,12 @@ impl RenderClient {
     pub fn new(config: Value) -> Result<Self> {
         let config: RenderClientConfig = serde_json::from_value(config)
             .map_err(|_| Error::from_reason("Render client configuration is invalid"))?;
-        CoreClient::new(config)
-            .map(|inner| Self { inner })
-            .map_err(mapped)
+        CoreClient::new(
+            config,
+            registry_render_client::PeerPolicy::AcceptDevelopmentPeer,
+        )
+        .map(|inner| Self { inner })
+        .map_err(mapped)
     }
     #[napi(ts_return_type = "Promise<import('./client').RenderedDocument>")]
     pub async fn render(

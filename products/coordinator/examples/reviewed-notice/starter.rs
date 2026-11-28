@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = Arguments::parse();
     let token = read_token(&arguments.token_file)?;
     let client = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(arguments.breg_url)
+        BaseRegistryClientConfig::new_without_peer_policy(arguments.breg_url)
             .with_token_provider(Arc::new(StaticToken::new(token)?)),
     )?;
     let options = BRegRecordOptions::default().access_profile(arguments.access_profile)?;

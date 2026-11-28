@@ -129,6 +129,11 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
                 .unwrap_or_else(|| "Registry Casework refused the request".to_owned()),
             ..MappedError::default()
         },
+        RustClientError::DevelopmentPeer => MappedError {
+            kind: "development-peer",
+            message: RustClientError::DevelopmentPeer.to_string(),
+            ..MappedError::default()
+        },
         RustClientError::Protocol { .. } => MappedError {
             kind: "protocol",
             message: "Registry Casework returned an invalid response".to_owned(),
@@ -505,7 +510,10 @@ impl CaseworkClient {
                 "Casework client configuration is invalid",
             )
         })?;
-        let mut config = CaseworkClientConfig::new(base_url);
+        let mut config = CaseworkClientConfig::new(
+            base_url,
+            casework_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(value) = attempt_timeout_seconds {
             config = config.with_attempt_timeout(duration(py, value)?);
         }

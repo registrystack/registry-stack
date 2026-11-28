@@ -43,6 +43,11 @@ pub enum SchedulingProtocolFailure {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SchedulingClientError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("Registry Scheduling client configuration is invalid: {reason}")]
     Configuration { reason: &'static str },
     #[error("Registry Scheduling client request is invalid: {reason}")]
@@ -102,6 +107,7 @@ impl SchedulingClientError {
     #[must_use]
     pub fn is_outcome_unknown(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => true,
             Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
             Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
             Self::Problem { status, .. } => *status >= 500,
@@ -116,6 +122,7 @@ impl SchedulingClientError {
     /// still refuses to resend a timeout or broken exchange after a 4xx one.
     pub(crate) fn resend_may_settle(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => false,
             Self::Transport { kind } => {
                 matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
             }

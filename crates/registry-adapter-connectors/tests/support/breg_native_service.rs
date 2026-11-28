@@ -748,7 +748,7 @@ impl Breg {
             chrono::Utc::now().timestamp() + 3600,
         );
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(self.base_url.parse().unwrap())
+            BaseRegistryClientConfig::new_without_peer_policy(self.base_url.parse().unwrap())
                 .with_token_provider(std::sync::Arc::new(StaticToken::new(token).unwrap()))
                 .with_maximum_mutation_retries(0),
         )
@@ -775,7 +775,7 @@ impl Breg {
             "adapter-field-ingestion",
         );
         let client = BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(self.base_url.parse().unwrap())
+            BaseRegistryClientConfig::new_without_peer_policy(self.base_url.parse().unwrap())
                 .with_token_provider(Arc::new(StaticToken::new(token).unwrap())),
         )
         .expect("the field-site observer client starts");

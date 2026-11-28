@@ -21,7 +21,8 @@ impl RenderClient {
         let config: RenderClientConfig =
             serde_json::from_value(parse_json_strict(config.as_bytes()).map_err(|_| fixed())?)
                 .map_err(|_| fixed())?;
-        let inner = CoreClient::new(config).map_err(mapped)?;
+        let inner = CoreClient::new(config, render_client_sdk::PeerPolicy::AcceptDevelopmentPeer)
+            .map_err(mapped)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

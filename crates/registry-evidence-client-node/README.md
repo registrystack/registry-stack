@@ -148,7 +148,7 @@ from the package root. Its `kind` is always present; `status`, `code`,
 when the underlying failure carries them. `message` is human prose, not JSON:
 read it, do not parse it. `kind` is one of: `configuration`, `nonce`, `token`,
 `transport`, `denied`, `not-available`, `invalid-request`, `unavailable`,
-`protocol`, `verification`.
+`protocol`, `development-peer`, `verification`.
 
 Underneath, the native layer throws every mapped failure as a plain
 `napi::Error` whose `message` is a JSON-stringified envelope; `client.js`
@@ -158,7 +158,7 @@ caller-facing contract: do not `JSON.parse(error.message)`.
 
 A failure that is not a recognized envelope (a serialization defect, a caught
 panic, napi's own argument-type checking) is left exactly as thrown, so it
-cannot be mistaken for one of the ten kinds above.
+cannot be mistaken for one of the kinds above.
 
 HTTP 401, 403, and 429 map to `denied`; 422 maps to `not-available`; other
 contract-valid 4xx responses map to `invalid-request`; and contract-valid 5xx

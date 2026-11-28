@@ -35,9 +35,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{
-    read_bounded, validate_response_headers_without_peer_policy, FetchUrlError, FetchUrlPolicy,
-};
+use crate::{read_bounded, validate_response_headers, FetchUrlError, FetchUrlPolicy, PeerPolicy};
 use async_trait::async_trait;
 use chrono::Utc;
 use registry_platform_authcommon::client_assertion::{
@@ -1069,7 +1067,10 @@ impl PrivateKeyJwt {
             })?;
 
         let status = response.status().as_u16();
-        if validate_response_headers_without_peer_policy(response.headers()).is_err() {
+        // The deployment's OAuth issuer is outside Registry Stack, so always refuse
+        // development-marked token responses.
+        if validate_response_headers(response.headers(), PeerPolicy::RefuseDevelopmentPeer).is_err()
+        {
             return Err(TokenError::Protocol { status });
         }
         let media_type = exact_content_type(response.headers()).map(str::to_owned);

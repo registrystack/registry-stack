@@ -179,8 +179,10 @@ impl Casework {
                 .as_str(),
         )
         .await;
-        let client = CaseworkClient::new(CaseworkClientConfig::new(base_url.clone()))
-            .expect("native Casework client");
+        let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
+            base_url.clone(),
+        ))
+        .expect("native Casework client");
         Self {
             base_url,
             audit_path,

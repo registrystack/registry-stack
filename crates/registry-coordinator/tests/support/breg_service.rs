@@ -432,7 +432,7 @@ impl Breg {
             chrono::Utc::now().timestamp() + 300,
         );
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(base_url.parse().unwrap())
+            BaseRegistryClientConfig::new_without_peer_policy(base_url.parse().unwrap())
                 .with_token_provider(std::sync::Arc::new(StaticToken::new(token).unwrap()))
                 .with_maximum_mutation_retries(0),
         )

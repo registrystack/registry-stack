@@ -493,8 +493,12 @@ fn evidence_client_if_trusted(
     let accepted =
         accept_service_selection(selection, |candidate| trust.accepts(candidate)).ok()?;
     let token = credentials.evidence();
-    let config =
-        EvidenceClientConfig::new(accepted.base_url().clone(), token, trusted_jwks, Vec::new());
+    let config = EvidenceClientConfig::new_without_peer_policy(
+        accepted.base_url().clone(),
+        token,
+        trusted_jwks,
+        Vec::new(),
+    );
     Some(EvidenceClient::new(config).expect("the trusted Evidence client builds"))
 }
 
@@ -572,7 +576,7 @@ async fn complete_evidence_journey_builds_selects_trusts_and_invokes_a_signed_as
 
     let discovery = start_discovery(&index_path).await;
     let client = DiscoveryClient::new(
-        DiscoveryClientConfig::new(discovery.base_url.clone())
+        DiscoveryClientConfig::new_without_peer_policy(discovery.base_url.clone())
             .with_connect_timeout(Duration::from_secs(1))
             .with_attempt_timeout(Duration::from_secs(1)),
     )

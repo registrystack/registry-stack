@@ -95,7 +95,8 @@ async function serve(context, answer) {
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       requests.push({ method: request.method, path: request.url, headers: request.headers, body });
-      const { status, document, contentType = status === 200 ? 'application/json' : 'application/problem+json' } = answer(request);
+      const { status, document, posture, contentType = status === 200 ? 'application/json' : 'application/problem+json' } = answer(request);
+      if (posture) response.setHeader('registry-posture', posture);
       response.writeHead(status, { 'content-type': contentType, traceparent: TRACEPARENT });
       response.end(JSON.stringify(document));
     });
@@ -114,8 +115,8 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.CoordinatorClientError, 'function');
 });
 
-test('start preserves the caller token, key, and input', async (context) => {
-  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: STATUS }));
+test('start accepts a development peer and preserves the caller token, key, and input', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: STATUS, posture: 'development' }));
   const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
   const request = { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: { record: 'case-42', priority: 2 } };

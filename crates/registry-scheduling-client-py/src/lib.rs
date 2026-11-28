@@ -126,6 +126,11 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             trace_id,
             ..MappedError::default()
         },
+        RustClientError::DevelopmentPeer => MappedError {
+            kind: "development-peer",
+            message: RustClientError::DevelopmentPeer.to_string(),
+            ..MappedError::default()
+        },
         RustClientError::Protocol {
             status,
             failure,
@@ -345,7 +350,10 @@ impl SchedulingClient {
                 "Scheduling client configuration is invalid",
             )
         })?;
-        let mut config = SchedulingClientConfig::new(base_url);
+        let mut config = SchedulingClientConfig::new(
+            base_url,
+            scheduling_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(value) = attempt_timeout_seconds {
             config = config.with_attempt_timeout(duration(py, value)?);
         }

@@ -122,7 +122,7 @@ async fn caller_metadata_vocabulary_codes_prepare_and_recover_exactly() {
     });
     let tokens = Arc::new(StaticToken(AtomicUsize::new(0)));
     let client = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(
+        BaseRegistryClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/tenant/base")).unwrap(),
         )
         .with_token_provider(tokens.clone()),
@@ -191,7 +191,7 @@ async fn saved_command_refuses_after_registry_revision_change() {
         .await
         .expect("serve mock registry");
     });
-    let config = BaseRegistryClientConfig::new(
+    let config = BaseRegistryClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/tenant/base")).expect("base URL"),
     )
     .with_token_provider(Arc::new(StaticToken(AtomicUsize::new(0))));

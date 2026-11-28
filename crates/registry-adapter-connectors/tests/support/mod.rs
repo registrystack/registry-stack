@@ -849,7 +849,7 @@ pub fn empty_prefix_digest() -> String {
 pub fn direct_client(base_url: &str) -> BaseRegistryClient {
     let token = Arc::new(StaticToken::new(TOKEN).expect("static token"));
     BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(Url::parse(base_url).expect("base url"))
+        BaseRegistryClientConfig::new_without_peer_policy(Url::parse(base_url).expect("base url"))
             .with_token_provider(token)
             .with_maximum_mutation_retries(0),
     )

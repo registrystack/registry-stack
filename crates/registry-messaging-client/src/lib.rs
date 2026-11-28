@@ -58,3 +58,4 @@ pub use registry_messaging_core::{
     MESSAGE_RECEIPT_PATH, MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
+pub use registry_platform_httputil::PeerPolicy;

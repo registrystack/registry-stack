@@ -891,7 +891,7 @@ async fn a_served_runtime_is_ready_and_keeps_metrics_on_the_private_listener() {
     assert_eq!(get(metrics, "/ready").await, Some(404));
 
     // The published client reads the served runtime as the contract promises.
-    let client = MessagingClient::new(MessagingClientConfig::new(
+    let client = MessagingClient::new(MessagingClientConfig::new_without_peer_policy(
         url::Url::parse(&format!("http://{public}/")).expect("the runtime URL"),
     ))
     .expect("a messaging client");

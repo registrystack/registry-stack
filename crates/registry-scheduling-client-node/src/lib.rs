@@ -104,7 +104,10 @@ impl SchedulingClient {
                 "Scheduling client configuration is invalid",
             )
         })?;
-        let mut core = CoreConfig::new(base_url);
+        let mut core = CoreConfig::new(
+            base_url,
+            registry_scheduling_client::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(value) = config.attempt_timeout_milliseconds {
             core = core.with_attempt_timeout(Duration::from_millis(whole_number(value)?));
         }
@@ -583,6 +586,10 @@ fn error_envelope(error: SchedulingClientError) -> Value {
             "title": code.title(),
             "detail": code.detail(),
             "message": code.detail(),
+        }),
+        SchedulingClientError::DevelopmentPeer => json!({
+            "kind": "development-peer",
+            "message": SchedulingClientError::DevelopmentPeer.to_string(),
         }),
         SchedulingClientError::Protocol {
             status,

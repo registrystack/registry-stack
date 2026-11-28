@@ -72,7 +72,7 @@ impl RealEvidenceProvider {
         let jwks: JwksDocument =
             serde_json::from_slice(&std::fs::read(ready["jwksFile"].as_str().unwrap()).unwrap())
                 .unwrap();
-        let config = EvidenceClientConfig::new(
+        let config = EvidenceClientConfig::new_without_peer_policy(
             ready["baseUrl"].as_str().unwrap().parse().unwrap(),
             Arc::new(StaticToken::new(token.trim()).unwrap()),
             jwks,
@@ -100,7 +100,7 @@ impl RealEvidenceProvider {
             &std::fs::read(self.ready["jwksFile"].as_str().unwrap()).unwrap(),
         )
         .unwrap();
-        let config = EvidenceClientConfig::new(
+        let config = EvidenceClientConfig::new_without_peer_policy(
             self.ready["baseUrl"].as_str().unwrap().parse().unwrap(),
             Arc::new(StaticToken::new(token.trim()).unwrap()),
             jwks,

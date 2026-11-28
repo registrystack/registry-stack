@@ -43,4 +43,5 @@ pub use model::{
     StepStatus, WaitStatus, WorkflowContract,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
+pub use registry_platform_httputil::PeerPolicy;
 pub use uuid::Uuid;

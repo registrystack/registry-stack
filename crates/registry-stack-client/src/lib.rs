@@ -29,8 +29,9 @@ pub mod breg {
         BRegProposalSubmission, BRegProposalSubmissionApplication, BRegProposalTurn,
         BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
         BRegRecoveryHint, BRegRequestError, BRegResponseMetadata, BRegVerifiedHookDelivery,
-        BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, PolicySelection,
-        ReviewProgressCode, Uuid, EVENT_RECORD_DESCRIPTOR_VERSION, EVENT_RECORD_VIEW_CONTRACT,
+        BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, PeerPolicy,
+        PolicySelection, ReviewProgressCode, Uuid, EVENT_RECORD_DESCRIPTOR_VERSION,
+        EVENT_RECORD_VIEW_CONTRACT,
     };
 }
 
@@ -48,30 +49,30 @@ pub mod casework {
         DirectoryTeamUpdateRequest, ElapsedDuration, EqualsPredicate, HolidaySetDocument,
         HolidaySetRevisionInput, HumanIdentity, HumanSourceCredential, IssuerPrincipal,
         OneOfPredicate, OwnReviewDecision, OwnReviewDecisionPage, OwnReviewDecisionQuery, Page,
-        PageStatus, PolicyBinding, PolicySelection, QueueRecord, ReviewAccountabilityRecord,
-        ReviewCancelRequest, ReviewCancelResponse, ReviewCaseloadApplyRequest,
-        ReviewCaseloadMoveRequest, ReviewCaseloadPreview, ReviewCaseloadResult, ReviewCaseloadTask,
-        ReviewClockOccurrence, ReviewClockRecomputeApplyRequest, ReviewClockRecomputePreview,
-        ReviewClockRecomputeRequest, ReviewClockRecomputeResult, ReviewClockRecomputeTask,
-        ReviewCompletion, ReviewCompletionType, ReviewContext, ReviewContextCapability,
-        ReviewContextContract, ReviewContextPolicy, ReviewContextProviderPolicy,
-        ReviewCreateRequest, ReviewDecisionReceipt, ReviewDecisionType, ReviewHistoryAudience,
-        ReviewHistoryEntry, ReviewHistoryPage, ReviewMutationErrorClass,
-        ReviewNegativeDecisionMode, ReviewNoteRequest, ReviewPageQuery, ReviewPolicy,
-        ReviewPolicyClosure, ReviewPolicyDependencies, ReviewProgressCode, ReviewPurpose,
-        ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
-        ReviewResultFeedEntry, ReviewResultFeedPage, ReviewResultObservation, ReviewResultResponse,
-        ReviewResultStatus, ReviewSourceBindingStatus, ReviewSourceProjection, ReviewStaffingQuery,
-        ReviewStagePolicy, ReviewTask, ReviewTaskContext, ReviewTaskContextData,
-        ReviewTaskDecisionRequest, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskOwnership,
-        ReviewTaskPage, ReviewTaskSort, ReviewTaskState, ReviewValidationError,
-        ReviewValidationReason, RoutingCondition, RoutingPredicate, RoutingRule,
-        SchedulingTaskPermission, SourceContextBinding, StaffingDiagnostic, StageClockAnchor,
-        StageClockAnchorType, SubjectBinding, SubjectClockAnchor, SubjectClockAnchorType,
-        SubmissionDigest, SupervisoryReviewTask, SupervisoryReviewTaskPage,
-        SupervisoryReviewTaskQuery, SupervisoryReviewTaskState, TaskApprovalRequest,
-        TaskAssertionResponse, TaskAuthorizationMode, TaskGrantBounds, TaskGrantList,
-        TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
+        PageStatus, PeerPolicy, PolicyBinding, PolicySelection, QueueRecord,
+        ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse,
+        ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest, ReviewCaseloadPreview,
+        ReviewCaseloadResult, ReviewCaseloadTask, ReviewClockOccurrence,
+        ReviewClockRecomputeApplyRequest, ReviewClockRecomputePreview, ReviewClockRecomputeRequest,
+        ReviewClockRecomputeResult, ReviewClockRecomputeTask, ReviewCompletion,
+        ReviewCompletionType, ReviewContext, ReviewContextCapability, ReviewContextContract,
+        ReviewContextPolicy, ReviewContextProviderPolicy, ReviewCreateRequest,
+        ReviewDecisionReceipt, ReviewDecisionType, ReviewHistoryAudience, ReviewHistoryEntry,
+        ReviewHistoryPage, ReviewMutationErrorClass, ReviewNegativeDecisionMode, ReviewNoteRequest,
+        ReviewPageQuery, ReviewPolicy, ReviewPolicyClosure, ReviewPolicyDependencies,
+        ReviewProgressCode, ReviewPurpose, ReviewRequestAccepted, ReviewRequestLifecycle,
+        ReviewRequestView, ReviewResult, ReviewResultFeedEntry, ReviewResultFeedPage,
+        ReviewResultObservation, ReviewResultResponse, ReviewResultStatus,
+        ReviewSourceBindingStatus, ReviewSourceProjection, ReviewStaffingQuery, ReviewStagePolicy,
+        ReviewTask, ReviewTaskContext, ReviewTaskContextData, ReviewTaskDecisionRequest,
+        ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskOwnership, ReviewTaskPage, ReviewTaskSort,
+        ReviewTaskState, ReviewValidationError, ReviewValidationReason, RoutingCondition,
+        RoutingPredicate, RoutingRule, SchedulingTaskPermission, SourceContextBinding,
+        StaffingDiagnostic, StageClockAnchor, StageClockAnchorType, SubjectBinding,
+        SubjectClockAnchor, SubjectClockAnchorType, SubmissionDigest, SupervisoryReviewTask,
+        SupervisoryReviewTaskPage, SupervisoryReviewTaskQuery, SupervisoryReviewTaskState,
+        TaskApprovalRequest, TaskAssertionResponse, TaskAuthorizationMode, TaskGrantBounds,
+        TaskGrantList, TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
         TaskPermission, TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, Uuid, WorkingDays,
         WorkingDaysBefore, WorkingWeekday,
     };
@@ -82,11 +83,12 @@ pub mod messaging {
         type_uri, AttemptOutcome, AttemptSummary, BearerToken, Channel, DirectContent,
         MessageDispatch, MessageLinks, MessageReceipt, MessageReport, MessageStatus, MessageView,
         MessagingClient, MessagingClientConfig, MessagingClientError, MessagingComplete,
-        MessagingProtocolFailure, ProblemCode, Recipient, RenderedParts, SegmentCount, SmsEncoding,
-        SubmitMessageRequest, TemplatePreview, TemplatePreviewRequest, TemplateReference,
-        TransportKind, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
-        MAXIMUM_RETRY_AFTER_SECONDS, MESSAGES_PATH, MESSAGE_CANCEL_PATH, MESSAGE_PATH,
-        MESSAGE_RECEIPT_PATH, MESSAGING_PROBLEM_TYPE_BASE, READY_PATH, TEMPLATE_PREVIEW_PATH,
+        MessagingProtocolFailure, PeerPolicy, ProblemCode, Recipient, RenderedParts, SegmentCount,
+        SmsEncoding, SubmitMessageRequest, TemplatePreview, TemplatePreviewRequest,
+        TemplateReference, TransportKind, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER,
+        MAXIMUM_IDEMPOTENCY_KEY_BYTES, MAXIMUM_RETRY_AFTER_SECONDS, MESSAGES_PATH,
+        MESSAGE_CANCEL_PATH, MESSAGE_PATH, MESSAGE_RECEIPT_PATH, MESSAGING_PROBLEM_TYPE_BASE,
+        READY_PATH, TEMPLATE_PREVIEW_PATH,
     };
 }
 
@@ -104,7 +106,7 @@ pub mod scheduling {
         HoldDocument, LocationDocument, ManagerSelection, OfferingDocument,
         OperationalAllocationDocument, OperationalAppointmentDocument, OperationalAppointmentQuery,
         OperationalTimeBasis, PageDocument, PartyCounts, PartyCountsRequirement, PartyReference,
-        PartyReferenceRole, ProblemCode, RecordAttendanceRequest, ReminderDocument,
+        PartyReferenceRole, PeerPolicy, ProblemCode, RecordAttendanceRequest, ReminderDocument,
         RescheduleAppointmentRequest, ResourceDocument, SchedulingAuth, SchedulingClient,
         SchedulingClientConfig, SchedulingClientError, SchedulingComplete, SchedulingModeDocument,
         SchedulingProtocolFailure, SchedulingServiceDocument, ServiceDocument, TransportKind,
@@ -123,8 +125,8 @@ pub mod discovery {
         accept_service_selection, renew_unchanged_service_selection, AcceptedServiceSelection,
         DiscoveryClient, DiscoveryClientConfig, DiscoveryClientError, DiscoveryProblem,
         EvidenceResolutionContext, EvidenceSelectionRequest, EvidenceServiceQuery,
-        EvidenceServiceSelection, MatchedCapability, SelectionRequest, ServiceKind, ServiceRecord,
-        ServiceSearchResponse, ServiceSelection,
+        EvidenceServiceSelection, MatchedCapability, PeerPolicy, SelectionRequest, ServiceKind,
+        ServiceRecord, ServiceSearchResponse, ServiceSelection,
     };
 }
 
@@ -133,7 +135,7 @@ pub mod evidence {
         AssuranceProfile, AudienceScopedRequest, AudienceScopedResult, EvidenceClient,
         EvidenceClientConfig, EvidenceClientError, EvidenceRequestBatchItemSpec,
         EvidenceRequestBatchSpec, EvidenceRequestSpec, EvidenceResponseFormat,
-        HolderBoundRequestSpec, HolderPublicKey, NonVerifyingEvidenceClient,
+        HolderBoundRequestSpec, HolderPublicKey, NonVerifyingEvidenceClient, PeerPolicy,
         PreparedEvidenceRequest, PreparedEvidenceRequestBatch, PreparedHolderBoundRequest,
         ProgressivePreparedRequest, RawEvidenceRequestBatchResponse, RawEvidenceResponse,
         RetainedEvidenceVerification, SelectorValue, SubjectBindingReceipt, SubjectContinuity,
@@ -162,3 +164,16 @@ pub mod auth {
 
 pub use registry_coordinator_client as coordinator;
 pub use registry_render_client as render;
+
+#[cfg(test)]
+mod tests {
+    use crate::breg::{BaseRegistryClientConfig, PeerPolicy};
+
+    #[test]
+    fn breg_config_uses_the_facade_peer_policy() {
+        let _config = BaseRegistryClientConfig::new(
+            "http://127.0.0.1:8080".parse().unwrap(),
+            PeerPolicy::RefuseDevelopmentPeer,
+        );
+    }
+}

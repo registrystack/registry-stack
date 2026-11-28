@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! One-exchange bounded HTTP operations against Registry Discovery.
 
+use crate::PeerPolicy;
 use std::time::Duration;
 
 use registry_discovery::query::{service_matches_filters, validate_service_filters};
@@ -14,7 +15,7 @@ use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers_without_peer_policy};
+use registry_platform_httputil::{read_bounded, validate_response_headers, ResponseHeaderError};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -84,6 +85,7 @@ impl EvidenceServiceQuery {
 }
 
 pub struct DiscoveryClientConfig {
+    pub(crate) peer_policy: PeerPolicy,
     base_url: url::Url,
     attempt_timeout: Duration,
     connect_timeout: Duration,
@@ -92,9 +94,14 @@ pub struct DiscoveryClientConfig {
 }
 
 impl DiscoveryClientConfig {
+    pub fn new_without_peer_policy(base_url: url::Url) -> Self {
+        Self::new(base_url, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     #[must_use]
-    pub fn new(base_url: url::Url) -> Self {
+    pub fn new(base_url: url::Url, peer_policy: PeerPolicy) -> Self {
         Self {
+            peer_policy,
             base_url,
             attempt_timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(10),
@@ -148,6 +155,7 @@ impl std::fmt::Debug for DiscoveryClientConfig {
 
 #[derive(Clone)]
 pub struct DiscoveryClient {
+    peer_policy: PeerPolicy,
     base_url: ServiceBaseUrl,
     http: reqwest::Client,
     maximum_response_bytes: u64,
@@ -175,6 +183,7 @@ impl DiscoveryClient {
         })
         .map_err(|_| DiscoveryClientError::Configuration)?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             base_url,
             http,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -257,8 +266,12 @@ impl DiscoveryClient {
             .send()
             .await
             .map_err(|error| DiscoveryClientError::transport(send_failure_kind(&error)))?;
-        validate_response_headers_without_peer_policy(response.headers())
-            .map_err(|_| DiscoveryClientError::Protocol)?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => DiscoveryClientError::DevelopmentPeer,
+                _ => DiscoveryClientError::Protocol,
+            },
+        )?;
         let status = response.status();
         if status.is_success() && status != StatusCode::OK {
             return Err(DiscoveryClientError::Protocol);
@@ -884,9 +897,10 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let config =
-            DiscoveryClientConfig::new(url::Url::parse(&format!("http://{address}")).unwrap())
-                .with_maximum_response_bytes(maximum);
+        let config = DiscoveryClientConfig::new_without_peer_policy(
+            url::Url::parse(&format!("http://{address}")).unwrap(),
+        )
+        .with_maximum_response_bytes(maximum);
         (DiscoveryClient::new(config).unwrap(), state)
     }
 
@@ -922,7 +936,7 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = DiscoveryClient::new(DiscoveryClientConfig::new(
+        let client = DiscoveryClient::new(DiscoveryClientConfig::new_without_peer_policy(
             url::Url::parse(&format!("http://{address}")).unwrap(),
         ))
         .unwrap();
@@ -1304,7 +1318,7 @@ mod tests {
 
     #[test]
     fn config_debug_never_renders_the_full_url() {
-        let config = DiscoveryClientConfig::new(
+        let config = DiscoveryClientConfig::new_without_peer_policy(
             url::Url::parse("https://secret-host-canary.invalid/private-path").unwrap(),
         );
         let rendered = format!("{config:?}");
@@ -1314,15 +1328,64 @@ mod tests {
 
     #[test]
     fn production_client_requires_https_and_permits_only_explicit_loopback_http() {
-        let public_http = DiscoveryClientConfig::new(
+        let public_http = DiscoveryClientConfig::new_without_peer_policy(
             url::Url::parse("http://discovery.example.invalid").unwrap(),
         );
         assert!(matches!(
             DiscoveryClient::new(public_http),
             Err(DiscoveryClientError::Configuration)
         ));
-        let loopback =
-            DiscoveryClientConfig::new(url::Url::parse("http://127.0.0.1:8080").unwrap());
+        let loopback = DiscoveryClientConfig::new_without_peer_policy(
+            url::Url::parse("http://127.0.0.1:8080").unwrap(),
+        );
         assert!(DiscoveryClient::new(loopback).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move { (headers, r#"{}"#) }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    DiscoveryClient::new(DiscoveryClientConfig::new(url.clone(), policy)).unwrap();
+                let response = client
+                    .exchange::<serde_json::Value, ()>(Method::GET, "v1/test", None, None)
+                    .await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    assert!(matches!(
+                        response,
+                        Err(DiscoveryClientError::DevelopmentPeer)
+                    ));
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
+        }
     }
 }

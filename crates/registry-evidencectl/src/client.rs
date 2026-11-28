@@ -366,7 +366,7 @@ fn fetch_contracts(args: ContractsFetchArgs) -> Result<ExitCode> {
     // here would merely copy the already-reviewed file instead of discovering
     // what the deployment currently publishes.
     profile.contracts = registry_evidence_client::ContractsProfile::Published;
-    let client = EvidenceClient::from_profile(profile)
+    let client = EvidenceClient::from_profile_without_peer_policy(profile)
         .map_err(|_| anyhow::anyhow!("client contract discovery failed"))?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

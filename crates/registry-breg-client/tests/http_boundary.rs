@@ -42,6 +42,7 @@ struct CapturedRequest {
 #[derive(Clone, Copy)]
 enum Mode {
     Happy,
+    PeerPosture(&'static str),
     MissingLink,
     BadLink,
     DuplicateLink,
@@ -100,6 +101,13 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
         .push(captured.clone());
 
     match state.mode {
+        Mode::PeerPosture(posture) => {
+            let mut response = happy_response(&captured, Mode::Happy);
+            response
+                .headers_mut()
+                .insert("registry-posture", posture.parse().unwrap());
+            response
+        }
         Mode::Redirect => redirect_response(),
         Mode::ChangedProblemProse => changed_problem_prose(),
         Mode::UnknownProblem(status, change) => unknown_problem(status, change),
@@ -440,6 +448,15 @@ async fn test_client(
     provider: Option<Arc<dyn TokenProvider>>,
     maximum: u64,
 ) -> (BaseRegistryClient, Arc<Mutex<Vec<CapturedRequest>>>) {
+    test_client_with_policy(mode, provider, maximum, None).await
+}
+
+async fn test_client_with_policy(
+    mode: Mode,
+    provider: Option<Arc<dyn TokenProvider>>,
+    maximum: u64,
+    policy: Option<registry_breg_client::PeerPolicy>,
+) -> (BaseRegistryClient, Arc<Mutex<Vec<CapturedRequest>>>) {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
     let address = listener.local_addr().expect("server address");
@@ -455,9 +472,11 @@ async fn test_client(
         .await
         .expect("test server");
     });
-    let mut config = BaseRegistryClientConfig::new(
-        Url::parse(&format!("http://{address}/tenant/prefix")).expect("base URL"),
-    )
+    let base_url = Url::parse(&format!("http://{address}/tenant/prefix")).expect("base URL");
+    let mut config = match policy {
+        Some(policy) => BaseRegistryClientConfig::new(base_url, policy),
+        None => BaseRegistryClientConfig::new_without_peer_policy(base_url),
+    }
     .with_maximum_response_bytes(maximum);
     if let Some(provider) = provider {
         config = config.with_token_provider(provider);
@@ -1022,4 +1041,35 @@ fn probe_status_ignores_members_it_does_not_know() {
         )
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn breg_refusal_identifies_the_development_peer() {
+    let (client, _) = test_client(Mode::PeerPosture("development"), None, 1024).await;
+    let error = client.health().await.expect_err("development peer refused");
+    assert_eq!(error.kind(), "development-peer");
+}
+
+#[tokio::test]
+async fn breg_applies_the_peer_policy_to_health_responses() {
+    use registry_breg_client::PeerPolicy::{AcceptDevelopmentPeer, RefuseDevelopmentPeer};
+
+    for policy in [AcceptDevelopmentPeer, RefuseDevelopmentPeer] {
+        for mode in [
+            Mode::Happy,
+            Mode::PeerPosture("production"),
+            Mode::PeerPosture("development"),
+        ] {
+            let (client, _) = test_client_with_policy(mode, None, 1024, Some(policy)).await;
+            let response = client.health().await;
+            if policy == RefuseDevelopmentPeer && matches!(mode, Mode::PeerPosture("development")) {
+                assert!(matches!(
+                    response,
+                    Err(BaseRegistryClientError::DevelopmentPeer)
+                ));
+            } else {
+                response.expect("peer response accepted");
+            }
+        }
+    }
 }

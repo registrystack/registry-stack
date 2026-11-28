@@ -62,8 +62,8 @@ pub enum ResponseHeaderError {
 /// Enforce strict field-count and aggregate-byte bounds before inspecting response headers,
 /// then refuse a development-marked peer when `peer` says to.
 ///
-/// The peer's posture field is the exact value `development`. An absent field,
-/// `production`, or any other value passes.
+/// A peer declares development when any comma-separated posture value is
+/// `development` after trimming spaces and tabs.
 pub fn validate_response_headers(
     headers: &HeaderMap,
     peer: PeerPolicy,
@@ -93,7 +93,8 @@ pub fn validate_response_headers(
         && headers
             .get_all(registry_platform_posture::POSTURE_HEADER)
             .iter()
-            .any(|value| value.as_bytes() == registry_platform_posture::DEVELOPMENT.as_bytes())
+            .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+            .any(|value| value.trim_ascii() == registry_platform_posture::DEVELOPMENT.as_bytes())
     {
         return Err(ResponseHeaderError::DevelopmentPeer);
     }
@@ -1817,6 +1818,37 @@ mod tests {
                 validate_response_headers_without_peer_policy(&headers),
                 validate_response_headers(&headers, PeerPolicy::RefuseDevelopmentPeer),
                 "transitional entry point behaves as production, {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn folded_development_posture_follows_peer_policy() {
+        for (posture, is_development) in [
+            (Some("development, development"), true),
+            (Some("production, development"), true),
+            (Some("production,\t development "), true),
+            (Some("production"), false),
+            (None, false),
+        ] {
+            let mut headers = HeaderMap::new();
+            if let Some(posture) = posture {
+                headers.insert(
+                    registry_platform_posture::POSTURE_HEADER,
+                    posture.parse().unwrap(),
+                );
+            }
+            assert_eq!(
+                validate_response_headers(&headers, PeerPolicy::RefuseDevelopmentPeer),
+                if is_development {
+                    Err(ResponseHeaderError::DevelopmentPeer)
+                } else {
+                    Ok(())
+                },
+            );
+            assert_eq!(
+                validate_response_headers(&headers, PeerPolicy::AcceptDevelopmentPeer),
+                Ok(()),
             );
         }
     }

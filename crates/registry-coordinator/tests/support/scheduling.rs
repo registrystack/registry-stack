@@ -238,7 +238,7 @@ impl Scheduling {
             .spawn()
             .unwrap();
         let base_url = format!("http://{address}");
-        let client = SchedulingClient::new(SchedulingClientConfig::new(
+        let client = SchedulingClient::new(SchedulingClientConfig::new_without_peer_policy(
             base_url.parse().expect("Scheduling URL"),
         ))
         .unwrap();

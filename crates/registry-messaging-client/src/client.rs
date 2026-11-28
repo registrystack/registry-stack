@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::PeerPolicy;
 use std::fmt;
 
 use registry_messaging_core::{
@@ -15,8 +16,8 @@ use registry_platform_httputil::client::{
     ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, retry_after_seconds, url::append_path_segments,
-    validate_response_headers_without_peer_policy,
+    read_bounded, retry_after_seconds, url::append_path_segments, validate_response_headers,
+    ResponseHeaderError,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Response, StatusCode, Url};
@@ -47,6 +48,7 @@ pub struct MessagingComplete<T> {
 }
 
 pub struct MessagingClient {
+    peer_policy: PeerPolicy,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
@@ -75,6 +77,7 @@ impl MessagingClient {
         })
         .map_err(|_| MessagingClientError::configuration("the HTTP client could not be built"))?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             http,
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -390,13 +393,16 @@ impl MessagingClient {
             .map_err(|error| MessagingClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
-            protocol(
-                response.status(),
-                MessagingProtocolFailure::HeaderBounds,
-                None,
-            )
-        })?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => MessagingClientError::DevelopmentPeer,
+                _ => protocol(
+                    response.status(),
+                    MessagingProtocolFailure::HeaderBounds,
+                    None,
+                ),
+            },
+        )?;
         Ok(response)
     }
 
@@ -551,5 +557,53 @@ fn protocol(
         status: status.as_u16(),
         failure,
         trace_id,
+    }
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move {
+                    (headers, r#"{"status":"alive"}"#)
+                }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    MessagingClient::new(MessagingClientConfig::new(url.clone(), policy)).unwrap();
+                let response = client.health().await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    assert!(matches!(
+                        response,
+                        Err(MessagingClientError::DevelopmentPeer)
+                    ));
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
+        }
     }
 }

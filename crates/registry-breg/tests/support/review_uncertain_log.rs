@@ -23,7 +23,10 @@ async fn uncertain_submission_logs_one_bounded_value_free_transition() {
         .await
         .unwrap();
     });
-    let remote = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+    let remote = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
+        endpoint.parse().unwrap(),
+    ))
+    .unwrap();
     let logs = CapturedDiagnosticLogs::default();
     let subscriber = logs.subscriber_with_max_level(tracing::Level::DEBUG);
     let client = fixture.pool.get_for_test().await.unwrap();

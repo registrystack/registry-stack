@@ -15,7 +15,7 @@ or fetch referenced resources.
 ```rust
 use std::sync::Arc;
 use registry_breg_client::{
-    BaseRegistryClient, BaseRegistryClientConfig, StaticToken,
+    BaseRegistryClient, BaseRegistryClientConfig, PeerPolicy, StaticToken,
 };
 use url::Url;
 
@@ -23,6 +23,7 @@ use url::Url;
 let token = Arc::new(StaticToken::new("short-lived-access-token")?);
 let config = BaseRegistryClientConfig::new(
     Url::parse("https://breg.example/institution-a")?,
+    PeerPolicy::AcceptDevelopmentPeer,
 )
 .with_token_provider(token);
 let client = BaseRegistryClient::new(config)?;

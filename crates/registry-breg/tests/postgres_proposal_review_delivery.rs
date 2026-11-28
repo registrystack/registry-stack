@@ -189,13 +189,16 @@ impl Authority {
             axum::serve(listener, app).await.unwrap();
         });
         let client = Arc::new(
-            ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap(),
+            ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
+                endpoint.parse().unwrap(),
+            ))
+            .unwrap(),
         );
         let make_authority = |id: &str, recipient: &str, keys| {
             Arc::new(
                 ReviewAuthorityClient::new(
                     id.into(),
-                    ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap(),
+                    ReviewClient::new(ReviewClientConfig::new_without_peer_policy(endpoint.parse().unwrap())).unwrap(),
                     Arc::new(Token),
                     "producer".into(),
                     PRODUCER.into(),
@@ -2084,7 +2087,10 @@ async fn native_submission_remote_refusal_warns_the_operator_without_values() {
         .await
         .unwrap();
     });
-    let refusing = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+    let refusing = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
+        endpoint.parse().unwrap(),
+    ))
+    .unwrap();
     let logs = CapturedDiagnosticLogs::default();
     let subscriber = logs.subscriber_with_max_level(tracing::Level::DEBUG);
     let client = fixture.pool.get_for_test().await.unwrap();
@@ -2206,7 +2212,10 @@ async fn review_status_reports_the_handoff_state_before_and_after_acceptance() {
         .await
         .unwrap();
     });
-    let refusing = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+    let refusing = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
+        endpoint.parse().unwrap(),
+    ))
+    .unwrap();
     let client = fixture.pool.get_for_test().await.unwrap();
     assert!(run_one_submission(
         &**client,
@@ -2385,8 +2394,10 @@ async fn native_submission_remote_refusal_names_only_an_allowlisted_reason_on_th
             .await
             .unwrap();
         });
-        let refusing =
-            ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+        let refusing = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
+            endpoint.parse().unwrap(),
+        ))
+        .unwrap();
         let client = fixture.pool.get_for_test().await.unwrap();
         assert!(run_one_submission(
             &**client,
@@ -2537,7 +2548,10 @@ async fn a_handoff_refusal_is_named_only_while_the_refused_submission_is_current
         .await
         .unwrap();
     });
-    let refusing = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+    let refusing = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
+        endpoint.parse().unwrap(),
+    ))
+    .unwrap();
     let refused = Some(json!({"code": "review.policy-mismatch"}));
     let set_aside = |id: Uuid, assignment: &'static str| {
         let admin = &fixture.database.admin;

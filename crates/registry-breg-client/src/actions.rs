@@ -1668,10 +1668,11 @@ mod tests {
 
     #[test]
     fn prepared_action_preserves_original_conditions_and_refuses_changed_authority_or_input() {
-        let client = BaseRegistryClient::new(crate::BaseRegistryClientConfig::new(
-            "https://registry.example/".parse().unwrap(),
-        ))
-        .unwrap();
+        let client =
+            BaseRegistryClient::new(crate::BaseRegistryClientConfig::new_without_peer_policy(
+                "https://registry.example/".parse().unwrap(),
+            ))
+            .unwrap();
         let action = action_binding(false);
         let target = serde_json::json!({"targetId":"00000000-0000-4000-8000-000000000001"})
             .as_object()
@@ -1740,10 +1741,11 @@ mod tests {
 
     #[test]
     fn prepared_action_roundtrips_absent_and_explicit_empty_conditions() {
-        let client = BaseRegistryClient::new(crate::BaseRegistryClientConfig::new(
-            "https://registry.example/".parse().unwrap(),
-        ))
-        .unwrap();
+        let client =
+            BaseRegistryClient::new(crate::BaseRegistryClientConfig::new_without_peer_policy(
+                "https://registry.example/".parse().unwrap(),
+            ))
+            .unwrap();
         let action = action_binding_with_conditions(false, false);
         let inputs = json!({"targetId":"00000000-0000-4000-8000-000000000001"})
             .as_object()
@@ -2048,10 +2050,11 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         // Keep the default retry budget: malformed successful evidence is never resent.
-        let client = BaseRegistryClient::new(crate::BaseRegistryClientConfig::new(
-            format!("http://{address}/").parse().unwrap(),
-        ))
-        .unwrap();
+        let client =
+            BaseRegistryClient::new(crate::BaseRegistryClientConfig::new_without_peer_policy(
+                format!("http://{address}/").parse().unwrap(),
+            ))
+            .unwrap();
         let action = action_binding_at_source(false, false, &client.source_binding());
         let input = json!({"targetId":"00000000-0000-4000-8000-000000000001"})
             .as_object()

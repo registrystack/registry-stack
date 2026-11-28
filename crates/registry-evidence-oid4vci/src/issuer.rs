@@ -72,9 +72,9 @@ impl From<EvidenceClientError> for IssuanceError {
             EvidenceClientError::Configuration { .. } | EvidenceClientError::Nonce(_) => {
                 Self::Configuration("the prepared request was refused before it was sent")
             }
-            EvidenceClientError::Protocol { .. } | EvidenceClientError::Verification(_) => {
-                Self::Malformed
-            }
+            EvidenceClientError::Protocol { .. }
+            | EvidenceClientError::Verification(_)
+            | EvidenceClientError::DevelopmentPeer => Self::Malformed,
             // The client's error type is non-exhaustive. A failure this mapping
             // has never seen is one it cannot describe, so it becomes the
             // category that commits to nothing about a subject and tells the
@@ -127,9 +127,9 @@ impl EvidenceIssuer {
         let provider = PrivateKeyJwt::new(provider_config)
             .map_err(|_| IssuanceError::Configuration("the token client identity is unusable"))?;
         let provider: Arc<dyn TokenProvider> = Arc::new(provider);
-        let client = NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
-            base_url, provider,
-        ))
+        let client = NonVerifyingEvidenceClient::new(
+            EvidenceClientConfig::without_verification_without_peer_policy(base_url, provider),
+        )
         .map_err(|_| IssuanceError::Configuration("the Evidence client is unusable"))?;
         Ok(Self {
             client,

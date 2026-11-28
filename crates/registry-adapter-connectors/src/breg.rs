@@ -218,7 +218,7 @@ impl BregConnector {
     pub async fn connect(config: BregConnectorConfig) -> Result<Self, ConnectorFault> {
         // The base URL type is the client configuration's own; parsing stays
         // through it, so this crate carries no URL dependency of its own.
-        let mut client_config = BaseRegistryClientConfig::new(
+        let mut client_config = BaseRegistryClientConfig::new_without_peer_policy(
             config
                 .origin
                 .parse()

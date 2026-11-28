@@ -122,7 +122,7 @@ async fn serve(app: Router) -> (ReviewClient, tokio::task::JoinHandle<()>) {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = ReviewClient::new(ReviewClientConfig::new(
+    let client = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -892,7 +892,7 @@ async fn result_lookup_accepts_only_the_four_defined_statuses_and_shapes() {
 
 #[tokio::test]
 async fn nil_accepted_request_is_refused_before_authenticated_http() {
-    let client = ReviewClient::new(ReviewClientConfig::new(
+    let client = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
         Url::parse("http://127.0.0.1:1/").unwrap(),
     ))
     .unwrap();
@@ -1109,7 +1109,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ("unpaired", ReviewProtocolFailure::Problem),
         ("invalid-uri", ReviewProtocolFailure::Problem),
     ] {
-        let client = ReviewClient::new(ReviewClientConfig::new(
+        let client = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/{prefix}/")).expect("fixture URL"),
         ))
         .expect("client");
@@ -1123,7 +1123,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ));
     }
 
-    let provider_client = ReviewClient::new(ReviewClientConfig::new(
+    let provider_client = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/provider-namespace/")).unwrap(),
     ))
     .unwrap();
@@ -1140,7 +1140,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ReviewMutationErrorClass::Deterministic
     );
 
-    let client = ReviewClient::new(ReviewClientConfig::new(
+    let client = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/valid-problem/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1164,7 +1164,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
                     && validation.reason == ReviewValidationReason::SchemaMismatch)
     ));
 
-    let client = ReviewClient::new(ReviewClientConfig::new(
+    let client = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/server-problem/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1175,7 +1175,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
     assert_eq!(error.mutation_class(), ReviewMutationErrorClass::Ambiguous);
 
     let client = ReviewClient::new(
-        ReviewClientConfig::new(
+        ReviewClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/oversize/")).expect("fixture URL"),
         )
         .with_maximum_response_bytes(32),
@@ -1187,7 +1187,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         .expect_err("oversize response");
     assert!(matches!(error, ReviewClientError::Transport { .. }));
 
-    let client = ReviewClient::new(ReviewClientConfig::new(
+    let client = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/headers/")).expect("fixture URL"),
     ))
     .expect("client");

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::PeerPolicy;
 use std::fmt;
 use std::time::Duration;
 
@@ -17,8 +18,8 @@ use registry_platform_httputil::client::{
     MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers_without_peer_policy,
-    BoundedReadError,
+    read_bounded, url::append_path_segments, validate_response_headers, BoundedReadError,
+    ResponseHeaderError,
 };
 use registry_platform_yaml::Digest;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
@@ -53,6 +54,7 @@ pub type UploadBody = reqwest::Body;
 /// refuses an unusable configuration before any client exists.
 #[derive(Clone)]
 pub struct DocumentsClientConfig {
+    pub(crate) peer_policy: PeerPolicy,
     base_url: Url,
     attempt_timeout: Duration,
     connect_timeout: Duration,
@@ -65,9 +67,14 @@ pub struct DocumentsClientConfig {
 }
 
 impl DocumentsClientConfig {
+    pub fn new_without_peer_policy(base_url: Url) -> Self {
+        Self::new(base_url, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     #[must_use]
-    pub fn new(base_url: Url) -> Self {
+    pub fn new(base_url: Url, peer_policy: PeerPolicy) -> Self {
         Self {
+            peer_policy,
             base_url,
             attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
@@ -234,6 +241,7 @@ impl fmt::Debug for DocumentContent {
 }
 
 pub struct DocumentsClient {
+    peer_policy: PeerPolicy,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
@@ -263,6 +271,7 @@ impl DocumentsClient {
         })
         .map_err(|_| DocumentsClientError::configuration("the HTTP client could not be built"))?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             http,
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -286,8 +295,12 @@ impl DocumentsClient {
                     kind: send_failure_kind(&error),
                 })?;
         let status = response.status();
-        validate_response_headers_without_peer_policy(response.headers())
-            .map_err(|_| protocol(status, DocumentsProtocolFailure::HeaderBounds, None))?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => DocumentsClientError::DevelopmentPeer,
+                _ => protocol(status, DocumentsProtocolFailure::HeaderBounds, None),
+            },
+        )?;
         if status != StatusCode::OK {
             return Err(problem_or_status(response).await);
         }
@@ -697,13 +710,16 @@ impl DocumentsClient {
             .map_err(|error| DocumentsClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
-            protocol(
-                response.status(),
-                DocumentsProtocolFailure::HeaderBounds,
-                None,
-            )
-        })?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => DocumentsClientError::DevelopmentPeer,
+                _ => protocol(
+                    response.status(),
+                    DocumentsProtocolFailure::HeaderBounds,
+                    None,
+                ),
+            },
+        )?;
         Ok(response)
     }
 
@@ -924,7 +940,7 @@ mod tests {
 
     #[test]
     fn debug_withholds_url_and_certificate_material() {
-        let config = DocumentsClientConfig::new(
+        let config = DocumentsClientConfig::new_without_peer_policy(
             Url::parse("https://secret.example.invalid/private").expect("fixture URL"),
         )
         .with_user_agent("secret-agent")
@@ -969,7 +985,7 @@ mod tests {
 
     #[test]
     fn a_route_takes_exactly_its_placeholder_values_in_order() {
-        let client = DocumentsClient::new(DocumentsClientConfig::new(
+        let client = DocumentsClient::new(DocumentsClientConfig::new_without_peer_policy(
             Url::parse("https://documents.example.invalid/store/").expect("fixture URL"),
         ))
         .expect("client");
@@ -988,25 +1004,30 @@ mod tests {
     fn configuration_bounds_are_enforced_before_any_client_exists() {
         let url = Url::parse("https://documents.example.invalid/").expect("fixture URL");
         for config in [
-            DocumentsClientConfig::new(url.clone()).with_attempt_timeout(Duration::ZERO),
-            DocumentsClientConfig::new(url.clone()).with_connect_timeout(Duration::ZERO),
-            DocumentsClientConfig::new(url.clone()).with_trusted_root_certificates(vec![
-                0;
-                MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES
-                    + 1
-            ]),
-            DocumentsClientConfig::new(
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
+                .with_attempt_timeout(Duration::ZERO),
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
+                .with_connect_timeout(Duration::ZERO),
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
+                .with_trusted_root_certificates(vec![
+                    0;
+                    MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES
+                        + 1
+                ]),
+            DocumentsClientConfig::new_without_peer_policy(
                 Url::parse("https://user:pass@documents.example.invalid/").expect("fixture URL"),
             ),
-            DocumentsClientConfig::new(url.clone()).with_maximum_response_bytes(0),
-            DocumentsClientConfig::new(url.clone())
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
+                .with_maximum_response_bytes(0),
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
                 .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES + 1),
-            DocumentsClientConfig::new(url.clone()).with_maximum_download_bytes(0),
-            DocumentsClientConfig::new(url.clone())
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
+                .with_maximum_download_bytes(0),
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
                 .with_maximum_download_bytes(MAXIMUM_DOWNLOAD_BYTES + 1),
-            DocumentsClientConfig::new(url.clone())
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
                 .with_transfer_deadline(Duration::ZERO, Duration::from_secs(8)),
-            DocumentsClientConfig::new(url.clone())
+            DocumentsClientConfig::new_without_peer_policy(url.clone())
                 .with_transfer_deadline(Duration::from_secs(60), Duration::ZERO),
         ] {
             assert!(
@@ -1017,12 +1038,14 @@ mod tests {
                 "{config:?}"
             );
         }
-        assert!(DocumentsClientConfig::new(url.clone())
+        assert!(DocumentsClientConfig::new_without_peer_policy(url.clone())
             .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES)
             .with_maximum_download_bytes(MAXIMUM_DOWNLOAD_BYTES)
             .validate()
             .is_ok());
-        assert!(DocumentsClientConfig::new(url).validate().is_ok());
+        assert!(DocumentsClientConfig::new_without_peer_policy(url)
+            .validate()
+            .is_ok());
     }
 
     /// By default a transfer is allowed the attempt timeout plus the
@@ -1033,8 +1056,9 @@ mod tests {
     fn a_transfer_is_allowed_the_runtime_default_deadline_for_its_length() {
         const MEBIBYTE: u64 = 1024 * 1024;
         let url = Url::parse("https://documents.example.invalid/").expect("fixture URL");
-        let client = DocumentsClient::new(DocumentsClientConfig::new(url.clone()))
-            .expect("a default client");
+        let client =
+            DocumentsClient::new(DocumentsClientConfig::new_without_peer_policy(url.clone()))
+                .expect("a default client");
         let attempt = DEFAULT_REQUEST_TIMEOUT;
         assert_eq!(
             client.transfer_timeout(0),
@@ -1053,12 +1077,59 @@ mod tests {
             attempt + Duration::from_secs(188)
         );
         let larger = DocumentsClient::new(
-            DocumentsClientConfig::new(url).with_maximum_download_bytes(64 * MEBIBYTE),
+            DocumentsClientConfig::new_without_peer_policy(url)
+                .with_maximum_download_bytes(64 * MEBIBYTE),
         )
         .expect("a client with a larger download bound");
         assert_eq!(
             larger.download_timeout(),
             attempt + Duration::from_secs(60 + 8 * 64)
         );
+    }
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move { (headers, r#"{}"#) }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    DocumentsClient::new(DocumentsClientConfig::new(url.clone(), policy)).unwrap();
+                let response = client.health().await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    assert!(matches!(
+                        response,
+                        Err(DocumentsClientError::DevelopmentPeer)
+                    ));
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
+        }
     }
 }

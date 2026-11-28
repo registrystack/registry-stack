@@ -397,7 +397,7 @@ pub fn build_provider(
         token = token.with_scopes(scopes.clone());
     }
     let token = PrivateKeyJwt::new(token).map_err(|_| ReviewContextError::Invalid)?;
-    let config = BaseRegistryClientConfig::new(
+    let config = BaseRegistryClientConfig::new_without_peer_policy(
         url::Url::parse(&binding.base_url).map_err(|_| ReviewContextError::Invalid)?,
     )
     .with_token_provider(Arc::new(token))

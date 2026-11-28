@@ -272,13 +272,14 @@ pub fn activate_verifier(
     match config {
         ContentVerificationConfig::Disabled {} => Ok(Arc::new(DisabledVerifier)),
         ContentVerificationConfig::Http { settings } => {
-            let verifier = HttpVerifierSettings::from_config(settings)?.activate(
-                VerifierNamespace {
-                    binding_domain: HTTP_BINDING_DOMAIN,
-                    max_content_bytes,
-                },
-                resolver,
-            )?;
+            let verifier = HttpVerifierSettings::from_config_without_peer_policy(settings)?
+                .activate(
+                    VerifierNamespace {
+                        binding_domain: HTTP_BINDING_DOMAIN,
+                        max_content_bytes,
+                    },
+                    resolver,
+                )?;
             Ok(Arc::new(verifier))
         }
     }

@@ -138,7 +138,7 @@ async fn protocol_transient_http_failures_retry_reads_but_hold_ambiguous_mutatio
             .mount(&product)
             .await;
         let client = SchedulingClient::new(
-            SchedulingClientConfig::new(product.uri().parse().unwrap())
+            SchedulingClientConfig::new_without_peer_policy(product.uri().parse().unwrap())
                 .with_maximum_mutation_retries(0),
         )
         .unwrap();

@@ -1307,7 +1307,7 @@ async fn execute(
             native.insert(
                 step.client.clone(),
                 BaseRegistryClient::new(
-                    BaseRegistryClientConfig::new(state.breg_origin().parse()?)
+                    BaseRegistryClientConfig::new_without_peer_policy(state.breg_origin().parse()?)
                         .with_token_provider(Arc::new(provider)),
                 )?,
             );
@@ -2649,10 +2649,12 @@ mod tests {
         runtime.block_on(async {
             let bytes = private::read(&state.root().join("secrets/editor-token"), 65536).unwrap();
             let client = BaseRegistryClient::new(
-                BaseRegistryClientConfig::new(state.breg_origin().parse().unwrap())
-                    .with_token_provider(Arc::new(
-                        StaticToken::new(String::from_utf8(bytes).unwrap()).unwrap(),
-                    )),
+                BaseRegistryClientConfig::new_without_peer_policy(
+                    state.breg_origin().parse().unwrap(),
+                )
+                .with_token_provider(Arc::new(
+                    StaticToken::new(String::from_utf8(bytes).unwrap()).unwrap(),
+                )),
             )
             .unwrap();
             client
@@ -2894,8 +2896,10 @@ journeys:
             let bytes = private::read(&state.root().join("secrets/editor-token"), 65536).unwrap();
             let token = zeroize::Zeroizing::new(String::from_utf8(bytes).unwrap());
             let client = BaseRegistryClient::new(
-                BaseRegistryClientConfig::new(state.breg_origin().parse().unwrap())
-                    .with_token_provider(Arc::new(StaticToken::new(token.to_string()).unwrap())),
+                BaseRegistryClientConfig::new_without_peer_policy(
+                    state.breg_origin().parse().unwrap(),
+                )
+                .with_token_provider(Arc::new(StaticToken::new(token.to_string()).unwrap())),
             )
             .unwrap();
             let options = BRegRecordOptions::default()

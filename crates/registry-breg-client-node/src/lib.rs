@@ -463,6 +463,10 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             "traceId": trace_id,
             "message": "Base Registry Engine refused or failed the request with an unrecognized problem code",
         }),
+        BaseRegistryClientError::DevelopmentPeer => json!({
+            "kind": kind,
+            "message": BaseRegistryClientError::DevelopmentPeer.to_string(),
+        }),
         BaseRegistryClientError::Protocol {
             status,
             failure,
@@ -1105,7 +1109,10 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
     )?;
     let base_url = Url::parse(&base_url)
         .map_err(|_| binding_error("configuration", "baseUrl must be a URL"))?;
-    let mut config = BaseRegistryClientConfig::new(base_url);
+    let mut config = BaseRegistryClientConfig::new(
+        base_url,
+        registry_breg_client::PeerPolicy::AcceptDevelopmentPeer,
+    );
     if let Some(value) = object.get("authorization") {
         if let Some(provider) = authorization_provider(value)? {
             config = config.with_token_provider(provider);

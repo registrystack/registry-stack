@@ -81,9 +81,11 @@ impl Fixture {
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let token = Arc::new(CountingToken::default());
         let client = BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(format!("http://{address}/").parse().unwrap())
-                .with_maximum_mutation_retries(0)
-                .with_token_provider(token.clone()),
+            BaseRegistryClientConfig::new_without_peer_policy(
+                format!("http://{address}/").parse().unwrap(),
+            )
+            .with_maximum_mutation_retries(0)
+            .with_token_provider(token.clone()),
         )
         .unwrap();
         let metadata = client

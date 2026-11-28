@@ -138,9 +138,10 @@ async function serve(context, answer) {
         headers: request.headers,
         body,
       });
-      const { status, contentType, document } = answer(request, url);
+      const { status, contentType, document, posture } = answer(request, url);
       const headers = { traceparent: TRACEPARENT };
       if (contentType) headers['content-type'] = contentType;
+      if (posture) response.setHeader('registry-posture', posture);
       response.writeHead(status, headers);
       response.end(document === undefined ? '' : JSON.stringify(document));
     });
@@ -197,9 +198,9 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof exported.SchedulingClientError, 'function');
 });
 
-test('getScheduling answers the deployment and policy with the answered trace', async (context) => {
+test('getScheduling accepts a development peer and returns its policy and trace', async (context) => {
   const service = { schedulingId: 'scheduling-1', policyRevision: 3, policyDigest: 'sha256:abc' };
-  const { client: scheduling, requests } = await client(context, () => answered(200, service));
+  const { client: scheduling, requests } = await client(context, () => ({ ...answered(200, service), posture: 'development' }));
 
   assert.deepEqual(
     await scheduling.getScheduling('one-call-secret'),

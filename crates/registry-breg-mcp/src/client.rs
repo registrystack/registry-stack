@@ -35,7 +35,7 @@ impl BRegClientFactory {
     ) -> Result<BaseRegistryClient, TokenError> {
         BaseRegistryClient::new(
             authorized(
-                BaseRegistryClientConfig::new(self.base_url.clone()),
+                BaseRegistryClientConfig::new_without_peer_policy(self.base_url.clone()),
                 authorization,
             )
             .with_attempt_timeout(self.attempt_timeout)

@@ -380,7 +380,7 @@ export interface EvidenceRequestBatchSpec {
 }
 
 /**
- * The stable ten-kind error envelope every mapped Evidence Node failure
+ * The stable error envelope every mapped Evidence Node failure
  * carries, as properties on a thrown `Error` (see `src/lib.rs`'s
  * `to_napi_error` and `src/convert.rs`'s `map_client_error` for the Rust side
  * of this contract).

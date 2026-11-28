@@ -2483,8 +2483,10 @@ mod tests {
 
         let token = Arc::new(CountingToken::default());
         let client = BaseRegistryClient::new(
-            BaseRegistryClientConfig::new("http://127.0.0.1:9/tenant/".parse().unwrap())
-                .with_token_provider(token.clone()),
+            BaseRegistryClientConfig::new_without_peer_policy(
+                "http://127.0.0.1:9/tenant/".parse().unwrap(),
+            )
+            .with_token_provider(token.clone()),
         )
         .unwrap();
         let binding = BRegProposalTaskContextBinding::from_metadata(
@@ -2515,8 +2517,10 @@ mod tests {
             .is_err());
         request.request_id = Uuid::from_u128(10);
         let foreign = BaseRegistryClient::new(
-            BaseRegistryClientConfig::new("http://127.0.0.1:9/other/".parse().unwrap())
-                .with_token_provider(token.clone()),
+            BaseRegistryClientConfig::new_without_peer_policy(
+                "http://127.0.0.1:9/other/".parse().unwrap(),
+            )
+            .with_token_provider(token.clone()),
         )
         .unwrap();
         assert!(foreign
@@ -4065,7 +4069,10 @@ mod tests {
         }
     }
     fn client(origin: &str) -> BaseRegistryClient {
-        BaseRegistryClient::new(BaseRegistryClientConfig::new(origin.parse().unwrap())).unwrap()
+        BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+            origin.parse().unwrap(),
+        ))
+        .unwrap()
     }
     fn document() -> Value {
         json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,

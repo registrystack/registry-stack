@@ -397,7 +397,7 @@ fn completion_app() -> axum::Router {
     .expect("test connection configuration is valid")
     .build_pool()
     .expect("test pool builds");
-    let review_client = ReviewClient::new(ReviewClientConfig::new(
+    let review_client = ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
         "https://review.example.invalid/"
             .parse()
             .expect("reserved HTTPS URL"),

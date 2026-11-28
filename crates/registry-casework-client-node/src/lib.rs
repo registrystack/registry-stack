@@ -89,7 +89,10 @@ impl CaseworkClient {
         let base_url = Url::parse(&config.base_url).map_err(|_| {
             binding_error("configuration", "Casework client configuration is invalid")
         })?;
-        let mut core = CoreConfig::new(base_url);
+        let mut core = CoreConfig::new(
+            base_url,
+            registry_casework_client::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(value) = config.attempt_timeout_milliseconds {
             let value = positive_u32(value)?;
             core = core.with_attempt_timeout(Duration::from_millis(u64::from(value)));
@@ -1508,6 +1511,10 @@ fn client_error(error: CaseworkClientError) -> NapiError {
                 "message": message,
             })
         }
+        CaseworkClientError::DevelopmentPeer => json!({
+            "kind": "development-peer",
+            "message": CaseworkClientError::DevelopmentPeer.to_string(),
+        }),
         CaseworkClientError::Protocol {
             status,
             failure,
