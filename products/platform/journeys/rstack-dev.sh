@@ -336,19 +336,6 @@ stop_evidence_source() {
 }
 journey_at_cleanup stop_evidence_source
 
-check_restart_readiness() {
-	local project=$1 product=$2 person=$3 path=$4
-	perl -pi -e 's@^scenarioFile:.*@scenarioFile: journey-restart.yaml@' "$project/dev.yaml"
-	journey_write_file "$project/journey-restart.yaml" <<SCENARIOS
-apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1
-kind: RStackScenarios
-scenarios:
-  - id: ready-after-restart
-    steps:
-      - {id: ready, product: $product, as: $person, method: GET, path: "$path", expect: {status: 200}}
-SCENARIOS
-}
-
 # write_keep PRODUCT WORK PROJECT URL RUN: write data using the starter's
 # contract and set the path and expected value for the read after restart.
 write_keep() {
@@ -611,13 +598,6 @@ walk_product() {
 			cp -- "$audit" "$work/audit-before-restart.jsonl"
 			edit_for_restart "$product" "$project"
 		fi
-		# The authored startup scenario has already passed. Keep tests issue
-		# their own calls against the same data and refresh their credentials.
-		local restart_path=$CALL_PATH restart_person=$PERSON
-		if [[ "$product" == messaging ]]; then
-			restart_path=$KEEP_PATH
-		fi
-		check_restart_readiness "$project" "$product" "$restart_person" "$restart_path"
 		if [[ "$product" == adapter ]]; then
 			stop_adapter_source
 		fi

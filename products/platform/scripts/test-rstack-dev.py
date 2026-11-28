@@ -18,6 +18,8 @@ import socket
 import subprocess
 import tempfile
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import unquote, urlsplit
@@ -637,8 +639,9 @@ def verify_messaging_alone(root, bin_dir):
         [message] = get_json(mailpit_url + "/api/v1/messages")["messages"]
         assert message["To"][0]["Address"] == "ada@example.org", message
 
-        stopped = dev(bin_dir, env, checkout, "stop", run)
-        assert stopped["status"] == "stopped", stopped
+        stopped = dev(bin_dir, env, checkout, "stop", run, "--clean")
+        assert stopped["status"] == "stopped" and stopped["cleaned"], stopped
+        assert not project_volumes(checkout, state)
         assert labelled_containers(run) == set()
         assert labelled_containers() == baseline
         for address in (gateway, mailpit_url, report["products"]["messaging"]):
@@ -657,6 +660,7 @@ def verify_messaging_alone(root, bin_dir):
             dev(bin_dir, env, checkout, "stop", run)
         for container in labelled_containers() - baseline:
             checked("docker", "rm", "--force", "--volumes", container)
+        remove_project_volume(checkout, state)
 
 
 def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
@@ -1195,6 +1199,8 @@ def verify_startup_loss(bin_dir, pg, checkout, state, env, pg_env):
 import os
 import sys
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 if sys.argv[1] == "test":
@@ -1744,16 +1750,17 @@ def verify_offline_plan(root, bin_dir, project):
 RUN_LABEL = "org.registrystack.rstack.dev-run"
 
 
-def project_volumes(checkout):
-    digest = hashlib.sha256(os.fsencode(checkout.resolve())).hexdigest()[:32]
+def project_volumes(checkout, state):
+    identity = os.fsencode(checkout.resolve()) + b"\0" + os.fsencode(state.resolve())
+    digest = hashlib.sha256(identity).hexdigest()[:32]
     volume = f"rstack-development-project-{digest}"
     label = f"org.registrystack.rstack.development-project={digest}"
     names = checked("docker", "volume", "ls", "-q", "--filter", f"label={label}")
     return [name for name in names.decode().split() if name == volume]
 
 
-def remove_project_volume(checkout):
-    for volume in project_volumes(checkout):
+def remove_project_volume(checkout, state):
+    for volume in project_volumes(checkout, state):
         checked("docker", "volume", "rm", volume)
 
 
@@ -1774,9 +1781,19 @@ def verify_restart(root, bin_dir, product):
         f"RSTACK_{product.upper()}CTL_BIN": str(bin_dir / f"{product}ctl"),
         f"RSTACK_{product.upper()}_BIN": str(bin_dir / product),
     })
+    other_state = root / f"{product}-other-runs"
+    other_env = {**env, "RSTACK_DEV_STATE_DIR": str(other_state)}
     try:
         first = dev(bin_dir, env, checkout, "start", ".")
         first_id = first["run_id"]
+        assert first["scenarios"] and all(item["result"] == "passed" for item in first["scenarios"]), first
+        other = dev(bin_dir, other_env, checkout, "start", ".")
+        assert other["database"]["volume"] != first["database"]["volume"], other
+        dev(bin_dir, other_env, checkout, "stop", other["run_id"], "--clean")
+        dev(bin_dir, env, checkout, "stop", first_id)
+        first = dev(bin_dir, env, checkout, "start", ".")
+        first_id = first["run_id"]
+        assert first["scenarios"] and all(item["result"] == "skipped" for item in first["scenarios"]), first
         runtime = Path(first["runtimeConfigs"][product])
         config = json.loads(runtime.read_text())
         audit = Path(config["audit"]["path"])
@@ -1811,7 +1828,48 @@ def verify_restart(root, bin_dir, product):
         journal = audit if product == "breg" else audit.with_suffix(".schedulingctl.jsonl")
         prior = journal.read_bytes()
         assert prior.endswith(b"\n")
-        assert first["database"]["volume"] in project_volumes(checkout)
+        volume = first["database"]["volume"]
+        assert volume in project_volumes(checkout, state)
+        state_dir = Path(first["database"]["developmentState"])
+        state_dir.chmod(0o755)
+        try:
+            refused = dev(bin_dir, env, checkout, "start", ".", "--clean", expected=1)
+            assert f"chmod 700 {state_dir}" in refused["error"]["message"], refused
+            assert volume in project_volumes(checkout, state)
+        finally:
+            state_dir.chmod(0o700)
+        generation = state_dir / "generation"
+        saved_generation = generation.read_bytes()
+        generation.write_bytes(b"other")
+        try:
+            refused = dev(bin_dir, env, checkout, "start", ".", expected=1)
+            message = refused["error"]["message"]
+            assert volume in message and str(state_dir) in message and "--clean" in message, refused
+        finally:
+            generation.write_bytes(saved_generation)
+        if product == "breg":
+            scenario = checkout / "dev/scenarios.yaml"
+            original = scenario.read_text()
+            scenario.write_text(original.replace("contact@example.test", "changed@example.test"))
+            try:
+                changed = dev(bin_dir, env, checkout, "start", ".", expected=1)
+                assert changed["scenarios"][0]["result"] == "failed", changed
+                assert "--clean" in changed["scenarios"][0]["action"], changed
+                dev(bin_dir, env, checkout, "stop", changed["run_id"])
+            finally:
+                scenario.write_text(original)
+            registry = checkout / "registry.yaml"
+            original = registry.read_text()
+            revised, count = re.subn(r'(?m)^  version: .*$', '  version: 0.2.0', original, count=1)
+            assert count == 1 and revised != original
+            registry.write_text(revised)
+            try:
+                unsupported = dev(bin_dir, env, checkout, "start", ".", expected=1)
+                message = unsupported["error"]["message"]
+                assert "registry-version-changed" in message and "--clean" in message, unsupported
+                assert "--reviewed-migrations" not in message, unsupported
+            finally:
+                registry.write_text(original)
 
         authored = checkout / ("registry.yaml" if product == "breg" else "scheduling.yaml")
         before = authored.read_text()
@@ -1830,19 +1888,6 @@ actions:
             after = before.replace('version: "1"', 'version: "2"', 1)
         assert after != before
         authored.write_text(after)
-        if product == "breg":
-            # A request in a different BReg revision needs a new idempotency
-            # key. The restart scenario reads the retained collection.
-            (checkout / "dev/scenarios.yaml").write_text(
-                "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\n"
-                "kind: RStackScenarios\n"
-                "scenarios:\n"
-                "  - id: list-contacts\n"
-                "    steps:\n"
-                "      - {id: list, product: breg, as: editor, method: GET, "
-                "path: /v1/records/contacts, expect: {status: 200}}\n"
-            )
-
         second = dev(bin_dir, env, checkout, "start", ".")
         new_runtime = Path(second["runtimeConfigs"][product])
         current = json.loads(new_runtime.read_text())
@@ -1868,27 +1913,36 @@ actions:
         assert updated.startswith(prior) and updated != prior
         for line in updated[len(prior):].splitlines():
             assert json.loads(line)["eventId"]
-        clean = dev(bin_dir, env, checkout, "start", ".", "--clean")
+        if product == "scheduling":
+            checked("docker", "volume", "rm", volume)
+            clean = dev(bin_dir, env, checkout, "start", ".")
+            assert clean["database"]["replacedMissingVolume"], clean
+            assert all(item["result"] == "passed" for item in clean["scenarios"]), clean
+        else:
+            clean = dev(bin_dir, env, checkout, "start", ".", "--clean")
         headers = credential(bin_dir, env, checkout, clean["run_id"], person)
         if product == "breg":
             assert get(clean["products"][product] + path, headers) == 404
         else:
             status, body = get_body(clean["products"][product] + path, headers)
             assert status == 200 and expected not in body
-        dev(bin_dir, env, checkout, "stop", clean["run_id"])
+        dev(bin_dir, env, checkout, "stop", clean["run_id"], "--clean")
+        assert not project_volumes(checkout, state)
         print(f"{product} retained its record and appended to the same audit journal after an edit, then --clean removed the record")
     finally:
-        for run_root in live_runs(state):
-            dev(bin_dir, env, checkout, "stop", run_root.name)
-        remove_project_volume(checkout)
+        for current_env, current_state in ((env, state), (other_env, other_state)):
+            for run_root in live_runs(current_state):
+                dev(bin_dir, current_env, checkout, "stop", run_root.name)
+            remove_project_volume(checkout, current_state)
 
 
 def labelled_containers(run=None):
     """IDs of the containers a managed run labelled: one run's, or every run's."""
     label = RUN_LABEL if run is None else f"{RUN_LABEL}={run}"
-    listed = checked(
-        "docker", "ps", "--all", "--quiet", "--no-trunc", "--filter", f"label={label}"
-    )
+    filters = ["--filter", f"label={label}"]
+    if lane := os.environ.get("RSTACK_DEV_TEST_DOCKER_LABEL"):
+        filters.extend(["--filter", f"label={lane}"])
+    listed = checked("docker", "ps", "--all", "--quiet", "--no-trunc", *filters)
     return set(listed.decode().split())
 
 
@@ -1984,6 +2038,31 @@ def verify_production_refusal(root, bin_dir, product):
         f"RSTACK_{product.upper()}CTL_BIN": str(bin_dir / init_tool),
         f"RSTACK_{product.upper()}_BIN": str(bin_dir / runtime_name),
     })
+    source = None
+    source_thread = None
+    if product == "discovery":
+        catalog = (STACK / "products/discovery/fixtures/descriptions/evidence.jsonld").read_bytes()
+
+        class CatalogHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                assert self.path == "/evidence.jsonld"
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"',
+                )
+                self.send_header("Content-Length", str(len(catalog)))
+                self.end_headers()
+                self.wfile.write(catalog)
+
+            def log_message(self, *_):
+                pass
+
+        source = ThreadingHTTPServer(("127.0.0.1", 0), CatalogHandler)
+        origins = checkout / "origins.yaml"
+        origins.write_text(origins.read_text().replace("38090", str(source.server_port)).replace("enabled: false", "enabled: true"))
+        source_thread = threading.Thread(target=source.serve_forever)
+        source_thread.start()
     try:
         report = dev(bin_dir, env, checkout, "start", ".")
         runtime = Path(report["runtimeConfigs"][product])
@@ -2001,11 +2080,14 @@ def verify_production_refusal(root, bin_dir, product):
         }[product]
         result = command(bin_dir / tool, action, *flags, cwd=checkout, env=env)
         output = (result.stdout + result.stderr).decode()
-        # Discovery's public index has no test issuer or database identity.
         if product == "discovery":
-            assert result.returncode == 0, f"Discovery unexpectedly refused {runtime}: {output}"
-            print(f"EXPECTED FAILURE: {product} accepted {runtime} in production: {output.strip()}")
-            return
+            package = Path(json.loads(runtime.read_text())["package"]["root"])
+            index = package / "discovery-index.json"
+            probe = command(bin_dir / tool, "check", "--format", "json", "--index", index, cwd=checkout, env=env)
+            assert probe.returncode == 1 and any(
+                diagnostic["code"] == "discovery.posture.loopback-catalog-url"
+                for diagnostic in json.loads(probe.stdout)["diagnostics"]
+            ), probe.stdout.decode()
         if result.returncode == 0:
             raise AssertionError(f"{product} accepted {runtime} in production: {output}")
         assert re.search(r"posture|placeholder|development", output, re.IGNORECASE), (
@@ -2014,9 +2096,13 @@ def verify_production_refusal(root, bin_dir, product):
         print(f"{product} refused its generated runtime under production (exit {result.returncode})")
         verify_package_posture(bin_dir, checkout, runtime, env, product, placeholder)
     finally:
+        if source is not None:
+            source.shutdown()
+            source.server_close()
+            source_thread.join()
         for run_root in live_runs(state):
             dev(bin_dir, env, checkout, "stop", run_root.name)
-        remove_project_volume(checkout)
+        remove_project_volume(checkout, state)
 
 
 def verify_managed_run(report, state, image):
@@ -2067,7 +2153,7 @@ def exercise_managed(root, bin_dir, project, spatial):
         verify_alone(root, bin_dir, env)
         assert labelled_containers() == baseline
 
-        short = dev(bin_dir, env, checkout, "start", ".", "--clean", "--ttl", "1s")
+        short = dev(bin_dir, env, checkout, "start", ".", "--ttl", "1s")
         started.append(short["run_id"])
         wait_for_stop(bin_dir, env, checkout, short["run_id"])
         assert labelled_containers(short["run_id"]) == set()
@@ -2076,22 +2162,30 @@ def exercise_managed(root, bin_dir, project, spatial):
         failing.write_text("#!/bin/sh\nprintf 'boom\\n' >&2\nexit 1\n")
         failing.chmod(0o700)
         failure_env = {**env, "RSTACK_CASEWORK_BIN": str(failing)}
-        failed = dev(bin_dir, failure_env, checkout, "start", ".", "--clean", expected=1)
+        failed = dev(bin_dir, failure_env, checkout, "start", ".", expected=1)
         assert "casework exited before readiness" in failed["error"]["message"], failed
+        fresh_state = root / "failed-start-state"
+        fresh_env = {**failure_env, "RSTACK_DEV_STATE_DIR": str(fresh_state)}
+        failed = dev(bin_dir, fresh_env, checkout, "start", ".", expected=1)
+        assert "casework exited before readiness" in failed["error"]["message"], failed
+        assert not project_volumes(checkout, fresh_state)
+        assert not any(path.is_dir() for path in fresh_state.glob("development-project-*"))
         assert labelled_containers() == baseline
         print("TTL expiry and a failed start removed the managed server")
 
-        lost, run = lose_supervisor(bin_dir, checkout, state, env, "--clean")
+        lost, run = lose_supervisor(bin_dir, checkout, state, env)
         started.append(run)
         [container] = labelled_containers(run)
         status = dev(bin_dir, env, checkout, "status", run, expected=3)
         assert status["recovery"]["container"] == f"rstack-dev-{run}", status
+        held = dev(bin_dir, env, checkout, "start", ".", expected=1)
+        assert f"rstack dev stop {run} --recover" in held["error"]["message"], held
         checked("docker", "stop", container)
         recovered = dev(bin_dir, env, checkout, "stop", run, "--recover")
         assert recovered["status"] == "stopped", recovered
         assert recovered["recovered"]["containers"] == [container], recovered
         assert f"rstack_{run}_breg_test" in recovered["recovered"]["databases_and_roles"], recovered
-        assert lost["database"]["volume"] in project_volumes(checkout)
+        assert lost["database"]["volume"] in project_volumes(checkout, state)
         assert labelled_containers(run) == set()
         assert_nothing_listening(bin_dir, lost["products"].values())
         print("stop --recover removed a lost managed run's server without an administrator URL")
@@ -2121,11 +2215,11 @@ def exercise_managed(root, bin_dir, project, spatial):
             if left:
                 print(f"Removing containers left by run {run}: {sorted(left)}")
                 checked("docker", "rm", "--force", "--volumes", *sorted(left))
-        remove_project_volume(checkout)
-        remove_project_volume(root / "alone-breg")
-        remove_project_volume(root / "alone-casework")
+        remove_project_volume(checkout, state)
+        remove_project_volume(root / "alone-breg", state)
+        remove_project_volume(root / "alone-casework", state)
         if spatial:
-            remove_project_volume(root / "spatial")
+            remove_project_volume(root / "spatial", state)
 
 
 def main():

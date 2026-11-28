@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { DeliveryError, verifyDelivery, verifyRequest } from '../webhook.ts'
+import { DeliveryError, verifyDelivery, verifyRequest, verifyStandardDelivery, verifyStandardRequest } from '../webhook.ts'
 import { verifyMac } from '../webhook-mac.ts'
 
 const vectors = JSON.parse(readFileSync(new URL('./webhook-vectors.json', import.meta.url), 'utf8'))
@@ -271,4 +271,24 @@ test('verifyRequest turns a failed body read into a fixed invalid-body error', a
     assert.ok(!JSON.stringify(error).includes(secret) && !String(error.stack).includes(secret))
     return true
   })
+})
+
+test('signed posture member is refused in a Registry delivery', async () => {
+  const options = { currentKey: key(32), now: () => 1614265330 }
+  const body = bytes('{"id":"msg_fixture","posture":null}')
+  const signed = headers(await sign(options.currentKey, 'msg_fixture', '1614265330', body))
+  await assert.rejects(verifyDelivery(signed, body, options), { code: 'invalid-envelope' })
+  const request = new Request('https://function.example/hook', { method: 'POST', headers: signed, body })
+  await assert.rejects(verifyRequest(request, options), { code: 'invalid-envelope' })
+  await assert.rejects(verifyDelivery(headers(vectors.current), body, options), { code: 'signature-mismatch' })
+})
+
+test('signed posture member is preserved in a Standard Webhooks payload', async () => {
+  const options = { currentKey: key(32), now: () => 1614265330, eventIdMember: null }
+  const payload = { posture: 'application-specific' }
+  const body = bytes(JSON.stringify(payload))
+  const signed = headers(await sign(options.currentKey, 'msg_fixture', '1614265330', body))
+  assert.deepEqual(await verifyStandardDelivery(signed, body, options), payload)
+  const request = new Request('https://function.example/hook', { method: 'POST', headers: signed, body })
+  assert.deepEqual(await verifyStandardRequest(request, options), payload)
 })

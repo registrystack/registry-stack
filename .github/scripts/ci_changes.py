@@ -171,7 +171,7 @@ RSTACK_DEV_HARNESS_PACKAGES = frozenset({"registry-rstack", "registry-rstack-dev
 _dev_runner_gate = runpy.run_path(str(
     Path(__file__).resolve().parents[2] / "products/platform/scripts/check_dev_runner_reach.py"
 ))
-RSTACK_DEV_HOST_PACKAGES = frozenset(_dev_runner_gate["ALLOWLIST"][_dev_runner_gate["DEV_RUNNER"]])
+RSTACK_DEV_HOST_PACKAGES = frozenset(_dev_runner_gate["DEV_RUNNER_HOSTS"])
 
 # The acceptance journeys start every runtime and `*ctl` tool in their product
 # column (products/platform/journeys/products.yaml; test_ci_changes.py checks

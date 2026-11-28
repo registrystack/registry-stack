@@ -1088,17 +1088,20 @@ mod files {
         let path = root.join("foreign-owner");
         std::fs::create_dir(&path).unwrap();
         for posture in [Posture::Production, Posture::Development] {
-            let error = require_trusted_entry(&path, posture, 1000, 1001, 0o755, false, false)
-                .expect_err("a foreign owner is refused");
-            let diagnostic = error.deciding_diagnostic();
-            assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
-            assert_eq!(
-                diagnostic.message,
-                format!("`{}` is owned by another user", path.display())
-            );
-            assert!(diagnostic
-                .suggested_action
-                .contains(&format!("chown 1000 {}", path.display())));
+            for (uid, target) in [(0, "root"), (u32::MAX, "4294967295")] {
+                let error = require_trusted_entry(&path, posture, uid, 1001, 0o755, false, false)
+                    .expect_err("a foreign owner is refused");
+                let diagnostic = error.deciding_diagnostic();
+                assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
+                assert_eq!(
+                    diagnostic.message,
+                    format!("`{}` is owned by another user", path.display())
+                );
+                assert!(diagnostic
+                    .suggested_action
+                    .contains(&format!("chown {target} {}", path.display())));
+                assert!(diagnostic.suggested_action.contains("sudo"));
+            }
         }
     }
 

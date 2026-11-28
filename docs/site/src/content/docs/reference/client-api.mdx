@@ -230,19 +230,18 @@ cannot contain credentials, a query, a fragment, or ambiguous empty path segment
 
 ### Deployment peer policy
 
-Pass `PeerPolicy::RefuseDevelopmentPeer` when constructing a Rust client for a production
-runtime. A response carrying `Registry-Posture: development` returns a `DevelopmentPeer`
-error, with kind `development-peer` where the client exposes an error kind. Use
-`PeerPolicy::AcceptDevelopmentPeer` in development runtimes and application code.
-The Node and Python bindings accept development peers. Only a Rust client built with
-`RefuseDevelopmentPeer` raises `development-peer`. Run the stack in one posture in
-practice, since a production peer refuses a development neighbour.
+Every binding accepts development peers by default. For a production runtime, pass
+`PeerPolicy::RefuseDevelopmentPeer` in Rust, `refuseDevelopmentPeer: true` in Node and TypeScript,
+or `refuse_development_peer=True` in Python. A response carrying `Registry-Posture: development`
+then raises a development-peer error. Only TypeScript exposes the mark on a successful answer as
+`answer.developmentPeer`. Node and Python omit the mark from successful answers.
 
 {/* Evidence: crates/registry-breg-client/src/config.rs, BaseRegistryClientConfig;
     crates/registry-breg-client/src/transport.rs, DevelopmentPeer;
     crates/registry-breg-client/src/error.rs, development-peer;
-    crates/registry-breg-client-node/src/lib.rs, AcceptDevelopmentPeer;
-    crates/registry-breg-client-py/src/convert.rs, AcceptDevelopmentPeer */}
+    crates/registry-breg-client-node/src/lib.rs, refuseDevelopmentPeer;
+    crates/registry-breg-client-py/src/lib.rs, refuse_development_peer;
+    clients/typescript/core.ts, developmentPeer and refuseDevelopmentPeer. */}
 
 ### Unknown outcomes and the same-key retry
 

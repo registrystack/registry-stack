@@ -456,7 +456,23 @@ impl<'a> ProductRunner<'a> {
             .iter()
             .any(|entry| entry.product == Product::Coordinator)
         {
-            let state = self.product_state("coordinator");
+            let coordinator =
+                product_root(&self.input.project, &self.input.plan, Product::Coordinator)?
+                    .context("missing Coordinator project")?;
+            let runtime = authored_document(&coordinator.root.join("runtime.yaml"))?;
+            let needs_stable_issuer =
+                runtime["connections"]
+                    .as_object()
+                    .is_some_and(|connections| {
+                        connections.values().any(|connection| {
+                            ["authorization", "observationAuthorization"]
+                                .iter()
+                                .any(|field| connection[*field].is_object())
+                        })
+                    });
+            let state = needs_stable_issuer
+                .then(|| self.product_state("coordinator"))
+                .flatten();
             let listener = coordinator_issuer_listener(state.as_deref())?;
             self.coordinator_issuer = Some(evidence::JwksServer::start(
                 listener,
@@ -775,6 +791,7 @@ impl<'a> ProductRunner<'a> {
         } else {
             None
         };
+        let mut retained_changes = Vec::new();
         if let Some(baseline) = &baseline {
             let (status, diff) = self.breg_report(
                 "diff",
@@ -798,6 +815,25 @@ impl<'a> ProductRunner<'a> {
                 )?;
                 return Ok((config, baseline.clone()));
             }
+            retained_changes.extend(
+                diff["changes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|item| {
+                        let change = &item["change"];
+                        let code = change["code"].as_str()?;
+                        let target = &change["target"];
+                        let member = target["memberId"]
+                            .as_str()
+                            .or(target["recordTypeId"].as_str());
+                        Some(member.map_or_else(
+                            || code.to_owned(),
+                            |member| format!("{code} at {member}"),
+                        ))
+                    })
+                    .take(6),
+            );
         }
         // A server that cannot provision, for example without PostGIS or the
         // privilege to create it, is an environment failure.
@@ -830,8 +866,24 @@ impl<'a> ProductRunner<'a> {
                 args.extend(["--baseline-package".as_ref(), baseline.as_os_str()]);
             }
         }
-        self.tool(Product::Breg, "test", &test_args)?;
-        self.tool(Product::Breg, "package", &package_args)?;
+        let retained_refusal = |error| {
+            if baseline.is_some() {
+                anyhow::anyhow!(
+                    "BReg refused changes to the retained package ({}). Start with --clean. {}",
+                    retained_changes.join(", "),
+                    format!("{error:#}")
+                        .split("Run diff, review the migration")
+                        .next()
+                        .unwrap_or_default()
+                )
+            } else {
+                error
+            }
+        };
+        self.tool(Product::Breg, "test", &test_args)
+            .map_err(retained_refusal)?;
+        self.tool(Product::Breg, "package", &package_args)
+            .map_err(retained_refusal)?;
         let package = if let Some(state) = self.product_state("breg") {
             let sums = plan::read(&candidate.join("SHA256SUMS"), 4 * 1024 * 1024)?;
             let digest = registry_platform_config::sha256_uri(&sums);
@@ -860,7 +912,8 @@ impl<'a> ProductRunner<'a> {
         if baseline.is_none() {
             apply.push("--initial".as_ref());
         }
-        self.tool(Product::Breg, "apply", &apply)?;
+        self.tool(Product::Breg, "apply", &apply)
+            .map_err(retained_refusal)?;
         let config = self.config(Product::Breg, "breg", bind, &package, urls)?;
         self.tool(
             Product::Breg,
@@ -913,7 +966,8 @@ impl<'a> ProductRunner<'a> {
         }
         let state = self.input.project_state(self.root);
         let key = state.as_deref().unwrap_or(self.root).join(FIELD_KEY);
-        if !key.exists() {
+        let mut bytes = super::read_private(&key)?.map(zeroize::Zeroizing::new);
+        if bytes.is_none() {
             self.tool(
                 Product::Breg,
                 "field-encryption",
@@ -921,7 +975,10 @@ impl<'a> ProductRunner<'a> {
             )?;
         }
         if state.is_some() {
-            let bytes = zeroize::Zeroizing::new(fs::read(key)?);
+            if bytes.is_none() {
+                bytes = super::read_private(&key)?.map(zeroize::Zeroizing::new);
+            }
+            let bytes = bytes.context("field encryption key generation produced no key")?;
             write_private(&self.root.join(FIELD_KEY), &bytes)?;
         }
         Ok(())
@@ -1187,11 +1244,8 @@ impl<'a> ProductRunner<'a> {
             })
             .transpose()?;
         let records = if let Some((state, bytes, digest)) = &retained {
-            match fs::read_to_string(state) {
-                Ok(applied) if applied == *digest => return Ok(()),
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
+            if super::read_private(state)?.as_deref() == Some(digest.as_bytes()) {
+                return Ok(());
             }
             let captured = self.root.join("scheduling-records.yaml");
             write_private(&captured, bytes)?;
@@ -1561,10 +1615,13 @@ impl<'a> ProductRunner<'a> {
             return self.secret(name, fresh);
         };
         let file = state.join(name);
-        if !file.exists() {
-            write_private(&file, fresh)?;
-        }
-        let bytes = zeroize::Zeroizing::new(fs::read(file)?);
+        let bytes = match super::read_private(&file)? {
+            Some(bytes) => zeroize::Zeroizing::new(bytes),
+            None => {
+                write_private(&file, fresh)?;
+                return self.secret(name, fresh);
+            }
+        };
         self.secret(name, &bytes)
     }
 
@@ -1718,16 +1775,15 @@ fn coordinator_issuer_listener(state: Option<&Path>) -> Result<TcpListener> {
         return Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?);
     };
     let file = state.join("coordinator-issuer-port");
-    let port = match fs::read_to_string(&file) {
-        Ok(saved) => saved
+    let port = match super::read_private(&file)? {
+        Some(saved) => std::str::from_utf8(&saved)?
             .parse::<std::num::NonZeroU16>()
             .context("the retained Coordinator issuer port is invalid")?
             .get(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(error) => return Err(error.into()),
+        None => 0,
     };
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).with_context(|| {
-        format!("cannot bind the Coordinator development issuer on loopback port {port}")
+        format!("cannot bind the Coordinator development issuer on loopback port {port}, which is kept for resumable workflow connections. Start with --clean")
     })?;
     if port == 0 {
         write_private(&file, listener.local_addr()?.port().to_string().as_bytes())?;
@@ -2208,7 +2264,7 @@ struct SelectedProduct {
     root: PathBuf,
 }
 
-/// Whether the project's Messaging providers need the run to start Mailpit.
+/// Check that the canonical-review starter is paired with its BReg project.
 pub(super) fn require_canonical_review_pair(root: &Path, plan: &Plan) -> Result<()> {
     if plan.bindings.casework_context_provider.is_some() {
         return Ok(());
@@ -2225,6 +2281,7 @@ pub(super) fn require_canonical_review_pair(root: &Path, plan: &Plan) -> Result<
     Ok(())
 }
 
+/// Whether the project's Messaging providers need the run to start Mailpit.
 pub(super) fn needs_mailpit(root: &Path, plan: &Plan) -> Result<bool> {
     messaging::needs_mailpit(root, plan)
 }
@@ -4858,6 +4915,20 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_names_the_occupied_issuer_port_and_the_fix() {
+        let state = tempfile::tempdir().unwrap();
+        let retained = coordinator_issuer_listener(Some(state.path())).unwrap();
+        let port = retained.local_addr().unwrap().port();
+        let error = coordinator_issuer_listener(Some(state.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&port.to_string()));
+        assert!(error.contains("resumable workflow connections") && error.contains("--clean"));
+        let ephemeral = coordinator_issuer_listener(None).unwrap();
+        assert_ne!(ephemeral.local_addr().unwrap().port(), port);
+    }
+
+    #[test]
     fn coordinator_reopens_the_same_managed_development_issuer() {
         let state = tempfile::tempdir().unwrap();
         let listener = coordinator_issuer_listener(Some(state.path())).unwrap();
@@ -5089,7 +5160,7 @@ INVENTORY
             private_directory(&root).unwrap();
             let mut input = breg_input(false);
             input.run_id = run_id.into();
-            input.project_key = Some(crate::project_key(scratch.path()));
+            input.project_key = Some(crate::project_key(scratch.path(), scratch.path()));
             crate::ensure_private(&input.project_state(&root).unwrap(), true).unwrap();
             let terminate = AtomicBool::new(false);
             let runner = ProductRunner::new(Arc::new(input), &root, &terminate).unwrap();

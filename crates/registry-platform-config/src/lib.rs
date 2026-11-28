@@ -86,6 +86,20 @@ pub use secrets::{
     MAX_SECRET_BYTES, MAX_SECRET_LINKS,
 };
 
+/// Detect a posture flag repeated across a subcommand boundary, where Clap
+/// can collapse both declarations into one value.
+pub fn has_repeated_posture_flag() -> bool {
+    std::env::args_os()
+        .skip(1)
+        .take_while(|argument| argument != "--")
+        .filter(|argument| {
+            let argument = argument.as_encoded_bytes();
+            argument == b"--posture" || argument.starts_with(b"--posture=")
+        })
+        .nth(1)
+        .is_some()
+}
+
 fn resolve_config_env_expression(
     expression: &str,
     lookup: impl Fn(&str) -> Option<String>,

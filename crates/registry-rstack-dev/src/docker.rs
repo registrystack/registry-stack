@@ -6,7 +6,6 @@
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::{
-    fs,
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -54,8 +53,8 @@ const PULL_DEADLINE: Duration = Duration::from_secs(600);
 const MAXIMUM_OUTPUT_BYTES: u64 = 1024 * 1024;
 const MAXIMUM_ERROR_CHARACTERS: usize = 400;
 
-/// Where the server's certificate and key live inside the container: the
-/// image's volume, so removing the container with its volumes removes them.
+/// The server reopens its data volume using these PostgreSQL TLS paths.
+/// Each start installs a fresh certificate and key there.
 const SERVER_CERTIFICATE: &str = "/var/lib/postgresql/rstack-dev-server.crt";
 const SERVER_KEY: &str = "/var/lib/postgresql/rstack-dev-server.key";
 /// Local connections inside the container stay trusted for the image's own
@@ -168,11 +167,24 @@ impl Docker {
     pub(super) fn require_free_volume(&self, key: &str) -> Result<()> {
         let filter = format!("volume={}", volume_name(key));
         let held = self.run(
-            &["ps", "--all", "--quiet", "--filter", &filter],
+            &[
+                "ps",
+                "--all",
+                "--format",
+                &format!("{{{{.Label \"{LABEL}\"}}}} {{{{.Names}}}}"),
+                "--filter",
+                &filter,
+            ],
             None,
             COMMAND_DEADLINE,
         )?;
-        ensure!(held.trim().is_empty(), "a development container still holds this project's volume; recover the previous run first");
+        if let Some(holder) = held.lines().next() {
+            let (run_id, name) = holder.rsplit_once(' ').unwrap_or(("", holder));
+            if super::run_dir_name(run_id) {
+                anyhow::bail!("run {run_id} still holds this project's volume. Run rstack dev stop {run_id} --recover");
+            }
+            anyhow::bail!("container {name} holds this project's volume. Stop and remove it before starting this project");
+        }
         Ok(())
     }
 
@@ -192,10 +204,44 @@ impl Docker {
 
     pub(super) fn has_project_volume(&self, key: &str) -> Result<bool> {
         let volume = volume_name(key);
-        Ok(self
+        if self
             .project_volumes(key)?
             .lines()
-            .any(|line| line == volume))
+            .any(|line| line == volume)
+        {
+            return Ok(true);
+        }
+        let named = self.run(
+            &[
+                "volume",
+                "ls",
+                "--quiet",
+                "--filter",
+                &format!("name={volume}"),
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )?;
+        ensure!(
+            !named.lines().any(|line| line == volume),
+            "volume {volume} has no development project label. Remove the unrelated volume before starting this project"
+        );
+        Ok(false)
+    }
+
+    pub(super) fn volume_generation(&self, key: &str) -> Result<String> {
+        let output = self.run(
+            &[
+                "volume",
+                "inspect",
+                "--format",
+                "{{index .Labels \"org.registrystack.dev.generation\"}}",
+                &volume_name(key),
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )?;
+        Ok(output.trim().to_owned())
     }
 
     pub(super) fn remove_project_volume(&self, key: &str) -> Result<()> {
@@ -214,12 +260,20 @@ impl Docker {
         run_id: &str,
         image: Image,
         key: &str,
+        generation: &str,
     ) -> Result<Server> {
-        self.start_labelled(root, run_id, image, key)
+        self.start_labelled(root, run_id, image, key, generation)
             .map_err(operational)
     }
 
-    fn start_labelled(&self, root: &Path, run_id: &str, image: Image, key: &str) -> Result<Server> {
+    fn start_labelled(
+        &self,
+        root: &Path,
+        run_id: &str,
+        image: Image,
+        key: &str,
+        generation: &str,
+    ) -> Result<Server> {
         let state = root.with_file_name(format!("development-project-{key}"));
         let volume = volume_name(key);
         self.run(
@@ -228,6 +282,8 @@ impl Docker {
                 "create",
                 "--label",
                 &format!("{PROJECT_LABEL}={key}"),
+                "--label",
+                &format!("org.registrystack.dev.generation={generation}"),
                 &volume,
             ],
             None,
@@ -238,6 +294,11 @@ impl Docker {
                 .lines()
                 .any(|line| line == volume),
             "the PostgreSQL volume {volume} is missing the development project label"
+        );
+        ensure!(
+            self.volume_generation(key)? == generation,
+            "volume {volume} and development state directory {} have different generations. Start with --clean",
+            state.display()
         );
         let mount = format!("{volume}:{PG_VOLUME_PATH}");
         let name = container_name(run_id);
@@ -301,7 +362,7 @@ impl Docker {
             &id,
             &format!("ALTER ROLE postgres PASSWORD '{}';", verifier.as_str()),
         )?;
-        let tls = RunTls::load_or_create(&state)?;
+        let tls = RunTls::generate()?;
         let hba_file = self.sql(&id, "SHOW hba_file;")?;
         let hba_file = hba_file.trim();
         ensure!(
@@ -336,13 +397,20 @@ impl Docker {
             arguments.extend(installed);
             self.run(&arguments, None, COMMAND_DEADLINE)?;
         }
+        // The new pg_hba.conf only allows TLS over TCP. Confirm the old
+        // TLS configuration has been disabled before enabling the new one.
+        self.sql(
+            &id,
+            "ALTER SYSTEM SET ssl = 'off';\nSELECT pg_reload_conf();\n",
+        )?;
+        self.await_tls(&id, &name, &label, "off")?;
         self.sql(
             &id,
             &format!(
                 "ALTER SYSTEM SET ssl_cert_file = '{SERVER_CERTIFICATE}';\nALTER SYSTEM SET ssl_key_file = '{SERVER_KEY}';\nALTER SYSTEM SET ssl = 'on';\nSELECT pg_reload_conf();\n"
             ),
         )?;
-        self.await_tls(&id, &name, &label)?;
+        self.await_tls(&id, &name, &label, "on")?;
 
         Ok(Server {
             admin_url: Zeroizing::new(format!(
@@ -468,18 +536,17 @@ impl Docker {
         }
     }
 
-    /// Wait until the reloaded server reports TLS on. A certificate it cannot
-    /// load leaves TLS off, so this fails rather than serving without it.
-    fn await_tls(&self, id: &str, name: &str, label: &str) -> Result<()> {
+    /// Wait until the reloaded server reports the expected TLS setting.
+    fn await_tls(&self, id: &str, name: &str, label: &str, expected: &str) -> Result<()> {
         let deadline = Instant::now() + self.ready_deadline;
         loop {
             let answer = self.sql(id, "SHOW ssl;")?;
-            if answer.trim() == "on" {
+            if answer.trim() == expected {
                 return Ok(());
             }
             if Instant::now() >= deadline {
                 bail!(
-                    "the PostgreSQL server in container {name} (label {label}) did not turn on TLS within {} s; its log has the reason",
+                    "the PostgreSQL server in container {name} (label {label}) did not report TLS {expected} within {} s. Inspect its log",
                     self.ready_deadline.as_secs()
                 );
             }
@@ -538,7 +605,7 @@ impl Docker {
             stopped.push("--all");
             let existing = self.run(&stopped, None, COMMAND_DEADLINE)?;
             if existing.trim().is_empty() {
-                return Ok(Vec::new());
+                anyhow::bail!("cannot drop rehearsal objects for run {run_id} because its PostgreSQL container {name} is gone");
             }
             // The data volume is retained even after Docker stopped the
             // container. Reopen it locally long enough to release the test database.
@@ -670,24 +737,6 @@ struct RunTls {
 }
 
 impl RunTls {
-    fn load_or_create(state: &Path) -> Result<Self> {
-        let ca = state.join("postgres-ca.crt");
-        let certificate = state.join("postgres-server.crt");
-        let key = state.join("postgres-server.key");
-        if ca.exists() {
-            return Ok(Self {
-                ca_pem: fs::read(ca)?,
-                certificate_pem: fs::read(certificate)?,
-                key_pem: Zeroizing::new(fs::read(key)?),
-            });
-        }
-        let tls = Self::generate()?;
-        write_private(&certificate, &tls.certificate_pem)?;
-        write_private(&key, &tls.key_pem)?;
-        write_private(&ca, &tls.ca_pem)?;
-        Ok(tls)
-    }
-
     fn generate() -> Result<Self> {
         let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new())?;
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -814,8 +863,37 @@ mod tests {
                 &root.with_file_name(format!("development-project-{RUN_ID}")),
                 true,
             )?;
-            self.docker.start_server(&root, RUN_ID, image, RUN_ID)
+            self.docker
+                .start_server(&root, RUN_ID, image, RUN_ID, RUN_ID)
         }
+    }
+
+    #[test]
+    fn held_volume_names_the_run_and_recovery_command() {
+        let fake = Fake::new();
+        fake.start(Image::for_plan(false)).unwrap();
+        fs::write(
+            fake.state().join("volume-holder"),
+            format!("{RUN_ID} rstack-dev-{RUN_ID}"),
+        )
+        .unwrap();
+        let error = fake
+            .docker
+            .require_free_volume(RUN_ID)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&format!("rstack dev stop {RUN_ID} --recover")));
+    }
+
+    #[test]
+    fn recovery_reports_rehearsal_cleanup_when_the_container_is_gone() {
+        let fake = Fake::new();
+        let error = fake
+            .docker
+            .drop_rehearsals(RUN_ID, vec![vec!["rehearsal".to_owned()]])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("cannot drop rehearsal objects") && error.contains(RUN_ID));
     }
 
     #[test]
@@ -972,6 +1050,9 @@ mod tests {
             "{exec:?}"
         );
         let psql = fs::read_to_string(fake.state().join("psql.log")).unwrap();
+        let disabled = psql.find("ALTER SYSTEM SET ssl = 'off'").unwrap();
+        let enabled = psql.find("ALTER SYSTEM SET ssl = 'on'").unwrap();
+        assert!(disabled < enabled && psql[disabled..enabled].contains("SHOW ssl"));
         assert!(psql.contains("ALTER SYSTEM SET ssl = 'on'"), "{psql}");
         assert!(psql.contains("SELECT pg_reload_conf()"), "{psql}");
         assert!(psql.contains("SHOW ssl"), "{psql}");

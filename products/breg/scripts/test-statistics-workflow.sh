@@ -33,8 +33,8 @@ require_command() {
 cleanup() {
   local exit_code=$?
   if [[ -n "$run_id" ]]; then
-    "$rstack" "${rstack_args[@]}" dev stop "$run_id" >/dev/null ||
-      printf 'statistics workflow could not stop run %s; run rstack dev stop %s\n' "$run_id" "$run_id" >&2
+    "$rstack" "${rstack_args[@]}" dev stop "$run_id" --clean >/dev/null ||
+      { printf 'statistics workflow could not stop run %s. Run rstack dev stop %s --clean\n' "$run_id" "$run_id" >&2; return 1; }
   fi
   case "$temporary_root" in
     "$temporary_base"/breg-statistics-workflow.*)
@@ -62,6 +62,25 @@ temporary_root=$(mktemp -d "$temporary_base/breg-statistics-workflow.XXXXXX")
 project="$temporary_root/facility"
 cp -R "$repository_root/products/breg/acceptance/facility" "$project"
 
+# Require the facility development clients' existing scope in the copied
+# project. The profile, authored rehearsal, and injected credentials must agree.
+python3 - "$project" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+
+project = Path(sys.argv[1])
+scope = "registry:facility:operate"
+registry = project / "registry.yaml"
+definition = json.loads(registry.read_text())
+definition["accessProfiles"]["facility-operator"]["requiredScopes"] = [scope]
+registry.write_text(json.dumps(definition, indent=2) + "\n")
+for name in ("dev.yaml", "tests/journeys.yaml"):
+    path = project / name
+    text = path.read_text()
+    path.write_text(text.replace("scopes: []", f"scopes: {json.dumps([scope])}"))
+PYTHON
+
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
@@ -80,6 +99,7 @@ fi
 
 checkpoint "starting the facility project and its local issuer"
 export RSTACK_DEV_STATE_DIR="$temporary_root/state"
+unset RSTACK_DEV_DATABASE_URL RSTACK_DEV_DATABASE_CA
 export RSTACK_BREGCTL_BIN="$bregctl"
 export RSTACK_BREG_BIN="$breg"
 start_status=0
@@ -182,7 +202,7 @@ for number in range(1, 6):
 PY
 
 checkpoint "publishing the ended period with the public CLI"
-if ! "$bregctl" --format json statistics publish \
+if ! "$bregctl" --format json statistics publish --posture development \
   --breg-url "$breg_url" \
   --access-token-file "$temporary_root/statistics-publisher-token" \
   --dataset monthly-discharge-reports --period 2025-01 --status final \
@@ -281,7 +301,7 @@ if any(row[0] != "2025-01" for row in rows[1:]):
 PY
 
 checkpoint "withdrawing the release with the public CLI"
-if ! "$bregctl" --format json statistics withdraw \
+if ! "$bregctl" --format json statistics withdraw --posture development \
   --breg-url "$breg_url" \
   --access-token-file "$temporary_root/statistics-publisher-token" \
   --dataset monthly-discharge-reports --period 2025-01 --version 1 \

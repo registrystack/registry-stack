@@ -1417,10 +1417,18 @@ case_binaries() {
 	check "with neither --bin-dir nor CARGO_TARGET_DIR the run stops" has "pass --bin-dir DIR or export CARGO_TARGET_DIR" "$last_err"
 	drive 2 PATH="$cargo_path" CARGO_TARGET_DIR="$work/target" -- --product alpha --timed
 	check "--timed refuses a build" has "--timed needs --bin-dir" "$last_err"
-	if ! PATH="$test_path" command -v cargo >/dev/null; then
-		drive 2 CARGO_TARGET_DIR="$work/target" -- --product alpha
-		check "a build needs cargo on PATH" has "cargo is not on PATH" "$last_err"
-	fi
+	local filtered="$work/no-cargo" entry executable
+	local -a search_dirs
+	mkdir -p "$filtered"
+	IFS=: read -r -a search_dirs <<<"$test_path"
+	for entry in "${search_dirs[@]}"; do
+		for executable in "$entry"/*; do
+			[[ -f "$executable" && -x "$executable" && "${executable##*/}" != cargo ]] || continue
+			[[ -L "$filtered/${executable##*/}" ]] || ln -s "$executable" "$filtered/"
+		done
+	done
+	drive 2 PATH="$filtered" CARGO_TARGET_DIR="$work/target" -- --product alpha
+	check "a build needs cargo on PATH" has "cargo is not on PATH" "$last_err"
 	check "no refused build ran cargo" no_file "$state/cargo.argv"
 
 	begin_case build-fails

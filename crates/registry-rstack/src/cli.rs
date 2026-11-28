@@ -232,7 +232,7 @@ enum DevCommand {
         /// without either, the run starts its own PostgreSQL server in Docker.
         #[arg(long, value_name = "URL")]
         database_url: Option<String>,
-        /// Clear this project's managed development data before starting.
+        /// Remove this project's managed PostgreSQL volume and state before starting.
         #[arg(long)]
         clean: bool,
         /// Lifetime after readiness, from 1s to 24h. Defaults to 8h.
@@ -268,6 +268,9 @@ enum DevCommand {
         /// was lost.
         #[arg(long)]
         recover: bool,
+        /// Remove the project's managed PostgreSQL volume and state after stopping.
+        #[arg(long, conflicts_with = "recover")]
+        clean: bool,
         /// TLS PostgreSQL administrator URL for --recover. Defaults to
         /// RSTACK_DEV_DATABASE_URL; a run that started its own server needs none.
         #[arg(long, value_name = "URL", requires = "recover")]
@@ -1818,12 +1821,14 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
         DevCommand::Stop {
             run_id,
             recover,
+            clean,
             database_url,
         } => (
             "stop",
             recover
                 .then(|| OsString::from("--recover"))
                 .into_iter()
+                .chain(clean.then(|| OsString::from("--clean")))
                 .collect(),
             run_id.as_ref(),
             database_url.as_deref(),

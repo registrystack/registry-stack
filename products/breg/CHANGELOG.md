@@ -1,6 +1,7 @@
 # Base Registry Engine changelog
 
 ## Unreleased
+- `breg-review` refuses repeated `--posture` flags, including flags on both sides of `serve`.
 - Production refuses verified bearer tokens marked as development even when they carry no task grant.
 - BReg Review reports its loopback HTTP sign-in issuer as an explicit production setting.
 
@@ -8,7 +9,6 @@
 
 - The published runtime schema types each `authentication.oidc.issuers` key as a local identifier (`propertyNames: {$ref: LocalId}`), as the other products' issuer maps do.
 
-- The BReg client reports a refused development hook delivery as `development-peer`.
 
 - BReg accepts development attachment storage and verifier responses when the runtime declares development.
 

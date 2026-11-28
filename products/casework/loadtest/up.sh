@@ -28,12 +28,19 @@ for command in cargo docker python3; do
     exit 2
   }
 done
+umask 077
 if [[ -L "$run_dir" || -e "$run_dir" ]]; then
-  printf '%s\n' "load-test state path already exists: $run_dir. Preserve it, or move it aside after stopping its owned dev run." >&2
-  exit 2
+  if [[ -L "$run_dir" || ! -d "$run_dir" || -L "$run_dir/.launcher-owned" || ! -f "$run_dir/.launcher-owned" ]] ||
+    [[ "$(<"$run_dir/.launcher-owned")" != registry-stack-casework-loadtest-v2 ]] ||
+    ! python3 -c 'import json, sys; report = json.load(open(sys.argv[1])); sys.exit(not (report.get("status") == "stopped" and report.get("cleaned") is True))' "$run_dir/stop-report.json" 2>/dev/null; then
+    printf '%s\n' "load-test state path already exists: $run_dir. Stop its owned dev run with down.sh before starting again." >&2
+    exit 2
+  fi
+  archive=$(mktemp -d "$loadtest_dir/.run-archive.XXXXXXXX")
+  mv -- "$run_dir" "$archive/"
+  printf 'Previous load-test evidence: %s/.run\n' "$archive"
 fi
 
-umask 077
 mkdir -m 700 "$run_dir" "$run_dir/state"
 printf '%s\n' 'registry-stack-casework-loadtest-v2' >"$run_dir/.launcher-owned"
 
@@ -56,14 +63,15 @@ export RSTACK_CASEWORKCTL_BIN="$repository_root/target/$build_profile/caseworkct
 rstack="$repository_root/target/$build_profile/rstack"
 # rstack dev keeps each run's private state, including its credentials, here.
 export RSTACK_DEV_STATE_DIR="$run_dir/state"
+unset RSTACK_DEV_DATABASE_URL RSTACK_DEV_DATABASE_CA
 
 run_id=""
 cleanup_failed_start() {
   local status=$?
   if [[ "$status" -ne 0 && -n "$run_id" ]]; then
     printf '%s\n' 'Load-test startup failed; stopping only the run this launcher started.' >&2
-    "$rstack" dev stop "$run_id" >/dev/null 2>&1 ||
-      printf '%s\n' "Automatic owned-run cleanup failed; run: RSTACK_DEV_STATE_DIR=$run_dir/state $rstack dev stop $run_id" >&2
+    "$rstack" dev stop "$run_id" --clean >/dev/null 2>&1 ||
+      printf '%s\n' "Automatic owned-run cleanup failed. Run RSTACK_DEV_STATE_DIR=$run_dir/state $rstack dev stop $run_id --clean" >&2
   fi
   exit "$status"
 }
@@ -74,7 +82,10 @@ python3 "$support" local-project --example "$example" --project "$run_dir/projec
 "$rstack" --format json dev check "$run_dir/project" >"$run_dir/check-report.json"
 
 printf '%s\n' '== Starting the rstack dev run'
-"$rstack" --format json dev start --ttl 8h "$run_dir/project" >"$run_dir/start-report.json"
+"$rstack" --format json dev start --ttl 8h "$run_dir/project" >"$run_dir/start-report.json" || {
+  run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run_id",""))' "$run_dir/start-report.json" 2>/dev/null || true)
+  exit 1
+}
 run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$run_dir/start-report.json")
 python3 "$support" environment \
   --root "$run_dir" \

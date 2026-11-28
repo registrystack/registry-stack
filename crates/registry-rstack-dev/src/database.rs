@@ -10,8 +10,9 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_provision::{
-    plan, sql::quote_identifier, Plan, ProductDatabase, ProvisionTarget, RoleCredential,
-    SchemaLayout, Scope, Spatial,
+    plan,
+    sql::{quote_identifier, quote_literal},
+    Plan, Probe, ProductDatabase, ProvisionTarget, RoleCredential, SchemaLayout, Scope, Spatial,
 };
 use rustls::pki_types::{pem::PemObject as _, CertificateDer};
 use serde::{Deserialize, Serialize};
@@ -498,11 +499,7 @@ impl Database {
                 name, &verifier,
             ));
             self.create_if_missing(&create, &SqlState::DUPLICATE_OBJECT)?;
-            let alter = Zeroizing::new(format!(
-                "ALTER ROLE {} PASSWORD '{}'",
-                quote_identifier(name),
-                verifier.as_str()
-            ));
+            let alter = Zeroizing::new(retained_password_sql(name, &verifier));
             self.execute_admin(&alter)?;
         }
         if let Some(statement) = &batches.bbox_role {
@@ -731,13 +728,8 @@ impl Database {
     }
 
     fn configure_database(&self, names: &Names, batches: &Batches, retained: bool) -> Result<()> {
-        let repeatable;
         let statement = if retained {
-            repeatable = batches
-                .setup
-                .replace("CREATE EXTENSION ", "CREATE EXTENSION IF NOT EXISTS ")
-                .replace("CREATE SCHEMA ", "CREATE SCHEMA IF NOT EXISTS ");
-            &repeatable
+            &batches.retained_setup
         } else {
             &batches.setup
         };
@@ -913,6 +905,7 @@ struct Batches {
     create_database: String,
     access: String,
     setup: String,
+    retained_setup: String,
     postgis: Option<String>,
 }
 
@@ -973,6 +966,21 @@ impl Batches {
             }
         };
         let postgis = printable(&|step, _| step == "extension.postgis");
+        let retained_setup = plan
+            .statements()
+            .iter()
+            .filter(|statement| {
+                statement.scope == Scope::Database && statement.step != "extension.postgis"
+            })
+            .map(|statement| match &statement.probe {
+                Some(Probe::Extension { name, .. }) => {
+                    format!("CREATE EXTENSION IF NOT EXISTS {}", quote_identifier(name))
+                }
+                Some(Probe::Schema { name, owner }) => retained_schema_sql(name, owner),
+                _ => statement.printable.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
         Ok(Self {
             bbox_role: printable(&|step, _| step == "role.spatial-bbox").pop(),
             create_database: one("database.create")?,
@@ -984,9 +992,39 @@ impl Batches {
                 scope == Scope::Database && step != "extension.postgis"
             })
             .join("; "),
+            retained_setup,
             postgis: postgis.into_iter().next(),
         })
     }
+}
+
+fn retained_password_sql(name: &str, verifier: &str) -> String {
+    format!(
+        "ALTER ROLE {} PASSWORD {}",
+        quote_identifier(name),
+        quote_literal(verifier)
+    )
+}
+
+fn retained_schema_sql(name: &str, owner: &str) -> String {
+    let name = quote_identifier(name);
+    let owner = quote_identifier(owner);
+    format!(
+        "CREATE SCHEMA IF NOT EXISTS {name} AUTHORIZATION {owner}; REVOKE ALL ON SCHEMA {name} FROM PUBLIC"
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn retained_schema_quotes_identifiers() {
+    assert_eq!(
+        retained_schema_sql("foo\"; CREATE SCHEMA bar", "owner\"name"),
+        r#"CREATE SCHEMA IF NOT EXISTS "foo""; CREATE SCHEMA bar" AUTHORIZATION "owner""name"; REVOKE ALL ON SCHEMA "foo""; CREATE SCHEMA bar" FROM PUBLIC"#
+    );
+    assert_eq!(
+        retained_password_sql("owner\"name", "a'b"),
+        r#"ALTER ROLE "owner""name" PASSWORD 'a''b'"#
+    );
 }
 
 fn spatial_bbox_role(names: &Names) -> String {

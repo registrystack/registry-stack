@@ -787,7 +787,7 @@ jobs:
         run: python3 products/platform/scripts/check_dev_runner_reach.py
 
       - name: Development runner reach tests
-        run: python3 products/platform/scripts/test_dev_runner_reach.py
+        run: python3 -m unittest discover -s products/platform/scripts -p test_dev_runner_reach.py
 
       - name: Cargo deny
         run: cargo deny check

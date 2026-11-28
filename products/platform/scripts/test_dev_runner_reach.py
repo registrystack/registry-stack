@@ -2,7 +2,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_dev_runner_reach import dependency_violations, source_violations
+from check_dev_runner_reach import (
+    ALLOWLIST,
+    DEV_RUNNER,
+    DEV_RUNNER_HOSTS,
+    dependency_violations,
+    source_violations,
+)
 
 
 def metadata(package, dependency, kind=None):
@@ -25,6 +31,12 @@ class DevRunnerReachTests(unittest.TestCase):
         ):
             with self.subTest(package=package):
                 self.assertEqual(dependency_violations(metadata(package, dependency)), [])
+
+    def test_hosts_are_the_runner_dependents_that_host_runs(self):
+        self.assertIn("registry-cli-docs", ALLOWLIST[DEV_RUNNER])
+        self.assertNotIn("registry-cli-docs", DEV_RUNNER_HOSTS)
+        self.assertIn("registry-bregctl", DEV_RUNNER_HOSTS)
+        self.assertLessEqual(DEV_RUNNER_HOSTS, set(ALLOWLIST[DEV_RUNNER]))
 
     def test_optional_normal_dependencies_are_checked(self):
         for dependency in (
@@ -57,3 +69,34 @@ class DevRunnerReachTests(unittest.TestCase):
             failures = source_violations(root)
             self.assertEqual(len(failures), 2)
             self.assertTrue(all("serve.rs:1" in failure for failure in failures))
+
+    def test_unapproved_crate_reaches_runner_through_approved_host(self):
+        graph = metadata("registry-discoveryctl", "registry-rstack-dev")
+        graph["workspace_members"].append("caller")
+        graph["packages"].extend([
+            {"id": "caller", "name": "registry-unapproved", "dependencies": []},
+            {"id": "runner", "name": "registry-rstack-dev", "dependencies": []},
+        ])
+        graph["resolve"] = {"nodes": [
+            {"id": "caller", "deps": [{"pkg": "host", "dep_kinds": [{"kind": None}]}]},
+            {"id": "host", "deps": [{"pkg": "runner", "dep_kinds": [{"kind": None}]}]},
+            {"id": "runner", "deps": []},
+        ]}
+        failures = dependency_violations(graph)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("registry-unapproved -> registry-discoveryctl -> registry-rstack-dev", failures[0])
+
+    def test_import_alias_and_extern_crate_are_runner_references(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crates/registry-render/src"
+            source.mkdir(parents=True)
+            (source / "serve.rs").write_text(
+                "use registry_rstack_dev as runner;\n"
+                "extern crate registry_rstack_dev as dev;\n"
+            )
+            self.assertEqual(len(source_violations(root)), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

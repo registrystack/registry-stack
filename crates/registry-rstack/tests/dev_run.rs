@@ -2646,7 +2646,8 @@ fn start_without_database_url_runs_a_labelled_container() {
     assert!(runs[0].contains(" --env-file "), "{argv}");
     assert!(runs[0].contains(" postgres:18.7@sha256:"), "{argv}");
     assert!(!runs[0].contains("--platform"), "{argv}");
-    // The run removed its container by label before it reported the failure.
+    // The first start removed its container by label and discarded the
+    // volume it created. The caller has no run ID to clean up afterward.
     assert!(
         argv.contains(&format!(
             "ps --all --quiet --no-trunc --filter label={DEV_RUN_LABEL}={run_id}"
@@ -2654,7 +2655,7 @@ fn start_without_database_url_runs_a_labelled_container() {
         "{argv}"
     );
     assert_eq!(fs::read_dir(docker.join("containers")).unwrap().count(), 0);
-    assert_eq!(fs::read_dir(docker.join("volumes")).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(docker.join("volumes")).unwrap().count(), 0);
     assert!(report.get("run_id").is_none(), "{report}");
     assert_eq!(live_runs(&state), Vec::<String>::new());
     // The drawn administrator password reached Docker only in a file.

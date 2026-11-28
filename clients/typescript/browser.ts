@@ -1,7 +1,7 @@
 export { RegistryError, describeError, registryClientHeader, pages, allPages } from './core.ts'
 export type { Answer, CallOptions, ClientOptions, DescribeOptions, ErrorKind, ErrorReason, FieldValue, Filter, FilterOperator, JsonValue,
   ListPage, Page, Range, WireBytes, WireText } from './core.ts'
-export { DeliveryError, verifyDelivery, verifyRequest } from './webhook.ts'
+export { DeliveryError, verifyDelivery, verifyRequest, verifyStandardDelivery, verifyStandardRequest } from './webhook.ts'
 export * as bregMinimal from './generated/breg-minimal.ts'
 export * as bregFacility from './generated/breg-facility.ts'
 export * as casework from './generated/casework.ts'

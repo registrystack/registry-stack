@@ -10,9 +10,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_authcommon::{validate_compact_access_token, DeclaredScope, FailedCheck};
 use registry_platform_httputil::{FetchUrlPolicy, PeerPolicy};
 use registry_platform_oidc::{
-    actor_kind, grant_claims, ActorKind, Audience, ClaimError, ClaimNames, GrantClaims,
-    GrantContextError, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig, VerifiedToken,
+    actor_kind, grant_claims, refuses_development_assertion, ActorKind, Audience, ClaimError,
+    ClaimNames, GrantClaims, GrantContextError, IssuerNetworkPolicy, JwksFetcher,
+    JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -411,14 +411,7 @@ impl Authenticator {
                 return Err(AuthenticationError::Verification(error.failed_check()));
             }
         };
-        if self.peer_policy == PeerPolicy::RefuseDevelopmentPeer
-            && verified
-                .claims
-                .extra
-                .get(registry_platform_oidc::POSTURE_CLAIM)
-                .and_then(Value::as_str)
-                == Some(registry_platform_config::DEVELOPMENT)
-        {
+        if refuses_development_assertion(&verified, self.peer_policy) {
             return Err(AuthenticationError::DevelopmentAssertion);
         }
         // The scope gate reads only the verified token's scope set. It runs

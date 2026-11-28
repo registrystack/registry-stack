@@ -426,6 +426,9 @@ Coordinator does not check that a record, subject, or recipient identifier in th
 
 Under each `eventSources.<alias>`, set the producer URI in `source` and put the delivery key for each URL under `triggers.<workflow>.<trigger>.hmacSha256KeyRef`.
 Generate a separate key file for each trigger and give the same file to that trigger's sender.
+Signed deliveries have the same form in both postures, so use separate deployment keys and never give production trigger keys to development producers.
+
+{/* Evidence: crates/registry-coordinator/src/event_trigger.rs, verify_delivery. */}
 
 ```sh
 (umask 077 && openssl rand -hex 32 | tr -d '\n' > key)

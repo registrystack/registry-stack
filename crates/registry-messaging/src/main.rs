@@ -11,6 +11,10 @@ use tracing_subscriber::prelude::*;
 async fn main() {
     // Help and version answer without requiring valid operational settings.
     let matches = command().get_matches();
+    if registry_platform_config::has_repeated_posture_flag() {
+        eprintln!("messaging: [platform.posture.conflict] Declare --posture only once.");
+        std::process::exit(2);
+    }
     let flag = matches.get_one::<String>("posture").map(String::as_str);
     let posture = match registry_platform_config::declared(flag) {
         Ok(posture) => posture,

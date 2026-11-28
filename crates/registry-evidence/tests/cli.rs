@@ -5961,32 +5961,36 @@ fn offline_fixture_commands_enforce_posture_before_evaluation() {
     let deployment = Deployment::stage("adult-status");
     deployment.seal();
     for name in ["bundle-evaluate", "bundle-record-fixture-facts"] {
-        for (posture, expected_success) in [("production", false), ("development", true)] {
-            let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        for posture in [None, Some("production"), Some("development")] {
+            let expected_success = posture == Some("development");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+            command
                 .args([name, "--bundle"])
                 .arg(deployment.path("bundle"))
                 .args(["--fixture", "fixtures/cases.yaml"])
-                .env("REGISTRY_STACK_POSTURE", posture)
-                .output()
-                .unwrap();
+                .env_remove("REGISTRY_STACK_POSTURE");
+            if let Some(posture) = posture {
+                command.args(["--posture", posture]);
+            }
+            let output = command.output().unwrap();
             let refusal = String::from_utf8_lossy(&output.stderr);
             assert_eq!(
                 output.status.success(),
                 expected_success,
                 "{name}: {refusal}"
             );
-            if !expected_success {
-                assert!(
-                    refusal.contains("evidence.posture.local-assurance"),
-                    "{refusal}"
-                );
-                assert!(output.stdout.is_empty());
-            } else {
+            assert!(
+                refusal.contains("evidence.posture.local-assurance"),
+                "{name}: {refusal}"
+            );
+            if expected_success {
                 assert!(!output.stdout.is_empty(), "{name}: missing fixture payload");
+            } else {
                 assert!(
-                    refusal.contains("evidence.posture.local-assurance"),
+                    refusal.contains("--posture development"),
                     "{name}: {refusal}"
                 );
+                assert!(output.stdout.is_empty());
             }
         }
     }
