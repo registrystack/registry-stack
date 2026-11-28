@@ -18,15 +18,14 @@ use std::time::Duration;
 
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{
-    PrivateRangeRefusal, RuntimeFileCheck, SecretError, SecretReference, SecretResolver,
-    UrlHookDestinationConfig,
+    RuntimeFileCheck, SecretError, SecretReference, SecretResolver, UrlHookDestinationConfig,
 };
 use registry_platform_crypto::delivery_signature::{
     distinct_delivery_keys, DeliveryKey, DeliveryKeyError, DeliveryKeys,
 };
 use registry_platform_httputil::destination::{DestinationPolicyError, EventDestinationPolicy};
 use registry_platform_httputil::select::{DestinationSelectionError, TransportClass};
-use registry_platform_yaml::{Diagnostic, LocalId};
+use registry_platform_yaml::{escape_pointer_segment, Diagnostic, LocalId};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -44,13 +43,24 @@ pub enum UrlHookActivationError {
     /// attempt count is outside the block's delivery budget.
     #[error("the URL hook destination widens its delivery budget")]
     DeliveryBudgetWidening,
-    /// The URL or the policy built from it is refused.
+    /// A destination the shared check admits failed to build. The check
+    /// and activation refuse the same URLs, so this names an internal
+    /// inconsistency rather than a configuration to correct.
     #[error("the URL hook destination is invalid")]
     InvalidDestination,
-    /// The shared destination selector refused the URL, its transport, or
-    /// its private ranges.
-    #[error("the URL hook destination is refused: {0}. {fix}", fix = .0.fix())]
-    DestinationRefused(DestinationSelectionError),
+    /// The URL, the transport or a private range is refused, exactly as
+    /// [`check_url_hook_destination`] refuses it: `code` is the check's code
+    /// and `member` is the JSON pointer of the refused member below the
+    /// destination, such as `url` or `allowedPrivateCidrs/0`. No message
+    /// repeats a configured value.
+    #[error("{code}: destination {destination} member {member}: {message}. {suggested_action}")]
+    DestinationRefused {
+        destination: String,
+        code: String,
+        member: String,
+        message: String,
+        suggested_action: String,
+    },
     /// The key reference could not be resolved.
     #[error("Destination {destination} could not resolve {member}: {reason}. {}", reason.suggested_action())]
     SigningKeyUnavailable {
@@ -76,17 +86,38 @@ pub enum UrlHookActivationError {
 }
 
 impl UrlHookActivationError {
-    /// The selector's stable code for a [`Self::DestinationRefused`]
+    /// The check's stable code for a [`Self::DestinationRefused`]
     /// destination, or `None` for every other refusal.
     #[must_use]
-    pub fn code(&self) -> Option<&'static str> {
+    pub fn code(&self) -> Option<&str> {
         match self {
-            Self::DestinationRefused(error) => Some(error.code()),
+            Self::DestinationRefused { code, .. } => Some(code),
             Self::DeliveryBudgetWidening
             | Self::InvalidDestination
             | Self::SigningKeyUnavailable { .. }
             | Self::InvalidSigningKey { .. }
             | Self::RepeatedSigningKey { .. } => None,
+        }
+    }
+
+    /// The JSON pointer of the refused member of a
+    /// [`Self::DestinationRefused`] destination, under `block`, the pointer
+    /// of the map that holds the destinations by id (such as
+    /// `/destinations/hooks`). The id is escaped as a pointer segment, so
+    /// this is the pointer [`check_url_hook_destination`] reports when it is
+    /// given `{block}/{escaped id}`.
+    #[must_use]
+    pub fn pointer_under(&self, block: &str) -> Option<String> {
+        match self {
+            Self::DestinationRefused {
+                destination,
+                member,
+                ..
+            } => Some(format!(
+                "{block}/{}/{member}",
+                escape_pointer_segment(destination)
+            )),
+            _ => None,
         }
     }
 }
@@ -241,19 +272,6 @@ fn declared_transport(config: &UrlHookDestinationConfig) -> Option<TransportClas
         .map(|transport| TransportClass::from(*transport.get()))
 }
 
-/// A refused range carries the selector's code, which is the code its
-/// configuration check reports.
-fn range_refusal(refusal: PrivateRangeRefusal) -> DestinationSelectionError {
-    match refusal {
-        PrivateRangeRefusal::Malformed => DestinationSelectionError::RangeMalformed,
-        PrivateRangeRefusal::NotPrivate | PrivateRangeRefusal::MetadataAddress => {
-            DestinationSelectionError::RangeNotPrivate
-        }
-        PrivateRangeRefusal::NotCanonical => DestinationSelectionError::RangeNotCanonical,
-        PrivateRangeRefusal::TooMany => DestinationSelectionError::TooManyRanges,
-    }
-}
-
 /// Every configured URL hook destination, activated, with the digest of the
 /// whole inventory's non-secret bindings.
 #[derive(Clone)]
@@ -334,18 +352,28 @@ pub fn activate_url_hook_destination(
     if LocalId::new(logical_id).is_err() || !config.within_delivery_budget() {
         return Err(UrlHookActivationError::DeliveryBudgetWidening);
     }
+    // Refuse with the check's own first diagnostic, so activation names the
+    // code and member `check_url_hook_destination` reports for this input.
+    if let Some(refused) = check_url_hook_destination(config, "").into_iter().next() {
+        return Err(UrlHookActivationError::DestinationRefused {
+            destination: logical_id.to_owned(),
+            code: refused.code,
+            member: refused
+                .path
+                .strip_prefix('/')
+                .unwrap_or(&refused.path)
+                .to_owned(),
+            message: refused.message,
+            suggested_action: refused.suggested_action,
+        });
+    }
     let ranges = config
         .allowed_private_cidrs
         .ranges()
-        .map_err(|refusal| UrlHookActivationError::DestinationRefused(range_refusal(refusal)))?;
+        .map_err(|_| UrlHookActivationError::InvalidDestination)?;
     let address =
         url_destination_address_selected(config.url.as_str(), declared_transport(config), &ranges)
-            .map_err(|error| match error {
-                UrlDestinationError::Refused(error) => {
-                    UrlHookActivationError::DestinationRefused(error)
-                }
-                UrlDestinationError::InvalidBinding => UrlHookActivationError::InvalidDestination,
-            })?;
+            .map_err(|_| UrlHookActivationError::InvalidDestination)?;
     let policy = EventDestinationPolicy::from_selected(logical_id, &address.selected)
         .map_err(|_| UrlHookActivationError::InvalidDestination)?;
     let (current, _, _) = resolve_delivery_key(

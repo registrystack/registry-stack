@@ -3228,6 +3228,71 @@ pub(crate) mod tests {
         );
     }
 
+    /// Startup names the code and the pointer the offline check reports for
+    /// the same runtime document: from the load when the product refuses the
+    /// member itself, and from hook activation otherwise.
+    #[cfg(unix)]
+    #[test]
+    fn startup_reports_the_hook_refusal_the_offline_check_reports() {
+        let starter_url = "url: https://civil-registry.example.test/document-events";
+        let with_hook = |url: &str| STARTER_RUNTIME.replace(starter_url, &format!("url: {url}"));
+        let mut documents = [
+            "https://localhost.:9443/hooks",
+            "https://localhost:0/hooks",
+            "https://receiver.localhost:9443/hooks",
+            "http://receiver.example.test/hooks",
+        ]
+        .map(with_hook)
+        .to_vec();
+        let starter_id = "\n    owning-system-events:\n";
+        assert!(STARTER_RUNTIME.contains(starter_id));
+        documents.push(STARTER_RUNTIME.replace(starter_id, "\n    \"a/b~c\":\n"));
+        for document in documents {
+            let offline = offline_codes(&document);
+            assert!(!offline.is_empty(), "{document}");
+            assert_eq!(startup_refusal(&document), offline, "{document}");
+        }
+    }
+
+    /// What startup reports for `text`: the load's refusals, or the code and
+    /// pointer of the hook activation refusal.
+    #[cfg(unix)]
+    fn startup_refusal(text: &str) -> Vec<String> {
+        let config = match parse(text) {
+            Ok(config) => config,
+            Err(RuntimeConfigError::Refused(findings)) => {
+                return findings
+                    .iter()
+                    .map(|finding| format!("{} {}", finding.code, finding.pointer))
+                    .collect();
+            }
+            Err(RuntimeConfigError::Load(error)) => {
+                return error
+                    .diagnostics()
+                    .iter()
+                    .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.path))
+                    .collect();
+            }
+            Err(other) => panic!("an unexpected load refusal: {other}"),
+        };
+        let secrets = registry_platform_config::SecretResolver::new(
+            [registry_platform_config::SecretProvider::Environment],
+            "/",
+        )
+        .expect("the test secret resolver");
+        let error = crate::hooks::activate_destinations(
+            &std::collections::BTreeSet::new(),
+            &config.destinations.hooks,
+            &secrets,
+        )
+        .map(drop)
+        .expect_err("startup refuses the destination");
+        match (error.code(), error.pointer()) {
+            (Some(code), Some(pointer)) => vec![format!("{code} {pointer}")],
+            _ => panic!("an unpositioned activation refusal: {error}"),
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_expression_serving_bind_defers_only_the_overlap_comparison() {

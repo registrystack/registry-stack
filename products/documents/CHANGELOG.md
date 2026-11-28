@@ -36,6 +36,16 @@
 - `documentsctl generate identity-facts PROJECT --runtime-config FILE --output FILE` writes the identity facts one issuer entry states. With more than one entry, `--issuer ISSUER_ID` names it, and a missing or unknown id is refused with `identity.facts.issuer-required` or `identity.facts.unknown-issuer`.
 
 - `documentsctl check` reports `explicitProductionSettings`, right after `posture`: each explicit setting of the runtime file that is valid in every posture and worth a reviewer's attention, such as `accessTokenType: JWT` or a non-default `scopeClaim`.
+
+- Startup refuses a hook destination's URL, transport or private range with
+  the code and pointer `documentsctl check` reports, such as `config.invalid-value:
+  /destinations/hooks/owning-system-events/url: ...` for `https://localhost.:9443/hooks`.
+  Before, startup said only that a hook destination binding was invalid.
+  BREAKING (Rust API): `HookActivationError` gains `DestinationRefused`,
+  `HookActivationError::code` is no longer `const` and returns
+  `Option<&str>`, and the new `HookActivationError::pointer` gives the
+  refused member's pointer.
+
 - A `destinations.hooks` URL over https to a loopback address literal or the
   exact name `localhost`, such as `https://localhost:9443/hooks`, now
   activates and delivers. Before, `https://localhost` was refused at startup

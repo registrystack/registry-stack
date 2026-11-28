@@ -173,12 +173,21 @@ selection:
   port, checked with `SelectedDestination::admits_url` before anything is
   resolved or dialled. That covers an address literal or `localhost`, which
   no resolver sees, so a credential the caller adds reaches no other origin.
-  A `Host` header the caller sets must name that same authority, compared as
-  a URL authority (case, a written or elided default port, and the form of
-  an IPv6 literal do not matter), and a request with more than one is
-  refused, so a credential cannot reach another virtual host behind the
-  selected peer either. A refused `Host` fails with
-  `DestinationClientError::HostNotSelected` before anything is dialled.
+  A `Host` header the caller sets must name that same authority, and a
+  request with more than one is refused. The value is read with a bounded
+  grammar, never through a URL parser: a name is compared as written without
+  case, root dot included, and a name whose last label (ignoring one root
+  dot) is a number, decimal or `0x` hex, is read as an IPv4 address, which
+  must be dotted decimal with no leading zeros and no root dot. An IPv6
+  address must be bracketed with no zone and is compared as an address, and a
+  written port is compared as a number, leading zeros included, an elided one
+  being the scheme's default. An empty port, a port of zero or above 65535, a
+  percent-encoded byte, an empty last label after one root dot
+  (`objects.example..`), or an IPv4 address in any other spelling (`127.1`,
+  `0x7f.0.0.1`, `2130706433`) is refused. So a credential cannot reach
+  another virtual host behind the selected peer either. A refused `Host`
+  fails with `DestinationClientError::HostNotSelected` before anything is
+  dialled.
   A private plain-text selection never builds a client, since a client
   carries whatever credential its caller adds.
 - `ServiceBaseUrl::selected` refuses a private plain-text selection for the

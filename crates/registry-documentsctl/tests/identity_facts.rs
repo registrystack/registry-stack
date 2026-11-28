@@ -246,9 +246,10 @@ fn a_profile_client_the_runtime_does_not_admit_is_refused() {
 fn check_lists_the_explicit_settings_right_after_the_posture() {
     let temporary = tempfile::tempdir().unwrap();
     let (project, runtime) = starter(temporary.path());
-    let text = std::fs::read_to_string(&runtime)
-        .unwrap()
-        .replace(MAIN_CLIENTS, &format!("{MAIN_CLIENTS}\n        accessTokenType: JWT"));
+    let text = std::fs::read_to_string(&runtime).unwrap().replace(
+        MAIN_CLIENTS,
+        &format!("{MAIN_CLIENTS}\n        accessTokenType: JWT"),
+    );
     std::fs::write(&runtime, text).unwrap();
     let run = documentsctl(&[
         "--format",

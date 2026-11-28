@@ -143,16 +143,20 @@ optional `previousHmacSha256KeyRef`, and a delivery budget. It is defined in
 through the shared destination selector and records the binding digest. A
 destination is https, http on a loopback host, or http inside the declared
 ranges under `transport: private-network-plaintext`, always without a client
-certificate. A refused destination carries the selector's code in
-`UrlHookActivationError::DestinationRefused`. An https URL to a loopback
+certificate. A refused URL, transport or private range is
+`UrlHookActivationError::DestinationRefused`, which carries the code and the
+member (such as `url` or `allowedPrivateCidrs/0`) that
+`check_url_hook_destination` reports for the same destination, so startup and
+`check` name the same refusal. `pointer_under("/destinations/hooks")` gives
+its JSON pointer, with the destination id escaped. An https URL to a loopback
 address literal (`127.0.0.0/8`, `[::1]`, or an IPv4-mapped loopback such as
 `[::ffff:127.0.0.1]`) or the exact name `localhost` is
 admitted in every posture and pinned to loopback addresses as an http URL on a
 loopback host is: a literal is dialled as written, and `localhost` only when
 every address it resolves to is loopback. An https URL that names a name under
 `localhost` or the absolute name `localhost.`, or port zero, passes the
-selector and is refused by the fixed destination policy as
-`InvalidDestination`. To move such a destination, write the receiver as
+selector and is refused by the fixed destination policy, as
+`config.invalid-value` at the destination's `url`. To move such a destination, write the receiver as
 `https://localhost:<port>` or a loopback literal such as
 `https://127.0.0.1:<port>` when it runs on the same host, or as a name outside
 the `localhost` namespace when it does not, and give the URL a port other than
@@ -163,7 +167,9 @@ pointer, so a product's `check` that calls it refuses them before startup.
 Scheduling and Document Store share that block, and their offline checks call
 `check_url_hook_destination_file` for each bound destination at
 `/destinations/hooks/<id>`, keeping their own code where they already refuse
-the same member. The Base
+the same member. Their startup reports a refused destination with the same
+code and pointer, and a member they refuse themselves is refused when the
+runtime file is loaded, before activation, with their own code. The Base
 Registry Engine configures the full outbound policy instead, because its
 destinations may present a client certificate for mTLS.
 

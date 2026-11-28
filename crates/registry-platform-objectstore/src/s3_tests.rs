@@ -196,6 +196,27 @@ fn a_put_signs_exactly_host_payload_date_and_session_token_and_marks_secrets_sen
     );
 }
 
+/// A path-style endpoint written with a root dot signs that name as its
+/// `Host`, root dot included. The selected client admits exactly this value
+/// (`registry-platform-httputil`'s
+/// `a_root_dot_name_passes_its_own_signed_host_header`).
+#[test]
+fn a_root_dot_path_style_endpoint_signs_its_written_name() {
+    for (url, expected_host) in [
+        ("https://objects.example./", "objects.example."),
+        ("https://objects.example.:9000/", "objects.example.:9000"),
+    ] {
+        let store = store(url, "registry");
+        let object = store.bucket_url.join("key").unwrap();
+        assert_eq!(object.host_str(), Some("objects.example."), "{url}");
+        let headers = store
+            .signed_headers(&Method::GET, &object, &[], TIMESTAMP)
+            .unwrap();
+        assert_eq!(headers["host"], expected_host, "{url}");
+        assert_eq!(headers.get_all("host").iter().count(), 1, "{url}");
+    }
+}
+
 #[test]
 fn ipv6_signed_host_preserves_brackets_and_normalizes_default_ports() {
     // Generated independently with Python hashlib/hmac using the explicitly

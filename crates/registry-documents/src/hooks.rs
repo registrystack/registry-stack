@@ -98,6 +98,16 @@ pub enum HookActivationError {
     DestinationInventoryMismatch,
     #[error("a Document Store hook destination binding is invalid")]
     InvalidDestination,
+    /// A destination's URL, transport or private range is refused. The
+    /// message leads with the code and the pointer `documentsctl check` reports for
+    /// the same runtime document.
+    #[error("{code}: {pointer}: {message}. {suggested_action}")]
+    DestinationRefused {
+        code: String,
+        pointer: String,
+        message: String,
+        suggested_action: String,
+    },
     #[error("a Document Store hook destination widens the fixed delivery budget")]
     DeliveryBudgetWidening,
     #[error("{}", signing_material_refusal(.0))]
@@ -109,14 +119,28 @@ pub enum HookActivationError {
 impl HookActivationError {
     /// The diagnostic code a refusal carries, when it has one.
     #[must_use]
-    pub const fn code(&self) -> Option<&'static str> {
+    pub fn code(&self) -> Option<&str> {
         match self {
             Self::UnsupportedCapability { .. } => Some(HookCapabilityError::CODE),
             Self::DestinationInventoryMismatch => Some(UNBOUND_HOOK_DESTINATION_CODE),
+            Self::DestinationRefused { code, .. } => Some(code),
+            _ => None,
+        }
+    }
+
+    /// The JSON pointer of the refused member in the runtime document, for a
+    /// refusal `documentsctl check` positions at one.
+    #[must_use]
+    pub fn pointer(&self) -> Option<&str> {
+        match self {
+            Self::DestinationRefused { pointer, .. } => Some(pointer),
             _ => None,
         }
     }
 }
+
+/// The runtime document's pointer of the hook destinations, keyed by id.
+const DESTINATIONS_POINTER: &str = "/destinations/hooks";
 
 impl From<HookCapabilityError> for HookActivationError {
     fn from(error: HookCapabilityError) -> Self {
@@ -716,7 +740,7 @@ impl ActivatedHooks {
 
 /// Activate the configured destination inventory, which must bind every
 /// destination `expected` names.
-fn activate_destinations(
+pub(crate) fn activate_destinations(
     expected: &BTreeSet<String>,
     configured: &BTreeMap<String, UrlHookDestinationConfig>,
     secrets: &SecretResolver,
@@ -739,8 +763,20 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
         UrlHookActivationError::DeliveryBudgetWidening => {
             HookActivationError::DeliveryBudgetWidening
         }
-        UrlHookActivationError::InvalidDestination
-        | UrlHookActivationError::DestinationRefused(_) => HookActivationError::InvalidDestination,
+        UrlHookActivationError::DestinationRefused {
+            ref code,
+            ref message,
+            ref suggested_action,
+            ..
+        } => HookActivationError::DestinationRefused {
+            code: code.clone(),
+            pointer: error
+                .pointer_under(DESTINATIONS_POINTER)
+                .expect("a refused destination names its member"),
+            message: message.clone(),
+            suggested_action: suggested_action.clone(),
+        },
+        UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
         UrlHookActivationError::SigningKeyUnavailable { .. }
         | UrlHookActivationError::InvalidSigningKey { .. }
         | UrlHookActivationError::RepeatedSigningKey { .. } => {
@@ -785,7 +821,7 @@ fn signing_material_refusal(error: &UrlHookActivationError) -> String {
         }
         UrlHookActivationError::DeliveryBudgetWidening
         | UrlHookActivationError::InvalidDestination
-        | UrlHookActivationError::DestinationRefused(_) => error.to_string(),
+        | UrlHookActivationError::DestinationRefused { .. } => error.to_string(),
     }
 }
 

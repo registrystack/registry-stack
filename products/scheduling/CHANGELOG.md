@@ -7,6 +7,16 @@
 - Start a local development run from the starter with `rstack dev start`.
 
 - BREAKING: `schedulingctl records apply` reports a swap the store refuses (`package-not-active`, `deployment-identity`, `not-activated`, `database-id-mismatch`, `combined-invariant`) as a domain refusal with exit 1 and its own code, as the other activation commands do. It was exit 3 `store-unavailable`. Migration: Scripts that retry on exit 3 no longer retry these refusals. Run the command the message names.
+
+- Startup refuses a hook destination's URL, transport or private range with
+  the code and pointer `schedulingctl check` reports, such as `config.invalid-value:
+  /destinations/hooks/appointment-events/url: ...` for `https://localhost.:9443/hooks`.
+  Before, startup said only that a hook destination binding was invalid.
+  BREAKING (Rust API): `HookActivationError` gains `DestinationRefused`,
+  `HookActivationError::code` is no longer `const` and returns
+  `Option<&str>`, and the new `HookActivationError::pointer` gives the
+  refused member's pointer.
+
 - A `destinations.hooks` URL over https to a loopback address literal or the
   exact name `localhost`, such as `https://localhost:9443/hooks`, now
   activates and delivers. Before, `https://localhost` was refused at startup

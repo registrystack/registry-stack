@@ -141,6 +141,19 @@
   its caller reference. With two or more entries, the reference is a SHA-256
   digest of the verified issuer and subject, so equal subjects from different
   issuers stay distinct.
+
+- Hook activation refuses a URL, transport or private range with the code
+  and member `check_url_hook_destination` reports for the same destination.
+  Before, a URL the fixed destination policy refused (a name under
+  `localhost`, `localhost.`, or port zero) and a URL with a query or a
+  fragment were refused as `InvalidDestination` with no code or member.
+  BREAKING (Rust API): `UrlHookActivationError::DestinationRefused` is a
+  struct variant with `destination`, `code`, `member`, `message` and
+  `suggested_action`, `UrlHookActivationError::code` returns
+  `Option<&str>`, and the new `pointer_under(block)` gives the member's
+  JSON pointer. `InvalidDestination` now names only an internal
+  inconsistency.
+
 - A URL hook destination over https to a loopback address literal
   (`127.0.0.0/8`, `[::1]`, or an IPv4-mapped loopback such as
   `[::ffff:127.0.0.1]`) or the exact name `localhost` is admitted in
@@ -311,8 +324,18 @@
   dialled, so an address literal or `localhost`, which no resolver sees,
   cannot carry a caller's credential elsewhere. A `Host` header that names
   another authority, or a second `Host` header, is refused with
-  `DestinationClientError::HostNotSelected` before anything is dialled; a
-  matching `Host`, such as the object store's signed one, is sent.
+  `DestinationClientError::HostNotSelected` before anything is dialled. A
+  matching `Host`, such as the object store's signed one, is sent. The value
+  is read with a bounded grammar rather than normalized as a URL, so an
+  empty port, a percent-encoded byte, or an IPv4 address not in dotted
+  decimal is refused even when it would normalize to the selected host. A
+  written port is compared as a number, so `receiver.example:000443` matches
+  a default https selection. A
+  name is compared as written, root dot included, so an endpoint such as
+  `https://objects.example./` or `https://objects.0xrelay/` passes its own
+  signed `Host`. Only one root dot is read: a `Host` whose last label is
+  empty after it, such as `objects.example..`, is refused, even against a
+  selection spelled the same way.
 
 - `registry-platform-objectstore` selects the bucket URL and the verifier URL
   with `select_credential_destination` and builds each client through

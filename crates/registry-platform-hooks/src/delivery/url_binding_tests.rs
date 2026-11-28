@@ -386,17 +386,15 @@ fn activation_refuses_a_url_outside_the_fixed_policy() {
     for (url, expected) in [
         (
             "http://events.example.test/hooks",
-            UrlHookActivationError::DestinationRefused(
-                DestinationSelectionError::PrivateNetworkNotDeclared,
-            ),
+            DestinationSelectionError::PrivateNetworkNotDeclared.code(),
         ),
         (
             "https://events.example.test/hooks?token=canary",
-            UrlHookActivationError::InvalidDestination,
+            "config.invalid-value",
         ),
         (
             "https://events.example.test/hooks#part",
-            UrlHookActivationError::InvalidDestination,
+            "config.invalid-value",
         ),
     ] {
         let refused = activate_url_hook_destination(
@@ -408,7 +406,12 @@ fn activation_refuses_a_url_outside_the_fixed_policy() {
         )
         .map(drop)
         .expect_err("the URL is refused");
-        assert_eq!(refused, expected, "{url}");
+        assert_eq!(refused.code(), Some(expected), "{url}");
+        assert_eq!(
+            refused.pointer_under("/hooks"),
+            Some("/hooks/events/url".to_owned()),
+            "{url}"
+        );
         assert!(!refused.to_string().contains("canary"), "{refused}");
     }
 }
@@ -688,32 +691,32 @@ fn activation_refuses_what_the_destination_selector_refuses() {
         let refused = activate(&secrets, &row_config(&row))
             .map(drop)
             .expect_err(row.row);
-        match row.refusal {
-            Some(error) => {
-                assert_eq!(
-                    refused,
-                    UrlHookActivationError::DestinationRefused(error),
-                    "{}",
-                    row.row
-                );
-                assert_eq!(refused.code(), Some(row.code), "{}", row.row);
-                let message = refused.to_string();
-                assert!(message.contains(error.fix()), "{message}");
-                // The fix names "the receiver's range" in fixed words, so the
-                // probe is the configured host as written.
-                for value in ["receiver:", "receiver/", "10.1.2.3", "169.254", "canary"] {
-                    assert!(!message.contains(value), "{}: {message}", row.row);
-                }
-            }
-            None => {
-                assert_eq!(
-                    refused,
-                    UrlHookActivationError::InvalidDestination,
-                    "{}",
-                    row.row
-                );
-                assert_eq!(refused.code(), None, "{}", row.row);
-            }
+        // Activation names the code and member the check reports.
+        assert_eq!(
+            activation_coded(&refused),
+            check_coded(&row_config(&row)),
+            "{}",
+            row.row
+        );
+        assert_eq!(refused.code(), Some(row.code), "{}", row.row);
+        let member = row
+            .member
+            .strip_prefix(HOOK)
+            .expect("a member under the hook");
+        assert_eq!(
+            refused.pointer_under("/hooks"),
+            Some(format!("/hooks/events{member}")),
+            "{}",
+            row.row
+        );
+        let message = refused.to_string();
+        if let Some(error) = row.refusal {
+            assert!(message.contains(error.fix()), "{message}");
+        }
+        // The fix names "the receiver's range" in fixed words, so the
+        // probe is the configured host as written.
+        for value in ["receiver:", "receiver/", "10.1.2.3", "169.254", "canary"] {
+            assert!(!message.contains(value), "{}: {message}", row.row);
         }
     }
 }
@@ -807,12 +810,50 @@ fn https_to_an_explicit_loopback_host_is_admitted_by_check_and_activation() {
             .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
             .collect();
         assert_eq!(coded, [("config.invalid-value", "/hook/url")], "{url}");
-        assert_eq!(
-            activate(&secrets, &config).map(drop).unwrap_err(),
-            UrlHookActivationError::InvalidDestination,
-            "{url}"
-        );
+        let refused = activate(&secrets, &config).map(drop).unwrap_err();
+        assert_eq!(activation_coded(&refused), check_coded(&config), "{url}");
     }
+}
+
+/// The pointer escapes the destination id as a JSON pointer segment, as the
+/// products escape it for their offline check.
+#[test]
+fn an_activation_refusal_pointer_escapes_the_destination_id() {
+    let refused = UrlHookActivationError::DestinationRefused {
+        destination: "a/b~c".to_owned(),
+        code: "config.invalid-value".to_owned(),
+        member: "url".to_owned(),
+        message: "the hook URL's port is zero".to_owned(),
+        suggested_action: "Give the hook URL a port other than 0.".to_owned(),
+    };
+    assert_eq!(
+        refused.pointer_under("/destinations/hooks"),
+        Some("/destinations/hooks/a~1b~0c/url".to_owned())
+    );
+    assert_eq!(
+        UrlHookActivationError::InvalidDestination.pointer_under("/destinations/hooks"),
+        None
+    );
+}
+
+/// The code and pointer an activation refusal names for the destination
+/// `events` under `/hooks`.
+fn activation_coded(refused: &UrlHookActivationError) -> (Option<String>, Option<String>) {
+    (
+        refused.code().map(str::to_owned),
+        refused.pointer_under("/hooks"),
+    )
+}
+
+/// The code and pointer the check's first diagnostic names for the same
+/// destination.
+fn check_coded(config: &UrlHookDestinationConfig) -> (Option<String>, Option<String>) {
+    let found = check_url_hook_destination(config, "/hooks/events");
+    let first = found.first();
+    (
+        first.map(|diagnostic| diagnostic.code.clone()),
+        first.map(|diagnostic| diagnostic.path.clone()),
+    )
 }
 
 const ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
