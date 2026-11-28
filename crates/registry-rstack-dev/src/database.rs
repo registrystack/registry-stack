@@ -297,6 +297,7 @@ fn open_admin_session(
     Ok((client, connection_task, identity))
 }
 
+#[derive(Clone)]
 pub(super) struct DatabaseUrls {
     pub runtime: String,
     pub migration: String,
@@ -318,6 +319,7 @@ pub(super) struct Database {
     recovery_identity: RecoveryIdentity,
     endpoint: Endpoint,
     run_id: String,
+    project_key: Option<String>,
     acquisitions: Vec<Acquisition>,
     runtime: Runtime,
 }
@@ -409,6 +411,7 @@ impl Database {
             recovery_identity,
             endpoint,
             run_id: run_id.to_owned(),
+            project_key: None,
             acquisitions: Vec::new(),
             runtime,
         })
@@ -416,6 +419,10 @@ impl Database {
 
     pub(super) fn recovery_identity(&self) -> &RecoveryIdentity {
         &self.recovery_identity
+    }
+
+    pub(super) fn set_project_key(&mut self, key: Option<String>) {
+        self.project_key = key;
     }
 
     pub(super) fn provision(
@@ -428,7 +435,9 @@ impl Database {
         if requires_postgis && !breg {
             bail!("PostGIS prerequisites may be provisioned only for a BReg database");
         }
-        let names = Names::new(&self.run_id, label);
+        let project_key = self.project_key.as_deref().filter(|_| label != "breg_test");
+        let names = Names::new(project_key.unwrap_or(&self.run_id), label);
+        let retained = project_key.is_some();
         if self.acquisitions.iter().any(|acquisition| {
             matches!(acquisition, Acquisition::Database(database) if database == &names.database)
         }) {
@@ -449,13 +458,17 @@ impl Database {
             &migration_password,
             &runtime_password,
         )?;
-        self.create_role(&names.migration_role, &migration_password)?;
-        self.create_role(&names.runtime_role, &runtime_password)?;
-        if let Some(statement) = &batches.bbox_role {
-            self.create_spatial_bbox_role(&spatial_bbox_role(&names), statement)?;
+        if retained {
+            self.provision_retained(&names, &batches, &migration_password, &runtime_password)?;
+        } else {
+            self.create_role(&names.migration_role, &migration_password)?;
+            self.create_role(&names.runtime_role, &runtime_password)?;
+            if let Some(statement) = &batches.bbox_role {
+                self.create_spatial_bbox_role(&spatial_bbox_role(&names), statement)?;
+            }
+            self.create_database(&names, &batches)?;
         }
-        self.create_database(&names, &batches)?;
-        self.configure_database(&names, &batches)?;
+        self.configure_database(&names, &batches, retained)?;
 
         Ok(DatabaseUrls {
             runtime: self.product_url(&names.database, &names.runtime_role, &runtime_password)?,
@@ -465,6 +478,50 @@ impl Database {
                 &migration_password,
             )?,
         })
+    }
+
+    fn provision_retained(
+        &mut self,
+        names: &Names,
+        batches: &Batches,
+        migration_password: &str,
+        runtime_password: &str,
+    ) -> Result<()> {
+        for (name, password) in [
+            (&names.migration_role, migration_password),
+            (&names.runtime_role, runtime_password),
+        ] {
+            let verifier = Zeroizing::new(postgres_protocol::password::scram_sha_256(
+                password.as_bytes(),
+            ));
+            let create = Zeroizing::new(registry_platform_provision::sql::create_role_sql(
+                name, &verifier,
+            ));
+            self.create_if_missing(&create, &SqlState::DUPLICATE_OBJECT)?;
+            let alter = Zeroizing::new(format!(
+                "ALTER ROLE {} PASSWORD '{}'",
+                quote_identifier(name),
+                verifier.as_str()
+            ));
+            self.execute_admin(&alter)?;
+        }
+        if let Some(statement) = &batches.bbox_role {
+            self.create_if_missing(statement, &SqlState::DUPLICATE_OBJECT)?;
+        }
+        self.create_if_missing(&batches.create_database, &SqlState::DUPLICATE_DATABASE)?;
+        self.execute_admin(&batches.access)
+    }
+
+    fn create_if_missing(&mut self, statement: &str, duplicate: &SqlState) -> Result<()> {
+        match self.execute_admin_operation(statement, "development provisioning", OPERATION_TIMEOUT)
+        {
+            Err(OperationFailure::PostgreSql { source, .. })
+                if source.code() == Some(duplicate) =>
+            {
+                Ok(())
+            }
+            result => result.map_err(Into::into),
+        }
     }
 
     pub(super) fn cleanup(&mut self) -> Result<()> {
@@ -673,8 +730,17 @@ impl Database {
             .context("cannot restrict the PostgreSQL database to this run's roles")
     }
 
-    fn configure_database(&self, names: &Names, batches: &Batches) -> Result<()> {
-        let statement = &batches.setup;
+    fn configure_database(&self, names: &Names, batches: &Batches, retained: bool) -> Result<()> {
+        let repeatable;
+        let statement = if retained {
+            repeatable = batches
+                .setup
+                .replace("CREATE EXTENSION ", "CREATE EXTENSION IF NOT EXISTS ")
+                .replace("CREATE SCHEMA ", "CREATE SCHEMA IF NOT EXISTS ");
+            &repeatable
+        } else {
+            &batches.setup
+        };
         let postgis = &batches.postgis;
 
         let mut target = self.admin_config.clone();
@@ -1280,6 +1346,7 @@ mod tests {
                 port: Some(stalled_port),
             },
             run_id: RUN_ID.to_owned(),
+            project_key: None,
             acquisitions: Vec::new(),
             runtime,
         };

@@ -6,6 +6,7 @@
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::{
+    fs,
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -18,6 +19,12 @@ use super::{database, operational, write_private};
 
 /// The label every managed run's container carries, valued with the run ID.
 pub(super) const LABEL: &str = "org.registrystack.rstack.dev-run";
+const PROJECT_LABEL: &str = "org.registrystack.rstack.development-project";
+const PG_VOLUME_PATH: &str = "/var/lib/postgresql";
+
+pub(super) fn volume_name(key: &str) -> String {
+    format!("rstack-development-project-{key}")
+}
 
 /// The official multi-arch PostgreSQL image.
 const DEFAULT_IMAGE: &str =
@@ -158,15 +165,81 @@ impl Docker {
         Ok(())
     }
 
-    /// Start the run's PostgreSQL container and turn on verified TLS. A
-    /// failure leaves any container started under the run's label, for the
-    /// run's cleanup to remove.
-    pub(super) fn start_server(&self, root: &Path, run_id: &str, image: Image) -> Result<Server> {
-        self.start_labelled(root, run_id, image)
+    pub(super) fn require_free_volume(&self, key: &str) -> Result<()> {
+        let filter = format!("volume={}", volume_name(key));
+        let held = self.run(
+            &["ps", "--all", "--quiet", "--filter", &filter],
+            None,
+            COMMAND_DEADLINE,
+        )?;
+        ensure!(held.trim().is_empty(), "a development container still holds this project's volume; recover the previous run first");
+        Ok(())
+    }
+
+    fn project_volumes(&self, key: &str) -> Result<String> {
+        self.run(
+            &[
+                "volume",
+                "ls",
+                "--quiet",
+                "--filter",
+                &format!("label={PROJECT_LABEL}={key}"),
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )
+    }
+
+    pub(super) fn has_project_volume(&self, key: &str) -> Result<bool> {
+        let volume = volume_name(key);
+        Ok(self
+            .project_volumes(key)?
+            .lines()
+            .any(|line| line == volume))
+    }
+
+    pub(super) fn remove_project_volume(&self, key: &str) -> Result<()> {
+        let volume = volume_name(key);
+        if self.has_project_volume(key)? {
+            self.run(&["volume", "rm", &volume], None, COMMAND_DEADLINE)?;
+        }
+        Ok(())
+    }
+
+    /// Start the run's PostgreSQL server on its project's labelled volume.
+    /// Leave any started container under the run's label for cleanup.
+    pub(super) fn start_server(
+        &self,
+        root: &Path,
+        run_id: &str,
+        image: Image,
+        key: &str,
+    ) -> Result<Server> {
+        self.start_labelled(root, run_id, image, key)
             .map_err(operational)
     }
 
-    fn start_labelled(&self, root: &Path, run_id: &str, image: Image) -> Result<Server> {
+    fn start_labelled(&self, root: &Path, run_id: &str, image: Image, key: &str) -> Result<Server> {
+        let state = root.with_file_name(format!("development-project-{key}"));
+        let volume = volume_name(key);
+        self.run(
+            &[
+                "volume",
+                "create",
+                "--label",
+                &format!("{PROJECT_LABEL}={key}"),
+                &volume,
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )?;
+        ensure!(
+            self.project_volumes(key)?
+                .lines()
+                .any(|line| line == volume),
+            "the PostgreSQL volume {volume} is missing the development project label"
+        );
+        let mount = format!("{volume}:{PG_VOLUME_PATH}");
         let name = container_name(run_id);
         let label = format!("{LABEL}={run_id}");
         // The password reaches Docker in an owner-only file, never in an
@@ -192,6 +265,8 @@ impl Docker {
             "127.0.0.1::5432",
             "--env-file",
             env_file,
+            "-v",
+            &mount,
         ];
         if let Some(platform) = image.platform {
             arguments.extend(["--platform", platform]);
@@ -219,7 +294,14 @@ impl Docker {
             })?;
 
         self.await_ready(&id, &name, &label)?;
-        let tls = RunTls::generate()?;
+        let verifier = Zeroizing::new(postgres_protocol::password::scram_sha_256(
+            password.as_bytes(),
+        ));
+        self.sql(
+            &id,
+            &format!("ALTER ROLE postgres PASSWORD '{}';", verifier.as_str()),
+        )?;
+        let tls = RunTls::load_or_create(&state)?;
         let hba_file = self.sql(&id, "SHOW hba_file;")?;
         let hba_file = hba_file.trim();
         ensure!(
@@ -430,6 +512,55 @@ impl Docker {
         )
     }
 
+    pub(super) fn drop_rehearsals(
+        &self,
+        run_id: &str,
+        groups: Vec<Vec<String>>,
+    ) -> Result<Vec<String>> {
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+        let name = container_name(run_id);
+        let name_filter = format!("name=^/{name}$");
+        let label = format!("{LABEL}={run_id}");
+        let label_filter = format!("label={label}");
+        let listing = [
+            "ps",
+            "--quiet",
+            "--filter",
+            &name_filter,
+            "--filter",
+            &label_filter,
+        ];
+        let running = self.run(&listing, None, COMMAND_DEADLINE)?;
+        if running.trim().is_empty() {
+            let mut stopped = listing.to_vec();
+            stopped.push("--all");
+            let existing = self.run(&stopped, None, COMMAND_DEADLINE)?;
+            if existing.trim().is_empty() {
+                return Ok(Vec::new());
+            }
+            // The data volume is retained even after Docker stopped the
+            // container. Reopen it locally long enough to release the test database.
+            self.run(&["start", &name], None, COMMAND_DEADLINE)?;
+            self.await_ready(&name, &name, &label)?;
+        }
+        let mut dropped = Vec::new();
+        let mut sql = String::new();
+        use std::fmt::Write as _;
+        for mut names in groups {
+            let database = names.pop().context("missing rehearsal database name")?;
+            writeln!(sql, r#"DROP DATABASE IF EXISTS "{database}" WITH (FORCE);"#)?;
+            dropped.push(database);
+            for role in names {
+                writeln!(sql, r#"DROP ROLE IF EXISTS "{role}";"#)?;
+                dropped.push(role);
+            }
+        }
+        self.sql(&name, &sql)?;
+        Ok(dropped)
+    }
+
     /// Remove every container labelled with this run, with its anonymous
     /// volumes, and return the IDs removed.
     pub(super) fn remove(&self, run_id: &str) -> Result<Vec<String>> {
@@ -539,6 +670,24 @@ struct RunTls {
 }
 
 impl RunTls {
+    fn load_or_create(state: &Path) -> Result<Self> {
+        let ca = state.join("postgres-ca.crt");
+        let certificate = state.join("postgres-server.crt");
+        let key = state.join("postgres-server.key");
+        if ca.exists() {
+            return Ok(Self {
+                ca_pem: fs::read(ca)?,
+                certificate_pem: fs::read(certificate)?,
+                key_pem: Zeroizing::new(fs::read(key)?),
+            });
+        }
+        let tls = Self::generate()?;
+        write_private(&certificate, &tls.certificate_pem)?;
+        write_private(&key, &tls.key_pem)?;
+        write_private(&ca, &tls.ca_pem)?;
+        Ok(tls)
+    }
+
     fn generate() -> Result<Self> {
         let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new())?;
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -660,8 +809,26 @@ mod tests {
         }
 
         fn start(&self, image: Image) -> Result<Server> {
-            self.docker.start_server(&self.root(), RUN_ID, image)
+            let root = self.root();
+            super::super::ensure_private(
+                &root.with_file_name(format!("development-project-{RUN_ID}")),
+                true,
+            )?;
+            self.docker.start_server(&root, RUN_ID, image, RUN_ID)
         }
+    }
+
+    #[test]
+    fn managed_container_mounts_project_data() {
+        let fake = Fake::new();
+        fake.start(Image::for_plan(false)).unwrap();
+        let runs = fake.invocations("run");
+        assert!(runs[0].contains(" -v "), "{runs:?}");
+        fake.docker.remove(RUN_ID).unwrap();
+        let volume = volume_name(RUN_ID);
+        assert!(fake.state().join("volumes").join(&volume).exists());
+        fake.docker.remove_project_volume(RUN_ID).unwrap();
+        assert!(!fake.state().join("volumes").join(&volume).exists());
     }
 
     #[test]

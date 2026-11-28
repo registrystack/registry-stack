@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Managed Coordinator runs reuse their local connection issuer address so workflows already waiting can resume after a restart.
+
+- Scheduling restarts apply the authored package and retain the running environment's records unless the project's records.yaml changed.
+
+- Starting the standalone canonical-review Casework template identifies the missing facility-registry pair and gives the pairing command before PostgreSQL starts.
+
+- Managed `rstack dev` projects keep their PostgreSQL data, audit journals and keys across stops. Start with `--clean` to clear a stopped project's development data. Runs using a supplied PostgreSQL server still drop their databases and roles at stop.
+
 - `rstack dev` writes each product's run issuer as the one entry, `main`, of its issuer set, so BReg, Messaging, Scheduling, Documents, Coordinator, the Adapter and Render read the runtime files a run generates.
 - BREAKING: `ObjectStoreError` and `VerifierError` add `DevelopmentPeer` variants. Migration: Update exhaustive matches.
 - A peer policy that refuses development checks each comma-separated `Registry-Posture` value in every header field. An exact `development` value after trimming whitespace marks the response as a development peer.

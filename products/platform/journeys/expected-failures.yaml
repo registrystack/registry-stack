@@ -125,84 +125,60 @@ expectedFailures:
 
   - journey: rstack-dev
     product: breg
-    step: plan
-    code: journey.needs.hand-written-plan
-    removedBy: rstack-dev-products
+    step: attach
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "bregctl init writes a project with no dev.yaml. rstack dev check refuses it with rstack.dev.check-unavailable (cannot read dev.yaml), so the only way forward is a plan the reader writes."
+    observedOn: "m4b checkout, journey run 20261128035909-a07d"
+    reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: casework
-    step: plan
-    code: journey.needs.hand-written-plan
-    removedBy: rstack-dev-products
+    step: attach
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "caseworkctl init writes casework.yaml with no dev.yaml. rstack dev check refuses it with rstack.dev.check-unavailable. Its own next step tells the reader to write a dev.yaml plan."
+    observedOn: "m4b checkout, journey run 20261128035838-f991"
+    reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: messaging
-    step: keep
-    code: journey.keep.state-lost
-    removedBy: rstack-dev-products
+    step: attach
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "init ships a dev.yaml and the run reaches call (HTTP 202). After rstack dev stop and a second rstack dev start of the same project, the message the first run accepted answers HTTP 404, because every start draws fresh databases."
-  - journey: rstack-dev
-    product: evidence
-    step: plan
-    code: journey.needs.hand-written-plan
-    removedBy: rstack-dev-products
-    basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "evidencectl init --profile local --transport sqlite-extract writes a project with no dev.yaml, so rstack dev check refuses it with rstack.dev.check-unavailable. The attach step is not reached."
+    observedOn: "m4b checkout, journey run 20261128040034-0116"
+    reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: scheduling
-    step: plan
-    code: product.config.unknown-variant
-    removedBy: rstack-dev-products
+    step: attach
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "init succeeds and writes no dev.yaml. A hand-written dev.yaml naming scheduling is refused with config.unknown-variant at /products/0/product: expected one of breg, casework, evidence, messaging."
+    observedOn: "m4b checkout, journey run 20261128035900-3bec"
+    reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: documents
-    step: plan
-    code: product.config.unknown-variant
-    removedBy: rstack-dev-products
+    step: attach
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "init succeeds and writes no dev.yaml. A hand-written dev.yaml naming documents is refused with config.unknown-variant at /products/0/product: expected one of breg, casework, evidence, messaging."
+    observedOn: "m4b checkout, journey run 20261128035908-2c40"
+    reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: coordinator
-    step: plan
-    code: product.config.unknown-variant
-    removedBy: rstack-dev-products
+    step: attach
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "init succeeds and writes no dev.yaml. A hand-written dev.yaml naming coordinator is refused with config.unknown-variant at /products/0/product: expected one of breg, casework, evidence, messaging."
-  - journey: rstack-dev
-    product: render
-    step: plan
-    code: product.config.unknown-variant
-    removedBy: rstack-dev-products
-    basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "init succeeds and writes no dev.yaml. A hand-written dev.yaml naming render is refused with config.unknown-variant at /products/0/product: expected one of breg, casework, evidence, messaging."
+    observedOn: "m4b checkout, journey run 20261128040126-31dd"
+    reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: adapter
-    step: init
-    code: product.adapterctl.usage-invalid
-    removedBy: rstack-dev-products
+    step: attach
+    code: journey.needs.certificate
+    removedBy: posture
     basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "adapterctl has no init command. adapterctl --format json init DIR is refused with adapterctl.usage-invalid (unrecognized subcommand), so there is no starter project to plan from."
-  - journey: rstack-dev
-    product: discovery
-    step: init
-    code: product.discovery.usage.invalid-arguments
-    removedBy: rstack-dev-products
-    basis: observed
-    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127014337-dc92"
-    reason: "discoveryctl has no init command. discoveryctl init DIR is refused with discovery.usage.invalid-arguments (unrecognized subcommand), so there is no starter project to plan from."
+    observedOn: "m4b checkout, journey run 20261128035921-56a4"
+    reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
 
   - journey: promote
     product: breg
@@ -414,4 +390,16 @@ unreached:
 #     basis: observed
 #     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), promote run 20261127025000-816f on own-provider run 20261127024425-265d (assisted: sql, certificate, token-type, mapper)"
 #     reason: "The assisted Scheduling cell reached T1. Started with no development declaration, schedulingctl check (which has no --production flag) lists no refusal and the server starts and answers /readyz, so zero refusals are listed. No shared posture exists on main, so nothing can refuse. The count becomes meaningful once the posture change lands."
-passes: []
+passes:
+  - journey: rstack-dev
+    product: evidence
+    basis: observed
+    observedOn: "m4b checkout, journey run 20261128035856-afe8"
+  - journey: rstack-dev
+    product: render
+    basis: observed
+    observedOn: "m4b checkout, journey run 20261128035150-fad4"
+  - journey: rstack-dev
+    product: discovery
+    basis: observed
+    observedOn: "m4b checkout, journey run 20261128035152-674a"
