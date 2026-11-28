@@ -95,14 +95,15 @@ The `token` function runs on every call.
 It can return a string, `undefined` or a promise of either.
 Return `undefined` to send a call without a bearer credential.
 A token that changes between calls needs no new client.
+A page whose session part signs its calls leaves `token` out, as [Page mode](#page-mode) describes.
 
 Other options:
 
 | Option | Behaviour |
 | --- | --- |
 | `allowInsecureHttp` | Allows `http:` for a host that cannot be on the public internet: a private or link-local IP address, or a host name without a dot. Loopback hosts accept `http:` without it. |
-| `timeoutMs` | Deadline for the whole call. Default 10 seconds. |
-| `maxResponseBytes` | Largest response body read. Default 8 MiB. |
+| `timeoutMs` | Deadline for the whole call. Default 10 seconds. A [byte transfer](#byte-transfers) uses it as an idle deadline. |
+| `maxResponseBytes` | Largest response body read. Default 8 MiB. A byte transfer ignores it. A call can set its own. |
 | `fetch` | The Fetch function to use. Default `globalThis.fetch`. |
 
 The base URL must use HTTPS, with two exceptions for plain HTTP:
@@ -119,12 +120,83 @@ In a browser the base URL can be a path such as `/registry`.
 The client resolves it against the page origin (`globalThis.location`), then applies the same rule.
 Where there is no page origin, such as Node or Deno without `location`, a path is refused.
 A refused base throws `TypeError` with the message `Invalid registry base URL` and nothing else.
-Each call also accepts an `AbortSignal` in `signal`.
-Calls omit ambient credentials and do not follow redirects.
+Every call accepts an `AbortSignal` in `signal`, including page methods, Actions and byte transfers.
+With a `token` function, calls omit ambient credentials.
+No call follows a redirect.
 A successful call returns `data`, `status` and `headers`, plus `idempotencyKey` when the operation sends one.
 
 {/* Evidence: clients/typescript/core.ts ClientOptions, Transport, baseAddress, Answer;
-    clients/typescript/tests/core.test.ts; clients/typescript/tests/screens.test.ts. */}
+    clients/typescript/tests/core.test.ts; clients/typescript/tests/screens.test.ts;
+    clients/typescript/tests/page.test.ts. */}
+
+## Byte transfers
+
+A byte transfer is an operation whose request body is not JSON or form fields, such as a document upload.
+An operation whose success answer is read as bytes, such as a download, is one too.
+
+- An upload body is a `Uint8Array`, a string, or a `Blob` such as a `File` from a file input.
+  A `Blob` is sent as given.
+- `timeoutMs` is an idle deadline.
+  It restarts when the answer's headers arrive and each time a chunk of the body arrives.
+  A slow download that keeps moving finishes, and one that stops fails with the reason `timeout`.
+- Fetch cannot report upload progress.
+  While a body is sent, the wait for the answer is `timeoutMs` plus one second for each 16 KiB of body.
+  That allows an upload rate as low as 128 kbit/s.
+- The client's `maxResponseBytes` does not apply, so a transfer reads the whole answer.
+  To bound one, pass `maxResponseBytes` in that call's options.
+  A larger answer fails with the reason `too-large`.
+
+```ts
+const file = input.files?.[0]
+if (file) {
+  const contentType = file.type || 'application/octet-stream'
+  await documents.call('uploadDocumentContent', { path: { uploadId }, body: file, contentType })
+}
+const { data } = await documents.call('downloadDocumentVersion', {
+  path: { documentId, versionId },
+  maxResponseBytes: 50 * 1024 * 1024,
+})
+```
+
+JSON and text calls keep one deadline for the whole call and the client's response cap.
+
+{/* Evidence: clients/typescript/core.ts isTransfer, uploadAllowanceMs, Transport, CallOptions;
+    clients/typescript/tests/transfer.test.ts. */}
+
+## Page mode
+
+A page whose session part signs its calls leaves `token` out.
+
+```ts
+import { createRegistryClient } from './generated/breg-minimal.ts'
+
+const client = createRegistryClient({ baseUrl: '/registry' })
+```
+
+In page mode:
+
+- The client sends no `Authorization` header.
+- Fetch sends cookies with `credentials: 'same-origin'`, so they go to the page's own origin only.
+  With a `token` function, the client sends `'omit'` instead.
+- Any `401` has the reason `sign-in-expired` and `outcomeUnknown: false`, whatever its body.
+  The session part answers `401` when the sign-in has ended and passes nothing on, so nothing was changed.
+  Keep the person's unsent values and offer to sign in again.
+
+In both modes:
+
+- The client sends one fixed header, `Registry-Client: page`, on every call.
+  The session part requires it on every route.
+  The exported constant `pageRequestHeader` holds its name and value, and a header of that name in a call's options is replaced.
+  A browser sends a CORS preflight for each cross-origin call, so a registry on another origin must list the header in `Access-Control-Allow-Headers`.
+- A `412` has the reason `stale`.
+  Reload the item and try again.
+  BReg also answers a refused guard with `412`, so that is `stale` too, and `describeError` still shows the guard's label.
+
+Both reasons sit on the existing error kinds, so code that already handles a refusal keeps working.
+Operations authenticated by a signature never send cookies.
+
+{/* Evidence: clients/typescript/core.ts pageRequestHeader, ClientOptions, Transport;
+    clients/typescript/tests/page.test.ts. */}
 
 ## Errors
 
@@ -135,7 +207,7 @@ Every other failure throws one class, `RegistryError`.
 | Member | Meaning |
 | --- | --- |
 | `kind` | `refused` for a validated product refusal, `unreachable` for a failed exchange, `unexpected` for a response the contract does not describe. |
-| `reason` | `token`, `input`, `network`, `timeout`, `aborted`, `too-large`, `media`, `schema`, `unsafe-integer` or `status`. |
+| `reason` | `token`, `input`, `network`, `timeout`, `aborted`, `too-large`, `media`, `schema`, `unsafe-integer`, `status`, `stale` or `sign-in-expired`. |
 | `status` | The HTTP status, when a response arrived. |
 | `code`, `detail`, `traceId` | Members of a validated problem response, when there was one. |
 | `problem` | The validated problem object. |
@@ -155,7 +227,7 @@ Read `traceId` from the error when you need it for support.
   The OpenAPI document does not carry guard labels, so the client never takes one from the answer.
   Without a label for that guard, the sentence is a fixed one.
 - Otherwise there is one sentence for each failure class.
-  The classes are the reasons `token`, `input`, `timeout`, `aborted` and `network`, then the statuses.
+  The classes are the reasons `sign-in-expired`, `stale`, `token`, `input`, `timeout`, `aborted` and `network`, then the statuses.
   The statuses give refused credentials, not allowed, not found, a conflict and too many requests.
   They also give a request not valid, a server failure, an unreadable answer and an unexpected answer.
 - A `TypeError` gives the sentence for a request that could not be built.
@@ -227,6 +299,69 @@ async function showNext() {
 {/* Evidence: clients/typescript/core.ts pages, allPages; clients/typescript/tests/breg.test.ts;
     clients/typescript/tests/screens.test.ts. */}
 
+## List BReg Records
+
+A BReg list operation publishes a query profile for each access profile in `x-registry-queryProfiles`, or one in `x-registry-queryProfile`.
+The generated `list` method types its options from those profiles.
+A field the profile does not allow is a type error.
+
+```ts
+const first = await client.list('records.licence.list', {
+  accessProfile: 'licence-officer',
+  where: { status: ['active', 'suspended'], region: 'north', holderName: { startsWith: 'Dep' } },
+  orderBy: 'expiresOn',
+  select: ['licenceNumber', 'holderName', 'expiresOn'],
+  top: 20,
+  count: true,
+})
+const second = await client.list('records.licence.list', { accessProfile: 'licence-officer' }, first.nextCursor ?? undefined)
+```
+
+| Option | What the profile decides |
+| --- | --- |
+| `accessProfile` | One of the operation's profiles. Required when it has more than one. A route without the parameter takes none. |
+| `where` | Each key is a filterable property. The value's form must be one of the property's operators. |
+| `orderBy` | One sortable property, or `'property desc'` where the profile allows descending. |
+| `select` | Selectable properties, each once. |
+| `count` | Allowed only when the profile sets `allowCount`. The answer then carries `count`. |
+| `top` | A whole number from 1 to the profile's `maximumPageSize`. |
+
+`where` forms and the operators they need:
+
+| Form | Operator | Sent as |
+| --- | --- | --- |
+| `status: 'active'` | `equals` | `status eq 'active'` |
+| `status: ['active', 'suspended']` | `in` | `status in ('active','suspended')` |
+| `holderName: { startsWith: 'Dep' }` | `prefix` | `startswith(holderName,'Dep')` |
+| `holderName: { contains: 'ep' }` | `contains` | `contains(holderName,'ep')` |
+| `expiresOn: { ge: '2027-01-01', lt: '2028-01-01' }` | `range` | `expiresOn ge '2027-01-01' and expiresOn lt '2028-01-01'` |
+| `suspendedOn: { isNull: true }` | `is-null` | `suspendedOn eq null` |
+| `suspendedOn: { isNull: false }` | `is-not-null` | `suspendedOn ne null` |
+
+All the filters in `where` must hold together.
+Values are strings, booleans or plain decimal numbers, and an `in` list holds 1 to 100 of them.
+The value types come from the record type, so a `status` outside its declared values is a type error.
+Not-equals and `or` need a typed `call` with `$filter`.
+
+A profile can publish `requiredFilters`, a list of alternatives, each a list of property names.
+That profile lists only when `where` holds an equality filter on every property of one alternative.
+The types require one, and an `in` list does not count.
+
+The client checks the same rules again before it sends anything.
+A refusal is a `TypeError` that names the property and profile, for example ``Profile `licence-holder` lists only with an equality filter on `holderId`, or on `licenceNumber` and `status` ``.
+It never repeats a filter value, and it names a property only when the profile declares it.
+
+`list` returns `{ items, nextCursor }`, plus `count` when the answer carries it.
+Pass `nextCursor` as the third argument for the next page.
+The cursor carries the query, so that call sends only the access profile and the cursor.
+`list` takes the same `signal` and `maxResponseBytes` as any call, and works with `pages` and `allPages`.
+
+Only profiles of kind `list` are covered.
+As-of, current and snapshot queries, and bounding-box filters, use `call`.
+
+{/* Evidence: clients/typescript/generate.ts queryProfiles; clients/typescript/core.ts listQuery, listPage, Filter, FieldValue;
+    clients/typescript/tests/list.test.ts; clients/typescript/tests/fixtures/breg-list.openapi.json. */}
+
 ## Action availability and input metadata
 
 A BReg client for a project whose Action declares an availability route exposes it as the typed operation `actions.<id>.availability`.
@@ -277,6 +412,8 @@ const receipt = await client.invoke('update-contact-email', { contactId, email }
 `targetConditions` returns the `ifMatch` for each target the Action names.
 The generated types require `preconditions` for an Action that declares them.
 They refuse `preconditions` for an Action that does not.
+`invoke` never reads target conditions by itself.
+The `ifMatch` it sends is the one the person saw, so a change made since then is refused rather than overwritten.
 
 {/* Evidence: clients/typescript/generate.ts targetConditions;
     clients/typescript/tests/breg.test.ts. */}

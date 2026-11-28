@@ -1,0 +1,481 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "list-fixture",
+    "version": "0.1.0"
+  },
+  "components": {
+    "parameters": {
+      "accessProfile": {
+        "in": "query",
+        "name": "accessProfile",
+        "required": false,
+        "explode": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "select": {
+        "in": "query",
+        "name": "$select",
+        "required": false,
+        "explode": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 16384
+        }
+      },
+      "filter": {
+        "in": "query",
+        "name": "$filter",
+        "required": false,
+        "explode": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 16384
+        }
+      },
+      "orderby": {
+        "in": "query",
+        "name": "$orderby",
+        "required": false,
+        "explode": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "top": {
+        "in": "query",
+        "name": "$top",
+        "required": false,
+        "explode": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "count": {
+        "in": "query",
+        "name": "$count",
+        "required": false,
+        "explode": false,
+        "schema": {
+          "type": "boolean"
+        }
+      },
+      "skiptoken": {
+        "in": "query",
+        "name": "$skiptoken",
+        "required": false,
+        "explode": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 10978
+        }
+      }
+    },
+    "schemas": {
+      "Licence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "domainData",
+          "recordIdentifier",
+          "revisionIdentifier"
+        ],
+        "properties": {
+          "domainData": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "holderId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "holderName": {
+                "type": "string",
+                "maxLength": 160
+              },
+              "licenceNumber": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "region": {
+                "type": "string",
+                "enum": [
+                  "north",
+                  "east",
+                  "south",
+                  "west"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "suspended",
+                  "expired"
+                ]
+              },
+              "expiresOn": {
+                "type": "string",
+                "format": "date"
+              },
+              "fee": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "suspendedOn": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date"
+              }
+            }
+          },
+          "recordIdentifier": {
+            "type": "string"
+          },
+          "revisionIdentifier": {
+            "type": "string"
+          }
+        }
+      },
+      "LicencePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "pageInfo"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Licence"
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "nextCursor"
+            ],
+            "properties": {
+              "nextCursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 10978
+              }
+            }
+          }
+        }
+      },
+      "Site": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "domainData",
+          "recordIdentifier",
+          "revisionIdentifier"
+        ],
+        "properties": {
+          "domainData": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "siteCode": {
+                "type": "string"
+              }
+            }
+          },
+          "recordIdentifier": {
+            "type": "string"
+          },
+          "revisionIdentifier": {
+            "type": "string"
+          }
+        }
+      },
+      "SitePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "pageInfo"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Site"
+            }
+          },
+          "pageInfo": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "nextCursor"
+            ],
+            "properties": {
+              "nextCursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 10978
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/v1/records/licences": {
+      "get": {
+        "operationId": "records.licence.list",
+        "x-registry-operation": "list",
+        "x-registry-queryKind": "list",
+        "x-registry-recordType": "licence",
+        "x-registry-accessProfiles": [
+          "licence-holder",
+          "licence-officer"
+        ],
+        "x-registry-queryProfiles": {
+          "licence-holder": {
+            "profile": "licence-holder",
+            "kind": "list",
+            "maximumPageSize": 20,
+            "allowCount": false,
+            "selectableProperties": [
+              "licenceNumber",
+              "status"
+            ],
+            "filterableProperties": [
+              {
+                "property": "holderId",
+                "operators": [
+                  "equals"
+                ]
+              },
+              {
+                "property": "licenceNumber",
+                "operators": [
+                  "equals",
+                  "in"
+                ]
+              },
+              {
+                "property": "status",
+                "operators": [
+                  "equals"
+                ]
+              }
+            ],
+            "sortableProperties": [],
+            "selectorProperties": [],
+            "temporal": null,
+            "requiredFilters": [
+              [
+                "holderId"
+              ],
+              [
+                "licenceNumber",
+                "status"
+              ]
+            ]
+          },
+          "licence-officer": {
+            "profile": "licence-officer",
+            "kind": "list",
+            "maximumPageSize": 50,
+            "allowCount": true,
+            "selectableProperties": [
+              "expiresOn",
+              "fee",
+              "holderName",
+              "licenceNumber",
+              "region",
+              "status"
+            ],
+            "filterableProperties": [
+              {
+                "property": "expiresOn",
+                "operators": [
+                  "range"
+                ]
+              },
+              {
+                "property": "fee",
+                "operators": [
+                  "equals",
+                  "range"
+                ]
+              },
+              {
+                "property": "holderName",
+                "operators": [
+                  "prefix",
+                  "contains"
+                ]
+              },
+              {
+                "property": "region",
+                "operators": [
+                  "equals",
+                  "in"
+                ]
+              },
+              {
+                "property": "status",
+                "operators": [
+                  "equals",
+                  "in"
+                ]
+              },
+              {
+                "property": "suspendedOn",
+                "operators": [
+                  "is-null",
+                  "is-not-null"
+                ]
+              }
+            ],
+            "sortableProperties": [
+              {
+                "property": "expiresOn",
+                "directions": [
+                  "asc"
+                ]
+              },
+              {
+                "property": "holderName",
+                "directions": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            ],
+            "selectorProperties": [],
+            "temporal": null
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/accessProfile"
+          },
+          {
+            "$ref": "#/components/parameters/select"
+          },
+          {
+            "$ref": "#/components/parameters/filter"
+          },
+          {
+            "$ref": "#/components/parameters/orderby"
+          },
+          {
+            "$ref": "#/components/parameters/top"
+          },
+          {
+            "$ref": "#/components/parameters/count"
+          },
+          {
+            "$ref": "#/components/parameters/skiptoken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LicencePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/records/sites": {
+      "get": {
+        "operationId": "records.site.list",
+        "x-registry-operation": "list",
+        "x-registry-queryKind": "list",
+        "x-registry-recordType": "site",
+        "x-registry-accessProfile": "site-planner",
+        "x-registry-queryProfile": {
+          "profile": "site-planner",
+          "kind": "list",
+          "maximumPageSize": 10,
+          "allowCount": false,
+          "selectableProperties": [
+            "label",
+            "siteCode"
+          ],
+          "filterableProperties": [
+            {
+              "property": "siteCode",
+              "operators": [
+                "equals"
+              ]
+            }
+          ],
+          "sortableProperties": [
+            {
+              "property": "label",
+              "directions": [
+                "asc"
+              ]
+            }
+          ],
+          "selectorProperties": [],
+          "temporal": null
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/select"
+          },
+          {
+            "$ref": "#/components/parameters/filter"
+          },
+          {
+            "$ref": "#/components/parameters/orderby"
+          },
+          {
+            "$ref": "#/components/parameters/top"
+          },
+          {
+            "$ref": "#/components/parameters/skiptoken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Records returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SitePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

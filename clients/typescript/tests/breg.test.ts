@@ -75,6 +75,29 @@ test('BReg resends the exact key, input and target conditions', async () => {
   assert.equal(writes, 1)
 })
 
+test('invoke never reads target conditions itself', async () => {
+  const routes: string[] = []
+  const bodies: unknown[] = []
+  const refusal = { title: 'Precondition Required', code: 'precondition.required', status: 428 }
+  const client = new Client({
+    baseUrl: 'https://registry.example.org', token: () => 'fixture',
+    fetch: async (url, request) => {
+      routes.push(new URL(String(url)).pathname)
+      bodies.push(JSON.parse(String(request?.body)))
+      if (JSON.parse(String(request?.body)).preconditions === undefined) {
+        return new Response(JSON.stringify(refusal), { status: 428, headers: { 'Content-Type': 'application/problem+json' } })
+      }
+      return json({ action: 'update-contact-email', applicationId: id,
+        results: { 'contact-email': { recordType: 'contact', recordId: id, revision: 2 } } })
+    },
+  })
+  const preconditions = { contactId: { ifMatch: '"revision-1"' } }
+  await client.invoke('update-contact-email', input, { preconditions })
+  await assert.rejects(client.invoke('update-contact-email', input, {} as never), { status: 428 })
+  assert.deepEqual(routes, ['/v1/actions/update-contact-email', '/v1/actions/update-contact-email'])
+  assert.deepEqual(bodies, [{ input, preconditions }, { input }])
+})
+
 function typeChecks(client: Client, facility: FacilityClient) {
   // @ts-expect-error Action IDs are project-defined.
   client.invoke('other', input, {})
