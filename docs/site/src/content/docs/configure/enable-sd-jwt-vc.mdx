@@ -63,7 +63,7 @@ For the local target checks below, declare development in your shell:
 export REGISTRY_STACK_POSTURE=development
 ```
 
-`adult-status` declares `subjectBinding: audience-scoped`, and the project checks clean:
+`adult-status` declares `subjectBinding: audience-scoped`, and the project checks with no errors and one development warning for the local target:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
 rstack evidence check . --target local-target.yaml

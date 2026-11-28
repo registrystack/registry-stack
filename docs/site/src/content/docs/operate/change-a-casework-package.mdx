@@ -124,7 +124,7 @@ caseworkctl apply --runtime-config "$next" --posture development --operator-refe
 ```
 
 ```json test-excerpt
-{"applyOrder": 3, "planKind": "successor", "predecessorPackageDigest": "sha256:<digest>"}
+{"planKind": "successor", "predecessorPackageDigest": "sha256:<digest>"}
 ```
 
 The ledger now names `package-2` as active, with the run's package as its predecessor.
