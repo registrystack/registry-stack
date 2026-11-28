@@ -105,6 +105,15 @@ class DiscoveryDistributionSmokeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unified @registrystack/client"):
             self.smoke.validate_client_directory(client)
 
+    def test_browser_package_cannot_stand_in_for_the_new_native_package(self) -> None:
+        package = {"name": "@registrystack/client", "version": "0.49.0"}
+        with self.assertRaisesRegex(ValueError, "unified @registrystack/client-node"):
+            self.smoke.node_package_identity(package, "directory")
+        package["name"] = "@registrystack/client-node"
+        version, definition = self.smoke.node_package_identity(package, "directory")
+        self.assertEqual("0.49.0", version)
+        self.assertEqual("registrystack-client-node", definition.npm_tarball_stem)
+
     def test_tarball_source_refuses_unsafe_or_incomplete_candidate_packages(
         self,
     ) -> None:

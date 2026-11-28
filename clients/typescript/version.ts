@@ -1,7 +1,7 @@
 import { clientVersion } from './generated-client-version.ts'
 
 export function compatibleClientVersions(first: string, second: string): boolean {
-  const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\w.-]+)?(?:\+[\w.-]+)?$/u
+  const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
   const left = semver.exec(first)
   const right = semver.exec(second)
   return !!left && !!right && left[1] === right[1] && (left[1] !== '0' || left[2] === right[2])

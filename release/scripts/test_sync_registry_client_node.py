@@ -48,11 +48,11 @@ class SyncRegistryClientNodeReadmeTest(unittest.TestCase):
         for platform, triple in PLATFORM_TRIPLES.items():
             with self.subTest(platform=platform):
                 text = self.files[TARGET / "npm" / platform / "README.md"].decode()
-                self.assertIn(f"# `@registrystack/client-{platform}`", text)
+                self.assertIn(f"# `@registrystack/client-node-{platform}`", text)
                 self.assertIn(f"**{triple}**", text)
                 self.assertIn(
-                    "[`@registrystack/client`]"
-                    "(https://www.npmjs.com/package/@registrystack/client)",
+                    "[`@registrystack/client-node`]"
+                    "(https://www.npmjs.com/package/@registrystack/client-node)",
                     text,
                 )
 

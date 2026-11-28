@@ -480,11 +480,8 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
                 f"registrystack-discovery-client-{platform}-{version}.tgz"
             ] = "client-package"
     if unified_client:
-        inventory[f"registrystack-client-{version}.tgz"] = "client-package"
-        for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
-            inventory[f"registrystack-client-{platform}-{version}.tgz"] = (
-                "client-package"
-            )
+        for path in client_registry.npm_tarballs(Path(), version, "stack"):
+            inventory[path.name] = "client-package"
         for platform in wheel_platforms:
             inventory[
                 f"registry_stack_client-{version}-{wheel_abi_tag}-{platform}.whl"

@@ -1904,6 +1904,7 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
                     )
                 surfaces.append(platform_path)
 
+    node_package_name = client_registry.client_definition("stack", version).npm_root_package
     unified_node_root = repo / "crates/registry-stack-client-node"
     unified_package_path = unified_node_root / "package.json"
     unified_lock_path = unified_node_root / "package-lock.json"
@@ -1920,21 +1921,21 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
     )
     if (
         not isinstance(unified_package, dict)
-        or unified_package.get("name") != "@registrystack/client"
+        or unified_package.get("name") != node_package_name
         or unified_package.get("version") != version
         or "optionalDependencies" in unified_package
     ):
         raise ReleasePlanError(
             "crates/registry-stack-client-node/package.json must identify "
-            f"@registrystack/client at version {version} without pre-bound "
+            f"{node_package_name} at version {version} without pre-bound "
             "platform dependencies"
         )
     if (
         not isinstance(unified_lock, dict)
-        or unified_lock.get("name") != "@registrystack/client"
+        or unified_lock.get("name") != node_package_name
         or unified_lock.get("version") != version
         or not isinstance(unified_lock_root, dict)
-        or unified_lock_root.get("name") != "@registrystack/client"
+        or unified_lock_root.get("name") != node_package_name
         or unified_lock_root.get("version") != version
         or "optionalDependencies" in unified_lock_root
     ):
@@ -1962,12 +1963,12 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
         if (
             not isinstance(platform_package, dict)
             or platform_package.get("name")
-            != f"@registrystack/client-{platform}"
+            != f"{node_package_name}-{platform}"
             or platform_package.get("version") != version
         ):
             raise ReleasePlanError(
                 f"{relative_path(repo, platform_path)} must identify "
-                f"@registrystack/client-{platform} at version {version}"
+                f"{node_package_name}-{platform} at version {version}"
             )
         surfaces.append(platform_path)
 

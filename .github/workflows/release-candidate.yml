@@ -1433,14 +1433,14 @@ jobs:
             (cd "${root_stage}" && npm pack \
               "./npm/${{ matrix.napi_platform }}" \
               --ignore-scripts --pack-destination "${RUNNER_TEMP}")
-            platform_package="registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
+            platform_package="registrystack-client-node-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
             test -f "${RUNNER_TEMP}/${platform_package}"
             cp "${RUNNER_TEMP}/${platform_package}" \
               "${GITHUB_WORKSPACE}/candidate-client-package/clients/${platform_package}"
             (cd "${root_stage}" && npm pack \
               --ignore-scripts --pack-destination "${smoke}")
-            root_package="${smoke}/registrystack-client-${CLIENT_VERSION}.tgz"
-            platform_package="${GITHUB_WORKSPACE}/candidate-client-package/clients/registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
+            root_package="${smoke}/registrystack-client-node-${CLIENT_VERSION}.tgz"
+            platform_package="${GITHUB_WORKSPACE}/candidate-client-package/clients/registrystack-client-node-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
             test -f "${root_package}"
             test -f "${platform_package}"
             (
@@ -1448,7 +1448,7 @@ jobs:
               npm init --yes >/dev/null
               npm install --no-audit --no-fund \
                 "${root_package}" "${platform_package}"
-              test -z "$(find node_modules/@registrystack/client \
+              test -z "$(find node_modules/@registrystack/client-node \
                 -maxdepth 1 -name '*.node' -print -quit)"
               expected_addons=3
               if [[ "${include_casework}" -eq 1 ]]; then
@@ -1463,7 +1463,7 @@ jobs:
               if [[ "${coordinator_in_release}" == true ]]; then
                 expected_addons=$((expected_addons + 1))
               fi
-              test "$(find node_modules/@registrystack/client-${{ matrix.napi_platform }} \
+              test "$(find node_modules/@registrystack/client-node-${{ matrix.napi_platform }} \
                 -maxdepth 1 -name '*.node' | wc -l)" -eq "${expected_addons}"
               cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
                 "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" .
@@ -1571,7 +1571,7 @@ jobs:
           fi
           client_dir="${GITHUB_WORKSPACE}/clients/typescript"
           destination="${GITHUB_WORKSPACE}/candidate-client-package/clients"
-          npm --prefix "${client_dir}" ci --no-audit --no-fund
+          npm --prefix "${client_dir}" ci --no-audit --no-fund --ignore-scripts
           npm --prefix "${client_dir}" run build
           (cd "${client_dir}" && npm pack --ignore-scripts --pack-destination "${destination}")
           python3 release/scripts/client_registry.py validate-web-npm \
@@ -2000,9 +2000,9 @@ jobs:
               echo "${web_package}"
             fi
             if [[ "${include_unified_client}" -eq 1 ]]; then
-              echo "registrystack-client-${version}.tgz"
+              echo "registrystack-client-node-${version}.tgz"
               for platform in darwin-arm64 linux-arm64-gnu linux-x64-gnu; do
-                echo "registrystack-client-${platform}-${version}.tgz"
+                echo "registrystack-client-node-${platform}-${version}.tgz"
               done
               for wheel_platform in \
                 manylinux_2_17_x86_64.manylinux2014_x86_64 \
@@ -2305,7 +2305,7 @@ jobs:
             --install-dir "${install_dir}"
           python3 release/scripts/smoke_discovery_distribution.py \
             --bin-dir "${install_dir}" \
-            --client-tarball "candidate/bundle-root/registrystack-client-${{ needs.validate.outputs.version }}.tgz"
+            --client-tarball "candidate/bundle-root/registrystack-client-node-${{ needs.validate.outputs.version }}.tgz"
 
       - name: Assemble and smoke Discovery install inputs
         if: needs.validate.outputs.unit == 'discovery'
@@ -2371,7 +2371,7 @@ jobs:
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
                     THIRD_PARTY_NOTICES) kind=notice ;;
-                    "${web_package}"|discovery-client-node-*.tgz|evidence-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_stack_client-*.whl) kind=client-package ;;
+                    "${web_package}"|discovery-client-node-*.tgz|evidence-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-client-node-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_stack_client-*.whl) kind=client-package ;;
                     *) kind=binary ;;
                   esac
                   jq -n \

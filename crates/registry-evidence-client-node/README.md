@@ -6,16 +6,16 @@ client, via [napi-rs](https://napi.rs). Every Evidence semantic decision
 own; this crate is a thin `#[napi]` surface plus a JSON conversion layer, and
 re-implements none of it.
 
-This crate publishes through the unified `@registrystack/client` package.
+This crate publishes through the unified `@registrystack/client-node` package.
 Install the exact client version that matches the Evidence deployment, and use
 its `evidence` namespace:
 
 ```sh
-npm install "@registrystack/client@<version>"
+npm install "@registrystack/client-node@<version>"
 ```
 
 ```js
-const { evidence: { EvidenceClient } } = require('@registrystack/client');
+const { evidence: { EvidenceClient } } = require('@registrystack/client-node');
 ```
 
 The root package selects one exact native package for Linux amd64 with glibc,
@@ -24,9 +24,8 @@ installed Node.js runtime may impose a newer system requirement. The Linux
 packages do not support musl-based distributions such as Alpine.
 
 Registry Stack v0.22.0 through v0.26.0 published this binding on its own, as
-`@registrystack/evidence-client`. Those versions stay published and unchanged,
-and no later version joins them: from v0.26.1 the maintained Node.js client is
-`@registrystack/client`.
+`@registrystack/evidence-client`. The unified Node client first shipped in
+v0.26.1. Install `@registrystack/client-node` for v0.49.0 and later.
 
 ## JS surface
 
@@ -47,7 +46,7 @@ const verifiedAt = client.verifyAsOf(prepared, response, asOfMillis);
 
 // A profile-driven result also carries exact assertion or credential bytes
 // and its pre-response verification context for application-owned retention.
-const { verifyRetained, verifyRetainedAsOf } = require('@registrystack/client').evidence;
+const { verifyRetained, verifyRetainedAsOf } = require('@registrystack/client-node').evidence;
 const profileClient = EvidenceClient.fromProfile('client.json');
 const result = await profileClient.request({ handle: 'status-check', selectors: {} });
 const replayed = verifyRetainedAsOf(result.retainedVerification, result.assertion, decisionMillis);

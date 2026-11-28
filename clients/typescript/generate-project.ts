@@ -99,17 +99,20 @@ function generateProject(): void {
       writeFileSync(source, code)
       generated.set(module, code)
       registers[member] = { register, authorProfiles: authors }
-      settings[member] = { source, import: './' + basename(module), routePrefix }
+      settings[member] = { source, import: './' + basename(module, '.ts') + '.js', routePrefix }
     }
-    generated.set(output, generateService({ registers, products: values.products ? values.products.split(',') : [] }, {
+    const service = generateService({ registers, products: values.products ? values.products.split(',') : [] }, {
       registers: settings,
-    }))
+    })
     const parent = dirname(output)
     mkdirSync(parent, { recursive: true })
     const staging = mkdtempSync(join(parent, '.registry-client-'))
     try {
       for (const [path, code] of generated) writeFileSync(join(staging, basename(path)), code)
+      const stagedService = join(staging, basename(output))
+      writeFileSync(stagedService, service)
       for (const path of generated.keys()) renameSync(join(staging, basename(path)), path)
+      renameSync(stagedService, output)
     } finally {
       rmSync(staging, { recursive: true, force: true })
     }
@@ -119,6 +122,9 @@ function generateProject(): void {
 }
 
 try {
+  if (Number(process.versions.node.split('.')[0]) < 24) {
+    throw new Error('registry-generate requires Node.js 24 or later.')
+  }
   generateProject()
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))

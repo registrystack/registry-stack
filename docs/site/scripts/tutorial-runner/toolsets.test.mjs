@@ -248,7 +248,7 @@ test('the breg toolset builds its binaries marked with the workspace release tag
 
 test('the breg toolset installs the client packages only for a journey that runs their install commands', () => {
   const { clients } = TOOLSETS.breg;
-  for (const code of ['python -m pip install "registry-stack-client==${version}"', 'npm install "@registrystack/client@${version}"']) {
+  for (const code of ['python -m pip install "registry-stack-client==${version}"', 'npm install "@registrystack/client-node@${version}"']) {
     assert.equal(clients.test(code), true, `must match: ${code}`);
   }
   for (const code of ['bregctl dev start tutorial-work/project', 'cd registry-stack-client-demo', 'ls crates/registry-stack-client-node']) {
@@ -330,7 +330,7 @@ test('a journey that installs the client gets the packages served, and closing s
   const packages = await packedFixture(root);
   const workRoot = join(root, 'work');
   await mkdir(workRoot);
-  const steps = [{ kind: 'run', code: 'npm install "@registrystack/client@${version}"' }];
+  const steps = [{ kind: 'run', code: 'npm install "@registrystack/client-node@${version}"' }];
   const { env, close } = await withPackagesDir(packages, () => clientEnvironment(steps, REPO_ROOT, workRoot));
   let closed = false;
   try {

@@ -23,6 +23,13 @@ import urllib.error
 import urllib.request
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import client_registry  # noqa: E402
+
+
 MEDIA_TYPE = (
     'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"'
 )
@@ -167,7 +174,7 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     client.add_argument(
         "--client-dir",
         type=Path,
-        help="installed @registrystack/client package root or npm project",
+        help="installed @registrystack/client-node package root or npm project",
     )
     client.add_argument(
         "--client-tarball",
@@ -240,32 +247,39 @@ def _canonical_package_version(value: object) -> str:
     return value
 
 
+def node_package_identity(
+    metadata: dict[str, object], source: str
+) -> tuple[str, client_registry.ClientDefinition]:
+    version = _canonical_package_version(metadata.get("version"))
+    definition = client_registry.client_definition("stack", version)
+    if metadata.get("name") != definition.npm_root_package:
+        raise ValueError(
+            f"client {source} is not the unified {definition.npm_root_package} package"
+        )
+    return version, definition
+
+
 def validate_client_directory(path: Path) -> ClientDirectory:
     supplied = path.expanduser().resolve()
-    installed = supplied / "node_modules/@registrystack/client"
-    root = installed if installed.is_dir() else supplied
+    scope = supplied / "node_modules/@registrystack"
+    root = next(
+        (scope / name for name in ("client-node", "client") if (scope / name).is_dir()),
+        supplied,
+    )
     metadata = _json_object(root / "package.json")
-    if metadata.get("name") != "@registrystack/client":
-        raise ValueError(
-            "client directory is not the unified @registrystack/client package"
-        )
-    version = _canonical_package_version(metadata.get("version"))
+    version, definition = node_package_identity(metadata, "directory")
     required = (root / "index.js", root / "native.js", root / "discovery/client.js")
     if any(not member.is_file() or member.is_symlink() for member in required):
         raise ValueError("unified client directory is missing its Discovery facade")
     platform_name = node_platform()
-    native_name = f"@registrystack/client-{platform_name}"
+    native_name = f"{definition.npm_root_package}-{platform_name}"
     optional = metadata.get("optionalDependencies")
     if not isinstance(optional, dict) or optional.get(native_name) != version:
         raise ValueError(
             "unified client does not bind the exact native package version"
         )
-    if root == installed:
-        native_root = (
-            supplied / "node_modules/@registrystack" / f"client-{platform_name}"
-        )
-    else:
-        native_root = root / "node_modules/@registrystack" / f"client-{platform_name}"
+    native_scope = scope if root != supplied else root / "node_modules/@registrystack"
+    native_root = native_scope / native_name.split("/", 1)[1]
     native_metadata = _json_object(native_root / "package.json")
     if native_metadata.get("name") != native_name:
         raise ValueError("client directory has no matching native package")
@@ -335,11 +349,7 @@ def validate_client_tarballs(path: Path) -> ClientTarballs:
         raise ValueError("unified client tarball must not be a symlink")
     root = supplied.resolve()
     metadata, names = _archive_metadata(root)
-    if metadata.get("name") != "@registrystack/client":
-        raise ValueError(
-            "client tarball is not the unified @registrystack/client package"
-        )
-    version = _canonical_package_version(metadata.get("version"))
+    version, definition = node_package_identity(metadata, "tarball")
     required = {
         "package/package.json",
         "package/index.js",
@@ -351,13 +361,13 @@ def validate_client_tarballs(path: Path) -> ClientTarballs:
             "unified client tarball has an invalid Discovery facade or native payload"
         )
     platform_name = node_platform()
-    native_package_name = f"@registrystack/client-{platform_name}"
+    native_package_name = f"{definition.npm_root_package}-{platform_name}"
     optional = metadata.get("optionalDependencies")
     if not isinstance(optional, dict) or optional.get(native_package_name) != version:
         raise ValueError(
             "unified client tarball does not bind the exact native package version"
         )
-    native = root.parent / f"registrystack-client-{platform_name}-{version}.tgz"
+    native = root.parent / f"{definition.npm_tarball_stem}-{platform_name}-{version}.tgz"
     if not native.is_file():
         raise ValueError(
             "client tarball has no matching native candidate package beside it"

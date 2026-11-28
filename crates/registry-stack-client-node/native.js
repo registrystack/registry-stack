@@ -7,18 +7,18 @@ function target() {
   if (process.platform === 'darwin' && process.arch === 'arm64') return 'darwin-arm64';
   if (process.platform === 'linux' && process.arch === 'arm64') return 'linux-arm64-gnu';
   if (process.platform === 'linux' && process.arch === 'x64') return 'linux-x64-gnu';
-  throw new Error(`@registrystack/client does not support ${process.platform}-${process.arch}`);
+  throw new Error(`@registrystack/client-node does not support ${process.platform}-${process.arch}`);
 }
 
 function load(product) {
   if (!PRODUCTS.has(product)) throw new Error(`unknown Registry Stack client product: ${product}`);
   const suffix = target();
-  const packageName = `@registrystack/client-${suffix}`;
+  const packageName = `@registrystack/client-node-${suffix}`;
   let bindings;
   try {
     bindings = require(packageName);
   } catch (error) {
-    error.message = `Unable to load ${packageName}. Reinstall @registrystack/client for this platform. ${error.message}`;
+    error.message = `Unable to load ${packageName}. Reinstall @registrystack/client-node for this platform. ${error.message}`;
     throw error;
   }
   const installedVersion = require(`${packageName}/package.json`).version;

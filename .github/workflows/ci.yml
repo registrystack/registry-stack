@@ -3962,9 +3962,9 @@ jobs:
           mkdir -p "${smoke}/node_modules/@registrystack"
           mkdir -p "${client_dir}/node_modules/@registrystack"
           ln -s "${platform_dir}" \
-            "${client_dir}/node_modules/@registrystack/client-${{ matrix.napi_platform }}"
+            "${client_dir}/node_modules/@registrystack/client-node-${{ matrix.napi_platform }}"
           ln -s "${client_dir}" \
-            "${smoke}/node_modules/@registrystack/client"
+            "${smoke}/node_modules/@registrystack/client-node"
           cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
             "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" \
             "${smoke}/"

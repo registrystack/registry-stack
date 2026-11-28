@@ -127,7 +127,7 @@ scaled:
 
 ```js title="replay-adult-status.js"
 const { readFileSync } = require('node:fs')
-const { evidence } = require('@registrystack/client')
+const { evidence } = require('@registrystack/client-node')
 
 const replayed = evidence.verifyRetainedAsOf(
   readFileSync('adult-status.retained.json'),

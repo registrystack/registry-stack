@@ -1,6 +1,7 @@
-# Registry Stack TypeScript clients
+# `@registrystack/client`
 
-Use these clients from Node 24, Deno, browsers, or edge functions with Fetch
+Use this package by default for browser pages and edge functions. It also runs in
+Node 24 and Deno with Fetch
 and WebCrypto. The source modules use erasable TypeScript and have no runtime
 dependencies. The package and source generator require Node 24 or later. The browser build emits standard ES modules and declarations in
 `dist/`.
@@ -9,13 +10,16 @@ dependencies. The package and source generator require Node 24 or later. The bro
 
 One generated file per service holds the two entry points. A service has named Base Registry Engine (BReg) registers and shared products. The
 examples in `generated/services/` are a facility register with Documents,
-Casework and Evidence, and one with every product.
+Casework and Evidence, one with every product, and one with two registers.
+The BReg and service examples under `@registrystack/client/products/...` are
+generated from this repository's sample registers. Use them as examples when
+generating clients for your own registers.
 
-In a page, call `createRegistryClient`. It takes no token. The page's session
+After you [generate a service](#generate-a-service), call `createRegistryClient` in a page. It takes no token. The page's session
 part signs each call:
 
 ```ts
-import { createRegistryClient } from './generated/services/breg-facility-documents-casework-evidence.ts'
+import { createRegistryClient } from './service.ts'
 
 const registry = createRegistryClient({ baseUrl: '/registry' })
 
@@ -28,7 +32,7 @@ In a function, a script or a back end, call `createRegistryServerClient`. It
 requires a token:
 
 ```ts
-import { createRegistryServerClient } from './generated/services/breg-facility-documents-casework-evidence.ts'
+import { createRegistryServerClient } from './service.ts'
 
 const registry = createRegistryServerClient({
   baseUrl: 'https://registry.example.org',
@@ -161,14 +165,17 @@ Wallet exchanges and discovery metadata use the OID4VCI protocol directly.
 Install the package in your application with Node 24.
 
 ```sh
-npm install @registrystack/web-client
+npm install @registrystack/client
 ```
+
+If you use `rstack`, run `rstack client generate` with the same options shown below.
+It uses the package installed in your application and the BReg CLI resolved by `rstack`.
 
 Run the generator from your application directory with `bregctl` on `PATH`.
 You can also set `RSTACK_BREGCTL_BIN` to the executable path.
 
 ```sh
-npx registry-generate \
+npx --no-install registry-generate \
   --register facility=./projects/facility \
   --author-profile facility=facility-correction-author \
   --route-prefix facility=/facilities \
@@ -198,12 +205,11 @@ Before 1.0, the client versions must share a minor version, so `0.48.1` works wi
 From 1.0, they must share a major version.
 Patch differences are always accepted.
 
-Before writing files, the generator checks any installed package it can resolve from the output directory.
+The generator must resolve `@registrystack/client` from the output directory before it writes files.
+If resolution fails, install the package in your application.
 The runtime checks the recorded client version when you construct a client.
 If either check fails, regenerate with the command from your installed package.
 You can also install the matching package version named in the error.
-
-Use `npm run generate` and `npm run check:generated` in this repository to maintain its committed examples.
 
 Successful calls return an object
 with `data`, HTTP `status` and `headers`, and the request's `idempotencyKey`
@@ -543,7 +549,7 @@ matching label from your `guardLabels` before falling back to the words table.
 
 For `list` and `read`, generated types follow the response schema's required
 fields. A `domainData` field can be absent when the access profile does not
-disclose it or your `$select` leaves it out.
+disclose it or your `select` option leaves it out.
 
 ```ts
 showText(row.data.name ?? 'Not shared')
@@ -651,9 +657,11 @@ npm --prefix clients/typescript run build
 `test` runs the Node tests. `test:deno` runs the transport and delivery tests
 under Deno and needs Deno installed.
 
-Use Node 24 to generate a module from the OpenAPI document produced by
-`bregctl` for your own project. The generated module imports the installed package by default. For a repository
-example, pass `--local-imports` to use paths relative to the output file.
+For repository maintenance, use `npm run generate` to refresh committed examples
+and `npm run check:generated` to verify them. The `--local-imports` flag is for
+maintaining individual examples in this repository. In your application, use
+[Generate a service](#generate-a-service) to generate imports from the installed
+`@registrystack/client` package.
 
 ```sh
 node clients/typescript/generate.ts --breg --local-imports \

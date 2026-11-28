@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -220,7 +220,11 @@ test('register generation defaults to package imports and supports explicit loca
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const root = dirname(fileURLToPath(new URL('../generate.ts', import.meta.url)))
   const input = fileURLToPath(new URL('./fixtures/breg-list.openapi.json', import.meta.url))
-  const { name } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name: string }
+  const manifest = readFileSync(join(root, 'package.json'), 'utf8')
+  const { name } = JSON.parse(manifest) as { name: string }
+  const installed = join(dir, 'node_modules', name)
+  mkdirSync(installed, { recursive: true })
+  writeFileSync(join(installed, 'package.json'), manifest)
   const output = join(dir, 'register.ts')
   const imports = (...flags: string[]) => {
     execFileSync(process.execPath, [join(root, 'generate.ts'), '--breg', ...flags, input, output])

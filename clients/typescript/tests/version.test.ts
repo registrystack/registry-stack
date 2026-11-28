@@ -48,3 +48,15 @@ test('client versions match by minor before 1.0 and by major from 1.0', async ()
   assert.equal(compatibleClientVersions('1.0.1', '1.7.3'), true)
   assert.equal(compatibleClientVersions('1.7.3', '2.7.3'), false)
 })
+
+for (const [version, valid] of [
+  ['0.49.0-_', false],
+  ['0.49.0-..', false],
+  ['0.49.0-rc.1', true],
+  ['0.49.0+build.5', true],
+] as const) {
+  test('generated client version syntax: ' + version, async () => {
+    const { compatibleClientVersions } = await import('../version.ts')
+    assert.equal(compatibleClientVersions(version, '0.49.0'), valid)
+  })
+}

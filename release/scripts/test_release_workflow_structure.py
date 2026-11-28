@@ -1557,7 +1557,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             node_smoke,
         )
         self.assertIn(
-            "node_modules/@registrystack/client-${{ matrix.napi_platform }}",
+            "node_modules/@registrystack/client-node-${{ matrix.napi_platform }}",
             node_smoke,
         )
         self.assertIn(
@@ -1697,7 +1697,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "assemble",
             "Seal compact candidate manifest and bundle",
         )
-        self.assertIn("registrystack-client-*.tgz", seal)
+        self.assertIn("registrystack-client-node-*.tgz", seal)
         self.assertIn("registry_stack_client-*.whl", seal)
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
             self.assertNotIn(forbidden, text)
@@ -2159,7 +2159,7 @@ class IndependentUnitWorkflowTest(unittest.TestCase):
         self.assertEqual(smoke["if"], "needs.validate.outputs.exclude_discovery == 'true'")
         self.assertIn("release_distribution.py install", smoke["run"])
         self.assertIn("smoke_discovery_distribution.py", smoke["run"])
-        self.assertIn('--client-tarball "candidate/bundle-root/registrystack-client-', smoke["run"])
+        self.assertIn('--client-tarball "candidate/bundle-root/registrystack-client-node-', smoke["run"])
         setup = next(step for step in steps if step.get("name") == "Install Node for the distribution SDK smoke")
         self.assertEqual(setup["with"]["node-version"], "24.11.0")
 

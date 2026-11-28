@@ -167,8 +167,38 @@ enum Command {
         #[command(subcommand)]
         command: DevCommand,
     },
+    /// Generate application clients from registry projects.
+    Client {
+        #[command(subcommand)]
+        command: ClientCommand,
+    },
     #[command(external_subcommand)]
     Product(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum ClientCommand {
+    /// Run the registry-generate bin installed in the application project.
+    Generate(ClientGenerate),
+}
+
+#[derive(clap::Args)]
+struct ClientGenerate {
+    /// Register member and project path, as member=path. Repeat for each register.
+    #[arg(long, required = true)]
+    register: Vec<OsString>,
+    /// Comma-separated product names.
+    #[arg(long)]
+    products: Option<OsString>,
+    /// Proposal author profile, as member=profile. Repeat to add profiles.
+    #[arg(long)]
+    author_profile: Vec<OsString>,
+    /// Register route prefix, as member=/prefix. Repeat for each register.
+    #[arg(long)]
+    route_prefix: Vec<OsString>,
+    /// TypeScript service file to generate.
+    #[arg(long)]
+    output: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -651,6 +681,7 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
                 reportln!("rstack <product> <action> [options]");
                 reportln!("Use rstack help <product> for offline product help.");
                 reportln!("Use rstack dev --help for local development commands.");
+                reportln!("Use rstack client generate --help to generate an application client.");
                 reportln!("Use rstack components list to inspect installation availability.");
                 reportln!("Products: {}", PRODUCTS.join(", "));
             }
@@ -799,6 +830,9 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
             );
         }
         Some(Command::Dev { command }) => dispatch_dev(&cli, command, format)?,
+        Some(Command::Client {
+            command: ClientCommand::Generate(arguments),
+        }) => generate_client(&cli, arguments)?,
         Some(Command::Identity { command }) => match command {
             IdentityCommand::Generate {
                 target: IdentityTarget::Thunderid(arguments),
@@ -864,6 +898,72 @@ fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), 
         }
     }
     Ok(())
+}
+
+fn generate_client(cli: &Cli, arguments: &ClientGenerate) -> Result<(), CliFailure> {
+    let node_missing = || {
+        CliFailure::domain(
+            "rstack.client.node-missing: install Node.js 24 or later, then run npm install @registrystack/client in the application project".into(),
+        )
+    };
+    if first_path_binary("node").is_none() {
+        return Err(node_missing());
+    }
+    let output = std::path::absolute(&arguments.output)
+        .map_err(|error| CliFailure::operational(format!("cannot resolve output path: {error}")))?;
+    let output_directory = output
+        .ancestors()
+        .skip(1)
+        .find_map(|candidate| candidate.canonicalize().ok().filter(|path| path.is_dir()));
+    let generator = output_directory
+        .iter()
+        .flat_map(|directory| directory.ancestors())
+        .map(|directory| directory.join("node_modules/.bin/registry-generate"))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            CliFailure::domain(
+                "rstack.client.generator-missing: run npm install @registrystack/client in the application project".into(),
+            )
+        })?;
+
+    let mut command = ProcessCommand::new("node");
+    let selected = selected_state(cli)?;
+    if let Some((lease, selection, manifest)) = &selected {
+        set_selected_generation_environment(&mut command, lease.path(), selection, manifest)?;
+        if !command.get_envs().any(|(name, value)| {
+            name == BREG_DEV_HOST.tool_variable
+                && value.is_some_and(|path| std::path::Path::new(path).is_file())
+        }) {
+            return Err(CliFailure::domain(
+                "component breg is missing; run rstack install breg".into(),
+            ));
+        }
+        inherit_invocation_lease(lease)?;
+    } else if source_dev_binary(BREG_DEV_HOST.tool_variable).is_none() {
+        return Err(CliFailure::domain(
+            "run rstack install breg or set RSTACK_BREGCTL_BIN to an existing bregctl binary"
+                .into(),
+        ));
+    }
+
+    command.arg(generator);
+    for (flag, values) in [
+        ("--register", arguments.register.as_slice()),
+        ("--author-profile", arguments.author_profile.as_slice()),
+        ("--route-prefix", arguments.route_prefix.as_slice()),
+        ("--products", arguments.products.as_slice()),
+    ] {
+        for value in values {
+            command.arg(flag).arg(value);
+        }
+    }
+    let error = command.arg("--output").arg(&arguments.output).exec();
+    if error.kind() == io::ErrorKind::NotFound {
+        return Err(node_missing());
+    }
+    Err(CliFailure::operational(format!(
+        "cannot launch registry-generate: {error}"
+    )))
 }
 
 /// The tool of the selected release that writes a product's identity facts:
@@ -1283,7 +1383,7 @@ fn doctor(cli: &Cli, format: ReportFormat) -> Result<(), CliFailure> {
         }
         Err(error) => problems.push(format!("cannot inspect public rstack path: {error}")),
     }
-    if let Some(first) = first_path_rstack() {
+    if let Some(first) = first_path_binary("rstack") {
         if fs::canonicalize(&first).ok() != fs::canonicalize(&public_link).ok() {
             problems.push(format!(
                 "another rstack shadows the selected launcher at {}",
@@ -1336,10 +1436,10 @@ fn doctor(cli: &Cli, format: ReportFormat) -> Result<(), CliFailure> {
     }
 }
 
-fn first_path_rstack() -> Option<PathBuf> {
+fn first_path_binary(binary: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for directory in std::env::split_paths(&path) {
-        let candidate = directory.join("rstack");
+        let candidate = directory.join(binary);
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -1359,18 +1459,20 @@ struct DevHost {
     runtime_variable: &'static str,
 }
 
+const BREG_DEV_HOST: DevHost = DevHost {
+    component: "breg",
+    tool: "bregctl",
+    tool_variable: "RSTACK_BREGCTL_BIN",
+    runtime_variable: "RSTACK_BREG_BIN",
+};
+
 /// The hosting products in the order that picks the host. The first one a
 /// plan lists hosts `check` and `start`, because the plan needs that CLI
 /// anyway. The first one available hosts `status`, `token` and `stop`: a run
 /// keeps its state in its run directory, so any host of the same release
 /// serves a run another host started.
 const DEV_HOSTS: [DevHost; 10] = [
-    DevHost {
-        component: "breg",
-        tool: "bregctl",
-        tool_variable: "RSTACK_BREGCTL_BIN",
-        runtime_variable: "RSTACK_BREG_BIN",
-    },
+    BREG_DEV_HOST,
     DevHost {
         component: "casework",
         tool: "caseworkctl",
@@ -1616,6 +1718,13 @@ fn admit_dev(action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure
     Err(CliFailure::reported(2))
 }
 
+fn source_dev_binary(variable: &str) -> Option<PathBuf> {
+    std::env::var_os(variable)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
 fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
     admit_dev(action, format)?;
     let option = |name: &str, value: &std::ffi::OsStr| {
@@ -1741,16 +1850,10 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
         }
         (command, Some(lease))
     } else {
-        let source = |variable: &str| {
-            std::env::var_os(variable)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-                .filter(|path| path.is_file())
-        };
         let missing: Vec<_> = needs
             .variables()
             .into_iter()
-            .filter(|variable| source(variable).is_none())
+            .filter(|variable| source_dev_binary(variable).is_none())
             .collect();
         if !missing.is_empty() {
             return Err(CliFailure::domain(format!(
@@ -1768,8 +1871,10 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
             )));
         }
         let host = match needs.products.first() {
-            Some(first) => source(first.tool_variable),
-            None => DEV_HOSTS.iter().find_map(|host| source(host.tool_variable)),
+            Some(first) => source_dev_binary(first.tool_variable),
+            None => DEV_HOSTS
+                .iter()
+                .find_map(|host| source_dev_binary(host.tool_variable)),
         }
         .ok_or_else(|| no_dev_host(false))?;
         (ProcessCommand::new(host), None)
