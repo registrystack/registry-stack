@@ -154,7 +154,8 @@
 
 - The shared database block adds `database.transport`: `verified-tls`, the
   default, `loopback-plaintext`, for a Unix socket, a numeric loopback
-  address or `localhost`, and `private-network-plaintext`, development only,
+  address or `localhost` when it resolves only to loopback addresses, and
+  `private-network-plaintext`, development only,
   for loopback or private addresses. `DatabaseConfig::plaintext_permitted`
   checks the hosts against the value, and `DatabaseConfig::check` refuses
   `transport` beside `testOnlyPlaintext`, and `testOnlyPlaintext` outside a
@@ -262,8 +263,8 @@
 - BREAKING (Rust API): `registry-platform-httputil` can refuse a response
   from a peer that declares the development posture.
   `validate_response_headers` takes a `PeerPolicy`: under
-  `RefuseDevelopmentPeer` a response whose `Registry-Posture` field is exactly
-  `development` is refused with `ResponseHeaderError::DevelopmentPeer`, and
+  `RefuseDevelopmentPeer` a response whose `Registry-Posture` field lists
+  `development` among its comma-separated values is refused with `ResponseHeaderError::DevelopmentPeer`, and
   `AcceptDevelopmentPeer` checks only the header bounds.
   `ResponseHeaderBoundError` is now `ResponseHeaderError`. `is_loopback_host`
   is the one host rule for plain http: a loopback address literal or the

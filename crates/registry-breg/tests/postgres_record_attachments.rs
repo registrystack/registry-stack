@@ -1256,7 +1256,7 @@ async fn immediate_action_refuses_a_completed_rejected_verdict_and_keeps_approve
     }))
     .unwrap();
     let verification = AttachmentVerification::Http(std::sync::Arc::new(
-        HttpVerifierSettings::from_config(&config)
+        HttpVerifierSettings::from_config_without_peer_policy(&config)
             .unwrap()
             .activate(
                 VerifierNamespace {

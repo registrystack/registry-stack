@@ -872,6 +872,36 @@ def check_loader(root: Path, row: Row) -> list[str]:
     return problems
 
 
+def strip_attributes(code: str) -> str:
+    """Blank every `#[...]` attribute, counting nested brackets so an
+    attribute that holds an array, such as a schemars `extend` list, is
+    removed whole."""
+    out = list(code)
+    index = code.find("#[")
+    while index != -1:
+        depth = 0
+        end = index + 1
+        while end < len(code):
+            if code[end] == "[":
+                depth += 1
+            elif code[end] == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            end += 1
+        for position in range(index, min(end + 1, len(code))):
+            if out[position] != "\n":
+                out[position] = " "
+        index = code.find("#[", end + 1)
+    return "".join(out)
+
+
+def unwrap_gated(written: str | None) -> str | None:
+    """The type inside a posture `Gated<...>` wrapper, or `written` itself."""
+    gated = re.fullmatch(rf"(?:{PLATFORM_CRATE}::)?Gated<(.+)>", written or "")
+    return gated.group(1) if gated else written
+
+
 def struct_fields(code: str, struct: str) -> dict[str, str] | None:
     declaration = re.search(
         rf"\bstruct\s+{struct}\b[^{{;]*\{{", code
@@ -879,7 +909,7 @@ def struct_fields(code: str, struct: str) -> dict[str, str] | None:
     if declaration is None:
         return None
     body = code[declaration.end() : matching_brace(code, declaration.end() - 1)]
-    body = re.sub(r"#\[[^\]]*\]", " ", body)
+    body = strip_attributes(body)
     fields: dict[str, str] = {}
     depth = 0
     current = ""
@@ -906,7 +936,7 @@ def enum_variants(code: str, enum: str) -> dict[str, str] | None:
     if declaration is None:
         return None
     body = code[declaration.end() : matching_brace(code, declaration.end() - 1)]
-    body = re.sub(r"#\[[^\]]*\]", " ", body)
+    body = strip_attributes(body)
     body = re.sub(r"//[^\n]*", " ", body)
     variants: dict[str, str] = {}
     depth = 0
@@ -948,7 +978,7 @@ def variant_member(
         elif character in ">)]}":
             depth -= 1
         if (character == "," and depth == 0) or index == close:
-            chunk = re.sub(r"#\[[^\]]*\]", " ", code[start:index])
+            chunk = strip_attributes(code[start:index])
             field = re.fullmatch(
                 r"\s*(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:\s*(.+?)\s*", chunk, re.DOTALL
             )
@@ -1040,6 +1070,7 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
                 continue
         else:
             field = entry.field
+        written = unwrap_gated(written)
         if entry.repeated:
             item = re.fullmatch(r"Vec<(.+)>", written or "")
             written = item.group(1) if item else None

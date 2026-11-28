@@ -221,6 +221,22 @@ skips all of it.
 Base URLs may carry a deployment prefix. HTTPS is required except for loopback HTTP, and the URL
 cannot contain credentials, a query, a fragment, or ambiguous empty path segments.
 
+### Deployment peer policy
+
+Pass `PeerPolicy::RefuseDevelopmentPeer` when constructing a Rust client for a production
+runtime. A response carrying `Registry-Posture: development` returns a `DevelopmentPeer`
+error, with kind `development-peer` where the client exposes an error kind. Use
+`PeerPolicy::AcceptDevelopmentPeer` in development runtimes and application code.
+The Node and Python bindings accept development peers. Only a Rust client built with
+`RefuseDevelopmentPeer` raises `development-peer`. Run the stack in one posture in
+practice, since a production peer refuses a development neighbour.
+
+{/* Evidence: crates/registry-breg-client/src/config.rs, BaseRegistryClientConfig;
+    crates/registry-breg-client/src/transport.rs, DevelopmentPeer;
+    crates/registry-breg-client/src/error.rs, development-peer;
+    crates/registry-breg-client-node/src/lib.rs, AcceptDevelopmentPeer;
+    crates/registry-breg-client-py/src/convert.rs, AcceptDevelopmentPeer */}
+
 ### Unknown outcomes and the same-key retry
 
 A 5xx answer may follow a commit. A BReg, Casework<DocsetProduct product="registry-messaging">, Messaging,</DocsetProduct>
@@ -339,10 +355,13 @@ Endpoint trust and the call that follows stay with the relying application.
 ### Construct a Discovery client
 
 ```rust
-use registry_discovery_client::{DiscoveryClient, DiscoveryClientConfig};
+use registry_discovery_client::{DiscoveryClient, DiscoveryClientConfig, PeerPolicy};
 use url::Url;
 
-let config = DiscoveryClientConfig::new(Url::parse("https://discovery.example.invalid/")?);
+let config = DiscoveryClientConfig::new(
+    Url::parse("https://discovery.example.invalid/")?,
+    PeerPolicy::AcceptDevelopmentPeer,
+);
 let client = DiscoveryClient::new(config)?;
 ```
 
@@ -450,7 +469,7 @@ revoked-key list the verifier could never use is refused at construction.
 
 ```rust
 use std::sync::Arc;
-use registry_evidence_client::{EvidenceClient, EvidenceClientConfig, StaticToken};
+use registry_evidence_client::{EvidenceClient, EvidenceClientConfig, StaticToken, PeerPolicy};
 use url::Url;
 
 let config = EvidenceClientConfig::new(
@@ -458,6 +477,7 @@ let config = EvidenceClientConfig::new(
     Arc::new(StaticToken::new(token)?),
     trusted_jwks,
     Vec::new(),
+    PeerPolicy::AcceptDevelopmentPeer,
 );
 let client = EvidenceClient::new(config)?;
 ```
@@ -550,9 +570,17 @@ client = evidence.EvidenceClient.from_profile("evidence-client.json")
 const client = evidence.EvidenceClient.fromProfile('evidence-client.json');
 ```
 
-Rust names the same entry points `EvidenceClient::from_profile`,
-`EvidenceClient::from_profile_with_key`, `EvidenceClient::from_profile_path`, and
-`EvidenceClient::from_profile_path_with_key`.
+The Rust entry points for a decoded profile are `EvidenceClient::from_profile`,
+`EvidenceClient::from_profile_with_key`, and `EvidenceClient::from_profile_with_authorization`.
+Their file-based counterparts are `EvidenceClient::from_profile_path`,
+`EvidenceClient::from_profile_path_with_key`, and
+`EvidenceClient::from_profile_path_with_authorization`. Each takes the peer policy you
+choose. The transitional `_without_peer_policy` variants use `RefuseDevelopmentPeer`.
+The Node and Python profile factories use `AcceptDevelopmentPeer`.
+
+{/* Evidence: crates/registry-evidence-client/src/client.rs, from_profile_without_peer_policy;
+    crates/registry-evidence-client-node/src/lib.rs, AcceptDevelopmentPeer;
+    crates/registry-evidence-client-py/src/lib.rs, AcceptDevelopmentPeer */}
 
 ### Prepare, send, and verify
 
@@ -637,9 +665,8 @@ operation identity, and it is not a substitute for the deployment's audit record
 
 ### Evidence error contract
 
-Python raises one of ten subclasses of `evidence.EvidenceClientError`, so an application can catch
-the category it handles and let the rest propagate. Node throws `evidence.EvidenceClientError` with
-`kind` carrying the same ten values.
+Python raises `evidence.EvidenceClientError` or a subclass, so an application can catch the
+category it handles. Node throws `evidence.EvidenceClientError` with the same `kind` values.
 
 | Kind | Python class | Meaning |
 | --- | --- | --- |
@@ -681,11 +708,12 @@ Proposals, recovery after a restart, and the full error tables.
 ### Construct a BReg client
 
 ```rust
-use registry_stack_client::breg::{BaseRegistryClient, BaseRegistryClientConfig};
+use registry_stack_client::breg::{BaseRegistryClient, BaseRegistryClientConfig, PeerPolicy};
 use url::Url;
 
 let config = BaseRegistryClientConfig::new(
     Url::parse("https://breg.example.invalid/institution-a")?,
+    PeerPolicy::AcceptDevelopmentPeer,
 );
 let client = BaseRegistryClient::new(config)?;
 ```
@@ -999,10 +1027,11 @@ authorise any later business mutation in the producer's system.
 ### Construct a Casework client
 
 ```rust
-use registry_stack_client::casework::{CaseworkClient, CaseworkClientConfig};
+use registry_stack_client::casework::{CaseworkClient, CaseworkClientConfig, PeerPolicy};
 
 let client = CaseworkClient::new(CaseworkClientConfig::new(
     "https://casework.example.invalid/".parse()?,
+    PeerPolicy::AcceptDevelopmentPeer,
 ))?;
 ```
 
@@ -1224,11 +1253,12 @@ uses.
 ### Construct a Messaging client
 
 ```rust
-use registry_messaging_client::{MessagingClient, MessagingClientConfig};
+use registry_messaging_client::{MessagingClient, MessagingClientConfig, PeerPolicy};
 use url::Url;
 
 let client = MessagingClient::new(MessagingClientConfig::new(
     Url::parse("https://messaging.example.invalid/")?,
+    PeerPolicy::AcceptDevelopmentPeer,
 ))?;
 ```
 
@@ -1411,11 +1441,12 @@ generates. The
 and problem codes each operation assumes.
 
 ```rust
-use registry_scheduling_client::{SchedulingClient, SchedulingClientConfig};
+use registry_scheduling_client::{SchedulingClient, SchedulingClientConfig, PeerPolicy};
 use url::Url;
 
 let client = SchedulingClient::new(SchedulingClientConfig::new(
     Url::parse("https://scheduling.example.invalid/")?,
+    PeerPolicy::AcceptDevelopmentPeer,
 ))?;
 ```
 

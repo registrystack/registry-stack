@@ -96,7 +96,8 @@ impl AttachmentVerificationConfig {
         match raw {
             RawAttachmentVerificationConfig::Disabled {} => Ok(Self::default()),
             RawAttachmentVerificationConfig::Http(config) => {
-                HttpVerifierSettings::from_config(&config).map(|settings| Self(Some(settings)))
+                HttpVerifierSettings::from_config_without_peer_policy(&config)
+                    .map(|settings| Self(Some(settings)))
             }
         }
     }

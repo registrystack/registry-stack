@@ -700,7 +700,7 @@ async fn native_review_client(app: axum::Router) -> (CaseworkClient, tokio::task
             .expect("serve candidate Casework router");
     });
     let client = CaseworkClient::new(
-        CaseworkClientConfig::new(
+        CaseworkClientConfig::new_without_peer_policy(
             format!("http://{address}/")
                 .parse()
                 .expect("test service URL"),
@@ -5932,7 +5932,7 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
     let server = tokio::spawn(async move {
         axum::serve(listener, served).await.unwrap();
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         format!("http://{address}/").parse().unwrap(),
     ))
     .unwrap();

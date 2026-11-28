@@ -27,7 +27,8 @@ async fn client_for(answer: fn() -> Response) -> (DocumentsClient, tokio::task::
             .expect("the fixture server");
     });
     let url = url::Url::parse(&format!("http://{address}/")).expect("a fixture URL");
-    let client = DocumentsClient::new(DocumentsClientConfig::new(url)).expect("a client");
+    let client = DocumentsClient::new(DocumentsClientConfig::new_without_peer_policy(url))
+        .expect("a client");
     (client, server)
 }
 

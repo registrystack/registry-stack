@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use registry_breg_client::{
     BRegBoundingBox, BRegGeoJsonListRequest, BRegGeoJsonOptions, BaseRegistryClient,
-    BaseRegistryClientConfig, StaticToken,
+    BaseRegistryClientConfig, PeerPolicy, StaticToken,
 };
 use url::Url;
 
@@ -22,7 +22,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("BREG_BBOX requires west,south,east,north".into());
     };
     let bbox = BRegBoundingBox::new(*west, *south, *east, *north)?;
-    let mut config = BaseRegistryClientConfig::new(Url::parse(&base_url)?);
+    let mut config =
+        BaseRegistryClientConfig::new(Url::parse(&base_url)?, PeerPolicy::AcceptDevelopmentPeer);
     if let Ok(path) = std::env::var("BREG_TOKEN_FILE") {
         let token = std::fs::read_to_string(path)?;
         config = config.with_token_provider(Arc::new(StaticToken::new(token.trim())?));

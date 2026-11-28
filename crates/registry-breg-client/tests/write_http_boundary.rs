@@ -189,7 +189,7 @@ async fn serve_test_client(responses: Vec<MockResponse>, max_mutation_retries: u
         .expect("serve mock Base Registry Engine");
     });
     let token = Arc::new(CountingToken(AtomicUsize::new(0)));
-    let config = BaseRegistryClientConfig::new(
+    let config = BaseRegistryClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/tenant/base")).expect("base URL"),
     )
     .with_token_provider(token.clone())

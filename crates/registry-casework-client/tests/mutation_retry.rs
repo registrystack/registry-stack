@@ -203,7 +203,9 @@ async fn serve(answers: &[Answer]) -> (String, Script, tokio::task::JoinHandle<(
 }
 
 fn config(address: &str) -> CaseworkClientConfig {
-    CaseworkClientConfig::new(Url::parse(&format!("http://{address}/")).expect("fixture URL"))
+    CaseworkClientConfig::new_without_peer_policy(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    )
 }
 
 fn client(config: CaseworkClientConfig) -> CaseworkClient {

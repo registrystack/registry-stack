@@ -475,7 +475,7 @@ fn ingestion_client(
     base: &ServiceBaseUrl,
     token: &str,
 ) -> Result<BaseRegistryClient, DataLifecycleError> {
-    let config = BaseRegistryClientConfig::new(base.as_url().clone())
+    let config = BaseRegistryClientConfig::new_without_peer_policy(base.as_url().clone())
         .with_attempt_timeout(DEFAULT_REQUEST_TIMEOUT)
         .with_connect_timeout(DEFAULT_CONNECT_TIMEOUT)
         .with_user_agent(DATA_HTTP_USER_AGENT);
@@ -988,7 +988,7 @@ fn map_ingestion_client_error(error: BaseRegistryClientError) -> DataLifecycleEr
         BaseRegistryClientError::InvalidRequest { .. } => {
             DataLifecycleError::Data(DataError::InvalidBinding)
         }
-        BaseRegistryClientError::Protocol { .. } => {
+        BaseRegistryClientError::Protocol { .. } | BaseRegistryClientError::DevelopmentPeer => {
             DataLifecycleError::Data(DataError::InvalidResponse)
         }
         BaseRegistryClientError::Problem {
@@ -1754,6 +1754,14 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    #[test]
+    fn a_development_peer_ingestion_answer_maps_to_an_invalid_response() {
+        assert!(matches!(
+            map_ingestion_client_error(BaseRegistryClientError::DevelopmentPeer),
+            DataLifecycleError::Data(DataError::InvalidResponse)
+        ));
+    }
 
     const ENTITY: &str = "record";
     const PROFILE: &str = "operator";

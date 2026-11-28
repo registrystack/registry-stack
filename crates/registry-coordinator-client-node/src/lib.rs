@@ -66,7 +66,10 @@ impl CoordinatorClient {
                 "Coordinator client configuration is invalid",
             )
         })?;
-        let mut core = CoreConfig::new(base_url);
+        let mut core = CoreConfig::new(
+            base_url,
+            registry_coordinator_client::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(value) = config.attempt_timeout_milliseconds {
             core = core.with_attempt_timeout(Duration::from_millis(whole_number(value)?));
         }
@@ -312,6 +315,10 @@ fn error_envelope(error: CoordinatorClientError) -> Value {
             "status": status,
             "code": code,
             "message": "Registry Coordinator refused the request",
+        }),
+        CoordinatorClientError::DevelopmentPeer => json!({
+            "kind": "development-peer",
+            "message": CoordinatorClientError::DevelopmentPeer.to_string(),
         }),
         CoordinatorClientError::Protocol { status, failure } => json!({
             "kind": "protocol",

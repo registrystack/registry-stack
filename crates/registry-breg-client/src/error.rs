@@ -509,6 +509,11 @@ impl std::fmt::Display for BRegProtocolFailure {
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BaseRegistryClientError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("the Base Registry Engine client cannot be used as configured: {reason}")]
     Configuration { reason: &'static str },
     #[error("the Base Registry Engine request is invalid: {reason}")]
@@ -611,6 +616,7 @@ impl BaseRegistryClientError {
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
+            Self::DevelopmentPeer => "development-peer",
             Self::Configuration { .. } => "configuration",
             Self::InvalidRequest { .. } => "invalid-request",
             Self::Token(_) => "token",
@@ -728,6 +734,7 @@ impl BaseRegistryClientError {
     #[must_use]
     pub fn is_outcome_unknown(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => true,
             Self::Configuration { .. } | Self::InvalidRequest { .. } | Self::Token(_) => false,
             Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
             Self::Problem { status, code, .. } => *status >= 500 && !code.fails_before_commit(),
@@ -743,6 +750,7 @@ impl BaseRegistryClientError {
     /// still refuses to resend a timeout or broken exchange after a 4xx one.
     pub(crate) fn resend_may_settle(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => false,
             Self::Transport { kind } => {
                 matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
             }

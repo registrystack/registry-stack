@@ -3096,7 +3096,7 @@ mod tests {
     }
 
     fn authority(id: &str, completion: Option<(u8, &str)>) -> Arc<ReviewAuthorityClient> {
-        let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
+        let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new_without_peer_policy(
             "https://casework.example.test/".parse().expect("URL"),
         ))
         .expect("client");
@@ -3238,9 +3238,11 @@ mod tests {
         }
 
         let over_bound = "x".repeat(MAXIMUM_COMPLETION_RECIPIENT_BYTES + 1);
-        let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-            "https://casework.example.test/".parse().expect("URL"),
-        ))
+        let client = ReviewClient::new(
+            registry_review_client::ReviewClientConfig::new_without_peer_policy(
+                "https://casework.example.test/".parse().expect("URL"),
+            ),
+        )
         .expect("client");
         assert!(
             ReviewAuthorityClient::new(
@@ -3266,9 +3268,11 @@ mod tests {
         let configured = |recovery_days| {
             ReviewAuthorityClient::new(
                 "casework-a".to_owned(),
-                ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-                    "https://casework.example.test/".parse().expect("URL"),
-                ))
+                ReviewClient::new(
+                    registry_review_client::ReviewClientConfig::new_without_peer_policy(
+                        "https://casework.example.test/".parse().expect("URL"),
+                    ),
+                )
                 .expect("client"),
                 Arc::new(
                     registry_platform_httputil::StaticToken::new("outgoing-token".to_owned())

@@ -47,7 +47,9 @@ fn raw(url: &str) -> serde_json::Value {
 }
 
 fn settings(input: serde_json::Value) -> Result<S3Settings> {
-    S3Settings::from_config(&serde_json::from_value::<ObjectStorageConfig>(input).unwrap())
+    S3Settings::from_config_without_peer_policy(
+        &serde_json::from_value::<ObjectStorageConfig>(input).unwrap(),
+    )
 }
 
 /// A store over `url` built without the versioning probe, so a test can
@@ -57,6 +59,7 @@ fn store_from(input: serde_json::Value, scope: &str, files: &SecretFiles) -> S3O
     let resolver = files.resolver();
     let scope = hex::encode(Sha256::digest(scope));
     S3ObjectStore {
+        peer_policy: PeerPolicy::RefuseDevelopmentPeer,
         client: OutboundClientBuilder::new()
             .timeout(settings.timeout)
             .connect_timeout(connect_timeout(settings.timeout))
@@ -338,6 +341,7 @@ fn strict_storage_configuration_and_debug_are_value_free() {
         ObjectStoreError::InvalidConfiguration
     );
     for url in [
+        "http://localhost:1234",
         "http://127.0.0.2:1234",
         "http://[::1]:1234",
         "http://[::ffff:127.0.0.1]:1234",
@@ -345,8 +349,8 @@ fn strict_storage_configuration_and_debug_are_value_free() {
         settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
     }
     for url in [
-        "http://localhost:1234",
         "http://storage.localhost:1234",
+        "http://10.0.0.1:1234",
         "http://0.0.0.0:1234",
         "http://[::ffff:10.0.0.1]:1234",
     ] {
@@ -702,6 +706,12 @@ async fn a_scoped_store_binds_its_own_scope_without_resolving_or_sending() {
 async fn downloads_refuse_missing_corrupt_oversized_versioned_and_redirect_responses() {
     let digest = hex::encode(Sha256::digest(b"content"));
     for (body, status, headers, error) in [
+        (
+            "content",
+            StatusCode::OK,
+            &[("registry-posture", "development")][..],
+            ObjectStoreError::DevelopmentPeer,
+        ),
         (
             "content",
             StatusCode::NOT_FOUND,

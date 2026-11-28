@@ -1,3 +1,4 @@
+use crate::PeerPolicy;
 use std::fmt;
 use std::time::Duration;
 
@@ -6,7 +7,7 @@ use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers_without_peer_policy,
+    read_bounded, url::append_path_segments, validate_response_headers, ResponseHeaderError,
 };
 use registry_review_protocol::{
     review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
@@ -214,6 +215,7 @@ impl ClientResponse for ReviewCancelResponse {
 }
 
 pub struct ReviewClient {
+    peer_policy: PeerPolicy,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
@@ -241,6 +243,7 @@ impl ReviewClient {
         })
         .map_err(|_| ReviewClientError::configuration("the HTTP client could not be built"))?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             http,
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -732,8 +735,12 @@ impl ReviewClient {
             .map_err(|error| ReviewClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers_without_peer_policy(response.headers())
-            .map_err(|_| protocol(response.status(), ReviewProtocolFailure::HeaderBounds, None))?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => ReviewClientError::DevelopmentPeer,
+                _ => protocol(response.status(), ReviewProtocolFailure::HeaderBounds, None),
+            },
+        )?;
         Ok(response)
     }
 
@@ -978,5 +985,48 @@ fn protocol(
         status: status.as_u16(),
         failure,
         trace_id,
+    }
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move { (headers, r#"{}"#) }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    ReviewClient::new(ReviewClientConfig::new(url.clone(), policy)).unwrap();
+                let response = client.send(client.http.get(url.clone())).await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    assert!(matches!(response, Err(ReviewClientError::DevelopmentPeer)));
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
+        }
     }
 }

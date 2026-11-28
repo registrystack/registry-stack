@@ -2181,7 +2181,7 @@ mod tests {
             let input = request(offering);
             assert_parity(&schema, &input, true, availability_selector_accepts);
         }
-        let client = SchedulingClient::new(SchedulingClientConfig::new(
+        let client = SchedulingClient::new(SchedulingClientConfig::new_without_peer_policy(
             "https://scheduling.example.invalid/"
                 .parse()
                 .expect("fixture service URL"),

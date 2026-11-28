@@ -1377,9 +1377,11 @@ impl RuntimeConfig {
                 (None, None)
             };
             let client = registry_review_client::ReviewClient::new(
-                registry_review_client::ReviewClientConfig::new(config.endpoint.clone())
-                    .with_attempt_timeout(self.operational_timeouts.http_request)
-                    .with_connect_timeout(self.operational_timeouts.http_request),
+                registry_review_client::ReviewClientConfig::new_without_peer_policy(
+                    config.endpoint.clone(),
+                )
+                .with_attempt_timeout(self.operational_timeouts.http_request)
+                .with_connect_timeout(self.operational_timeouts.http_request),
             )
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
             let authority_client = crate::review_store::ReviewAuthorityClient::new(

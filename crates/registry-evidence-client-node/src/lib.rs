@@ -71,7 +71,7 @@ fn to_napi_error(value: serde_json::Value) -> NapiError {
 
 /// A serialization failure on a value this crate itself constructed (a
 /// definitions document, a policy document, a verified payload) is not a
-/// caller mistake; it has no `kind` of its own among the ten stable ones, so
+/// caller mistake; it has no `kind` of its own among the stable response error kinds, so
 /// it is reported as a plain reason rather than forced into that envelope.
 fn to_napi_serialization_error(what: &str, error: serde_json::Error) -> NapiError {
     NapiError::from_reason(format!("{what} could not be described: {error}"))
@@ -656,7 +656,9 @@ impl EvidenceClient {
     #[napi(factory, ts_args_type = "path: string, privateKeyJwk?: any")]
     pub fn from_profile(path: String, private_key_jwk: Option<serde_json::Value>) -> Result<Self> {
         catch_panic("constructing the client from a profile", || {
-            let path = PathBuf::from(path);
+            let profile =
+                registry_evidence_client::EvidenceClientProfile::from_file(PathBuf::from(path))
+                    .map_err(|error| to_napi_error(map_client_error(&error)))?;
             let client = match private_key_jwk {
                 Some(private_key_jwk) => {
                     let private_key: registry_platform_crypto::PrivateJwk =
@@ -666,9 +668,16 @@ impl EvidenceClient {
                                 "message": "`privateKeyJwk` must be a valid client private JWK",
                             }))
                         })?;
-                    RealEvidenceClient::from_profile_path_with_key(path, private_key)
+                    RealEvidenceClient::from_profile_with_key(
+                        profile,
+                        private_key,
+                        registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer,
+                    )
                 }
-                None => RealEvidenceClient::from_profile_path(path),
+                None => RealEvidenceClient::from_profile(
+                    profile,
+                    registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer,
+                ),
             }
             .map_err(|error| to_napi_error(map_client_error(&error)))?;
             Ok(Self {
@@ -690,9 +699,13 @@ impl EvidenceClient {
             || {
                 let exchange = exchange_from_authorization_json(&authorization)
                     .map_err(|error| to_napi_error(map_config_error(&error)))?;
-                let client = RealEvidenceClient::from_profile_path_with_authorization(
-                    PathBuf::from(path),
+                let profile =
+                    registry_evidence_client::EvidenceClientProfile::from_file(PathBuf::from(path))
+                        .map_err(|error| to_napi_error(map_client_error(&error)))?;
+                let client = RealEvidenceClient::from_profile_with_authorization(
+                    profile,
                     exchange,
+                    registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer,
                 )
                 .map_err(|error| to_napi_error(map_client_error(&error)))?;
                 Ok(Self {

@@ -643,7 +643,7 @@ impl Deployment {
             .into_iter()
             .collect(),
         );
-        let client = EvidenceClient::new(EvidenceClientConfig::new(
+        let client = EvidenceClient::new(EvidenceClientConfig::new_without_peer_policy(
             evidence.parse().expect("the Evidence origin parses"),
             Arc::new(StaticToken::new(&relying_token).expect("the credential is header-safe")),
             jwks,

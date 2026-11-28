@@ -12,6 +12,7 @@ pub use registry_discovery::{
     EvidenceTypeResolveRequest, EvidenceTypeResolveResponse, ResolvedAlternative, ServiceFilters,
     ServiceKind, ServiceRecord, ServiceSearchResponse,
 };
+pub use registry_platform_httputil::PeerPolicy;
 pub use selection::{
     accept_service_selection, renew_unchanged_service_selection,
     validate_service_selection_structure, AcceptedServiceSelection, EvidenceResolutionContext,

@@ -18,6 +18,7 @@ pub use model::{
     ReviewAuth, ReviewComplete, ReviewResultObservation, ReviewResultResponse, ReviewResultsQuery,
 };
 pub use registry_platform_httputil::client::BearerToken;
+pub use registry_platform_httputil::PeerPolicy;
 pub use registry_review_protocol::{
     submission_digest, ContentDigest, HumanIdentity, PolicyBinding, PolicySelection, ProtocolError,
     ReviewCancelRequest, ReviewCancelResponse, ReviewCompletion, ReviewCompletionType,

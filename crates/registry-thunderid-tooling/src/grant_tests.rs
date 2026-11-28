@@ -148,3 +148,17 @@ async fn assertion_failures_are_redacted_and_never_reach_exchange() {
         assert_eq!(worker.join().unwrap().len(), 2);
     }
 }
+
+#[tokio::test]
+async fn development_casework_peer_has_its_own_refusal() {
+    let (base, worker) = serve(vec![
+        token_response(false),
+        response("200 OK", "Registry-Posture: development\r\n", ""),
+    ]);
+    let result = acquire(&connection(&base), "task-agent", key(), GRANT).await;
+    assert!(matches!(
+        result,
+        Err(error) if error.to_string().contains("the Casework peer declared development and this tooling refuses it")
+    ));
+    assert_eq!(worker.join().unwrap().len(), 2);
+}

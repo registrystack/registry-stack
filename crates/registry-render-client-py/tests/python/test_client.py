@@ -12,7 +12,7 @@ import registry_render_client as client
 
 
 class RenderJourney(unittest.TestCase):
-    def test_one_document_uses_provider_and_invalid_input_precedes_it(self):
+    def test_one_document_from_development_peer_uses_provider_and_invalid_input_precedes_acquisition(self):
         requests = []
         malformed_pdf = [False]
 
@@ -32,6 +32,7 @@ class RenderJourney(unittest.TestCase):
                     }
                 ).encode()
                 self.send_response(200)
+                self.send_header("Registry-Posture", "development")
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header(

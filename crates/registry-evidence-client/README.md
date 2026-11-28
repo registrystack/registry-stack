@@ -52,7 +52,7 @@ crate names a runtime.
 use std::sync::Arc;
 
 use registry_evidence_client::{
-    EvidenceClient, EvidenceClientConfig, EvidenceClientError, PreparedEvidenceRequest,
+    EvidenceClient, EvidenceClientConfig, EvidenceClientError, PeerPolicy, PreparedEvidenceRequest,
     StaticToken, VerifiedEvidence,
 };
 
@@ -72,6 +72,7 @@ async fn accept(
         Arc::new(StaticToken::new(access_token)?),
         trusted_jwks,
         revoked_key_ids,
+        PeerPolicy::AcceptDevelopmentPeer,
     ))?;
     client.request_and_verify(prepared).await
 }

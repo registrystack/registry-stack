@@ -5750,7 +5750,7 @@ fn statistics_client_diagnostic(
             "statistics",
             "the statistical request does not satisfy the client contract",
         ),
-        BaseRegistryClientError::Protocol { .. } => (
+        BaseRegistryClientError::Protocol { .. } | BaseRegistryClientError::DevelopmentPeer => (
             "statistics.response.invalid",
             "statistics",
             "the Registry response does not satisfy its wire contract",
@@ -15530,6 +15530,14 @@ fn write_failure_with_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn statistics_diagnostic_reports_a_development_peer_as_an_invalid_response() {
+        let (code, ..) = statistics_client_diagnostic(
+            &registry_breg_client::BaseRegistryClientError::DevelopmentPeer,
+        );
+        assert_eq!(code, "statistics.response.invalid");
+    }
 
     #[test]
     fn reviewed_plan_refusal_names_a_blind_index_write_by_ids_only() {

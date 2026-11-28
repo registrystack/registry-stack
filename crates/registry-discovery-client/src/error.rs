@@ -27,6 +27,11 @@ impl std::fmt::Display for DiscoveryProblem {
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DiscoveryClientError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("the Discovery client configuration is invalid")]
     Configuration,
     #[error("the Discovery query is invalid")]

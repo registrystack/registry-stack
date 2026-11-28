@@ -49,6 +49,7 @@ fn kind(error: &DiscoveryClientError) -> &'static str {
         DiscoveryClientError::Problem { .. } | DiscoveryClientError::UnrecognizedProblem { .. } => {
             "problem"
         }
+        DiscoveryClientError::DevelopmentPeer => "development-peer",
         DiscoveryClientError::Protocol => "protocol",
         _ => "client",
     }
@@ -510,7 +511,10 @@ impl DiscoveryClient {
             return Err(configuration_error(py));
         }
         let base_url = url::Url::parse(base_url).map_err(|_| configuration_error(py))?;
-        let mut config = DiscoveryClientConfig::new(base_url);
+        let mut config = DiscoveryClientConfig::new(
+            base_url,
+            discovery_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(timeout) = attempt_timeout_seconds {
             config = config.with_attempt_timeout(
                 positive_duration(timeout).map_err(|_| configuration_error(py))?,
@@ -632,6 +636,14 @@ pub fn registry_discovery_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn development_peer_has_its_own_kind() {
+        assert_eq!(
+            kind(&DiscoveryClientError::DevelopmentPeer),
+            "development-peer"
+        );
+    }
 
     #[test]
     fn oversized_closed_output_maps_to_a_stable_protocol_error() {

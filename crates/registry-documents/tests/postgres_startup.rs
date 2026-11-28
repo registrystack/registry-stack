@@ -36,7 +36,8 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
 
     let base = Url::parse(&format!("http://{address}/")).unwrap();
     let client = DocumentsClient::new(
-        DocumentsClientConfig::new(base.clone()).with_attempt_timeout(Duration::from_secs(5)),
+        DocumentsClientConfig::new_without_peer_policy(base.clone())
+            .with_attempt_timeout(Duration::from_secs(5)),
     )
     .unwrap();
     client.health().await.expect("the health route answers");

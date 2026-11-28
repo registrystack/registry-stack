@@ -3469,7 +3469,9 @@ impl registry_platform_httputil::TokenProvider for NoToken {
 fn local_review_binding() -> std::sync::Arc<registry_breg::review_store::ReviewAuthorityRegistry> {
     use registry_breg::review_store::{ReviewAuthorityClient, ReviewAuthorityRegistry};
     let client = registry_review_client::ReviewClient::new(
-        registry_review_client::ReviewClientConfig::new("http://127.0.0.1:9/".parse().unwrap()),
+        registry_review_client::ReviewClientConfig::new_without_peer_policy(
+            "http://127.0.0.1:9/".parse().unwrap(),
+        ),
     )
     .unwrap();
     let authority = std::sync::Arc::new(

@@ -388,7 +388,7 @@ impl DatabaseTransportError {
                 "Name a Unix socket, a loopback address, a private-network address or a name that resolves only to such addresses, or write database.transport: verified-tls."
             }
             Self::HostMismatch(_) => {
-                "Name a Unix socket, a loopback address or localhost, or write database.transport: verified-tls."
+                "Name a Unix socket, a loopback address, or localhost where it resolves only to loopback addresses, or write database.transport: verified-tls."
             }
             Self::DevelopmentOnly(refused) => refused.setting.production,
             Self::Conflict => "Remove database.testOnlyPlaintext, and keep database.transport.",
@@ -433,9 +433,10 @@ impl DatabaseConfig {
 
     /// The transport the connection uses, once `hosts` are known: a plaintext
     /// transport is returned only when every host is one it permits. A
-    /// development-only transport is readable with `witness` alone. A name is
-    /// resolved here, once, so a later re-resolution by the driver is outside
-    /// the check; a name that does not resolve is refused.
+    /// development-only transport is readable with `witness` alone. A name,
+    /// `localhost` included, is resolved here, once, so a later re-resolution
+    /// by the driver is outside the check; a name that does not resolve is
+    /// refused.
     pub fn plaintext_permitted(
         &self,
         hosts: &[DatabaseHost],
@@ -467,7 +468,7 @@ pub(crate) fn plaintext_permitted_with(
     let permitted = |host: &DatabaseHost| match (transport, host) {
         (DatabaseTransport::VerifiedTls, _) | (_, DatabaseHost::Unix) => true,
         (DatabaseTransport::LoopbackPlaintext, DatabaseHost::Tcp(name)) => {
-            registry_platform_loopback::loopback_host(name).is_some()
+            loopback_database_host(name, resolve)
         }
         (DatabaseTransport::PrivateNetworkPlaintext, DatabaseHost::Tcp(name)) => {
             private_network_host(name, resolve)
@@ -480,13 +481,30 @@ pub(crate) fn plaintext_permitted_with(
     }
 }
 
+/// Whether `name` is a loopback address literal, or the name `localhost`
+/// resolving, and resolving only, to loopback addresses. The PostgreSQL
+/// driver resolves a name itself, so `localhost` is looked up here with the
+/// same resolver rather than trusted by its spelling.
+fn loopback_database_host(
+    name: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> bool {
+    match registry_platform_loopback::loopback_host(name) {
+        Some(host @ registry_platform_loopback::LoopbackHost::LocalhostName) => {
+            resolve(name).is_ok_and(|addresses| host.pinned_by(&addresses))
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
 /// Whether `name` is loopback, a private IPv4 address, an IPv6 unique local
 /// address, or a name that resolves, and resolves only, to such addresses.
 fn private_network_host(
     name: &str,
     resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
 ) -> bool {
-    if registry_platform_loopback::loopback_host(name).is_some() {
+    if loopback_database_host(name, resolve) {
         return true;
     }
     let literal = name

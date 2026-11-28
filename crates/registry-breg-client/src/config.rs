@@ -1,3 +1,4 @@
+use crate::PeerPolicy;
 use std::{fmt, sync::Arc, time::Duration};
 
 use registry_platform_httputil::client::{
@@ -14,6 +15,7 @@ use crate::{
 /// Transport policy for one Base Registry Engine deployment.
 #[derive(Clone)]
 pub struct BaseRegistryClientConfig {
+    pub(crate) peer_policy: PeerPolicy,
     pub(crate) base_url: Url,
     pub(crate) token_provider: Option<Arc<dyn TokenProvider>>,
     pub(crate) attempt_timeout: Duration,
@@ -25,9 +27,14 @@ pub struct BaseRegistryClientConfig {
 }
 
 impl BaseRegistryClientConfig {
+    pub fn new_without_peer_policy(base_url: Url) -> Self {
+        Self::new(base_url, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     #[must_use]
-    pub fn new(base_url: Url) -> Self {
+    pub fn new(base_url: Url, peer_policy: PeerPolicy) -> Self {
         Self {
+            peer_policy,
             base_url,
             token_provider: None,
             attempt_timeout: DEFAULT_ATTEMPT_TIMEOUT,
@@ -137,7 +144,7 @@ mod tests {
 
     #[test]
     fn debug_and_validation_never_render_configuration_values() {
-        let config = BaseRegistryClientConfig::new(
+        let config = BaseRegistryClientConfig::new_without_peer_policy(
             Url::parse("https://sensitive-server-canary.invalid/private-prefix")
                 .expect("fixture URL"),
         )
@@ -149,7 +156,7 @@ mod tests {
         assert!(!rendered.contains("certificate-material-canary"));
         assert!(!rendered.contains("sensitive-user-agent-canary"));
 
-        let invalid = BaseRegistryClientConfig::new(
+        let invalid = BaseRegistryClientConfig::new_without_peer_policy(
             Url::parse("https://secret-user:secret-password@example.invalid/")
                 .expect("fixture URL"),
         );
@@ -162,7 +169,7 @@ mod tests {
     #[test]
     fn the_mutation_retry_count_is_bounded() {
         let url = Url::parse("https://registry.example.invalid/").expect("fixture URL");
-        let error = BaseRegistryClientConfig::new(url.clone())
+        let error = BaseRegistryClientConfig::new_without_peer_policy(url.clone())
             .with_maximum_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1)
             .validate()
             .expect_err("a retry count above the bound is refused");
@@ -173,13 +180,15 @@ mod tests {
             }
         ));
         for retries in 0..=MAXIMUM_MUTATION_RETRIES {
-            assert!(BaseRegistryClientConfig::new(url.clone())
-                .with_maximum_mutation_retries(retries)
-                .validate()
-                .is_ok());
+            assert!(
+                BaseRegistryClientConfig::new_without_peer_policy(url.clone())
+                    .with_maximum_mutation_retries(retries)
+                    .validate()
+                    .is_ok()
+            );
         }
         assert_eq!(
-            BaseRegistryClientConfig::new(url).maximum_mutation_retries,
+            BaseRegistryClientConfig::new_without_peer_policy(url).maximum_mutation_retries,
             DEFAULT_MUTATION_RETRIES
         );
     }
@@ -188,10 +197,10 @@ mod tests {
     fn the_response_bound_keeps_its_default_and_refuses_zero() {
         let url = Url::parse("https://registry.example.invalid/").expect("fixture URL");
         assert_eq!(
-            BaseRegistryClientConfig::new(url.clone()).maximum_response_bytes,
+            BaseRegistryClientConfig::new_without_peer_policy(url.clone()).maximum_response_bytes,
             DEFAULT_MAXIMUM_RESPONSE_BYTES
         );
-        assert!(BaseRegistryClientConfig::new(url)
+        assert!(BaseRegistryClientConfig::new_without_peer_policy(url)
             .with_maximum_response_bytes(0)
             .validate()
             .is_err());

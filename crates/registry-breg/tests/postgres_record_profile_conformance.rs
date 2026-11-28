@@ -229,7 +229,7 @@ async fn breg_client_executes_metadata_bound_direct_writes_against_real_postgres
     let token = harness.token("asset-management", &[]);
     let http_server = harness.serve_http().await;
     let client = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(
+        BaseRegistryClientConfig::new_without_peer_policy(
             http_server
                 .base_url()
                 .parse()
@@ -533,19 +533,23 @@ async fn exercise_breg_client(
     protected: &Value,
 ) {
     let public_client = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(base_url.parse().expect("pilot loopback URL parses"))
-            .with_token_provider(Arc::new(
-                StaticToken::new(public_reader_token)
-                    .expect("MockIdp token is an outbound bearer value"),
-            )),
+        BaseRegistryClientConfig::new_without_peer_policy(
+            base_url.parse().expect("pilot loopback URL parses"),
+        )
+        .with_token_provider(Arc::new(
+            StaticToken::new(public_reader_token)
+                .expect("MockIdp token is an outbound bearer value"),
+        )),
     )
     .expect("public reader Base Registry Engine client config is valid");
     let protected_client = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(base_url.parse().expect("pilot loopback URL parses"))
-            .with_token_provider(Arc::new(
-                StaticToken::new(protected_reader_token)
-                    .expect("MockIdp token is an outbound bearer value"),
-            )),
+        BaseRegistryClientConfig::new_without_peer_policy(
+            base_url.parse().expect("pilot loopback URL parses"),
+        )
+        .with_token_provider(Arc::new(
+            StaticToken::new(protected_reader_token)
+                .expect("MockIdp token is an outbound bearer value"),
+        )),
     )
     .expect("protected Base Registry Engine client config is valid");
 

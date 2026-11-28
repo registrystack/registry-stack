@@ -82,6 +82,10 @@ fn error(source: DiscoveryClientError) -> Error {
             "status": status,
             "message": "Discovery refused or failed the request with an unrecognized problem type"
         }),
+        DiscoveryClientError::DevelopmentPeer => json!({
+            "kind": "development-peer",
+            "message": DiscoveryClientError::DevelopmentPeer.to_string(),
+        }),
         DiscoveryClientError::Protocol => json!({
             "kind": "protocol",
             "message": "the Discovery response did not satisfy its closed wire contract"
@@ -193,7 +197,10 @@ impl DiscoveryClient {
         };
         let base_url = url::Url::parse(&options.base_url)
             .map_err(|_| error(DiscoveryClientError::Configuration))?;
-        let mut config = DiscoveryClientConfig::new(base_url);
+        let mut config = DiscoveryClientConfig::new(
+            base_url,
+            registry_discovery_client::PeerPolicy::AcceptDevelopmentPeer,
+        );
         if let Some(milliseconds) = options.attempt_timeout_milliseconds {
             config = config.with_attempt_timeout(Duration::from_millis(u64::from(positive_u32(
                 milliseconds,

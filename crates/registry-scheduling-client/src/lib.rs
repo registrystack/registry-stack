@@ -50,6 +50,7 @@ pub use config::SchedulingClientConfig;
 pub use error::{SchedulingClientError, SchedulingProtocolFailure};
 pub use model::{SchedulingAuth, SchedulingComplete};
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
+pub use registry_platform_httputil::PeerPolicy;
 pub use registry_scheduling_core::{
     type_uri, AdditionalAllocationRequest, AdmissionRequest, AllocationDocument,
     AllocationRequirementDocument, AppointmentDocument, AppointmentHistoryEntryDocument,

@@ -527,7 +527,8 @@ pub fn config_from_parts(
 ) -> Result<BaseRegistryClientConfig, ConfigError> {
     let base_url =
         Url::parse(base_url).map_err(|_| ConversionError::new("base_url must be a valid URL"))?;
-    let mut config = BaseRegistryClientConfig::new(base_url);
+    let mut config =
+        BaseRegistryClientConfig::new(base_url, breg_client_sdk::PeerPolicy::AcceptDevelopmentPeer);
     if let Some(provider) = authorization_provider(authorization, roots)? {
         config = config.with_token_provider(provider);
     }

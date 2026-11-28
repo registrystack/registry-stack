@@ -352,9 +352,11 @@ fn install_delegated_profile(project: &Path) {
 }
 
 fn client(base_url: &Url, token: String) -> BaseRegistryClient {
-    BaseRegistryClient::new(BaseRegistryClientConfig::new(base_url.clone()))
-        .expect("native BReg client")
-        .with_bearer_token(BearerToken::new(token).expect("synthetic BReg bearer token"))
+    BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+        base_url.clone(),
+    ))
+    .expect("native BReg client")
+    .with_bearer_token(BearerToken::new(token).expect("synthetic BReg bearer token"))
 }
 fn map(value: Value) -> Map<String, Value> {
     value.as_object().expect("fixture object").clone()

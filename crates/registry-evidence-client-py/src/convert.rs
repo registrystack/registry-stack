@@ -987,8 +987,13 @@ pub fn config_from_parts_with_authorization_durations(
         token_provider_from_json(token)?
     };
 
-    let mut config =
-        EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
+    let mut config = EvidenceClientConfig::new(
+        base_url,
+        token_provider,
+        trusted_jwks,
+        revoked_key_ids,
+        evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+    );
 
     if let Some(timeout) = request_timeout {
         config = config.with_attempt_timeout(timeout);
@@ -1133,7 +1138,7 @@ pub fn map_config_error(error: &ConfigError) -> MappedError {
 ///
 /// Never included: response bytes, a credential, a header value, a selector
 /// value, or a subject binding. Every message here is `Display` text over
-/// fixed, non-secret reasons; none of the ten kinds can carry one of those.
+/// fixed, non-secret reasons; none of the error kinds can carry one of those.
 pub fn map_client_error(error: &EvidenceClientError) -> MappedError {
     let mut mapped = MappedError::bare(error.kind(), error.to_string());
     mapped.trace_id = error.trace_id().map(str::to_owned);
@@ -2201,7 +2206,7 @@ mod tests {
     }
 
     /// The discriminant is what the Python exception's `kind` attribute
-    /// carries, so every one of the ten stable names must map to itself.
+    /// carries, so every one of the stable names must map to itself.
     /// `EvidenceClientError` is `#[non_exhaustive]` at the enum level, which
     /// only bears on match exhaustiveness (a wildcard arm is required
     /// elsewhere in this module); it does not block constructing a
@@ -2210,6 +2215,7 @@ mod tests {
     #[test]
     fn map_client_error_reports_every_stable_kind() {
         let cases: Vec<(EvidenceClientError, &str)> = vec![
+            (EvidenceClientError::DevelopmentPeer, "development-peer"),
             (
                 EvidenceClientError::Configuration { reason: "unusable" },
                 "configuration",

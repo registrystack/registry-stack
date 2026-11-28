@@ -1023,8 +1023,13 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
 
     let token_provider = token_provider_from_json(object)?;
 
-    let mut config =
-        EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
+    let mut config = EvidenceClientConfig::new(
+        base_url,
+        token_provider,
+        trusted_jwks,
+        revoked_key_ids,
+        registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer,
+    );
 
     if let Some(millis) =
         optional_u64(object, "attemptTimeoutMilliseconds").map_err(ConfigError::Shape)?
@@ -1098,7 +1103,7 @@ pub fn map_config_error(error: &ConfigError) -> Value {
 ///
 /// Never included: response bytes, a credential, a header value, a selector
 /// value, or a subject binding. Every message here is `Display` text over
-/// fixed, non-secret reasons; none of the ten kinds can carry one of those.
+/// fixed, non-secret reasons; none of the kinds can carry one of those.
 pub fn map_client_error(error: &EvidenceClientError) -> Value {
     let mut fields = Map::new();
     fields.insert("kind".to_owned(), Value::String(error.kind().to_owned()));
@@ -2397,11 +2402,11 @@ mod tests {
         assert_eq!(protocol["status"], 500);
     }
 
-    /// The discriminant is what a caller branches on, so every one of the
-    /// ten stable kinds is distinct.
+    /// Each failure has a distinct stable kind.
     #[test]
     fn every_client_failure_reports_a_distinct_kind() {
         let errors = [
+            EvidenceClientError::DevelopmentPeer,
             EvidenceClientError::Configuration { reason: "unusable" },
             EvidenceClientError::Nonce(registry_evidence_client::NonceError::Entropy),
             EvidenceClientError::Token(TokenError::Unavailable),

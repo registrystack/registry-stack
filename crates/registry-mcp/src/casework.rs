@@ -49,7 +49,8 @@ impl CaseworkOptions {
         }
         // Client construction validates the service origin before any credential acquisition.
         CaseworkClient::new(
-            CaseworkClientConfig::new(base_url.clone()).with_maximum_mutation_retries(0),
+            CaseworkClientConfig::new_without_peer_policy(base_url.clone())
+                .with_maximum_mutation_retries(0),
         )
         .map_err(|_| InvalidCaseworkBinding)?;
         Ok(Self {
@@ -69,7 +70,8 @@ pub(crate) struct CaseworkProvider {
 impl CaseworkProvider {
     pub(crate) fn new(options: CaseworkOptions) -> Result<Self, InvalidCaseworkBinding> {
         let client = CaseworkClient::new(
-            CaseworkClientConfig::new(options.base_url.clone()).with_maximum_mutation_retries(0),
+            CaseworkClientConfig::new_without_peer_policy(options.base_url.clone())
+                .with_maximum_mutation_retries(0),
         )
         .map_err(|_| InvalidCaseworkBinding)?;
         Ok(Self { client, options })

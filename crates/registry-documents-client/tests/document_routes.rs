@@ -22,7 +22,7 @@ use registry_documents_client::{
 use support::*;
 
 fn config(url: &url::Url) -> DocumentsClientConfig {
-    DocumentsClientConfig::new(url.clone())
+    DocumentsClientConfig::new_without_peer_policy(url.clone())
 }
 
 fn reservation_request() -> ReserveDocumentRequest {

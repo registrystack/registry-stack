@@ -22,7 +22,7 @@ use support::*;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 fn config(url: &url::Url) -> DocumentsClientConfig {
-    DocumentsClientConfig::new(url.clone())
+    DocumentsClientConfig::new_without_peer_policy(url.clone())
 }
 
 fn reservation_request() -> ReserveDocumentRequest {

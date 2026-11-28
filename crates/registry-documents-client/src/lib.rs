@@ -44,4 +44,5 @@ pub use registry_documents_core::{
     DOCUMENTS_PROBLEM_TYPE_BASE, HEALTH_PATH, MAXIMUM_LABEL_BYTES, MAXIMUM_PAGE_SIZE,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
+pub use registry_platform_httputil::PeerPolicy;
 pub use registry_platform_yaml::{Digest, ExternalId, LocalId};

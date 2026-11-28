@@ -98,7 +98,8 @@ fn client_and_runtime(
     access_token_file: &Path,
 ) -> Result<(BaseRegistryClient, tokio::runtime::Runtime), StatisticsLifecycleError> {
     let base_url = Url::parse(breg_url).map_err(|_| StatisticsLifecycleError::BRegUrl)?;
-    let config = BaseRegistryClientConfig::new(base_url).with_user_agent(STATISTICS_USER_AGENT);
+    let config = BaseRegistryClientConfig::new_without_peer_policy(base_url)
+        .with_user_agent(STATISTICS_USER_AGENT);
     let client = BaseRegistryClient::new(config).map_err(|_| StatisticsLifecycleError::BRegUrl)?;
     let token =
         read_access_token(access_token_file).map_err(|_| StatisticsLifecycleError::Token)?;

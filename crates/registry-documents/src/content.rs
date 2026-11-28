@@ -161,7 +161,7 @@ impl ContentStorage {
             }),
             StorageConfig::S3 { settings, .. } => {
                 let ceiling = config.maximum_document_bytes();
-                let settings = S3Settings::from_config(settings)?;
+                let settings = S3Settings::from_config_without_peer_policy(settings)?;
                 let deployment = settings
                     .activate(s3_namespace(ceiling), database_id, &resolver)
                     .await?;

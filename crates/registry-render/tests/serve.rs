@@ -1797,7 +1797,7 @@ fn maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals() {
     );
     std::fs::write(&runtime_path, runtime_text).unwrap();
     let server = start_server(&runtime_path);
-    let client = RenderClient::new(RenderClientConfig::new(format!(
+    let client = RenderClient::new_without_peer_policy(RenderClientConfig::new(format!(
         "http://127.0.0.1:{}",
         server.port
     )))

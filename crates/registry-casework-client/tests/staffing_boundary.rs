@@ -85,7 +85,7 @@ async fn staffing_selectors_and_preview_ids_cross_the_exact_public_routes() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/tenant")).unwrap(),
     ))
     .unwrap();
@@ -232,7 +232,7 @@ async fn delegated_staff_read_uses_only_its_dedicated_route_and_policy_header() 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/tenant")).unwrap(),
     ))
     .unwrap();
@@ -263,7 +263,7 @@ async fn delegated_staff_read_uses_only_its_dedicated_route_and_policy_header() 
 }
 #[tokio::test]
 async fn invalid_staffing_inputs_fail_before_io() {
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse("http://127.0.0.1:1/").unwrap(),
     ))
     .unwrap();
@@ -353,7 +353,7 @@ async fn staffing_pages_refuse_duplicate_tasks_and_substituted_ordering() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = CaseworkClient::new(CaseworkClientConfig::new(
+        let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/")).unwrap(),
         ))
         .unwrap();
@@ -379,7 +379,7 @@ async fn staffing_pages_refuse_duplicate_tasks_and_substituted_ordering() {
 
 #[tokio::test]
 async fn decision_and_private_draft_bounds_fail_before_io() {
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse("http://127.0.0.1:1/").unwrap(),
     ))
     .unwrap();
@@ -442,7 +442,7 @@ async fn draft_response_json_rejects_duplicate_members_in_arbitrary_private_body
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).unwrap(),
     ))
     .unwrap();
@@ -515,7 +515,7 @@ async fn paged_reads_refuse_a_stopped_page_without_a_cursor() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = CaseworkClient::new(CaseworkClientConfig::new(
+        let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/")).unwrap(),
         ))
         .unwrap();
@@ -610,7 +610,7 @@ async fn uuid_paged_reads_refuse_a_nil_cursor() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).unwrap(),
     ))
     .unwrap();
@@ -781,7 +781,7 @@ async fn plain_reads_refuse_non_200_success_in_one_exchange() {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-            let client = CaseworkClient::new(CaseworkClientConfig::new(
+            let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
                 Url::parse(&format!("http://{address}")).unwrap(),
             ))
             .unwrap();

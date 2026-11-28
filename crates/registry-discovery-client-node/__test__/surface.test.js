@@ -131,8 +131,9 @@ function acceptsExpectedEvidence(candidate) {
     && resolution.mappingAuthorityId === expectedResolution.mappingAuthorityId;
 }
 
-test('search, resolve, and inert exact selection use the Rust client', async () => {
+test('search, resolve, and inert exact selection accept a development peer', async () => {
   const server = http.createServer((request, response) => {
+    response.setHeader('registry-posture', 'development');
     response.setHeader('content-type', 'application/json');
     if (request.method === 'GET' && request.url.startsWith('/v1/services')) {
       response.end(JSON.stringify({

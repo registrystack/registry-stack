@@ -8,7 +8,8 @@
 //! `Content-Type`, `Accept: application/json`, and `x-content-sha256` set to
 //! the lowercase hex SHA-256 of the body. Only a `200` whose body is at most
 //! 1024 bytes and exactly `{"verdict":"approved"}` or
-//! `{"verdict":"rejected"}` is a verdict; every other outcome is
+//! `{"verdict":"rejected"}` is a verdict. A refused peer posture returns
+//! [`VerifierError::DevelopmentPeer`]. Other unsuccessful exchanges return
 //! [`VerifierError::Unavailable`]. The `policyId` is not sent: it names the
 //! scanner and rules generation the operator bound the URL to, and enters
 //! only the binding digest a product records beside each verdict.
@@ -18,8 +19,9 @@ use std::{fmt, time::Duration};
 use registry_platform_config::{
     AttachmentVerifierConfig, ProtectedSecret, SecretReference, SecretResolver,
 };
+use registry_platform_httputil::client::transport_protects_the_credential;
 use registry_platform_httputil::{
-    read_bounded, validate_response_headers_without_peer_policy, OutboundClientBuilder,
+    read_bounded, validate_response_headers, OutboundClientBuilder, PeerPolicy, ResponseHeaderError,
 };
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -40,6 +42,11 @@ const MAXIMUM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Verifier failures carry no URLs, credentials or verifier responses.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum VerifierError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("content verification configuration is invalid")]
     InvalidConfiguration,
     #[error("content verification secret resolution failed")]
@@ -92,6 +99,7 @@ impl VerifierNamespace {
 /// Validated, unresolved verifier settings. Debug never reveals deployment values.
 #[derive(Clone)]
 pub struct HttpVerifierSettings {
+    peer_policy: PeerPolicy,
     url: Url,
     authorization_ref: SecretReference,
     policy_id: String,
@@ -99,17 +107,18 @@ pub struct HttpVerifierSettings {
 }
 
 impl HttpVerifierSettings {
+    /// Refuses development peers. Use [`Self::from_config`] to choose the policy.
+    pub fn from_config_without_peer_policy(config: &AttachmentVerifierConfig) -> Result<Self> {
+        Self::from_config(config, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     /// Refuse what the shared block's decode does not: a non-loopback `http`
     /// URL, a URL with a fragment or surrounding whitespace, and a
     /// `policyId` that is empty, longer than 128 bytes, or not printable
     /// ASCII.
-    pub fn from_config(config: &AttachmentVerifierConfig) -> Result<Self> {
+    pub fn from_config(config: &AttachmentVerifierConfig, peer_policy: PeerPolicy) -> Result<Self> {
         let text = config.url.as_str();
         let url = Url::parse(text).map_err(|_| VerifierError::InvalidConfiguration)?;
-        let loopback = url
-            .host_str()
-            .and_then(registry_platform_httputil::loopback::loopback_literal)
-            .is_some();
         let policy_id = config.policy_id.as_str();
         if text.len() > MAXIMUM_URL_BYTES
             || text.trim() != text
@@ -118,7 +127,7 @@ impl HttpVerifierSettings {
             || !url.username().is_empty()
             || url.password().is_some()
             || url.fragment().is_some()
-            || !(url.scheme() == "https" || (url.scheme() == "http" && loopback))
+            || !transport_protects_the_credential(&url)
             || policy_id.is_empty()
             || policy_id.len() > MAXIMUM_POLICY_ID_BYTES
             || !policy_id.bytes().all(|b| b.is_ascii_graphic())
@@ -126,6 +135,7 @@ impl HttpVerifierSettings {
             return Err(VerifierError::InvalidConfiguration);
         }
         Ok(Self {
+            peer_policy,
             url,
             authorization_ref: config.authorization_ref.clone(),
             policy_id: policy_id.to_owned(),
@@ -154,6 +164,7 @@ impl HttpVerifierSettings {
             return Err(VerifierError::Secret);
         }
         Ok(HttpVerifier {
+            peer_policy: self.peer_policy,
             client: OutboundClientBuilder::new()
                 .timeout(self.timeout)
                 .connect_timeout(connect_timeout(self.timeout))
@@ -190,6 +201,7 @@ fn binding_digest(namespace: VerifierNamespace, url: &Url, policy_id: &str) -> R
 
 /// One activated verifier.
 pub struct HttpVerifier {
+    peer_policy: PeerPolicy,
     client: reqwest::Client,
     namespace: VerifierNamespace,
     url: Url,
@@ -227,8 +239,12 @@ impl HttpVerifier {
             .send()
             .await
             .map_err(|_| VerifierError::Unavailable)?;
-        validate_response_headers_without_peer_policy(response.headers())
-            .map_err(|_| VerifierError::Unavailable)?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => VerifierError::DevelopmentPeer,
+                _ => VerifierError::Unavailable,
+            },
+        )?;
         if response.status() != StatusCode::OK {
             return Err(VerifierError::Unavailable);
         }

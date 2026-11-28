@@ -41,7 +41,7 @@ async fn breg_transient_http_failures_are_retryable_without_retrying_inside_an_a
             .expect(2)
             .mount(&server)
             .await;
-        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
             url::Url::parse(&server.uri()).unwrap(),
         ))
         .unwrap();

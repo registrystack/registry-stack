@@ -15,6 +15,11 @@ pub use registry_platform_httputil::TransportKind;
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvidenceClientError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     /// The client configuration or the request specification is unusable. The
     /// reason is fixed text chosen here, never caller data.
     #[error("the client cannot be used as configured: {reason}")]
@@ -111,6 +116,7 @@ impl EvidenceClientError {
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
+            Self::DevelopmentPeer => "development-peer",
             Self::Configuration { .. } => "configuration",
             Self::Nonce(_) => "nonce",
             Self::Token(_) => "token",

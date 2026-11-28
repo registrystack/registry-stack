@@ -43,9 +43,11 @@ impl TokenProvider for CountingToken {
 
 fn client(server: &MockServer, token: Arc<CountingToken>) -> BaseRegistryClient {
     BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(format!("{}/tenant/base/", server.uri()).parse().unwrap())
-            .with_token_provider(token)
-            .with_maximum_mutation_retries(0),
+        BaseRegistryClientConfig::new_without_peer_policy(
+            format!("{}/tenant/base/", server.uri()).parse().unwrap(),
+        )
+        .with_token_provider(token)
+        .with_maximum_mutation_retries(0),
     )
     .unwrap()
 }
@@ -571,10 +573,12 @@ async fn configured_adapter_requires_preparation_and_never_reconciles_by_sending
 
 fn bounded_client(server: &MockServer, token: Arc<CountingToken>) -> BaseRegistryClient {
     BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(format!("{}/tenant/base/", server.uri()).parse().unwrap())
-            .with_token_provider(token)
-            .with_maximum_response_bytes(65_536)
-            .with_maximum_mutation_retries(0),
+        BaseRegistryClientConfig::new_without_peer_policy(
+            format!("{}/tenant/base/", server.uri()).parse().unwrap(),
+        )
+        .with_token_provider(token)
+        .with_maximum_response_bytes(65_536)
+        .with_maximum_mutation_retries(0),
     )
     .unwrap()
 }

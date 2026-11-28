@@ -1,3 +1,4 @@
+use crate::PeerPolicy;
 use std::{fmt, time::Duration};
 
 use registry_platform_httputil::client::{
@@ -13,6 +14,7 @@ const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct CaseworkClientConfig {
+    pub(crate) peer_policy: PeerPolicy,
     pub(crate) base_url: Url,
     pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
@@ -23,9 +25,14 @@ pub struct CaseworkClientConfig {
 }
 
 impl CaseworkClientConfig {
+    pub fn new_without_peer_policy(base_url: Url) -> Self {
+        Self::new(base_url, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     #[must_use]
-    pub fn new(base_url: Url) -> Self {
+    pub fn new(base_url: Url, peer_policy: PeerPolicy) -> Self {
         Self {
+            peer_policy,
             base_url,
             attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
@@ -136,7 +143,7 @@ mod tests {
 
     #[test]
     fn debug_withholds_url_and_certificate_material() {
-        let config = CaseworkClientConfig::new(
+        let config = CaseworkClientConfig::new_without_peer_policy(
             Url::parse("https://secret.example.invalid/private").expect("fixture URL"),
         )
         .with_user_agent("secret-agent")
@@ -151,20 +158,20 @@ mod tests {
     #[test]
     fn the_mutation_retry_count_is_bounded_before_any_client_exists() {
         let url = Url::parse("https://casework.example.invalid/").expect("fixture URL");
-        let excessive_retries = CaseworkClientConfig::new(url.clone())
+        let excessive_retries = CaseworkClientConfig::new_without_peer_policy(url.clone())
             .with_maximum_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1);
         assert!(matches!(
             excessive_retries.validate(),
             Err(CaseworkClientError::Configuration { .. })
         ));
         for retries in 0..=MAXIMUM_MUTATION_RETRIES {
-            assert!(CaseworkClientConfig::new(url.clone())
+            assert!(CaseworkClientConfig::new_without_peer_policy(url.clone())
                 .with_maximum_mutation_retries(retries)
                 .validate()
                 .is_ok());
         }
         assert_eq!(
-            CaseworkClientConfig::new(url).maximum_mutation_retries,
+            CaseworkClientConfig::new_without_peer_policy(url).maximum_mutation_retries,
             DEFAULT_MUTATION_RETRIES
         );
     }
@@ -174,13 +181,13 @@ mod tests {
         let url = Url::parse("https://casework.example.invalid/").expect("fixture URL");
         for maximum in [0, MAXIMUM_RESPONSE_BYTES + 1] {
             assert!(matches!(
-                CaseworkClientConfig::new(url.clone())
+                CaseworkClientConfig::new_without_peer_policy(url.clone())
                     .with_maximum_response_bytes(maximum)
                     .validate(),
                 Err(CaseworkClientError::Configuration { .. })
             ));
         }
-        assert!(CaseworkClientConfig::new(url)
+        assert!(CaseworkClientConfig::new_without_peer_policy(url)
             .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES)
             .validate()
             .is_ok());

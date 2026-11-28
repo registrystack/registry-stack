@@ -231,7 +231,9 @@ fn read_failure(error: CaseworkClientError) -> CallOutcome {
         {
             retryable("transport-unavailable")
         }
-        CaseworkClientError::Protocol { .. } => refused("invalid-response"),
+        CaseworkClientError::Protocol { .. } | CaseworkClientError::DevelopmentPeer => {
+            refused("invalid-response")
+        }
         CaseworkClientError::Problem {
             status: 401 | 403, ..
         } => refused("product-forbidden"),
@@ -245,9 +247,11 @@ fn read_failure(error: CaseworkClientError) -> CallOutcome {
 /// same-key recovery an operator chooses.
 fn failure(error: CaseworkClientError) -> CallOutcome {
     match error {
-        CaseworkClientError::Protocol { .. } => CallOutcome::Uncertain {
-            code: "invalid-response".into(),
-        },
+        CaseworkClientError::Protocol { .. } | CaseworkClientError::DevelopmentPeer => {
+            CallOutcome::Uncertain {
+                code: "invalid-response".into(),
+            }
+        }
         CaseworkClientError::Problem {
             code: CaseworkProblemCode::IdempotencyExpired,
             ..
@@ -263,5 +267,28 @@ fn failure(error: CaseworkClientError) -> CallOutcome {
         CaseworkClientError::Problem { status: 404, .. } => refused("product-not-found"),
         CaseworkClientError::InvalidRequest { .. } => refused("invalid-command"),
         _ => refused("product-refused"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{failure, read_failure};
+    use crate::protocol::CallOutcome;
+    use registry_casework_client::CaseworkClientError;
+
+    #[test]
+    fn a_development_peer_read_is_refused_as_an_invalid_response() {
+        assert!(matches!(
+            read_failure(CaseworkClientError::DevelopmentPeer),
+            CallOutcome::Refused { code } if code == "invalid-response"
+        ));
+    }
+
+    #[test]
+    fn a_development_peer_on_a_keyed_review_call_holds_the_step_as_an_invalid_response() {
+        assert!(matches!(
+            failure(CaseworkClientError::DevelopmentPeer),
+            CallOutcome::Uncertain { code } if code == "invalid-response"
+        ));
     }
 }

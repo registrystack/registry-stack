@@ -529,7 +529,7 @@ async fn review_completion_authentication_refusals_use_the_registered_problem() 
     .build_pool()
     .expect("test pool builds");
     let review_client = || {
-        ReviewClient::new(ReviewClientConfig::new(
+        ReviewClient::new(ReviewClientConfig::new_without_peer_policy(
             "https://review.example.invalid/"
                 .parse()
                 .expect("reserved HTTPS URL"),

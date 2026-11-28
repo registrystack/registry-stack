@@ -365,9 +365,11 @@ impl ReviewResultSource for LiveApproval {
     }
 }
 fn review_binding_for_policy(producer_id: &str, policy_id: &str) -> Arc<ReviewAuthorityRegistry> {
-    let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-        "http://127.0.0.1:9/".parse().unwrap(),
-    ))
+    let client = ReviewClient::new(
+        registry_review_client::ReviewClientConfig::new_without_peer_policy(
+            "http://127.0.0.1:9/".parse().unwrap(),
+        ),
+    )
     .unwrap();
     let authority = Arc::new(
         ReviewAuthorityClient::new(
@@ -461,20 +463,22 @@ async fn start_proposal(
         .value
         .data
         .record_identifier;
-    let registrar = BaseRegistryClient::new(BaseRegistryClientConfig::new(breg_url.clone()))
-        .unwrap()
-        .with_bearer_token(
-            BearerToken::new(minted(
-                idp,
-                json!(BREG_AUDIENCE),
-                "facility-registrar",
-                "registrar-client",
-                "registry:facility:register",
-                "human",
-                Some("facility-administration"),
-            ))
-            .unwrap(),
-        );
+    let registrar = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+        breg_url.clone(),
+    ))
+    .unwrap()
+    .with_bearer_token(
+        BearerToken::new(minted(
+            idp,
+            json!(BREG_AUDIENCE),
+            "facility-registrar",
+            "registrar-client",
+            "registry:facility:register",
+            "human",
+            Some("facility-administration"),
+        ))
+        .unwrap(),
+    );
     let action = registrar
         .registry_contract(Some("facility-registrar"))
         .await
@@ -547,9 +551,11 @@ fn author_token(idp: &MockIdp, subject: &str) -> String {
 }
 
 fn author_client(url: &Url, idp: &MockIdp) -> BaseRegistryClient {
-    BaseRegistryClient::new(BaseRegistryClientConfig::new(url.clone()))
-        .unwrap()
-        .with_bearer_token(BearerToken::new(author_token(idp, "facility-author")).unwrap())
+    BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+        url.clone(),
+    ))
+    .unwrap()
+    .with_bearer_token(BearerToken::new(author_token(idp, "facility-author")).unwrap())
 }
 
 async fn progress_status(author: &BaseRegistryClient, proposal: &BRegProposal) -> Value {
@@ -765,9 +771,11 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
         BregContextProvider::new(
             "facility".into(),
             native,
-            BaseRegistryClient::new(BaseRegistryClientConfig::new(breg_url.clone()))
-                .unwrap()
-                .with_bearer_token(BearerToken::new(status_token).unwrap()),
+            BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+                breg_url.clone(),
+            ))
+            .unwrap()
+            .with_bearer_token(BearerToken::new(status_token).unwrap()),
             "casework-review-status".into(),
         )
         .unwrap(),
@@ -827,9 +835,11 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
     live_approval
         .casework
         .set((
-            ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-                casework_url.clone(),
-            ))
+            ReviewClient::new(
+                registry_review_client::ReviewClientConfig::new_without_peer_policy(
+                    casework_url.clone(),
+                ),
+            )
             .unwrap(),
             HttpBearerToken::new(producer.clone()).unwrap(),
         ))
@@ -837,9 +847,11 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
     let authority = Arc::new(
         ReviewAuthorityClient::new(
             "casework".into(),
-            ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-                casework_url.clone(),
-            ))
+            ReviewClient::new(
+                registry_review_client::ReviewClientConfig::new_without_peer_policy(
+                    casework_url.clone(),
+                ),
+            )
             .unwrap(),
             Arc::new(StaticToken::new(producer).unwrap()),
             "requester".into(),
@@ -1067,20 +1079,21 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
         "approved {:?} review releases the independently authorized BReg application",
         pattern
     );
-    let author = BaseRegistryClient::new(BaseRegistryClientConfig::new(breg_url))
-        .unwrap()
-        .with_bearer_token(
-            BearerToken::new(minted(
-                &idp,
-                json!(BREG_AUDIENCE),
-                "facility-author",
-                "author-client",
-                "registry:facility:correction:submit",
-                "human",
-                Some("facility-administration"),
-            ))
-            .unwrap(),
-        );
+    let author =
+        BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(breg_url))
+            .unwrap()
+            .with_bearer_token(
+                BearerToken::new(minted(
+                    &idp,
+                    json!(BREG_AUDIENCE),
+                    "facility-author",
+                    "author-client",
+                    "registry:facility:correction:submit",
+                    "human",
+                    Some("facility-administration"),
+                ))
+                .unwrap(),
+            );
     assert_eq!(
         author.read_proposal(&proposal).await.unwrap().value.state(),
         BRegProposalState::Applied,
@@ -1153,9 +1166,11 @@ async fn native_proposal_journey(producer_id: &'static str) {
     );
     let authority = ReviewAuthorityClient::new(
         "casework".into(),
-        ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-            casework_url.clone(),
-        ))
+        ReviewClient::new(
+            registry_review_client::ReviewClientConfig::new_without_peer_policy(
+                casework_url.clone(),
+            ),
+        )
         .unwrap(),
         Arc::new(StaticToken::new(producer.clone()).unwrap()),
         "requester".into(),
@@ -1237,9 +1252,11 @@ async fn native_proposal_journey(producer_id: &'static str) {
         "service",
         Some("facility-review"),
     );
-    let breg_client = BaseRegistryClient::new(BaseRegistryClientConfig::new(breg_url.clone()))
-        .unwrap()
-        .with_bearer_token(BearerToken::new(status_token).unwrap());
+    let breg_client = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+        breg_url.clone(),
+    ))
+    .unwrap()
+    .with_bearer_token(BearerToken::new(status_token).unwrap());
     let provider = Arc::new(
         BregContextProvider::new(
             "facility".into(),
@@ -1320,9 +1337,11 @@ async fn native_proposal_journey(producer_id: &'static str) {
     assert!(live_approval
         .casework
         .set((
-            ReviewClient::new(registry_review_client::ReviewClientConfig::new(
-                casework_url.clone(),
-            ))
+            ReviewClient::new(
+                registry_review_client::ReviewClientConfig::new_without_peer_policy(
+                    casework_url.clone(),
+                )
+            )
             .unwrap(),
             HttpBearerToken::new(producer.clone()).unwrap(),
         ))

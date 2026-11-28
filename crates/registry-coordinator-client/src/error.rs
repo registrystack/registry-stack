@@ -16,6 +16,11 @@ pub enum CoordinatorProtocolFailure {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CoordinatorClientError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("Registry Coordinator client configuration is invalid: {reason}")]
     Configuration { reason: &'static str },
     #[error("Registry Coordinator client request is invalid: {reason}")]
@@ -45,6 +50,7 @@ impl CoordinatorClientError {
     #[must_use]
     pub fn is_outcome_unknown(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => true,
             Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
             Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
             Self::Problem { status, .. } => *status >= 500,
@@ -59,6 +65,7 @@ impl CoordinatorClientError {
     /// status line, still refuses to resend after a 4xx one.
     pub(crate) fn resend_may_settle(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => false,
             Self::Transport { kind } => {
                 matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
             }

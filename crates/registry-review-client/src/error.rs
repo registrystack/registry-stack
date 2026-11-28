@@ -131,6 +131,11 @@ impl fmt::Display for ReviewProblem {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ReviewClientError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("review client configuration is invalid: {reason}")]
     Configuration { reason: &'static str },
     #[error("review client request is invalid: {reason}")]
@@ -180,7 +185,8 @@ impl ReviewClientError {
             Self::Problem { status, .. } if *status < 500 => {
                 ReviewMutationErrorClass::Deterministic
             }
-            Self::Transport { .. }
+            Self::DevelopmentPeer
+            | Self::Transport { .. }
             | Self::Problem { .. }
             | Self::Protocol { .. }
             | Self::ProducerIdentityMismatch { .. } => ReviewMutationErrorClass::Ambiguous,

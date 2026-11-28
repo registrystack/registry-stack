@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::PeerPolicy;
 use std::fmt;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -9,7 +10,7 @@ use registry_platform_httputil::client::{
     send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers_without_peer_policy,
+    read_bounded, url::append_path_segments, validate_response_headers, ResponseHeaderError,
 };
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, AppointmentDocument,
@@ -57,6 +58,7 @@ const STATE_QUERY_PARAMETER: &str = "state";
 const PROFILE_QUERY_PARAMETER: &str = "profile";
 
 pub struct SchedulingClient {
+    peer_policy: PeerPolicy,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
@@ -85,6 +87,7 @@ impl SchedulingClient {
         })
         .map_err(|_| SchedulingClientError::configuration("the HTTP client could not be built"))?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             http,
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -775,13 +778,16 @@ impl SchedulingClient {
             .map_err(|error| SchedulingClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
-            protocol(
-                response.status(),
-                SchedulingProtocolFailure::HeaderBounds,
-                None,
-            )
-        })?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => SchedulingClientError::DevelopmentPeer,
+                _ => protocol(
+                    response.status(),
+                    SchedulingProtocolFailure::HeaderBounds,
+                    None,
+                ),
+            },
+        )?;
         Ok(response)
     }
 
@@ -1174,5 +1180,52 @@ mod tests {
         let precise = Utc.with_ymd_and_hms(2026, 10, 5, 2, 0, 0).unwrap()
             + chrono::Duration::milliseconds(250);
         assert_eq!(rfc3339(precise), "2026-10-05T02:00:00.250Z");
+    }
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move { (headers, r#"{}"#) }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    SchedulingClient::new(SchedulingClientConfig::new(url.clone(), policy))
+                        .unwrap();
+                let response = client.send(client.http.get(url.clone())).await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    assert!(matches!(
+                        response,
+                        Err(SchedulingClientError::DevelopmentPeer)
+                    ));
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
+        }
     }
 }

@@ -191,7 +191,7 @@ async fn serve(prefix: &str, fixture: &Fixture) -> (MessagingClient, tokio::task
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = MessagingClient::new(MessagingClientConfig::new(
+    let client = MessagingClient::new(MessagingClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}{prefix}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -732,7 +732,7 @@ async fn an_unreachable_service_is_a_transport_failure() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
     let address = listener.local_addr().expect("the bound address");
     drop(listener);
-    let client = MessagingClient::new(MessagingClientConfig::new(
+    let client = MessagingClient::new(MessagingClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -744,7 +744,7 @@ async fn an_unreachable_service_is_a_transport_failure() {
 
 #[test]
 fn an_unprotected_remote_base_url_is_refused_before_any_client_exists() {
-    let refused = MessagingClient::new(MessagingClientConfig::new(
+    let refused = MessagingClient::new(MessagingClientConfig::new_without_peer_policy(
         Url::parse("http://messaging.example.invalid/").expect("fixture URL"),
     ));
     assert!(matches!(

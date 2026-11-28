@@ -109,7 +109,7 @@ async fn serve(
     });
     let mut cfg = RenderClientConfig::new(base);
     config(&mut cfg);
-    (RenderClient::new(cfg).unwrap(), task)
+    (RenderClient::new_without_peer_policy(cfg).unwrap(), task)
 }
 async fn seal_with(
     status: u16,
@@ -491,7 +491,9 @@ async fn correlation_key_is_sent_and_must_be_echoed() {
         assert_eq!(error.kind, "protocol");
     }
     for key in ["", "has space", &"k".repeat(129)] {
-        let client = RenderClient::new(RenderClientConfig::new("http://127.0.0.1:1")).unwrap();
+        let client =
+            RenderClient::new_without_peer_policy(RenderClientConfig::new("http://127.0.0.1:1"))
+                .unwrap();
         let error = client
             .seal(
                 &BearerToken::new("canary-render-token").unwrap(),
@@ -544,7 +546,7 @@ async fn render_takes_the_same_correlation_key() {
     let task = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    let client = RenderClient::new(RenderClientConfig::new(base)).unwrap();
+    let client = RenderClient::new_without_peer_policy(RenderClientConfig::new(base)).unwrap();
     let token = BearerToken::new("canary-render-token").unwrap();
     let request = json!({"issuedAt":"2026-10-23T00:00:00Z","data":{}});
     for key in [Some("key-1"), None] {
@@ -554,7 +556,9 @@ async fn render_takes_the_same_correlation_key() {
     task.abort();
     assert_eq!(*received.lock().unwrap(), [Some("key-1".to_owned()), None]);
     for key in ["", "has space", &"k".repeat(129)] {
-        let client = RenderClient::new(RenderClientConfig::new("http://127.0.0.1:1")).unwrap();
+        let client =
+            RenderClient::new_without_peer_policy(RenderClientConfig::new("http://127.0.0.1:1"))
+                .unwrap();
         let error = client
             .render(&token, "receipt", &request, Some(key))
             .await
@@ -583,7 +587,7 @@ async fn a_broken_exchange_is_not_resent() {
                 .await;
         }
     });
-    let client = RenderClient::new(RenderClientConfig::new(origin)).unwrap();
+    let client = RenderClient::new_without_peer_policy(RenderClientConfig::new(origin)).unwrap();
     let error = client
         .seal(
             &BearerToken::new("canary-render-token").unwrap(),

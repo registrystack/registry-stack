@@ -968,7 +968,7 @@ impl NativeTimerHarness {
             .ok_or_else(|| "native timer replica does not exist".to_owned())?
             .command
             .clone();
-        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
             self.replicas[replica].base_url.clone(),
         ))
         .map_err(|error| format!("native timer readiness client failed: {error}"))?;
@@ -1771,7 +1771,7 @@ impl NativeTimerHarness {
         let token = BearerToken::new(self.token.clone())
             .map_err(|_| "native timer bearer token is invalid".to_owned())?;
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(base_url)
+            BaseRegistryClientConfig::new_without_peer_policy(base_url)
                 .with_attempt_timeout(attempt_timeout)
                 .with_connect_timeout(Duration::from_secs(2))
                 .with_maximum_mutation_retries(0),
@@ -3916,7 +3916,7 @@ impl NativeTimerHarness {
     }
 
     async fn wait_ready(&mut self, replica: usize) -> Result<(), String> {
-        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
             self.replicas[replica].base_url.clone(),
         ))
         .map_err(|error| format!("native timer readiness client failed: {error}"))?;

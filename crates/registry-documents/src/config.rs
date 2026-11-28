@@ -825,7 +825,7 @@ impl RuntimeConfig {
                 "storage.url must be an https URL",
                 "Write an https URL, or run the listener in development-loopback mode.",
             ));
-        } else if S3Settings::from_config(settings).is_err() {
+        } else if S3Settings::from_config_without_peer_policy(settings).is_err() {
             findings.push(Finding::new(
                 "documents.runtime.invalid-object-storage",
                 "/storage",
@@ -857,7 +857,7 @@ impl RuntimeConfig {
                 ));
             }
             ContentVerificationConfig::Http { settings }
-                if HttpVerifierSettings::from_config(settings).is_err() =>
+                if HttpVerifierSettings::from_config_without_peer_policy(settings).is_err() =>
             {
                 findings.push(Finding::new(
                     "documents.runtime.invalid-content-verification",

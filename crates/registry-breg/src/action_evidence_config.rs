@@ -106,7 +106,7 @@ pub fn activate(
         let jwks = registry_platform_crypto::parse_json_strict(keys.expose_secret())
             .map_err(|_| Error::InvalidBinding)?;
         let jwks = serde_json::from_value(jwks).map_err(|_| Error::InvalidBinding)?;
-        let mut config = registry_evidence_client::EvidenceClientConfig::new(
+        let mut config = registry_evidence_client::EvidenceClientConfig::new_without_peer_policy(
             binding
                 .base_url
                 .as_str()
