@@ -305,6 +305,9 @@ pub enum Command {
         )]
         signer_name: Option<String>,
     },
+    /// Generate files from a deployment's own configuration.
+    #[command(subcommand)]
+    Generate(GenerateCommand),
     /// Serve the HTTP rendering API (see the runtime YAML).
     Serve {
         /// Runtime configuration file.
@@ -326,6 +329,34 @@ pub enum Command {
     /// Hidden: one supervised render (used by `registry-render serve`).
     #[command(hide = true, name = "__worker")]
     Worker,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GenerateCommand {
+    /// Write the identity facts the deployment states about its issuer: the
+    /// issuer, the audience, the admitted clients, and the scope each route
+    /// requires, with the requester clients of its seals.
+    ///
+    /// Reads the runtime file as `serve` does and the package it serves. The
+    /// output file must not exist, and the facts are read back through the
+    /// facts reader before they are written.
+    IdentityFacts {
+        /// The package directory the runtime serves.
+        package: PathBuf,
+        /// Runtime configuration file.
+        #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
+        runtime: PathBuf,
+        /// New facts file.
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+        /// The id under `authentication.oidc.issuers` to describe. Required
+        /// when the runtime declares more than one issuer.
+        #[arg(long, value_name = "ISSUER_ID")]
+        issuer: Option<String>,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
+    },
 }
 
 /// The `--require-audit-under` directory: the proof compares resolved
@@ -785,6 +816,24 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             })?;
             let code = crate::server::serve(&runtime, declared)?;
             Ok(code)
+        }
+        Command::Generate(GenerateCommand::IdentityFacts {
+            package,
+            runtime,
+            output,
+            issuer,
+            posture,
+        }) => {
+            let declared = registry_platform_config::declared(posture.as_deref()).map_err(|error| {
+                crate::problem::RenderProblem::new(crate::problem::ProblemKind::InvalidArgument, error.message())
+                    .with_diagnostics(vec![posture_diagnostic(error)])
+            })?;
+            let (loaded, _) = crate::runtime::load_with_positions(&runtime, declared)?;
+            let bundle = Bundle::load_for_preview(&package)?;
+            let facts = crate::identity_facts::facts(&loaded.config, &bundle, issuer.as_deref())?;
+            crate::identity_facts::write(&facts, &output)?;
+            println!("wrote {}", output.display());
+            Ok(0)
         }
         Command::Healthcheck { runtime, posture } => {
             let declared = registry_platform_config::declared(posture.as_deref()).map_err(|error| {

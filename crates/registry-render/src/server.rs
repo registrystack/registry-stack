@@ -37,7 +37,7 @@ use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder
 use registry_platform_httputil::{validate_response_headers, PeerPolicy};
 
 use crate::audit::{RenderAudit, RenderAuditEvent};
-use crate::auth::{RENDER_SCOPE, SCOPE_CLAIM, SEAL_SCOPE};
+use crate::auth::{Callers, Route};
 use crate::bundle::Bundle;
 use crate::hash::sha256_label;
 use crate::metrics::{Metrics, Operation, METRICS_PATH};
@@ -51,7 +51,7 @@ pub struct Service {
     bundle: Bundle,
     audit: RenderAudit,
     api_key: Vec<u8>,
-    oidc: Option<registry_platform_oidc::TokenVerifier>,
+    oidc: Option<Callers>,
     caller_fingerprint: String,
     limits: crate::runtime::LimitsRuntime,
     bundle_path: PathBuf,
@@ -143,7 +143,7 @@ pub(crate) async fn load_service(
         )
         .with_diagnostics(diagnostics)
     })?;
-    let oidc = crate::auth::verifier(&runtime).await?;
+    let oidc = crate::auth::callers(&runtime).await?;
     let api_key = if oidc.is_none() {
         normalize_api_key(runtime::resolve_secret(
             &runtime,
@@ -466,11 +466,13 @@ pub(crate) fn router(service: Arc<Service>) -> Router {
 /// The public application: the router under the request log, the refusal
 /// recording and the document counter.
 fn public_app(service: Arc<Service>, metrics: &Arc<Metrics>) -> Router {
+    let posture = service.posture.posture();
     router(service)
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(metrics.refusal_recorder()),
             record_refusals,
         ))
+        .layer(registry_platform_httpsec::refusal_detail::name_failed_check(posture))
         .layer(axum::middleware::from_fn(lifecycle_log))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(metrics),
@@ -481,6 +483,18 @@ fn public_app(service: Arc<Service>, metrics: &Arc<Metrics>) -> Router {
 /// The caller guidance a credential without `render:seal` receives on the
 /// seal route.
 const SEAL_SCOPE_GUIDANCE: &str = "Obtain a Render resource credential with the render:seal scope.";
+/// The same guidance when the runtime names its own seal scope.
+const CONFIGURED_SEAL_SCOPE_GUIDANCE: &str =
+    "Obtain a Render resource credential with the seal scope this service requires.";
+
+fn seal_scope_guidance(service: &Service) -> &'static str {
+    match &service.oidc {
+        Some(callers) if callers.scope(Route::Seal) != crate::runtime::DEFAULT_SEAL_SCOPE => {
+            CONFIGURED_SEAL_SCOPE_GUIDANCE
+        }
+        _ => SEAL_SCOPE_GUIDANCE,
+    }
+}
 /// The caller guidance the legacy API key receives on the seal route.
 const LEGACY_KEY_GUIDANCE: &str =
     "The legacy API key cannot seal; present an OIDC resource credential with the render:seal scope.";
@@ -490,7 +504,7 @@ async fn require_render_bearer(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    require_bearer(service, request, next, RENDER_SCOPE).await
+    require_bearer(service, request, next, Route::Render).await
 }
 
 async fn require_seal_bearer(
@@ -498,52 +512,66 @@ async fn require_seal_bearer(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    require_bearer(service, request, next, SEAL_SCOPE).await
+    require_bearer(service, request, next, Route::Seal).await
 }
 
 /// Authentication as a layer: it runs before the handler (and so before
 /// the body extractor buffers anything), and every refusal is audited as
 /// one response entry, with caller-controlled fields bounded and
-/// shape-checked first, because the audit log is append-only. `scope` is
-/// the one scope the route requires.
+/// shape-checked first, because the audit log is append-only. `route`
+/// names the one scope the route requires.
 async fn require_bearer(
     service: Arc<Service>,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
-    scope: &'static str,
+    route: Route,
 ) -> Response {
-    let caller = match authorized(&service, request.headers(), scope).await {
+    let caller = match authorized(&service, request.headers(), route).await {
         Ok(caller) => caller,
         Err(error) => {
             use crate::auth::AuthenticationError;
             let check = error.failed_check();
+            let mut note = RefusalNote::new(check);
+            let mut declared_claim = None;
             let (kind, caller) = match error {
-                AuthenticationError::Refused(_) => {
+                AuthenticationError::Refused { remedy, .. } => {
+                    if let Some(remedy) = remedy {
+                        note = note.with_remedy(remedy);
+                    }
                     (ProblemKind::Unauthorized, "unknown".to_owned())
                 }
                 AuthenticationError::Forbidden {
-                    caller_fingerprint, ..
-                } => (ProblemKind::Forbidden, caller_fingerprint),
+                    caller_fingerprint,
+                    scope_claim,
+                    ..
+                } => {
+                    declared_claim = Some(scope_claim);
+                    (ProblemKind::Forbidden, caller_fingerprint)
+                }
                 AuthenticationError::Unavailable => {
                     (ProblemKind::AuthenticationUnavailable, "unknown".to_owned())
                 }
             };
             let mut problem = RenderProblem::new(kind, "Render access could not be authorized");
-            if problem.kind == ProblemKind::Forbidden && scope == SEAL_SCOPE {
-                problem = problem.with_public_detail(SEAL_SCOPE_GUIDANCE);
+            if problem.kind == ProblemKind::Forbidden && route == Route::Seal {
+                problem = problem.with_public_detail(seal_scope_guidance(&service));
             }
             let (path, headers) = (request.uri().path(), request.headers());
             let mut response =
-                refuse_access(&service, path, headers, &problem, &caller, check).await;
-            if check == FailedCheck::Scope {
-                response.extensions_mut().insert(declared_scope(scope));
+                refuse_access(&service, path, headers, &problem, &caller, note).await;
+            if let (FailedCheck::Scope, Some(claim), Some(callers)) =
+                (check, declared_claim, &service.oidc)
+            {
+                response
+                    .extensions_mut()
+                    .insert(declared_scope(&claim, callers.scope(route)));
             }
             return response;
         }
     };
     // The legacy API key never seals. The runtime already refuses a signing
     // block without OIDC, so this holds even if that check is bypassed.
-    if scope == SEAL_SCOPE && service.oidc.is_none() {
+    if route == Route::Seal && service.oidc.is_none() {
         let problem = RenderProblem::new(ProblemKind::Forbidden, "the legacy API key cannot seal")
             .with_public_detail(LEGACY_KEY_GUIDANCE);
         let (path, headers) = (request.uri().path(), request.headers());
@@ -553,7 +581,7 @@ async fn require_bearer(
             headers,
             &problem,
             &caller.fingerprint,
-            FailedCheck::Operation,
+            RefusalNote::new(FailedCheck::Operation),
         )
         .await;
     }
@@ -569,7 +597,7 @@ async fn refuse_access(
     headers: &HeaderMap,
     problem: &RenderProblem,
     caller: &str,
-    check: FailedCheck,
+    note: RefusalNote,
 ) -> Response {
     let target = sanitize_route_target(path);
     let correlation = correlation_id(headers);
@@ -585,22 +613,22 @@ async fn refuse_access(
     if let Err(audit_problem) = service.audit.response(&envelope, event).await {
         return problem_response(&audit_problem, trace.as_deref());
     }
-    refusal_response(problem, trace.as_deref(), check)
+    refusal_response(problem, trace.as_deref(), note)
 }
 
 /// A refusal answer with the check that refused the caller in its response
 /// extensions, which are never serialized.
-fn refusal_response(problem: &RenderProblem, trace: Option<&str>, check: FailedCheck) -> Response {
+fn refusal_response(problem: &RenderProblem, trace: Option<&str>, note: RefusalNote) -> Response {
     let mut response = problem_answer(problem, trace);
-    response.extensions_mut().insert(RefusalNote::new(check));
+    response.extensions_mut().insert(note);
     response
 }
 
-/// The values the operator declared for a scope refusal: the claim Render
-/// reads scopes from and the scope the route requires. Nothing here comes
-/// from the caller's token.
-fn declared_scope(required_scope: &str) -> DeclaredScope {
-    DeclaredScope::new(SCOPE_CLAIM).with_required_scope(required_scope)
+/// The values the operator declared for a scope refusal: the claim the
+/// verifying issuer reads scopes from and the scope the route requires.
+/// Nothing here comes from the caller's token.
+fn declared_scope(claim: &str, required_scope: &str) -> DeclaredScope {
+    DeclaredScope::new(claim).with_required_scope(required_scope)
 }
 
 /// Count each refusal answer under its check and write the admitted log line.
@@ -924,7 +952,7 @@ struct SealReadiness {
 
 async fn ready(State(service): State<Arc<Service>>) -> Response {
     let keys_ready = match &service.oidc {
-        Some(verifier) => verifier.key_source().ensure_key_set().await.is_ok(),
+        Some(callers) => callers.keys_ready().await,
         None => true,
     };
     let (status, code) = if keys_ready && service.audit.ready().await {
@@ -1051,30 +1079,30 @@ fn normalize_api_key(raw: Vec<u8>) -> Result<Vec<u8>, RenderProblem> {
 async fn authorized(
     service: &Service,
     headers: &HeaderMap,
-    scope: &str,
+    route: Route,
 ) -> Result<Caller, crate::auth::AuthenticationError> {
     use crate::auth::AuthenticationError;
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
-    let value = values
-        .next()
-        .ok_or(AuthenticationError::Refused(FailedCheck::CredentialMissing))?;
+    let value = values.next().ok_or(AuthenticationError::refused_by(
+        FailedCheck::CredentialMissing,
+    ))?;
     if values.next().is_some() {
-        return Err(AuthenticationError::Refused(
+        return Err(AuthenticationError::refused_by(
             FailedCheck::CredentialMalformed,
         ));
     }
-    let malformed = || AuthenticationError::Refused(FailedCheck::CredentialMalformed);
+    let malformed = || AuthenticationError::refused_by(FailedCheck::CredentialMalformed);
     let token =
         parse_bearer_token(value.to_str().map_err(|_| malformed())?).map_err(
             |error| match error {
                 BearerParseError::InvalidScheme => {
-                    AuthenticationError::Refused(FailedCheck::CredentialMissing)
+                    AuthenticationError::refused_by(FailedCheck::CredentialMissing)
                 }
                 _ => malformed(),
             },
         )?;
-    if let Some(verifier) = &service.oidc {
-        let verified = crate::auth::authenticate(verifier, token, scope).await?;
+    if let Some(callers) = &service.oidc {
+        let verified = callers.authenticate(token, route).await?;
         return Ok(Caller {
             fingerprint: verified.caller_fingerprint,
             client_id: verified.client_id,
@@ -1087,7 +1115,7 @@ async fn authorized(
             fingerprint: service.caller_fingerprint.clone(),
             client_id: None,
         })
-        .ok_or(AuthenticationError::Refused(FailedCheck::SharedSecret))
+        .ok_or(AuthenticationError::refused_by(FailedCheck::SharedSecret))
 }
 
 /// Caller-supplied trace id from a W3C traceparent header, fully
@@ -1298,7 +1326,7 @@ impl SealCall {
         check: FailedCheck,
     ) -> Response {
         match self.audit_refusal(service, &problem).await {
-            Ok(()) => refusal_response(&problem, self.trace.as_deref(), check),
+            Ok(()) => refusal_response(&problem, self.trace.as_deref(), RefusalNote::new(check)),
             Err(answer) => answer,
         }
     }
@@ -2125,7 +2153,7 @@ mod tests {
         let mut service = service(&lines, 1);
         Arc::get_mut(&mut service)
             .expect("fixture owns service")
-            .oidc = Some(crate::auth::tests::test_verifier());
+            .oidc = Some(crate::auth::tests::test_callers());
         for (overrides, status) in [
             (serde_json::json!({}), StatusCode::OK),
             (
@@ -2245,7 +2273,7 @@ mod tests {
             .unwrap()
             .declared_jwks_fetch_policy();
         Arc::get_mut(&mut service).unwrap().oidc =
-            Some(crate::auth::tests::test_verifier_over(Arc::new(
+            Some(crate::auth::tests::test_callers_over(Arc::new(
                 registry_platform_oidc::JwksFetcher::new_with_fetch_url_policy(
                     url,
                     config,
@@ -2345,7 +2373,7 @@ mod tests {
     async fn scope_refusals_keep_verified_credential_fingerprints() {
         let lines = AuditLines::new(None);
         let mut service = service(&lines, 1);
-        Arc::get_mut(&mut service).unwrap().oidc = Some(crate::auth::tests::test_verifier());
+        Arc::get_mut(&mut service).unwrap().oidc = Some(crate::auth::tests::test_callers());
         let credential = crate::auth::tests::token(serde_json::json!({"scope":"other"}));
         for (token, status, caller) in [
             (
@@ -2386,7 +2414,7 @@ mod tests {
     async fn oidc_audit_contains_only_the_canonical_credential_fingerprint() {
         let lines = AuditLines::new(None);
         let mut service = service(&lines, 1);
-        Arc::get_mut(&mut service).unwrap().oidc = Some(crate::auth::tests::test_verifier());
+        Arc::get_mut(&mut service).unwrap().oidc = Some(crate::auth::tests::test_callers());
         for id in ["canary-first", "canary-second"] {
             let credential = crate::auth::tests::token(serde_json::json!({"jti":id}));
             let request = axum::http::Request::builder()
@@ -2899,7 +2927,7 @@ mod tests {
         let mut service = service(&lines, 1);
         let inner = Arc::get_mut(&mut service).expect("fixture owns service");
         if matches!(mode, Mode::Oidc | Mode::OidcSealed) {
-            inner.oidc = Some(crate::auth::tests::test_verifier());
+            inner.oidc = Some(crate::auth::tests::test_callers());
         }
         if matches!(mode, Mode::Outage) {
             let origin = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -2914,7 +2942,7 @@ mod tests {
             let fetch_policy = registry_platform_oidc::IssuerNetworkPolicy::new(&url, true)
                 .expect("loopback policy")
                 .declared_jwks_fetch_policy();
-            inner.oidc = Some(crate::auth::tests::test_verifier_over(Arc::new(
+            inner.oidc = Some(crate::auth::tests::test_callers_over(Arc::new(
                 registry_platform_oidc::JwksFetcher::new_with_fetch_url_policy(
                     url,
                     registry_platform_oidc::JwksFetcherConfig::defaults(),
@@ -3279,9 +3307,9 @@ mod tests {
             if check == "scope" {
                 assert_eq!(fields["scope_claim"], "scope", "{name}");
                 let required = if uri.starts_with("/v1/seal/") {
-                    SEAL_SCOPE
+                    crate::runtime::DEFAULT_SEAL_SCOPE
                 } else {
-                    RENDER_SCOPE
+                    crate::runtime::DEFAULT_RENDER_SCOPE
                 };
                 assert_eq!(fields["required_scope"], required, "{name}");
                 assert!(fields.get("access_profile").is_none(), "{name}");
@@ -3315,6 +3343,248 @@ mod tests {
         }
     }
 
+    /// The stack `serve` builds over `service`, declared as `posture`,
+    /// answering one request with the status and the body it gives.
+    async fn answer_service(
+        mut service: Arc<Service>,
+        posture: registry_platform_config::Posture,
+        method: Method,
+        uri: &str,
+        credential: Option<String>,
+    ) -> (StatusCode, serde_json::Value) {
+        Arc::get_mut(&mut service)
+            .expect("fixture owns service")
+            .posture = PostureReport::new(registry_platform_config::DeclaredPosture {
+            posture,
+            source: registry_platform_config::PostureSource::Flag,
+        });
+        let authorization: Vec<Vec<u8>> = credential.into_iter().map(String::into_bytes).collect();
+        let response = refusal_stack(service, &Arc::new(Metrics::default()))
+            .oneshot(bearer_request(method, uri, &authorization))
+            .await
+            .expect("router");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&body).expect("a JSON body")
+        };
+        (status, body)
+    }
+
+    async fn answer_under(
+        posture: registry_platform_config::Posture,
+        mode: Mode,
+        method: Method,
+        uri: &str,
+        credential: Option<String>,
+    ) -> (StatusCode, serde_json::Value) {
+        answer_service(
+            refusal_service(mode).await,
+            posture,
+            method,
+            uri,
+            credential,
+        )
+        .await
+    }
+
+    /// A sealed service whose callers are one issuer that lists the seal's
+    /// client `records-service` and one that admits every client, built from
+    /// a runtime file.
+    async fn two_issuer_sealed_service(
+        deployment: &crate::auth::tests::Deployment,
+    ) -> Arc<Service> {
+        let mut service = refusal_service(Mode::OidcSealed).await;
+        Arc::get_mut(&mut service)
+            .expect("fixture owns service")
+            .oidc = Some(crate::auth::tests::listing_and_open_issuers(deployment).await);
+        service
+    }
+
+    #[tokio::test]
+    async fn the_development_body_names_the_failed_check_and_production_does_not() {
+        use registry_platform_config::Posture;
+        let wrong_scope = || token_header(serde_json::json!({"scope":"other"}));
+        let (status, development) = answer_under(
+            Posture::Development,
+            Mode::Oidc,
+            Method::GET,
+            "/v1/documents",
+            wrong_scope(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(development["failedCheck"], "scope");
+        let (status, mut production) = answer_under(
+            Posture::Production,
+            Mode::Oidc,
+            Method::GET,
+            "/v1/documents",
+            wrong_scope(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(production.get("failedCheck").is_none(), "{production}");
+        // Everything but the member is the same in both postures.
+        let mut named = development;
+        named.as_object_mut().expect("object").remove("failedCheck");
+        for body in [&mut named, &mut production] {
+            body.as_object_mut().expect("object").remove("traceId");
+        }
+        assert_eq!(named, production);
+    }
+
+    #[tokio::test]
+    async fn the_same_token_reaches_the_same_profile_in_both_postures() {
+        use crate::auth::tests::{Deployment, RECORDS_ISSUER};
+        use registry_platform_config::Posture;
+        let deployment = Deployment::new(&["records", "open"]);
+        let credential = |scope: &str| {
+            Some(format!(
+                "Bearer {}",
+                deployment.token(
+                    "records",
+                    "at+jwt",
+                    serde_json::json!({
+                        "iss": RECORDS_ISSUER,
+                        "client_id": "records-service",
+                        "scope": scope,
+                    }),
+                )
+            ))
+        };
+        // The empty seal request body is refused by the handler, after
+        // authentication and the client check.
+        for (method, uri, scope, expected) in [
+            (
+                Method::GET,
+                "/v1/documents",
+                "render:render",
+                StatusCode::OK,
+            ),
+            (
+                Method::POST,
+                "/v1/seal/receipt",
+                "render:seal",
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let mut answers = Vec::new();
+            for posture in [Posture::Development, Posture::Production] {
+                let service = two_issuer_sealed_service(&deployment).await;
+                answers.push(
+                    answer_service(service, posture, method.clone(), uri, credential(scope)).await,
+                );
+            }
+            // Neither posture refuses the caller: authentication reaches the
+            // route's handler in both, and the handler answers alike.
+            for (status, body) in &answers {
+                assert!(
+                    *status != StatusCode::UNAUTHORIZED && *status != StatusCode::FORBIDDEN,
+                    "{uri}: {status} {body}"
+                );
+                assert!(body.get("failedCheck").is_none(), "{uri}: {body}");
+            }
+            assert_eq!(answers[0].0, expected, "{uri}");
+            assert_eq!(answers[1].0, expected, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_seal_client_in_a_token_from_another_issuer_is_refused() {
+        use crate::auth::tests::{Deployment, OPEN_ISSUER, RECORDS_ISSUER};
+        use registry_platform_config::Posture;
+        let deployment = Deployment::new(&["records", "open"]);
+        let seal_token = |name: &str, issuer: &str| {
+            Some(format!(
+                "Bearer {}",
+                deployment.token(
+                    name,
+                    "at+jwt",
+                    serde_json::json!({
+                        "iss": issuer,
+                        "client_id": "records-service",
+                        "scope": "render:seal",
+                    }),
+                )
+            ))
+        };
+        // The issuer that lists the seal's client passes authentication and the
+        // client check, and the seal handler answers the empty body.
+        let (status, body) = answer_service(
+            two_issuer_sealed_service(&deployment).await,
+            Posture::Development,
+            Method::POST,
+            "/v1/seal/receipt",
+            seal_token("records", RECORDS_ISSUER),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        // The issuer that admits every client does not carry the client the
+        // first issuer lists.
+        let (status, body) = answer_service(
+            two_issuer_sealed_service(&deployment).await,
+            Posture::Development,
+            Method::POST,
+            "/v1/seal/receipt",
+            seal_token("open", OPEN_ISSUER),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["failedCheck"], "requester-client");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_with_a_remedy_writes_it_on_the_log_line_and_never_in_the_body() {
+        let logs = LogCapture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(logs.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let jwt_typed = {
+            let now = chrono::Utc::now().timestamp();
+            let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+            header.kid = Some("canary".to_owned());
+            header.typ = Some("JWT".to_owned());
+            let claims = serde_json::json!({"iss":"https://issuer.example.test","sub":"s","aud":"urn:render:test","iat":now,"exp":now+300,"client_id":"portal","scope":"render:render"});
+            jsonwebtoken::encode(
+                &header,
+                &claims,
+                &jsonwebtoken::EncodingKey::from_secret(crate::auth::tests::CANARY_KEY),
+            )
+            .expect("token")
+        };
+        let (status, body) = answer_under(
+            registry_platform_config::Posture::Production,
+            Mode::Oidc,
+            Method::GET,
+            "/v1/documents",
+            Some(format!("Bearer {jwt_typed}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(!body.to_string().contains("accessTokenType"), "{body}");
+        let written = String::from_utf8(logs.0.lock().expect("log").clone()).expect("UTF-8");
+        let line: serde_json::Value = written
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON log line"))
+            .find(|line| line["fields"]["message"] == "request refused")
+            .expect("a refusal line");
+        assert_eq!(line["fields"]["failed_check"], "token-type");
+        assert!(
+            line["fields"]["remedy"]
+                .as_str()
+                .is_some_and(|remedy| remedy.contains("accessTokenType")),
+            "{line}"
+        );
+    }
+
     #[test]
     #[cfg(debug_assertions)]
     #[should_panic(expected = "a refusal was built without its failed check")]
@@ -3338,7 +3608,7 @@ mod tests {
             let response = refusal_response(
                 &RenderProblem::new(kind, "with check"),
                 None,
-                FailedCheck::Operation,
+                RefusalNote::new(FailedCheck::Operation),
             );
             assert!(response.extensions().get::<RefusalNote>().is_some());
         }

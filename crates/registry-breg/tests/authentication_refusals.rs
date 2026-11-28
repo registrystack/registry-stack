@@ -285,6 +285,7 @@ fn valid_claims() -> Value {
 fn delegated_grant_claims(now: u64) -> Value {
     json!({
         "aud": AUDIENCE,
+        "scope": "registry.read",
         "sub": PRINCIPAL,
         "registry_principal": PRINCIPAL,
         "azp": "agent-client",
@@ -305,6 +306,7 @@ fn delegated_grant_claims(now: u64) -> Value {
 fn standing_agent_claims(act: Value) -> Value {
     json!({
         "aud": AUDIENCE,
+        "scope": "registry.read",
         "sub": PRINCIPAL,
         "azp": "agent-client",
         "registry_actor_kind": "agent",
@@ -607,11 +609,14 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
     expired["exp"] = json!(now - 3600);
     let mut wrong_issuer = valid_claims();
     wrong_issuer["iss"] = json!("https://issuer-canary.example.test");
-    let mut no_actor_kind = valid_claims();
-    no_actor_kind
-        .as_object_mut()
-        .expect("claims are an object")
-        .remove("registry_actor_kind");
+    // No kind claim, no declared kind and no scope: an identity-only token.
+    let mut identity_only = valid_claims();
+    for claim in ["registry_actor_kind", "scope"] {
+        identity_only
+            .as_object_mut()
+            .expect("claims are an object")
+            .remove(claim);
+    }
     let mut object_principal = valid_claims();
     object_principal["registry_principal"] = json!({"value": PRINCIPAL});
     let mut malformed_actor_kind = valid_claims();
@@ -676,9 +681,9 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
             read_request(&record, &[&bearer(&plain.token(wrong_issuer))]),
         ),
         (
-            "missing-actor-kind",
+            "identity-only-token",
             "actor-kind",
-            read_request(&record, &[&bearer(&plain.token(no_actor_kind))]),
+            read_request(&record, &[&bearer(&plain.token(identity_only))]),
         ),
         (
             "actor-kind-is-not-a-string",
@@ -933,7 +938,18 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
             "{}: the line carries the request trace id",
             case.name
         );
-        let keys: BTreeSet<&str> = fields.keys().map(String::as_str).collect();
+        let mut keys: BTreeSet<&str> = fields.keys().map(String::as_str).collect();
+        // A refusal an operator fixes in configuration names the setting in
+        // `remedy`, fixed text that holds no caller value.
+        if keys.remove("remedy") {
+            assert!(
+                fields["remedy"]
+                    .as_str()
+                    .is_some_and(|remedy| !remedy.is_empty()),
+                "{}: the remedy is text",
+                case.name
+            );
+        }
         assert_eq!(
             keys,
             BTreeSet::from([
@@ -946,6 +962,13 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
             "{}: the line carries only the fixed fields",
             case.name
         );
+        // The challenge names the `Bearer` scheme by design. Everything else
+        // in the answer must not echo the presented credential.
+        let mut answer_without_challenge = case.answer.clone();
+        answer_without_challenge
+            .as_object_mut()
+            .expect("the answer is an object")
+            .remove("wwwAuthenticate");
         for canary in [
             "canary",
             PRINCIPAL,
@@ -956,7 +979,8 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
             "Bearer",
         ] {
             assert!(
-                !case.log_text.contains(canary) && !case.answer.to_string().contains(canary),
+                !case.log_text.contains(canary)
+                    && !answer_without_challenge.to_string().contains(canary),
                 "{}: the refusal exposed a canary value",
                 case.name
             );

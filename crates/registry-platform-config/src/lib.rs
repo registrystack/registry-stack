@@ -24,8 +24,9 @@ mod secrets;
 
 use sha2::{Digest, Sha256};
 
+pub use blocks::non_empty_assertion_issuers;
 #[cfg(feature = "schema")]
-pub use blocks::url_hook_destinations_schema;
+pub use blocks::{assertion_issuers_schema, url_hook_destinations_schema};
 pub use blocks::{
     describe_secret_failure, is_sha256_label, url_hook_destinations, AdmittedClients,
     AttachmentVerifierConfig, AttemptTimeoutMilliseconds, AuditKeyConfig, AuditKeyCustody,

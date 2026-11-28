@@ -184,8 +184,8 @@ impl Breg {
                 "database":{"runtimeUrlRef":format!("secret:file/database-{database}-1"), "migrationUrlRef":format!("secret:file/database-{database}-0"), "testOnlyPlaintext":true,
                     "pool":{"maximumConnections":4}, "roles":{"migration":service.roles[0], "runtime":service.roles[1]}},
                 "package":{"root":package},
-                "authentication":{"oidc":{"issuer":issuer.issuer(), "audience":"urn:example:applications", "allowedAlgorithm":"ES256", "accessTokenType":"at+jwt", "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":["application-reader", "citizen-gateway", "citizen-review-page"],
-                    "maximumTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}}, "authorityClaims":{"principal":"sub", "purpose":"registry_purpose", "trustedActors":{"citizen-gateway":"6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34"}}},
+                "authentication":{"oidc":{"issuers":{"primary":{"issuer":issuer.issuer(), "audience":"urn:example:applications", "allowedAlgorithm":"ES256", "accessTokenType":"at+jwt", "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":["application-reader", "citizen-gateway", "citizen-review-page"],
+                    "maximumTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}}}}, "authorityClaims":{"principal":"sub", "purpose":"registry_purpose", "trustedActors":{"citizen-gateway":"6f1c2d8e-3b4a-4e59-9c7d-2a8b5e0f1d34"}}},
                 "audit":{"hashKeyRef":"secret:file/audit-key", "path":service.root.join("audit/breg.jsonl")},
                 "cursor":{"secretRef":"secret:file/cursor-key"},
                 "taskGrantStatus":task_status

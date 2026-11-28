@@ -598,7 +598,7 @@ impl Breg {
                 },
                 "package": {"root": package},
                 "authentication": {
-                    "oidc": {
+                    "oidc": {"issuers": {"primary": {
                         "issuer": issuer.issuer(),
                         "audience": "urn:example:applications",
                         "allowedAlgorithm": "ES256",
@@ -613,7 +613,7 @@ impl Breg {
                         "maximumTokenLifetimeSeconds": 3600,
                         "leewayMilliseconds": 0,
                         "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}
-                    },
+                    }}},
                     "authorityClaims": if field_site {
                         json!({"principal": "sub", "purpose": "registry_purpose"})
                     } else {

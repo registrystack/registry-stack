@@ -214,7 +214,7 @@ fn install_runtime_constraints(schema: &mut Value) {
 /// timestamp policy, its clients are named (no wildcard, no `unrestricted`),
 /// and a timestamp authority is `https`, or `http` on a loopback host.
 /// Rules that need another member (every client is admitted by
-/// `authentication.oidc.allowedClients`, the secret provider is declared, OIDC is
+/// `allowedClients` of an issuer under `authentication.oidc.issuers`, the secret provider is declared, OIDC is
 /// configured) are left to the reader and stated in the member descriptions.
 fn set_signing_constraints(schema: &mut Value) {
     if let Some(member) = schema
@@ -809,11 +809,11 @@ mod tests {
             "listener": {"bind": "127.0.0.1:8080"},
             "package": {"root": "/srv/render/package"},
             "secretProviders": {"file": {"root": "/run/secrets"}},
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://issuer.example.test",
                 "audience": "https://render.example.test",
                 "allowedClients": ["portal", "records-service"]
-            }},
+            }}}},
             "audit": {"path": "/var/lib/render/audit/render.jsonl"},
             "assuranceProfile": "local",
             "signing": {"seals": {"ministry": {
@@ -1238,7 +1238,7 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(
-            clients.contains("authentication.oidc.allowedClients"),
+            clients.contains("authentication.oidc.issuers"),
             "the cross-member rule is stated: {clients}"
         );
     }

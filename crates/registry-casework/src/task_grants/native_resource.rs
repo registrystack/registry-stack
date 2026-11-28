@@ -298,23 +298,25 @@ database:
 package: {{root: {package_root}}}
 authentication:
   oidc:
-    issuer: {issuer}
-    audience: {AUDIENCE}
-    allowedAlgorithm: RS256
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [task-agent, other-agent, seed-client, other-seed-client]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource: {{type: discovery}}
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {issuer}
+        audience: {AUDIENCE}
+        allowedAlgorithm: RS256
+        accessTokenType: at+jwt
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [task-agent, other-agent, seed-client, other-seed-client]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource: {{type: discovery}}
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims: {{principal: sub, purpose: registry_purpose}}
 taskGrantStatus:
   - sourceIssuer: https://casework.example

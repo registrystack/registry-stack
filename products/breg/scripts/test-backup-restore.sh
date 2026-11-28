@@ -347,18 +347,20 @@ package:
   root: $package_root
 authentication:
   oidc:
-    issuer: https://issuer.example.invalid
-    audience: generic-registry
-    allowedAlgorithm: EdDSA
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [generic-registry-client]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 30000
-    jwksSource:
-      type: static
-      documentRef: secret:file/issuer-jwks
+    issuers:
+      primary:
+        issuer: https://issuer.example.invalid
+        audience: generic-registry
+        allowedAlgorithm: EdDSA
+        accessTokenType: at+jwt
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [generic-registry-client]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 30000
+        jwksSource:
+          type: static
+          documentRef: secret:file/issuer-jwks
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

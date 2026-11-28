@@ -11,7 +11,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "actor-is-not-the-trusted-actor": {
     "body": {
@@ -25,7 +25,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "actor-kind-is-not-a-string": {
     "body": {
@@ -39,7 +39,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "actor-without-a-matched-client": {
     "body": {
@@ -53,7 +53,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "basic-scheme": {
     "body": {
@@ -67,7 +67,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "double-space-separator": {
     "body": {
@@ -81,7 +81,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "expired-token": {
     "body": {
@@ -95,7 +95,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "extractor-without-authentication-context": {
     "body": {
@@ -109,7 +109,21 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
+  },
+  "identity-only-token": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
   },
   "key-source-unreachable": {
     "body": {
@@ -123,21 +137,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
-  },
-  "missing-actor-kind": {
-    "body": {
-      "code": "authentication.refused",
-      "detail": "The bearer token or delivery signature was not accepted.",
-      "status": 401,
-      "title": "Unauthorized",
-      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
-    },
-    "cacheControl": "no-store",
-    "contentType": "application/problem+json",
-    "retryAfter": null,
-    "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "no-authorization-header": {
     "body": {
@@ -151,7 +151,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "principal-claim-is-an-object": {
     "body": {
@@ -165,7 +165,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "repeated-authorization-header": {
     "body": {
@@ -179,7 +179,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "review-completion-expired-signature": {
     "body": {
@@ -291,7 +291,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "task-grant-bound-to-another-client": {
     "body": {
@@ -305,7 +305,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "task-grant-bound-to-another-resource": {
     "body": {
@@ -319,7 +319,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "task-grant-claims-malformed": {
     "body": {
@@ -333,7 +333,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "task-grant-expired": {
     "body": {
@@ -347,7 +347,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "task-grant-token-issued-for-too-long": {
     "body": {
@@ -361,7 +361,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "task-grant-token-issued-in-the-future": {
     "body": {
@@ -375,7 +375,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "token-not-compact": {
     "body": {
@@ -389,7 +389,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "token-type-is-not-admitted": {
     "body": {
@@ -403,7 +403,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "unknown-key-id": {
     "body": {
@@ -417,7 +417,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "wrong-audience": {
     "body": {
@@ -431,7 +431,7 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   },
   "wrong-issuer": {
     "body": {
@@ -445,6 +445,6 @@
     "contentType": "application/problem+json",
     "retryAfter": null,
     "status": 401,
-    "wwwAuthenticate": null
+    "wwwAuthenticate": "Bearer"
   }
 }

@@ -176,6 +176,14 @@ mod tests {
     }
 
     #[test]
+    fn the_issuer_set_schema_requires_one_issuer_as_the_reader_does() {
+        let document: Value = serde_json::from_str(&shared_blocks_document().unwrap()).unwrap();
+        let issuers = &document["$defs"]["CallerIssuers_CallerIssuerCore_OidcAllowedClients"]
+            ["properties"]["issuers"];
+        assert_eq!(issuers["minProperties"], 1, "{issuers:#}");
+    }
+
+    #[test]
     fn a_static_jwks_document_requires_the_provider_its_reference_names() {
         let requirement = |pattern: &str, provider: &str, definition: &str| {
             serde_json::json!({

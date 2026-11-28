@@ -21,7 +21,8 @@ use registry_breg::api::{
     VerifiedRequestClaims,
 };
 use registry_breg::auth::{
-    AuthenticationConfigError, AuthenticationError, AuthorityClaimConfig, RegistryAuthenticator,
+    AuthenticationConfigError, AuthenticationError, AuthenticatorIssuer, AuthorityClaimConfig,
+    RegistryAuthenticator,
 };
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{ConnectionConfig, PoolBounds};
@@ -36,8 +37,8 @@ use registry_platform_crypto::{
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    access_token_typ_set, ActorKind, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig,
+    access_token_typ_set, ActorKind, ClaimNames, DeclaredKinds, JwksFetcher, JwksFetcherConfig,
+    OidcError, TokenVerifier, TokenVerifierConfig,
 };
 use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
@@ -442,6 +443,16 @@ async fn contextual_harness_with(
     claims: AuthorityClaimConfig,
     max_token_lifetime: Option<std::time::Duration>,
 ) -> Harness {
+    contextual_harness_declaring(source, claims, max_token_lifetime, DeclaredKinds::None).await
+}
+
+/// [`contextual_harness_with`] whose one issuer declares `declared`.
+async fn contextual_harness_declaring(
+    source: &str,
+    claims: AuthorityClaimConfig,
+    max_token_lifetime: Option<std::time::Duration>,
+    declared: DeclaredKinds,
+) -> Harness {
     let project = parse_project_yaml(source.as_bytes()).expect("project parses");
     let registry = Arc::new(
         compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
@@ -455,8 +466,15 @@ async fn contextual_harness_with(
         BTreeMap::from([("agent-client".to_owned(), ACTOR_ID.to_owned())]),
     );
     let authenticator = Arc::new(
-        authenticator_with_verifier(&registry, &idp, verifier, claims)
-            .expect("contextual authentication config is valid"),
+        RegistryAuthenticator::with_issuers(
+            &registry,
+            vec![
+                AuthenticatorIssuer::new("issuer", verifier, key_source(&idp))
+                    .with_declared_kinds(declared),
+            ],
+            claims,
+        )
+        .expect("contextual authentication config is valid"),
     );
     let records = Arc::new(RecordingReadService::default());
     let service = Arc::new(HttpService::new(
@@ -477,7 +495,7 @@ async fn contextual_harness_with(
 }
 
 #[tokio::test]
-async fn token_without_actor_kind_is_refused_before_profile_authorization() {
+async fn a_token_without_a_kind_authenticates_as_unspecified() {
     let harness = Harness::new().await;
     let mut claims = valid_claims();
     claims
@@ -485,7 +503,16 @@ async fn token_without_actor_kind_is_refused_before_profile_authorization() {
         .expect("fixture claims are an object")
         .remove("registry_actor_kind");
 
-    assert_refused_without_record_call(&harness, &harness.idp.mint_token(claims)).await;
+    // The `public` profile pins no kind, so an unspecified caller reaches it.
+    let response = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=public"),
+            &[bearer(&harness.idp.mint_token(claims))],
+            None,
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -777,62 +804,144 @@ async fn review_completion_authentication_refusals_use_the_registered_problem() 
     }
 }
 
-#[tokio::test]
-async fn agent_registered_client_without_actor_kind_cannot_use_a_human_profile() {
-    let harness = contextual_harness().await;
-    let token = harness.idp.mint_token(json!({
+/// A token from `agent-client` that carries no kind, granting what the
+/// `standing-human` profile requires but the kind.
+fn kindless_human_profile_claims() -> Value {
+    json!({
         "aud": AUDIENCE,
         "sub": PRINCIPAL,
         "azp": "agent-client",
         "scope": "registry.read",
         "registry_purpose": "record-review"
-    }));
+    })
+}
 
-    let captured = CapturedLogs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_target(false)
-        .with_current_span(false)
-        .with_span_list(false)
-        .with_writer(captured.clone())
-        .with_max_level(tracing::Level::WARN)
-        .finish();
-    let capture = tracing::subscriber::set_default(subscriber);
+const STANDING_HUMAN: &str = "standing-human";
+
+fn standing_human_path() -> String {
+    format!("/v1/records/cases/{RECORD_ID}?accessProfile={STANDING_HUMAN}")
+}
+
+#[tokio::test]
+async fn a_human_only_profile_refuses_an_unspecified_kind() {
+    let harness = contextual_harness().await;
+    let token = harness.idp.mint_token(kindless_human_profile_claims());
+
     let response = harness
-        .send(
-            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-human"),
-            &[bearer(&token)],
-            None,
-        )
+        .send(&standing_human_path(), &[bearer(&token)], None)
         .await;
-    // A replayed credential is refused again without another warning.
-    let replayed = harness
-        .send(
-            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-human"),
-            &[bearer(&token)],
-            None,
-        )
+
+    // The concealed answer: the caller learns nothing about the profile.
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        refusal_note(&response).check,
+        registry_platform_authcommon::FailedCheck::ActorKind
+    );
+    assert_eq!(body_json(response).await["code"], "resource.not_found");
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_declared_client_kind_admits_a_token_without_a_kind() {
+    let harness = contextual_harness_declaring(
+        CONTEXTUAL_PROJECT,
+        AuthorityClaimConfig::new("sub", Some("registry_purpose".to_owned())),
+        None,
+        DeclaredKinds::Clients(BTreeMap::from([(
+            "agent-client".to_owned(),
+            ActorKind::Human,
+        )])),
+    )
+    .await;
+    let token = harness.idp.mint_token(kindless_human_profile_claims());
+
+    let response = harness
+        .send(&standing_human_path(), &[bearer(&token)], None)
         .await;
-    drop(capture);
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_token_kind_that_contradicts_the_declared_kind_is_refused() {
+    let harness = contextual_harness_declaring(
+        CONTEXTUAL_PROJECT,
+        AuthorityClaimConfig::new("sub", Some("registry_purpose".to_owned())),
+        None,
+        DeclaredKinds::Clients(BTreeMap::from([(
+            "agent-client".to_owned(),
+            ActorKind::Human,
+        )])),
+    )
+    .await;
+    let mut claims = kindless_human_profile_claims();
+    claims["registry_actor_kind"] = json!("service");
+    let token = harness.idp.mint_token(claims);
+
+    let response = harness
+        .send(&standing_human_path(), &[bearer(&token)], None)
+        .await;
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(body_json(response).await["code"], "authentication.refused");
-    assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 0);
-    let logs =
-        String::from_utf8_lossy(&captured.0.lock().expect("captured log buffer")).into_owned();
     assert_eq!(
-        logs.matches("verified credential is missing the configured actor-kind claim")
-            .count(),
-        1,
-        "the safe cause is logged once per interval: {logs}"
+        refusal_note(&response).check,
+        registry_platform_authcommon::FailedCheck::ActorKind
     );
-    for value in [PRINCIPAL, "agent-client", "registry_actor_kind"] {
+    assert_eq!(body_json(response).await["code"], "authentication.refused");
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_unlisted_client_is_refused() {
+    let harness = contextual_harness().await;
+    let mut claims = kindless_human_profile_claims();
+    claims["azp"] = json!("unlisted-client");
+    claims["registry_actor_kind"] = json!("human");
+    let token = harness.idp.mint_token(claims);
+
+    let response = harness
+        .send(&standing_human_path(), &[bearer(&token)], None)
+        .await;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        refusal_note(&response).check,
+        registry_platform_authcommon::FailedCheck::TokenClient
+    );
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_identity_only_token_is_refused_without_a_declared_kind() {
+    let harness = contextual_harness().await;
+    let mut without_scope = kindless_human_profile_claims();
+    without_scope
+        .as_object_mut()
+        .expect("claims are an object")
+        .remove("scope");
+    let mut sign_in_scopes = kindless_human_profile_claims();
+    sign_in_scopes["scope"] = json!("openid profile email");
+
+    for claims in [without_scope, sign_in_scopes] {
+        let token = harness.idp.mint_token(claims.clone());
+        let response = harness
+            .send(&standing_human_path(), &[bearer(&token)], None)
+            .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{claims}");
+        let note = refusal_note(&response);
+        assert_eq!(
+            note.check,
+            registry_platform_authcommon::FailedCheck::ActorKind,
+            "{claims}"
+        );
         assert!(
-            !logs.contains(value),
-            "diagnostics remain value-free: {logs}"
+            note.remedy
+                .is_some_and(|remedy| remedy.contains("actorKind")),
+            "the refusal names the settings that declare a kind: {note:?}"
         );
     }
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -844,6 +953,7 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
         .as_secs();
     let claims = json!({
         "aud": AUDIENCE,
+        "scope": "registry.read",
         "sub": PRINCIPAL,
         "azp": "agent-client",
         "registry_actor_kind": "agent",
@@ -936,6 +1046,7 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
 fn delegated_task_claims(now: u64) -> Value {
     json!({
         "aud": AUDIENCE,
+        "scope": "registry.read",
         "sub": PRINCIPAL,
         "registry_principal": PRINCIPAL,
         "azp": "agent-client",
@@ -1163,6 +1274,7 @@ async fn standing_citizen_agent_requires_the_registered_client_actor_pair() {
     let harness = contextual_harness().await;
     let claims = json!({
         "aud": AUDIENCE,
+        "scope": "registry.read",
         "sub": PRINCIPAL,
         "azp": "agent-client",
         "registry_actor_kind": "agent",
@@ -1193,6 +1305,7 @@ async fn standing_citizen_agent_requires_the_registered_client_actor_pair() {
 fn standing_agent_claims(act: Value) -> Value {
     json!({
         "aud": AUDIENCE,
+        "scope": "registry.read",
         "sub": PRINCIPAL,
         "azp": "agent-client",
         "registry_actor_kind": "agent",
@@ -1749,7 +1862,7 @@ async fn canonical_id_row_boundary_uses_the_compiled_uuid_claim_type() {
     let registry = compile_project(&project, &[], CompileProfile::Authoring)
         .expect("canonical-id boundary project compiles");
     let idp = MockIdp::start().await;
-    let authenticator = authenticator(
+    let authenticator = service_authenticator(
         &registry,
         &idp,
         AuthorityClaimConfig::new("registry_principal", None),
@@ -1758,6 +1871,7 @@ async fn canonical_id_row_boundary_uses_the_compiled_uuid_claim_type() {
 
     let token = idp.mint_token(json!({
         "aud": AUDIENCE,
+        "scope": "registry.read",
         "registry_actor_kind": "service",
         "registry_principal": PRINCIPAL,
         "record_id": RECORD_ID,
@@ -2049,8 +2163,9 @@ async fn discovery_key_misses_and_denied_keys_do_not_diagnose_rotation() {
             authority_claims(),
         )
         .expect("discovery verifier is valid");
-        let token =
-            sign_ed25519_compact_jwt(fixtures::ED25519_PRIVATE_JWK, "JWT", kid, valid_claims());
+        let mut claims = valid_claims();
+        claims["iss"] = json!(harness.idp.issuer());
+        let token = sign_ed25519_compact_jwt(fixtures::ED25519_PRIVATE_JWK, "JWT", kid, claims);
         let captured = CapturedLogs::default();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(captured.clone())
@@ -2567,6 +2682,23 @@ fn authenticator_with_verifier(
     RegistryAuthenticator::new(registry, verifier, key_source, claims)
 }
 
+/// [`authenticator`] whose issuer declares every token a service's, so a
+/// token that grants no scope is not refused as identity only.
+fn service_authenticator(
+    registry: &CompiledRegistry,
+    idp: &MockIdp,
+    claims: AuthorityClaimConfig,
+) -> Result<RegistryAuthenticator, AuthenticationConfigError> {
+    RegistryAuthenticator::with_issuers(
+        registry,
+        vec![
+            AuthenticatorIssuer::new("issuer", verifier_config(idp), key_source(idp))
+                .with_declared_kinds(DeclaredKinds::Issuer(ActorKind::Service)),
+        ],
+        claims,
+    )
+}
+
 fn token_verifier(idp: &MockIdp) -> TokenVerifier {
     TokenVerifier::new(verifier_config(idp), key_source(idp))
 }
@@ -2643,7 +2775,8 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
     let project = parse_project_yaml(source.as_bytes()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let idp = MockIdp::start().await;
-    let auth = authenticator(&registry, &idp, AuthorityClaimConfig::new("sub", None)).unwrap();
+    let auth =
+        service_authenticator(&registry, &idp, AuthorityClaimConfig::new("sub", None)).unwrap();
     let token = idp.mint_token(json!({
         "aud": AUDIENCE,
         "sub": RECORD_ID,
@@ -2675,7 +2808,7 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
         .replace("claim: sub", "claim: registry_principal");
     let project = parse_project_yaml(custom.as_bytes()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    let auth = authenticator(
+    let auth = service_authenticator(
         &registry,
         &idp,
         AuthorityClaimConfig::new("registry_principal", None),
@@ -2705,7 +2838,7 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
         );
     let project = parse_project_yaml(dated.as_bytes()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    let auth = authenticator(
+    let auth = service_authenticator(
         &registry,
         &idp,
         AuthorityClaimConfig::new("registry_principal", None),
@@ -2811,7 +2944,7 @@ async fn nested_application_and_lookup_claims_are_mapped_without_requiring_unrel
         ["apply_label", "lookup_label", "presence_label"]
     );
     let idp = MockIdp::start().await;
-    let auth = authenticator(
+    let auth = service_authenticator(
         &registry,
         &idp,
         AuthorityClaimConfig::new("registry_principal", None),
@@ -3175,4 +3308,325 @@ async fn action_and_proposal_only_clients_are_checked_at_construction() {
     );
     authenticator_with_verifier(&delegated_read_registry, &idp, verifier, claims)
         .expect("the delegated source reader has an exact trusted actor mapping");
+}
+
+const PARTNER_AUDIENCE: &str = "urn:example:breg-partners";
+const CASE_READ: &str =
+    "/v1/records/cases/00000000-0000-4000-8000-000000000001?accessProfile=caseworker";
+
+/// An authenticator that accepts tokens from two issuers. `first` signs with
+/// the fixture key and admits `JWT`-typed tokens for `AUDIENCE`. `partner`
+/// signs with the rotated fixture key and admits `at+jwt` tokens for
+/// `PARTNER_AUDIENCE`. Each publishes only its own key.
+struct TwoIssuers {
+    app: axum::Router,
+    records: Arc<RecordingReadService>,
+    first: MockIdp,
+    partner: MockIdp,
+}
+
+impl TwoIssuers {
+    async fn new() -> Self {
+        let project = parse_project_yaml(PROJECT.as_bytes()).expect("project parses");
+        let registry = Arc::new(
+            compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
+        );
+        let first = MockIdp::start().await;
+        let partner = MockIdp::start().await;
+        partner.rotate_key();
+        let mut partner_verifier =
+            oidc_verifier_config(partner.issuer(), vec![PARTNER_AUDIENCE.to_owned()]);
+        partner_verifier.allowed_typ = access_token_typ_set("at+jwt");
+        let authenticator = RegistryAuthenticator::with_issuers(
+            &registry,
+            vec![
+                AuthenticatorIssuer::new("first", verifier_config(&first), key_source(&first)),
+                AuthenticatorIssuer::new("partner", partner_verifier, key_source(&partner)),
+            ],
+            authority_claims(),
+        )
+        .expect("two issuer entries build one authenticator");
+        let records = Arc::new(RecordingReadService::default());
+        let service = Arc::new(HttpService::new(
+            Arc::clone(&registry),
+            read_identity(),
+            records.clone(),
+            Arc::new(Ready),
+            cursor_codec(),
+        ));
+        Self {
+            app: authenticated_router(service, Arc::new(authenticator)),
+            records,
+            first,
+            partner,
+        }
+    }
+
+    async fn read(&self, token: &str) -> axum::response::Response {
+        let request = Request::builder()
+            .uri(CASE_READ)
+            .header(AUTHORIZATION, bearer(token))
+            .body(Body::empty())
+            .expect("request");
+        self.app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router responds")
+    }
+
+    fn reads(&self) -> usize {
+        self.records.calls.load(Ordering::SeqCst)
+    }
+}
+
+/// `valid_claims` from `issuer` for `audience`, signed with `private_jwk`
+/// under `kid` and typed `typ`.
+fn issued_token(issuer: &str, audience: &str, typ: &str, private_jwk: &str, kid: &str) -> String {
+    issued_token_with(issuer, audience, typ, private_jwk, kid, json!({}))
+}
+
+const FIRST_KID: &str = "registry-platform-testing-ed25519-1";
+const PARTNER_KID: &str = "registry-platform-testing-ed25519-2";
+
+fn first_token(harness: &TwoIssuers, audience: &str, typ: &str) -> String {
+    issued_token(
+        &harness.first.issuer(),
+        audience,
+        typ,
+        fixtures::ED25519_PRIVATE_JWK,
+        FIRST_KID,
+    )
+}
+
+fn partner_token(harness: &TwoIssuers, audience: &str, typ: &str) -> String {
+    issued_token(
+        &harness.partner.issuer(),
+        audience,
+        typ,
+        fixtures::ED25519_ROTATED_PRIVATE_JWK,
+        PARTNER_KID,
+    )
+}
+
+fn refusal_note(response: &axum::response::Response) -> registry_platform_authcommon::RefusalNote {
+    *response
+        .extensions()
+        .get::<registry_platform_authcommon::RefusalNote>()
+        .expect("a refusal carries its note to the recording layer")
+}
+
+#[tokio::test]
+async fn a_token_from_each_configured_issuer_is_verified_under_its_own_rules() {
+    let harness = TwoIssuers::new().await;
+
+    let first = harness.read(&first_token(&harness, AUDIENCE, "JWT")).await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let partner = harness
+        .read(&partner_token(&harness, PARTNER_AUDIENCE, "at+jwt"))
+        .await;
+    assert_eq!(partner.status(), StatusCode::OK);
+    assert_eq!(harness.reads(), 2);
+
+    // Each entry holds a token to its own audience and token type only.
+    for token in [
+        first_token(&harness, PARTNER_AUDIENCE, "JWT"),
+        first_token(&harness, AUDIENCE, "at+jwt"),
+        partner_token(&harness, AUDIENCE, "at+jwt"),
+        partner_token(&harness, PARTNER_AUDIENCE, "JWT"),
+    ] {
+        let response = harness.read(&token).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(response).await["code"], "authentication.refused");
+    }
+    assert_eq!(harness.reads(), 2, "a refused token reads nothing");
+}
+
+#[tokio::test]
+async fn a_token_naming_one_issuer_signed_by_the_other_is_refused() {
+    let harness = TwoIssuers::new().await;
+    for token in [
+        issued_token(
+            &harness.first.issuer(),
+            AUDIENCE,
+            "JWT",
+            fixtures::ED25519_ROTATED_PRIVATE_JWK,
+            PARTNER_KID,
+        ),
+        issued_token(
+            &harness.partner.issuer(),
+            PARTNER_AUDIENCE,
+            "at+jwt",
+            fixtures::ED25519_PRIVATE_JWK,
+            FIRST_KID,
+        ),
+    ] {
+        let response = harness.read(&token).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            refusal_note(&response).check,
+            registry_platform_authcommon::FailedCheck::TokenKey
+        );
+    }
+    assert_eq!(harness.reads(), 0);
+}
+
+#[tokio::test]
+async fn a_token_from_an_unconfigured_issuer_is_refused() {
+    let harness = TwoIssuers::new().await;
+    let response = harness
+        .read(&issued_token(
+            "https://elsewhere.example",
+            AUDIENCE,
+            "JWT",
+            fixtures::ED25519_PRIVATE_JWK,
+            FIRST_KID,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        refusal_note(&response).check,
+        registry_platform_authcommon::FailedCheck::TokenIssuer
+    );
+    assert_eq!(body_json(response).await["code"], "authentication.refused");
+    assert_eq!(harness.reads(), 0);
+}
+
+#[tokio::test]
+async fn a_jwt_typed_token_is_refused_by_default_and_the_log_names_the_setting() {
+    let harness = TwoIssuers::new().await;
+    let response = harness
+        .read(&partner_token(&harness, PARTNER_AUDIENCE, "JWT"))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let note = refusal_note(&response);
+    assert_eq!(
+        note.check,
+        registry_platform_authcommon::FailedCheck::TokenType
+    );
+    let remedy = note
+        .remedy
+        .expect("the refusal names the setting to change");
+    assert!(remedy.contains("accessTokenType"), "{remedy}");
+    let body = body_json(response).await;
+    assert_eq!(body["code"], "authentication.refused");
+    assert!(
+        !body.to_string().contains("accessTokenType"),
+        "the remedy stays in the operator's log: {body}"
+    );
+    assert_eq!(harness.reads(), 0);
+}
+
+#[tokio::test]
+async fn a_401_carries_a_bearer_challenge() {
+    let harness = TwoIssuers::new().await;
+    // No credential, a credential in another scheme, and a refused token.
+    let refused_token = format!(
+        "Bearer {}",
+        partner_token(&harness, PARTNER_AUDIENCE, "JWT")
+    );
+    for authorization in [
+        None,
+        Some("Basic dXNlcjpwYXNz"),
+        Some(refused_token.as_str()),
+    ] {
+        let mut request = Request::builder()
+            .uri(CASE_READ)
+            .body(Body::empty())
+            .expect("request");
+        if let Some(value) = authorization {
+            request.headers_mut().insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(value).expect("header value"),
+            );
+        }
+        let response = harness
+            .app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let challenges = response
+            .headers()
+            .get_all(axum::http::header::WWW_AUTHENTICATE)
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(challenges, ["Bearer"], "{authorization:?}");
+    }
+    assert_eq!(harness.reads(), 0);
+}
+
+#[tokio::test]
+async fn a_jwt_typed_token_is_admitted_when_the_issuer_states_it() {
+    let harness = TwoIssuers::new().await;
+    let response = harness.read(&first_token(&harness, AUDIENCE, "JWT")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.reads(), 1);
+}
+
+#[tokio::test]
+async fn an_id_token_is_refused_whether_or_not_jwt_is_admitted() {
+    let harness = TwoIssuers::new().await;
+    for (token, admits_jwt) in [
+        (
+            issued_token_with(
+                &harness.first.issuer(),
+                AUDIENCE,
+                "JWT",
+                fixtures::ED25519_PRIVATE_JWK,
+                FIRST_KID,
+                json!({"nonce": "n-0S6_WzA2Mj"}),
+            ),
+            true,
+        ),
+        (
+            issued_token_with(
+                &harness.partner.issuer(),
+                PARTNER_AUDIENCE,
+                "JWT",
+                fixtures::ED25519_ROTATED_PRIVATE_JWK,
+                PARTNER_KID,
+                json!({"nonce": "n-0S6_WzA2Mj"}),
+            ),
+            false,
+        ),
+    ] {
+        let response = harness.read(&token).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{admits_jwt}");
+        assert_eq!(
+            refusal_note(&response).check,
+            registry_platform_authcommon::FailedCheck::TokenType,
+            "{admits_jwt}"
+        );
+    }
+    assert_eq!(harness.reads(), 0);
+}
+
+/// [`issued_token`] with `extra` members added to the claims.
+fn issued_token_with(
+    issuer: &str,
+    audience: &str,
+    typ: &str,
+    private_jwk: &str,
+    kid: &str,
+    extra: Value,
+) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs();
+    let mut claims = valid_claims();
+    let members = claims
+        .as_object_mut()
+        .expect("fixture claims are an object");
+    members.insert("iss".to_owned(), json!(issuer));
+    members.insert("aud".to_owned(), json!(audience));
+    members.insert("iat".to_owned(), json!(now));
+    members.insert("nbf".to_owned(), json!(now));
+    members.insert("exp".to_owned(), json!(now + 300));
+    for (name, value) in extra.as_object().expect("extra claims are an object") {
+        members.insert(name.clone(), value.clone());
+    }
+    sign_ed25519_compact_jwt(private_jwk, typ, kid, claims)
 }

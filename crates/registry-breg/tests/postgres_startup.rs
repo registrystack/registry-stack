@@ -3395,22 +3395,24 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: {}
-    audience: urn:breg:test
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 200
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {}
+        audience: urn:breg:test
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 200
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: principal
 audit:

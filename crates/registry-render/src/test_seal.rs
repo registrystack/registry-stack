@@ -223,8 +223,8 @@ fn write_runtime(
         "listener":{"bind":"127.0.0.1:8080"},
         "package":{"root":package_root,"expectedDigest":digest},
         "secretProviders":{"file":{"root":home}},
-        "authentication":{"oidc":{"issuer":ISSUER,"audience":AUDIENCE,"allowedClients":[CLIENT],
-            "jwksSource":{"type":"static","documentRef":"secret:file/jwks.json"}}},
+        "authentication":{"oidc":{"issuers":{"main":{"issuer":ISSUER,"audience":AUDIENCE,"allowedClients":[CLIENT],
+            "jwksSource":{"type":"static","documentRef":"secret:file/jwks.json"}}}}},
         "audit":{"path":home.join("audit.jsonl")}, "assuranceProfile":"local", "signing":{"seals":seals}
     });
     let path = home.join("runtime.yaml");

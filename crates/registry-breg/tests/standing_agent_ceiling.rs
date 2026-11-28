@@ -107,6 +107,28 @@ fn with_assistant_operation(permission: usize, operation: &str) -> Value {
 }
 
 #[test]
+fn a_profile_naming_actor_kind_without_requester_clients_compiles() {
+    // A human profile and a standing agent profile that grants no review
+    // context, each naming a kind without the clients it serves.
+    let mut value = project();
+    for profile in ["clerk", "assistant"] {
+        value["accessProfiles"][profile]
+            .as_object_mut()
+            .expect("profile object")
+            .remove("requesterClients");
+    }
+    compile(&value).expect("actorKind without requesterClients compiles");
+
+    // The clients without the kind compile too.
+    let mut value = project();
+    value["accessProfiles"]["clerk"]
+        .as_object_mut()
+        .expect("profile object")
+        .remove("actorKind");
+    compile(&value).expect("requesterClients without actorKind compiles");
+}
+
+#[test]
 fn standing_agent_may_read_and_author_caller_owned_proposal_drafts() {
     use registry_breg::model::{CompiledActionExecution, ProposalOperation};
     let registry = compile(&project()).expect("reads and caller-owned draft authoring compile");

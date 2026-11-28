@@ -1798,7 +1798,7 @@ fn maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals() {
     );
     let runtime_text=std::fs::read_to_string(&runtime_path).unwrap().replace(
         "  apiKeyRef: secret:file/api.key",
-        "  oidc:\n    issuer: https://issuer.example.test\n    audience: urn:render:test\n    allowedClients: [portal]\n    jwksSource:\n      type: static\n      documentRef: secret:file/jwks.json"
+        "  oidc:\n    issuers:\n      main:\n        issuer: https://issuer.example.test\n        audience: urn:render:test\n        allowedClients: [portal]\n        jwksSource:\n          type: static\n          documentRef: secret:file/jwks.json"
     );
     std::fs::write(&runtime_path, runtime_text).unwrap();
     let server = start_server(&runtime_path);

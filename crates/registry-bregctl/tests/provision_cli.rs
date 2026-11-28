@@ -71,15 +71,17 @@ package:
   root: {package}
 authentication:
   oidc:
-    issuer: https://issuer.example.test
-    audience: urn:breg:provision-cli-test
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: \" \"
-    allowedClients: [directory-client]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
+    issuers:
+      primary:
+        issuer: https://issuer.example.test
+        audience: urn:breg:provision-cli-test
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: \" \"
+        allowedClients: [directory-client]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

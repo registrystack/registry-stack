@@ -29,6 +29,14 @@ pub const DEFAULT_OU_HANDLE: &str = "default";
 /// this id and handle builds on the unit setup already created.
 pub const DEFAULT_OU_ID: &str = "01900000-0000-7000-8000-000000000001";
 
+/// The claim a token carries for the organization unit its principal is
+/// placed in. The issuer computes it from the unit's handle, so a principal's
+/// own attributes never state it.
+pub const UNIT_CLAIM: &str = "ouHandle";
+
+/// The most child organization units one description states.
+pub const MAXIMUM_UNITS: usize = 256;
+
 /// The whole closed description of one issuer deployment.
 #[derive(Debug, Clone)]
 pub struct IssuerDescription {
@@ -46,6 +54,9 @@ pub struct IssuerDescription {
     /// writes private files with owner-only modes; it never removes the root.
     pub state_root: PathBuf,
     pub organization_unit: OrganizationUnit,
+    /// Child organization units of `organization_unit`. A principal placed in
+    /// one carries its handle as the unit claim.
+    pub units: Vec<ChildUnit>,
     pub resource_servers: Vec<ResourceServer>,
     pub roles: Vec<Role>,
     pub machine_clients: Vec<MachineClient>,
@@ -74,6 +85,16 @@ pub struct SessionIdentity {
 #[derive(Debug, Clone)]
 pub struct OrganizationUnit {
     pub id: String,
+    pub handle: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// A child of the description's organization unit.
+#[derive(Debug, Clone)]
+pub struct ChildUnit {
+    pub id: String,
+    /// Unique across the description: only this handle reaches a token.
     pub handle: String,
     pub name: String,
     pub description: String,
@@ -142,6 +163,10 @@ pub struct MachineClient {
     pub attributes: BTreeMap<String, serde_json::Value>,
     /// Which of those attribute names are embedded in access tokens.
     pub token_attributes: Vec<String>,
+    /// The handle of the child unit the client is placed in. A placed client
+    /// opts in to the unit claim through `token_attributes` without stating
+    /// it in `attributes`.
+    pub unit: Option<String>,
     pub access_token_lifetime_seconds: u32,
     /// Enable native token exchange. Institutional mappings require the exact
     /// bootstrap grant; first-party mappings retain the client's authored
@@ -257,6 +282,9 @@ pub struct SyntheticUser {
     /// Relative owner-only file inside the issuer state root.
     pub password_file: PathBuf,
     pub attributes: BTreeMap<String, String>,
+    /// The handle of the child unit the user is placed in. A placed user
+    /// states no unit claim among its `attributes`.
+    pub unit: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -317,6 +345,15 @@ fn registered_permission(server: &ResourceServer, scope: &str) -> bool {
             .iter()
             .any(|action| scope == format!("{prefix}:{}", action.handle))
     })
+}
+
+/// A child unit handle: 1 to 64 bytes of ASCII letters, digits, `-`, `_` or
+/// `.`. Case is kept.
+pub(crate) fn valid_unit_handle(handle: &str) -> bool {
+    bounded(handle, 64)
+        && handle
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn private_file_name(path: &std::path::Path) -> bool {
@@ -431,6 +468,22 @@ impl IssuerDescription {
             && self.organization_unit.name.is_empty()
         {
             return refuse("the organization unit must carry a name");
+        }
+        let mut unit_handles = BTreeSet::new();
+        let mut unit_names = BTreeSet::new();
+        if self.units.len() > MAXIMUM_UNITS
+            || self.units.iter().any(|unit| {
+                !valid_uuid(&unit.id)
+                    || !valid_unit_handle(&unit.handle)
+                    || unit.handle == DEFAULT_OU_HANDLE
+                    || unit.handle == self.organization_unit.handle
+                    || !unit_handles.insert(unit.handle.as_str())
+                    || !bounded(&unit.name, 100)
+                    || !unit_names.insert(unit.name.as_str())
+                    || !bounded(&unit.description, 256)
+            })
+        {
+            return refuse("child units are at most 256, with distinct valid handles and names that differ from the deployment unit");
         }
         if self.resource_servers.is_empty() || self.resource_servers.len() > 8 {
             return refuse("the description states 1..=8 resource servers");
@@ -561,6 +614,10 @@ impl IssuerDescription {
                 })
                 || !emails.insert(&user.email)
                 || !private_file_name(&user.password_file)
+                || user
+                    .unit
+                    .as_deref()
+                    .is_some_and(|unit| !unit_handles.contains(unit))
                 || user.attributes.len() > 16
                 || user.attributes.iter().any(|(name, value)| {
                     // The renderer writes the declared username and email as
@@ -569,6 +626,7 @@ impl IssuerDescription {
                     // deduplicated here rather than add one.
                     protected_attribute(name)
                         || matches!(name.as_str(), "username" | "email")
+                        || (user.unit.is_some() && name == UNIT_CLAIM)
                         || !bounded(name, 128)
                         || !name
                             .bytes()
@@ -665,6 +723,13 @@ impl IssuerDescription {
             }
             if !bounded(&client.client_id, 128) {
                 return refuse("each machine client carries a bounded client id");
+            }
+            if client
+                .unit
+                .as_deref()
+                .is_some_and(|unit| !unit_handles.contains(unit))
+            {
+                return refuse("a principal is placed in a unit the description states");
             }
             let jwks: serde_json::Value =
                 serde_json::from_str(&client.public_jwks).map_err(|_| {
@@ -928,8 +993,12 @@ impl IssuerDescription {
                     return refuse("every client attribute is a stated schema attribute");
                 }
             }
+            if client.unit.is_some() && client.attributes.contains_key(UNIT_CLAIM) {
+                return refuse("a placed client states no unit attribute: its unit is its claim");
+            }
             for name in &client.token_attributes {
-                if !client.attributes.contains_key(name) {
+                let placed_unit_claim = name == UNIT_CLAIM && client.unit.is_some();
+                if !placed_unit_claim && !client.attributes.contains_key(name) {
                     return refuse("every token attribute is a stated client attribute");
                 }
             }
@@ -946,6 +1015,7 @@ impl IssuerDescription {
     /// Every identifier the renderer derives for a native entity.
     pub(crate) fn derived_ids(&self) -> Vec<&str> {
         std::iter::once(self.organization_unit.id.as_str())
+            .chain(self.units.iter().map(|unit| unit.id.as_str()))
             .chain(
                 self.resource_servers
                     .iter()
@@ -1100,6 +1170,66 @@ mod tests {
         );
     }
 
+    fn north() -> ChildUnit {
+        ChildUnit {
+            id: "0197aaaa-0000-7000-8000-0000000003a1".into(),
+            handle: "north".into(),
+            name: "North".into(),
+            description: "Child organization unit".into(),
+        }
+    }
+
+    #[test]
+    fn a_placed_principal_names_a_stated_unit_and_the_unit_claim_is_its_token_attribute() {
+        let mut description = crate::testing::synthetic_description();
+        description.machine_clients[0].unit = Some("north".into());
+        assert!(
+            matches!(
+                description.validate(),
+                Err(ToolingError::InvalidDescription {
+                    reason: "a principal is placed in a unit the description states"
+                })
+            ),
+            "a unit the description does not state"
+        );
+        description.units.push(north());
+        description.validate().expect("a stated unit");
+        description.machine_clients[0]
+            .token_attributes
+            .push(UNIT_CLAIM.into());
+        description
+            .validate()
+            .expect("a placed client projects the unit claim");
+        description.machine_clients[0].unit = None;
+        assert!(
+            description.validate().is_err(),
+            "an unplaced client states the claim as an attribute first"
+        );
+    }
+
+    #[test]
+    fn units_are_distinct_valid_and_never_the_deployment_unit() {
+        let mut description = crate::testing::synthetic_description();
+        description.units.push(north());
+        description.validate().expect("a unit");
+        let mut repeated = description.clone();
+        let mut again = north();
+        again.id = "0197aaaa-0000-7000-8000-0000000003a2".into();
+        repeated.units.push(again);
+        assert!(repeated.validate().is_err(), "a repeated handle");
+        for handle in ["default", "", "a b"] {
+            let mut bad = description.clone();
+            bad.units[0].handle = handle.into();
+            assert!(bad.validate().is_err(), "{handle:?}");
+        }
+        let mut same_id = description.clone();
+        same_id.units[0].id = same_id.organization_unit.id.clone();
+        assert!(
+            same_id.validate().is_err(),
+            "an id shared with the deployment unit"
+        );
+    }
+
     #[test]
     fn a_machine_clients_jwks_may_carry_no_private_key_material() {
         for member in PRIVATE_JWK_MEMBERS {
@@ -1138,6 +1268,7 @@ mod tests {
             email: format!("staff.{n}@example.test"),
             password_file: format!("secrets/user-{n}").into(),
             attributes: BTreeMap::new(),
+            unit: None,
         };
         description.interactive_applications = (0..8).map(application).collect();
         description.synthetic_users = (0..32).map(user).collect();
@@ -1179,6 +1310,7 @@ mod tests {
                 email: "shared@example.test".into(),
                 password_file: "secrets/first-user".into(),
                 attributes: BTreeMap::new(),
+                unit: None,
             },
             SyntheticUser {
                 id: "0197aaaa-0000-7000-8000-0000000000e3".into(),
@@ -1186,6 +1318,7 @@ mod tests {
                 email: "other@example.test".into(),
                 password_file: "secrets/second-user".into(),
                 attributes: BTreeMap::new(),
+                unit: None,
             },
         ];
         assert!(description.validate().is_ok());
@@ -1218,6 +1351,7 @@ mod tests {
             email: "staff-one@example.test".into(),
             password_file: "secrets/first-user".into(),
             attributes: BTreeMap::new(),
+            unit: None,
         }];
         assert!(description.validate().is_ok());
         for name in ["username", "email"] {

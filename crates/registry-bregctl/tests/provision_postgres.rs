@@ -269,14 +269,14 @@ impl Deployment {
             },
             "package": {"root": package},
             "authentication": {
-                "oidc": {
+                "oidc": {"issuers": {"primary": {
                     "issuer": self.issuer.issuer(), "audience": AUDIENCE,
                     "allowedAlgorithm": "ES256", "accessTokenType": "at+jwt",
                     "scopeClaim": "scope", "scopeSeparator": " ",
                     "allowedClients": ["application-reader"],
                     "maximumTokenLifetimeSeconds": 3600, "leewayMilliseconds": 0,
                     "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}
-                },
+                }}},
                 "authorityClaims": {"principal": "sub"}
             },
             "audit": {"hashKeyRef": "secret:file/audit-key", "path": self.path("audit/breg.jsonl")},

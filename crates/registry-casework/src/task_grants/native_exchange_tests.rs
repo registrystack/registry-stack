@@ -888,7 +888,7 @@ fn configured_private_thunderid_is_discovered_on_an_owned_docker_network() {
             "secretProviders":{"file":{"root":"/probe/secrets"}},
             "database":{"runtimeUrlRef":"secret:file/runtime-database-url","migrationUrlRef":"secret:file/migration-database-url","pool":{"maximumConnections":1,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
             "package":{"root":"/probe/package"},
-            "authentication":{"oidc":{"issuer":"http://thunderid:8090","allowInsecureHttp":true,"audience":"urn:private-network-proof","allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["private-network-client"],"maximumTokenLifetimeSeconds":3600,"leewayMilliseconds":60000,"jwksSource":{"type":"discovery"}},"authorityClaims":{"principal":"sub","purpose":"registry_purpose"}},
+            "authentication":{"oidc":{"issuers":{"primary":{"issuer":"http://thunderid:8090","allowInsecureHttp":true,"audience":"urn:private-network-proof","allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["private-network-client"],"maximumTokenLifetimeSeconds":3600,"leewayMilliseconds":60000,"jwksSource":{"type":"discovery"}}}},"authorityClaims":{"principal":"sub","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key","path":"/probe/audit.jsonl"},
             "cursor":{"secretRef":"secret:file/cursor-key"}
         }))

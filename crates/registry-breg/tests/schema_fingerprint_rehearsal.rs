@@ -603,22 +603,24 @@ package:
   root: /tmp/breg-rehearsal-package
 authentication:
   oidc:
-    issuer: https://issuer.example
-    audience: urn:breg:rehearsal
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [registry-client]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 900
+    issuers:
+      primary:
+        issuer: https://issuer.example
+        audience: urn:breg:rehearsal
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [registry-client]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

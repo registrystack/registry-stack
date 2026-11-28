@@ -824,22 +824,24 @@ package:
   root: {package_root}
 authentication:
   oidc:
-    issuer: https://oidc-is-not-opened.invalid
-    audience: urn:breg:diff
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [diff-client]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 1
-      outageToleranceSeconds: 900
+    issuers:
+      primary:
+        issuer: https://oidc-is-not-opened.invalid
+        audience: urn:breg:diff
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [diff-client]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 1
+          outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

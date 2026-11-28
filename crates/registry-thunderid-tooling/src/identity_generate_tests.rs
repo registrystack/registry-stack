@@ -1728,3 +1728,274 @@ fn an_exchange_profiles_actor_kind_is_required_of_the_clients_own_token() {
         ["identity.deployment.profile-requires-actor-kind"]
     );
 }
+
+/// BReg's facts reading `ouHandle` as a string claim, as a project whose row
+/// boundary names the claim does.
+fn reading_the_unit_claim(mut case: Case) -> Case {
+    case.facts[0].1 = case.facts[0]
+        .1
+        .replace("  registry_role: string\n", "  registry_role: string\n  ouHandle: string\n");
+    case
+}
+
+fn organization_units(generated: &Generated) -> Vec<serde_json::Value> {
+    of_type(&resources(generated), "organization_unit")
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+fn user_named(documents: &[serde_json::Value], username: &str) -> serde_json::Value {
+    of_type(documents, "user")
+        .into_iter()
+        .find(|user| user["attributes"]["username"] == username)
+        .expect("user")
+        .clone()
+}
+
+fn unit_claim_projections(app: &serde_json::Value) -> [serde_json::Value; 2] {
+    let token = &app["inboundAuthConfig"][0]["config"]["token"];
+    [
+        token["accessToken"]["userConfig"]["attributes"].clone(),
+        token["idToken"]["userAttributes"].clone(),
+    ]
+}
+
+#[test]
+fn a_principal_that_needs_a_unit_claim_and_has_no_unit_is_refused() {
+    let mut case = reading_the_unit_claim(case());
+    case.facts[0].1 = case.facts[0].1.replace(
+        "    purposes: [eligibility]\n",
+        "    purposes: [eligibility]\n    requiredClaims: [ouHandle]\n",
+    );
+    // The case portal, the officer and the farmer hold `case-read`. Only the
+    // officer is placed in a unit.
+    let Err(refused) = case.run() else {
+        panic!("the run was accepted")
+    };
+    let found: Vec<_> = refused
+        .report()
+        .expect("a report")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (
+                "identity.deployment.required-claim-missing".to_owned(),
+                "/clients/0/claims".to_owned()
+            ),
+            (
+                "identity.deployment.required-claim-missing".to_owned(),
+                "/users/1/claims".to_owned()
+            ),
+        ]
+    );
+
+    // Placed in a unit, a principal carries the claim.
+    case.deployment = case
+        .deployment
+        .replacen(
+            "      registry_actor_kind: service\n",
+            "      registry_actor_kind: service\n      ouHandle: north\n",
+            1,
+        )
+        .replace(
+            "      registry_role: farmer\n",
+            "      registry_role: farmer\n      ouHandle: south\n",
+        );
+    case.run().expect("every principal that needs a unit is placed");
+}
+
+#[test]
+fn a_user_with_a_unit_claim_is_placed_in_it_and_carries_no_unit_or_jurisdiction_attribute() {
+    let generated = reading_the_unit_claim(case()).run().expect("generates");
+    let documents = resources(&generated);
+    let sid = deployment_session_id(&generated.summary.issuer);
+
+    let officer = user_named(&documents, "officer-one");
+    assert_eq!(officer["ouHandle"], "registry/north");
+    // The farmer is placed in no unit and stays in the deployment unit.
+    assert_eq!(user_named(&documents, "farmer-one")["ouHandle"], "registry");
+    for user in of_type(&documents, "user") {
+        let attributes = user["attributes"].as_object().expect("attributes");
+        for name in ["ouHandle", "jurisdiction"] {
+            assert!(!attributes.contains_key(name), "{name} is a user attribute");
+        }
+    }
+    for schema in of_type(&documents, "user_type") {
+        let schema = schema["schema"].as_object().expect("a schema");
+        for name in ["ouHandle", "jurisdiction"] {
+            assert!(!schema.contains_key(name), "{name} is in a user schema");
+        }
+    }
+    // The application carries the unit claim, and no stale attribute.
+    let app = of_type(&documents, "application")[0];
+    for projection in unit_claim_projections(app) {
+        let names = projection.as_array().expect("a projection");
+        assert!(names.contains(&serde_json::json!("ouHandle")), "{names:?}");
+        assert!(!names.contains(&serde_json::json!("jurisdiction")), "{names:?}");
+    }
+    let north = local::derived_uuid(&format!("{sid}:organization-unit:registry/north"));
+    assert!(organization_units(&generated)
+        .iter()
+        .any(|unit| unit["id"] == north.as_str()));
+}
+
+#[test]
+fn a_machine_client_with_a_unit_claim_is_placed_and_projects_it() {
+    let generated = case().run().expect("generates");
+    let agent = agent_for(&generated, "field-agent");
+    assert_eq!(agent["ouHandle"], "registry/south");
+    assert!(agent["attributes"].get("ouHandle").is_none());
+    let config = &agent["inboundAuthConfig"][0]["config"];
+    let projected = config["token"]["accessToken"]["clientConfig"]["attributes"]
+        .as_array()
+        .expect("a projection");
+    assert!(projected.contains(&serde_json::json!("ouHandle")), "{projected:?}");
+    // An unplaced client stays in the deployment unit and projects nothing.
+    let other = agent_for(&generated, "case-portal");
+    assert_eq!(other["ouHandle"], "registry");
+    assert!(!other["inboundAuthConfig"][0]["config"]["token"]["accessToken"]["clientConfig"]
+        ["attributes"]
+        .as_array()
+        .expect("a projection")
+        .contains(&serde_json::json!("ouHandle")));
+    // The agent schema declares no unit attribute.
+    let agent_type = parse(&text(&generated, "registry-schema/agent-type.yaml"));
+    let schema = agent_type["schema"].as_object().expect("a schema");
+    for name in ["ouHandle", "jurisdiction"] {
+        assert!(!schema.contains_key(name), "{name} is in the agent schema");
+    }
+    // A product that reads the claim as a list cannot be served by a unit.
+    let mut list = case();
+    list.facts[0].1 = list.facts[0]
+        .1
+        .replace("  registry_role: string\n", "  registry_role: string\n  ouHandle: string-array\n");
+    assert!(list
+        .refusal()
+        .contains(&"identity.deployment.claim-type".to_owned()));
+}
+
+#[test]
+fn applications_carry_the_unit_claim_when_their_product_reads_it() {
+    let generated = reading_the_unit_claim(case()).run().expect("generates");
+    let documents = resources(&generated);
+    for projection in unit_claim_projections(of_type(&documents, "application")[0]) {
+        assert_eq!(
+            projection,
+            serde_json::json!([
+                "registry_actor_kind",
+                "registry_role",
+                "registry_purpose",
+                "ouHandle"
+            ])
+        );
+    }
+    // A product that does not read the claim projects nothing.
+    let silent = case().run().expect("generates");
+    for projection in unit_claim_projections(of_type(&resources(&silent), "application")[0]) {
+        assert!(!projection
+            .as_array()
+            .expect("a projection")
+            .contains(&serde_json::json!("ouHandle")));
+    }
+
+    // At 16 listed attributes the claim cannot be added.
+    let names: Vec<String> = (1..=15).map(|n| format!("claim_{n:02}")).collect();
+    let mut full = reading_the_unit_claim(case());
+    full.facts[0].1 = full.facts[0]
+        .1
+        .replace("    purposes: [eligibility]\n", "")
+        .replace(
+            "  registry_role: string\n",
+            &format!(
+                "  registry_role: string\n{}",
+                names
+                    .iter()
+                    .map(|name| format!("  {name}: string\n"))
+                    .collect::<String>()
+            ),
+        );
+    full.deployment = full.deployment.replace(
+        "tokenAttributes: [registry_actor_kind, registry_role]",
+        &format!("tokenAttributes: [registry_actor_kind, {}]", names.join(", ")),
+    );
+    assert_eq!(
+        only_finding(&full),
+        (
+            "identity.deployment.unit-claim-not-projected".to_owned(),
+            "/browserApps/0/tokenAttributes".to_owned()
+        )
+    );
+}
+
+#[test]
+fn each_unit_renders_as_a_child_of_the_deployment_unit() {
+    for home in ["registry", "default"] {
+        let mut case = case();
+        case.deployment = case
+            .deployment
+            .replace("  handle: registry\n", &format!("  handle: {home}\n"));
+        let generated = case.run().expect("generates");
+        let sid = deployment_session_id(&generated.summary.issuer);
+        let parent = if home == "default" {
+            crate::description::DEFAULT_OU_ID.to_owned()
+        } else {
+            local::derived_uuid(&format!("{sid}:organization-unit:{home}"))
+        };
+        let units = organization_units(&generated);
+        let children: Vec<_> = units.iter().filter(|unit| unit.get("parent").is_some()).collect();
+        assert_eq!(children.len(), 2, "{home}");
+        for (child, (handle, name)) in children
+            .iter()
+            .zip([("north", "North district"), ("south", "south")])
+        {
+            assert_eq!(child["handle"], handle);
+            assert_eq!(child["name"], name, "a unit without a name takes its handle");
+            assert_eq!(child["parent"], parent.as_str());
+            assert_eq!(
+                child["id"],
+                local::derived_uuid(&format!("{sid}:organization-unit:{home}/{handle}")).as_str()
+            );
+            assert_eq!(child["isRegistrationFlowEnabled"], false);
+        }
+        // Under `default` the bootstrap unit already exists and has no document.
+        assert_eq!(units.len(), if home == "default" { 2 } else { 3 }, "{home}");
+        let officer = user_named(&resources(&generated), "officer-one");
+        assert_eq!(officer["ouHandle"], format!("{home}/north"));
+    }
+}
+
+#[test]
+fn generated_resources_open_no_self_registration_and_carry_no_flow() {
+    let generated = reading_the_unit_claim(case()).run().expect("generates");
+    let documents = resources(&generated);
+    for unit in of_type(&documents, "organization_unit") {
+        if let Some(open) = unit.get("isRegistrationFlowEnabled") {
+            assert_eq!(*open, false, "{unit}");
+        }
+    }
+    assert_eq!(of_type(&documents, "organization_unit").len(), 3);
+    for user_type in of_type(&documents, "user_type") {
+        assert_eq!(user_type["allowSelfRegistration"], false);
+    }
+    for app in of_type(&documents, "application") {
+        assert_eq!(app["isRegistrationFlowEnabled"], false);
+        assert_eq!(app["isRecoveryFlowEnabled"], false);
+    }
+    for document in &documents {
+        let kind = document["resource_type"].as_str().expect("a resource type");
+        assert!(!kind.contains("flow"), "a generated {kind} document");
+    }
+    let everything: String = generated
+        .files
+        .values()
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .collect();
+    assert!(!everything.contains("AttributeCollector"));
+    assert!(!everything.contains("allowSelfRegistration: true"));
+    assert!(!everything.contains("isRegistrationFlowEnabled: true"));
+}

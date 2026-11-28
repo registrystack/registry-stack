@@ -4,6 +4,10 @@ organizationUnit:
   handle: registry
   name: Registry
   description: Registry Stack deployment
+  units:
+    - handle: north
+      name: North district
+    - handle: south
 clients:
   - id: case-portal
     publicJwksFile: keys/case-portal.jwks.json
@@ -21,6 +25,7 @@ clients:
       registry_actor_kind: service
       evidence_audience: https://relying.example
       evidence_tags: [field]
+      ouHandle: south
   - id: task-agent
     publicJwksFile: keys/task-agent.jwks.json
     grants:
@@ -46,6 +51,7 @@ users:
     passwordRef: secret:env/OFFICER_ONE_PASSWORD
     claims:
       registry_actor_kind: human
+      ouHandle: north
       registry_role: officer
     grants:
       - product: breg

@@ -20,7 +20,9 @@ use registry_platform_yaml::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::description::protected_attribute;
+use crate::description::{
+    protected_attribute, valid_unit_handle, DEFAULT_OU_HANDLE, MAXIMUM_UNITS, UNIT_CLAIM,
+};
 use crate::identity_facts::{set, valid_claim_name, valid_client_id, ActorKind, ACTOR_KIND_CLAIM};
 use crate::ToolingError;
 
@@ -51,6 +53,31 @@ pub struct OrganizationUnit {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Child units of this unit. A user or client whose `claims` state
+    /// `ouHandle` is placed in the child unit with that handle, and its
+    /// tokens carry the handle as the `ouHandle` claim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub units: Vec<ChildUnit>,
+}
+
+/// A child of the deployment's organization unit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChildUnit {
+    /// 1 to 64 ASCII letters, digits, `-`, `_` or `.`. Unique across the
+    /// file, because only this handle reaches a token.
+    pub handle: String,
+    /// At most 100 bytes. Omitted, the name is the handle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl ChildUnit {
+    /// The name the unit is rendered with.
+    pub fn name_or_handle(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.handle)
+    }
 }
 
 /// Access profiles of one product, granted to one principal.
@@ -262,6 +289,16 @@ fn unknown_actor_kind(pointer: &str, error: &mut dyn FnMut(&str, &str, &str, &st
     );
 }
 
+/// Refuse a unit claim that names no unit of the deployment.
+fn unknown_unit(pointer: &str, error: &mut dyn FnMut(&str, &str, &str, &str)) {
+    error(
+        pointer,
+        "identity.deployment.unknown-unit",
+        "the ouHandle claim does not name one of the organization unit's units",
+        "State the handle of an entry of organizationUnit.units, or remove the claim.",
+    );
+}
+
 fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic> {
     let mut found = Vec::new();
     let mut error = |pointer: &str, code: &str, message: &str, action: &str| {
@@ -303,6 +340,49 @@ fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic
             "State a browser application, or remove the users.",
         );
     }
+
+    let mut unit_handles = BTreeSet::new();
+    let mut unit_names = BTreeSet::new();
+    if unit.units.len() > MAXIMUM_UNITS {
+        error(
+            "/organizationUnit/units",
+            "identity.deployment.invalid-unit",
+            "more than 256 child units are stated",
+            "State at most 256 units.",
+        );
+    }
+    for (index, child) in unit.units.iter().enumerate() {
+        let pointer = format!("/organizationUnit/units/{index}");
+        if !valid_unit_handle(&child.handle)
+            || child.handle == DEFAULT_OU_HANDLE
+            || child.handle == unit.handle
+            || !unit_handles.insert(child.handle.as_str())
+        {
+            error(
+                &pointer,
+                "identity.deployment.invalid-unit",
+                "a unit handle is not 1 to 64 ASCII letters, digits, `-`, `_` or `.`, repeats another unit's, or equals the deployment unit's handle or `default`",
+                "Give each unit its own handle, different from the deployment unit's handle and from `default`.",
+            );
+        } else if child
+            .name
+            .as_deref()
+            .is_some_and(|name| name.is_empty() || name.len() > 100)
+            || !unit_names.insert(child.name_or_handle())
+        {
+            error(
+                &pointer,
+                "identity.deployment.invalid-unit",
+                "a unit name is empty, longer than 100 bytes, or repeats another unit's name",
+                "Give each unit its own name of 1 to 100 bytes, or omit it to use the handle.",
+            );
+        }
+    }
+    let places = |claim: Option<&ClaimValue>| match claim {
+        Some(ClaimValue::One(value)) => !unit_handles.contains(value.as_str()),
+        Some(ClaimValue::Many(_)) => true,
+        None => false,
+    };
 
     let mut client_ids = BTreeSet::new();
     let check_grants = |pointer: &str,
@@ -362,6 +442,9 @@ fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic
             if !matches!(kind, ClaimValue::One(kind) if ActorKind::parse(kind).is_some()) {
                 unknown_actor_kind(&pointer, &mut error);
             }
+        }
+        if places(client.claims.get(UNIT_CLAIM)) {
+            unknown_unit(&format!("{pointer}/claims/{UNIT_CLAIM}"), &mut error);
         }
         for name in client.claims.keys() {
             if !valid_claim_name(name) || protected_attribute(name) {
@@ -538,6 +621,13 @@ fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic
         {
             unknown_actor_kind(&pointer, &mut error);
         }
+        if user
+            .claims
+            .get(UNIT_CLAIM)
+            .is_some_and(|value| !unit_handles.contains(value.as_str()))
+        {
+            unknown_unit(&format!("{pointer}/claims/{UNIT_CLAIM}"), &mut error);
+        }
         check_grants(&pointer, &user.grants, &mut error);
     }
     let mut type_ids = BTreeSet::new();
@@ -554,16 +644,15 @@ fn check(document: &Document, deployment: &IdentityDeployment) -> Vec<Diagnostic
                 .all(|byte| byte.is_ascii_alphanumeric())
             || !type_names.insert(user_type.name.as_str())
             || user_type.attributes.len() > 16
-            || user_type
-                .attributes
-                .iter()
-                .any(|name| !valid_claim_name(name) || protected_attribute(name))
+            || user_type.attributes.iter().any(|name| {
+                !valid_claim_name(name) || protected_attribute(name) || name == UNIT_CLAIM
+            })
         {
             error(
                 &pointer,
                 "identity.deployment.invalid-user-type",
-                "a user type id or name is invalid or repeated, or its attributes are invalid",
-                "Give each type a local id and a distinct alphanumeric name, with at most 16 attributes.",
+                "a user type id or name is invalid or repeated, or its attributes are invalid or name the unit claim",
+                "Give each type a local id and a distinct alphanumeric name, with at most 16 attributes that do not include ouHandle.",
             );
         }
     }

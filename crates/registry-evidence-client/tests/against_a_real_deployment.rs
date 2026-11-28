@@ -2452,6 +2452,7 @@ fn start_stock_token_issuer_with_authorities(authority_issuers: &[&str]) -> Stoc
                 ("evidence_audience".to_owned(), json!(RELYING_AUDIENCE)),
             ]),
             token_attributes: vec!["evidence_tags".to_owned(), "evidence_audience".to_owned()],
+            unit: None,
             access_token_lifetime_seconds: 300,
             token_exchange: Some(TokenExchangeClient {
                 assertion_resource_server_id: TASK_AUTHORITY_RESOURCE_ID.to_owned(),

@@ -22,6 +22,7 @@ registry-platform-httpsec = { workspace = true, features = ["refusal-trace-id", 
 registry-platform-httputil = { workspace = true }
 registry-platform-metrics = { workspace = true }
 registry-platform-yaml = { workspace = true }
+registry-thunderid-tooling.workspace = true
 typst = { workspace = true }
 typst-pdf = { workspace = true }
 typst-assets = { workspace = true }

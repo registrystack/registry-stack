@@ -13,8 +13,14 @@
 - BREAKING: `/ready` gains `posture` and `developmentSettings`. Migration: No change for probes that read the status code.
 - BREAKING: Render audit lines gain `posture`. Migration: Audit readers with a closed line parser accept the posture member.
 - BREAKING: Development responses carry `Registry-Posture: development` and production refuses development peers. Migration: Point production runtimes at production peers.
+- BREAKING: `authentication.oidc` declares its issuers under `issuers`, one entry per issuer id, and the members `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`, `allowedClients` and `assertionIssuers` move into the entry. `assertionIssuers` keeps its rules. The old keys are refused as `config.removed-key`, each naming its replacement. Migration: Declare each of them under `authentication.oidc.issuers.ISSUER_ID`.
+- BREAKING: Render refuses an ID token under `accessTokenType: JWT`, and an access token that carries no scope beyond openid, profile, email, address, phone and offline_access and no declared actor kind. Migration: Name the issuer's access-token type on its entry, and declare the client's kind in `clientActorKinds`, or the issuer's in `actorKind`, where the provider grants no scope.
+- BREAKING: An issuer entry that lists `allowedClients: unrestricted` is an explicit production setting, reported as `platform.posture.unrestricted-clients` at the entry's `allowedClients`. It replaces `render.posture.unrestricted-oidc-clients`. Migration: Match `platform.posture.unrestricted-clients` where an operator or script matched the old code.
 
 - A secret file Render refuses names the failed check and its fix.
+- `authentication.oidc.renderScope` and `authentication.oidc.sealScope` name the scope the render and document routes and the seal route require. They default to `render:render` and `render:seal`, and a runtime whose two names are equal is refused as `render.runtime.seal-scope-is-render-scope`.
+- Each issuer entry may state `accessTokenType`, `scopeClaim`, `actorKind` and `clientActorKinds`, and several issuers may be declared at once. With more than one issuer, every client a seal allows is listed by exactly one issuer, as `render.runtime.seal-client-not-admitted` reports, and a token another issuer signs never carries that client. A refusal under `development` posture carries `failedCheck` in its body, naming the check that refused the caller. A production body is unchanged.
+- `registry-render generate identity-facts PACKAGE --runtime-config FILE --output FILE` writes the identity facts a deployment states about one issuer: the issuer, the audience, the admitted clients, the scope of each route, and the requester clients of its seals. `--issuer` names the issuer when the runtime declares more than one, and an issuer that carries no seal client states only the render profile. `--posture` reads the runtime under that posture, as `serve` does. It never replaces an existing file.
 
 - `check --runtime-config` verifies the configured package when its path is resolved and the runtime file passes its structural checks. A structural runtime error stops package inspection even when the package exists. An invalid package or digest mismatch returns exit 1 with `render.runtime.package-refused`. An unreadable package returns exit 3.
 - Production check and startup report `render.posture.local-assurance` for a local assurance profile and `render.posture.seals-not-served` for a sealed package without `signing`. When both apply, they appear in one refusal.
@@ -22,8 +28,8 @@
 - `serve` logs the posture block and refuses a sealed bundle served without `signing` before authentication starts. `healthcheck` refuses a listener bound to a scoped IPv6 address, which a URL cannot name.
 
 - A scope refusal writes the scope claim name and the scope the route
-  requires on its `request refused` log line. The values are fixed by Render
-  and never come from the caller's token. Responses are unchanged.
+  requires on its `request refused` log line. Both values come from the
+  runtime file and never from the caller's token. Responses are unchanged.
 - Render counts every refusal of a caller in `render_request_refusals_total{check}`
   (served when `metricsListener` is set) and writes one `request refused` log line with
   `failed_check` and the trace id, at most five per check per minute. The

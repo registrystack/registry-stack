@@ -351,25 +351,27 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: https://auth.example.test
-    audience: urn:breg:field-encryption
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: https://auth.example.test
+        audience: urn:breg:field-encryption
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: purpose

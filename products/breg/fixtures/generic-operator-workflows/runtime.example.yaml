@@ -51,17 +51,19 @@ package:
 # in registry.yaml read: `principalClaim`, and the claims row boundaries compare.
 authentication:
   oidc:
-    issuer: https://issuer.example.invalid
-    audience: generic-registry
-    allowedAlgorithm: ES256
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [generic-registry-client]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 30000
-    jwksSource:
-      type: discovery
+    issuers:
+      primary:
+        issuer: https://issuer.example.invalid
+        audience: generic-registry
+        allowedAlgorithm: ES256
+        accessTokenType: at+jwt
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [generic-registry-client]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 30000
+        jwksSource:
+          type: discovery
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

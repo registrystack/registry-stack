@@ -4,6 +4,10 @@ kind: PlatformIdentityDeployment
 organizationUnit:
   handle: registry
   name: Registry
+  units:
+    - handle: north
+      name: North district
+    - handle: south
 clients:
   - id: case-portal
     publicJwksFile: keys/case-portal.jwks.json
@@ -13,6 +17,7 @@ clients:
     claims:
       registry_actor_kind: service
       registry_principal: case-portal
+      ouHandle: south
 browserApps:
   - id: staff-portal
     clientSecretRef: secret:env/STAFF_PORTAL_CLIENT_SECRET
@@ -31,6 +36,7 @@ users:
     claims:
       registry_actor_kind: human
       registry_principal: officer-one
+      ouHandle: north
     grants:
       - product: breg
         accessProfiles: [case-read]

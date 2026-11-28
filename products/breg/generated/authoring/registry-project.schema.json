@@ -5929,7 +5929,8 @@
         "description": "One access profile as a project writes it.",
         "properties": {
           "actorKind": {
-            "$ref": "#/$defs/ActorKindSource"
+            "$ref": "#/$defs/ActorKindSource",
+            "description": "The caller kind this profile serves. A token whose kind is another one,\nor that states none and has none declared for its issuer or client, is\nrefused. Omit to serve every kind."
           },
           "default": {
             "default": false,
@@ -5954,7 +5955,7 @@
             "type": "string"
           },
           "requesterClients": {
-            "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
+            "description": "The OAuth clients whose tokens may select this profile, with or without\nactorKind. Omit to accept every client an issuer entry of the runtime\nadmits.",
             "items": {
               "type": "string"
             },

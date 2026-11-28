@@ -502,6 +502,31 @@ pub(crate) fn build(
         )?;
     }
 
+    // A child unit's parent is the deployment unit by id. Registration flows
+    // stay closed, as for every generated resource.
+    for unit in &description.units {
+        let document = json!({
+            "resource_type": "organization_unit",
+            "id": unit.id,
+            "handle": unit.handle,
+            "name": unit.name,
+            "description": unit.description,
+            "parent": description.organization_unit.id,
+            "isRegistrationFlowEnabled": false,
+        });
+        emit(
+            &mut outputs,
+            Area::Resources,
+            format!("organization_units/{}.yaml", unit.id),
+            &document,
+        )?;
+    }
+    // A placed principal's unit is the path from the deployment unit.
+    let placement = |unit: &Option<String>| match unit {
+        Some(unit) => format!("{ou_handle}/{unit}"),
+        None => ou_handle.clone(),
+    };
+
     for server in &description.resource_servers {
         let mut resources = Vec::new();
         for resource in &server.resources {
@@ -729,7 +754,7 @@ pub(crate) fn build(
         );
         let document = json!({
             "resource_type": "user", "id": user.id, "type": user_type_name(&user.id),
-            "ouHandle": ou_handle,
+            "ouHandle": placement(&user.unit),
             "attributes": attributes, "credentials": {"password": password},
         });
         emit(
@@ -815,7 +840,7 @@ pub(crate) fn build(
             "resource_type": "agent",
             "id": client.agent_id,
             "type": crate::description::DEFAULT_AGENT_TYPE,
-            "ouHandle": ou_handle,
+            "ouHandle": placement(&client.unit),
             "name": client.name,
             "description": client.description,
             "attributes": client.attributes,
@@ -1393,6 +1418,7 @@ mod tests {
                 "registry_role".into(),
                 "staff".into(),
             )]),
+            unit: None,
         });
         description.roles[0]
             .assigned_users

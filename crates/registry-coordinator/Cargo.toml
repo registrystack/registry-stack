@@ -165,6 +165,7 @@ registry-platform-script.workspace = true
 registry-review-protocol.workspace = true
 registry-scheduling-client.workspace = true
 registry-scheduling-core.workspace = true
+registry-thunderid-tooling.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
 rustls.workspace = true

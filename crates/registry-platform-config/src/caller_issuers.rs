@@ -465,6 +465,7 @@ pub trait CallerIssuerEntry {
 )]
 pub struct CallerIssuers<E> {
     /// The issuers a token may come from, by issuer id.
+    #[cfg_attr(feature = "schema", schemars(extend("minProperties" = 1)))]
     issuers: BTreeMap<LocalId, E>,
 }
 

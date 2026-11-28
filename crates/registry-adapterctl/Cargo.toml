@@ -45,6 +45,7 @@ registry-platform-httputil.workspace = true
 registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
+registry-thunderid-tooling.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

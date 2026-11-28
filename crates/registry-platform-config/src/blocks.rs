@@ -1056,9 +1056,10 @@ fn serialize_allowed_clients<S: serde::Serializer>(
 
 /// Client identifiers are external identifiers (CFG-ID-2) with a stated
 /// bound, so the schema types the keys with the shared `ExternalId` and states
-/// the bounds `OidcClientsConfig::check` enforces.
+/// the bounds `OidcClientsConfig::check` enforces. A product that holds
+/// `assertionIssuers` in its own issuer entry uses it as `schema_with`.
 #[cfg(feature = "schema")]
-fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+pub fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     let mut client = generator.subschema_for::<registry_platform_yaml::ExternalId>();
     client.insert(
         "maxLength".to_owned(),
@@ -1080,8 +1081,10 @@ fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schema
 }
 
 /// An empty mapping is not how a file says "no assertion-issuer rule"
-/// (CFG-EMPTY-2): omitting the member says it.
-fn non_empty_assertion_issuers<'de, D: Deserializer<'de>>(
+/// (CFG-EMPTY-2): omitting the member says it. A product that holds
+/// `assertionIssuers` in its own issuer entry reads it with this as
+/// `deserialize_with`, beside `#[serde(default)]`.
+pub fn non_empty_assertion_issuers<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeMap<String, Vec<String>>, D::Error> {
     let issuers = BTreeMap::<String, ListedIssuers>::deserialize(deserializer)?;

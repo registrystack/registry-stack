@@ -32,6 +32,7 @@ pub mod check;
 pub mod cli;
 pub mod envelope;
 pub mod hash;
+mod identity_facts;
 pub mod init;
 pub mod keygen;
 pub mod labels;

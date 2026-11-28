@@ -22,12 +22,12 @@ use registry_breg::api::{
     authenticated_router, HeldReadResponse, HttpService, ReadRuntimeIdentity, ReadServiceError,
     ReadinessProbe, RecordReadRequest, RecordReadService, ServiceFuture,
 };
-use registry_breg::auth::{AuthenticationConfigError, AuthenticationError, RegistryAuthenticator};
+use registry_breg::auth::{AuthenticationError, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::metrics::{metrics_app, Metrics};
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile};
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{ActorKind, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{
     Against, ClaimValue, Configuration, FixtureCase, Outcome, Stage, TokenCorpus, TokenFixture,
     TokenSigner,
@@ -42,7 +42,8 @@ const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
 /// The client a default configuration lists when the fixture names none, so a
 /// token without a client claim meets a list that does not include it.
 const LISTED_CLIENT: &str = "journey-app";
-/// The scope a profile requires when the fixture carries none.
+/// The scope a profile requires when the fixture carries none, outside a
+/// declared-kind row.
 const FALLBACK_SCOPE: &str = "records:get";
 
 #[tokio::test]
@@ -68,10 +69,18 @@ struct Shape {
     scope_claim: &'static str,
     /// Empty writes `allowedClients: unrestricted`.
     clients: Vec<String>,
-    /// The scope the compiled access profile requires.
-    scope: String,
-    /// The client a people-only profile serves.
-    profile_client: String,
+    /// What the compiled access profile writes in `requiredScopes`.
+    required_scopes: String,
+    /// The kind the operator declares for a `recipe-declared-kind` row,
+    /// written per client when the token names one.
+    declared: Option<DeclaredKind>,
+}
+
+/// An actor kind the runtime file declares, and the client it is declared
+/// for: `None` declares it for every token of the issuer.
+struct DeclaredKind {
+    client: Option<String>,
+    kind: &'static str,
 }
 
 impl Shape {
@@ -102,16 +111,46 @@ impl Shape {
             (None, true) => Vec::new(),
             (None, false) => vec![LISTED_CLIENT.to_owned()],
         };
-        let scope = fixture
-            .read_scope(scope_claim)
-            .unwrap_or_else(|| FALLBACK_SCOPE.to_owned());
+        // The profile requires the fixture's first scope. A scopeless token
+        // meets a scope it lacks, except on a declared-kind row: the recipe
+        // that declares a kind serves it on a profile that requires none.
+        let required_scopes = match fixture.read_scope(scope_claim) {
+            Some(scope) => format!("[{scope}]"),
+            None if case.declared_kind.is_some() => "unrestricted".to_owned(),
+            None => format!("[{FALLBACK_SCOPE}]"),
+        };
+        let declared = case.declared_kind.map(|kind| DeclaredKind {
+            client: client.clone(),
+            kind: match kind {
+                ActorKind::Human => "human",
+                ActorKind::Agent => "agent",
+                ActorKind::Service => "service",
+            },
+        });
         Self {
             algorithm,
             access_token_type,
             scope_claim,
             clients,
-            scope,
-            profile_client: client.unwrap_or_else(|| LISTED_CLIENT.to_owned()),
+            required_scopes,
+            declared,
+        }
+    }
+
+    /// The entry lines that declare the row's kind, if any.
+    fn declared_kind_yaml(&self) -> String {
+        match &self.declared {
+            None => String::new(),
+            Some(DeclaredKind {
+                client: Some(client),
+                kind,
+            }) => format!(
+                "        clientActorKinds:\n          {}: {kind}\n",
+                json!(client)
+            ),
+            Some(DeclaredKind { client: None, kind }) => {
+                format!("        actorKind: {kind}\n")
+            }
         }
     }
 
@@ -150,15 +189,17 @@ package:
   root: /var/lib/breg/package
 authentication:
   oidc:
-    issuer: {issuer}
-    audience: {audience}
-    allowedAlgorithm: {algorithm}
-    accessTokenType: "{access_token_type}"
-    scopeClaim: {scope_claim}
-    scopeSeparator: " "
-    allowedClients: {clients}
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
+    issuers:
+      primary:
+        issuer: {issuer}
+        audience: {audience}
+        allowedAlgorithm: {algorithm}
+        accessTokenType: "{access_token_type}"
+        scopeClaim: {scope_claim}
+        scopeSeparator: " "
+        allowedClients: {clients}
+{declared}        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
   authorityClaims:
     principal: sub
 audit:
@@ -181,22 +222,23 @@ operationalTimeouts:
             algorithm = self.algorithm,
             access_token_type = self.access_token_type,
             scope_claim = self.scope_claim,
+            declared = self.declared_kind_yaml(),
         )
     }
 
     /// A project with the one access profile the row is read against: a
     /// default profile for any actor, or a profile for people only. Each
-    /// requires the fixture's first scope. A people-only profile names the
-    /// requester clients it serves, as the compiler demands.
+    /// requires the scopes [`Shape::of`] chose and serves every client the
+    /// issuer entry admits.
     fn project_yaml(&self, against: Against) -> String {
         let profile = match against {
             Against::PlainRead => format!(
-                "  reader:\n    default: true\n    principalClaim: sub\n    requiredScopes: [{}]\n",
-                self.scope
+                "  reader:\n    default: true\n    principalClaim: sub\n    requiredScopes: {}\n",
+                self.required_scopes
             ),
             Against::HumanOnlyProfile => format!(
-                "  people:\n    default: true\n    principalClaim: sub\n    actorKind: human\n    requesterClients: [{}]\n    requiredScopes: [{}]\n",
-                self.profile_client, self.scope
+                "  people:\n    default: true\n    principalClaim: sub\n    actorKind: human\n    requiredScopes: {}\n",
+                self.required_scopes
             ),
         };
         format!(
@@ -254,18 +296,24 @@ async fn observe(case: FixtureCase) -> Outcome {
         serde_json::from_value(case.jwks.clone()).expect("the key set parses"),
         JwksFetcherConfig::defaults(),
     ));
-    let authenticator = match RegistryAuthenticator::new(
-        &registry,
-        config.authentication().oidc().token_verifier_config(),
-        keys,
-        config.authentication().authority_claim_config(),
-    ) {
-        Ok(authenticator) => Arc::new(authenticator),
-        // A profile that names requester clients cannot be served by a file
-        // that leaves the clients unrestricted: BReg refuses to start.
-        Err(AuthenticationConfigError::NamedClientNotListed) => return Outcome::None,
-        Err(error) => panic!("the authentication block is invalid for the project: {error}"),
-    };
+    let issuers = config
+        .authentication()
+        .oidc()
+        .issuers()
+        .map(|entry| entry.authenticator_issuer(Arc::clone(&keys)))
+        .collect();
+    // The profiles name no requester clients, so every issuer entry the row
+    // writes can serve them.
+    let authenticator = Arc::new(
+        RegistryAuthenticator::with_issuers(
+            &registry,
+            issuers,
+            config.authentication().authority_claim_config(),
+        )
+        .unwrap_or_else(|error| {
+            panic!("the authentication block is invalid for the project: {error}")
+        }),
+    );
 
     let token = case.token.expose();
     let claims = authenticator.authenticate(token).await;
@@ -278,7 +326,7 @@ async fn observe(case: FixtureCase) -> Outcome {
                 .await
                 .map_or(Outcome::Unknown, Outcome::Refused);
         }
-        Err(AuthenticationError::MissingActorKind | AuthenticationError::InvalidClaims) => {
+        Err(AuthenticationError::InvalidClaims) => {
             return Outcome::Refused(Stage::Claims);
         }
     };
@@ -322,6 +370,7 @@ async fn refused_stage(
         ["token-audience"] => Some(Stage::Audience),
         ["token-time"] => Some(Stage::Time),
         ["token-client" | "token-assertion-issuer"] => Some(Stage::Client),
+        ["actor-kind"] => Some(Stage::ActorKind),
         ["key-source-unavailable"] => Some(Stage::Unavailable),
         _ => None,
     }
@@ -356,12 +405,16 @@ async fn refusal_counts() -> std::collections::BTreeMap<String, u64> {
 }
 
 /// The actor kind in a `VerifiedRequestClaims` debug rendering, which prints
-/// the kind and redacts every value.
+/// the kind and redacts every value: `unspecified` for a caller whose token
+/// states no kind and has none declared.
 fn actor_kind_of(rendered: &str) -> String {
+    if rendered.contains("actor_kind: None") {
+        return "unspecified".to_owned();
+    }
     let after = rendered
         .split("actor_kind: Some(")
         .nth(1)
-        .expect("an authenticated request carries an actor kind");
+        .expect("an authenticated request renders its actor kind");
     after
         .split(')')
         .next()
