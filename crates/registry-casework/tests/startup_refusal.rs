@@ -184,6 +184,43 @@ fn a_runtime_file_breaking_casework_rules_prints_each_at_its_position() {
     assert!(!stderr.contains("10.0.0.5"), "{stderr}");
 }
 
+fn assert_completion_credential_names_replacement(member: &str, value: &str) {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let runtime = write_runtime_with(
+        &root,
+        &root.join("package"),
+        "casework-test",
+        "127.0.0.1:8100",
+        &format!("reviewCompletionDestinations:\n  receiver:\n    url: https://receiver.example.test/completions\n    {member}: {value}\n"),
+    );
+
+    let (code, stderr) = serve(&runtime);
+    assert_eq!(code, Some(1));
+    assert!(
+        stderr.contains(&format!("/reviewCompletionDestinations/receiver/{member}")),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Configure hmacSha256KeyRef with a Standard Webhooks signing key"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("secret:file/retired"), "{stderr}");
+}
+
+#[test]
+fn a_completion_destination_with_a_bearer_token_names_its_replacement() {
+    assert_completion_credential_names_replacement("bearerTokenRef", "secret:file/retired");
+}
+
+#[test]
+fn a_completion_destination_with_auth_names_its_replacement() {
+    assert_completion_credential_names_replacement(
+        "auth",
+        "{header: x-api-key, secretRef: secret:file/retired}",
+    );
+}
+
 const CANONICAL: &str =
     include_str!("../../../products/casework/examples/canonical-review/casework.yaml");
 const CANONICAL_SCHEMA: &str = include_str!(

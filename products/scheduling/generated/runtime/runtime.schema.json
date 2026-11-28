@@ -892,7 +892,7 @@
     },
     "UrlHookDestinationConfig": {
       "additionalProperties": false,
-      "description": "One URL hook destination a runtime signs and sends hook deliveries to:\nthe URL, the HMAC-SHA256 key reference, and the delivery budget. The\noutbound policy is fixed: `registry-platform-hooks` activates it with no\nprivate address range and no client certificate. A runtime whose\ndestinations need either configures its own full outbound policy instead.",
+      "description": "One URL hook destination a runtime signs and sends hook deliveries to:\nthe URL, the HMAC-SHA256 key references, and the delivery budget. The\noutbound policy is fixed: `registry-platform-hooks` activates it with no\nprivate address range and no client certificate. A runtime whose\ndestinations need either configures its own full outbound policy instead.",
       "properties": {
         "attemptTimeoutMilliseconds": {
           "default": 5000,
@@ -912,6 +912,10 @@
           "maximum": 20,
           "minimum": 1,
           "type": "integer"
+        },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Optional previous signing key for rotation, excluded from the\ndestination binding digest."
         },
         "url": {
           "$ref": "#/$defs/Url",

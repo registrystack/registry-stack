@@ -132,7 +132,7 @@ matter most:
 | `storage.type` | `database` or `s3`. The first upload pins the choice: a later start under another backend or bucket is refused. |
 | `storage.maximumDocumentBytes` | The largest version the deployment takes: 16 MiB by default on both backends. On `s3` you may raise it up to 64 MiB. |
 | `contentVerification` | `type: http` with the verifier's `url`, `authorizationRef`, and `policyId`. `type: disabled` approves everything and is accepted only on a development loopback listener. |
-| `destinations.hooks` | One entry per destination id the project's hooks name: the receiver's `url` and its `hmacSha256KeyRef`. See [Events](#events). |
+| `destinations.hooks` | One entry per destination id the project's hooks name: the receiver's `url`, its `hmacSha256KeyRef`, and an optional `previousHmacSha256KeyRef` for rotation. See [Events](#events). |
 | `retention.receiptRetentionDays` | How long a retry with the same `Idempotency-Key` gets the same answer. Seven days is a placeholder for your retention schedule to approve. |
 | `retention.hookPayloadRetentionDays` | How long an event waits to be delivered, from 1 to 30 days and 7 by default. |
 | `audit.rotateBytes` and `audit.retentionDays` | For a file journal: the size at which the active file is sealed, 100 MiB by default, and how many days a sealed file is kept, 90 by default. Ship the records you must keep off the host before `retentionDays` deletes them. |
@@ -228,16 +228,27 @@ unset value
 Write the other files the runtime file names the same way: `migration-database-url` for
 `documents_migration`, `content-verifier-authorization`, each key the S3 storage names, and the
 signing key of each hook destination. The verifier file holds the token alone; the runtime sends it
-as `Bearer <token>`. Generate a hook key like the audit key, at least 32 bytes, and give the
-receiver the same bytes through its own secret store. Each file must be a regular file owned by the
-runtime user, mode `0400` or `0600`, with one link.
+as `Bearer <token>`. Generate a distinct key per hook destination. The Document Store uses exactly
+32 to 64 bytes from each signing key file. This example writes 64 hexadecimal characters without
+a trailing newline.
+
+```bash
+(umask 077; openssl rand -hex 32 | tr -d '\n' \
+  > /run/secrets/registry-documents/owning-system-events-hmac)
+```
+
+Give the receiver the same bytes through its own secret store. Each file must be a regular file
+owned by the runtime user, mode `0400` or `0600`, with one link. The offline `documentsctl check`
+checks the secret reference and its provider. Startup also reads and validates the key bytes.
 
 `serve` never reads the migration credential; only `apply` connects with it. Write
 `migration-database-url` only on the host that runs `apply`.
 
 {/* Evidence: crates/registry-platform-config/src/secrets.rs, file provider checks;
     crates/registry-platform-objectstore/src/verifier.rs, HttpVerifier authorization;
-    crates/registry-platform-crypto/src/delivery_signature.rs, MIN_HMAC_SHA256_KEY_BYTES;
+    crates/registry-platform-crypto/src/delivery_signature.rs, DeliveryKey::new;
+    crates/registry-platform-hooks/src/delivery/url_binding.rs, activate_url_hook_destinations;
+    crates/registry-documents/src/config.rs, check_runtime_file;
     crates/registry-documents/src/runtime.rs, connect_migration only in apply. */}
 
 ## Check, apply, and start
@@ -566,14 +577,29 @@ hour, until the destination's `maximumAttempts` (8 by default, at most 20) are s
 then dead-lettered. Each attempt is recorded in the audit journal as `documents.hook-delivery`. No
 `documentsctl` command lists, replays, or discards a delivery.
 
-A receiver verifies the signature with its copy of the key, then reads what it needs through the
-API under its own token. An event grants nothing: it carries identifiers, and receiving one gives
+Each attempt uses an HTTP `POST` with `Accept: application/json`, `Content-Type: application/json`,
+`webhook-id`, `webhook-timestamp`, and `webhook-signature`. The id equals the envelope's `id`
+and stays the same on retry. The timestamp is the attempt time in Unix seconds. Each signature
+entry has the form `v1,<base64>`.
+
+To rotate a key, save the old bytes under a separate secret reference and set
+`previousHmacSha256KeyRef` to that reference. Replace the bytes at the existing
+`hmacSha256KeyRef` and restart. The delivery includes two signature entries separated by a
+space, with the current key's signature first. After the receiver switches to the current key,
+remove `previousHmacSha256KeyRef` and restart.
+
+The receiver verifies the exact request body, checks the timestamp window, and confirms that
+`webhook-id` matches the authenticated envelope id. Follow the [delivery signing reference](../../reference/delivery-signing/).
+The receiver then reads what it needs through the API under its own token.
+An event grants nothing: it carries identifiers, and receiving one gives
 the receiver no standing in the Document Store. An observer cannot answer with a change of its
 own; the Document Store refuses every proposal, records it as
 `documents.hook.proposal-unsupported`, and changes nothing.
 
 {/* Evidence: crates/registry-documents/src/hooks.rs, DocumentEvent::subject, projected,
     proposal_refusal, INITIAL_BACKOFF_MS, MAXIMUM_BACKOFF_MS, and record_audit;
+    crates/registry-documents/tests/postgres_hooks.rs, delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal;
+    crates/registry-platform-hooks/src/receiver.rs, verify_hook_delivery;
     crates/registry-documents-core/src/project.rs, HookTrigger::fields;
     crates/registry-platform-config/src/blocks.rs, UrlHookDestinationConfig;
     products/documents/generated/events/;

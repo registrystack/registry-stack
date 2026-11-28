@@ -11,7 +11,8 @@ use std::{
 use ipnet::IpNet;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{ProtectedSecret, SecretError, SecretReference, SecretResolver};
-use registry_platform_hooks::delivery::{UrlDestination, UrlDestinationError, UrlDestinationParts};
+use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
+use registry_platform_hooks::delivery::{UrlDestination, UrlDestinationParts};
 use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationProfile, DestinationTlsMaterial, EventDestinationPolicy,
     EventDestinationRequestTemplate, MAX_DESTINATION_PRIVATE_CIDRS,
@@ -329,7 +330,10 @@ impl EventDestinationConfig {
         maximum_payload_bytes: u32,
         secrets: &SecretResolver,
     ) -> Result<UrlDestination> {
-        let hmac_sha256_key = secrets.resolve_reference(&self.hmac_sha256_key_ref)?;
+        let secret = secrets.resolve_binary_reference(&self.hmac_sha256_key_ref)?;
+        let key = DeliveryKey::new(secret.expose_secret())
+            .map_err(|_| EventDestinationActivationError::InvalidSigningMaterial)?;
+        let keys = DeliveryKeys::new(key, None).expect("one validated key");
 
         let mut policy = EventDestinationPolicy::new_with_dns_family(
             logical_id,
@@ -368,18 +372,13 @@ impl EventDestinationConfig {
             request_target: self.path.clone(),
             policy,
             maximum_payload_bytes,
-            hmac_sha256_key,
+            keys,
             attempt_timeout: Duration::from_millis(u64::from(
                 self.delivery_ceilings.attempt_timeout_milliseconds,
             )),
             maximum_attempts: self.delivery_ceilings.maximum_attempts,
         })
-        .map_err(|error| match error {
-            UrlDestinationError::InvalidBinding => EventDestinationActivationError::InvalidBinding,
-            UrlDestinationError::InvalidSigningMaterial => {
-                EventDestinationActivationError::InvalidSigningMaterial
-            }
-        })
+        .map_err(|_| EventDestinationActivationError::InvalidBinding)
     }
 
     fn digest_value(&self, logical_id: &str) -> Value {

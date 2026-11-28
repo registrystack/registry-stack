@@ -6,14 +6,10 @@
 //! The worker claims due deliveries under `FOR UPDATE SKIP LOCKED` leases,
 //! reaps expired leases, expires retained payloads, schedules retries from
 //! the per-delivery frozen retry profile, dead-letters exhausted work, and
-//! offers bounded operator status and replay. This is the moved delivery
-//! core, not a new design: claim, lease/CAS, reaping, retry scheduling,
-//! dead-lettering, expiry, replay, attempt-budget accounting, idempotency-key
-//! construction, and transport-vs-deadline classification keep their
-//! behavior, and the worker sends the captured envelope bytes unchanged. The
-//! stored payload is one [`crate::HookEnvelope`] in canonical form; the worker
-//! re-reads it before every attempt and refuses a row whose headers would
-//! disagree with the body it is about to sign.
+//! offers bounded operator status and replay. It validates the retained
+//! canonical envelope against the claim and sends its bytes unchanged.
+//! Standard Webhooks signs the claimed event ID, the lease's attempt
+//! timestamp, and the exact envelope bytes.
 //!
 //! A delivery row names the kind of handler that answers it. For the `url`
 //! kind the worker signs and sends, and the bounded response body is the
@@ -28,17 +24,17 @@
 //! applied, refused, or dead-lettered.
 //!
 //! Everything product-owned enters through [`DeliverySeams`]: the key
-//! material, the idempotency domain, the audit journal, the operational-event
+//! material, the audit journal, the operational-event
 //! vocabulary, the registry identity preflight, and the activated
 //! destinations. The pieces every product fills the same way live beside the
 //! seams so no product re-implements them: the `url` destination
-//! ([`UrlDestination`]: Version 1 signing, the closed request template, and
+//! ([`UrlDestination`]: Standard Webhooks signing, the closed request template, and
 //! the bounded answer read), the pooled connection, the uninhabited
 //! [`NoLocalHandler`], the audit words and entry shape
 //! ([`hook_audit_entry`]), and the activation-record identity preflight
 //! ([`verify_active_package`]). The library carries no product
 //! name and no product policy; [`DeliveryConfig`] carries the product's
-//! schema name, idempotency domain, and delivery source identity.
+//! schema name and delivery source identity.
 
 mod audit;
 mod connection;

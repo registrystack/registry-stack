@@ -757,6 +757,12 @@ impl RuntimeConfig {
                 format!("destinations.hooks.{id}.hmacSha256KeyRef"),
                 destination.hmac_sha256_key_ref.as_str(),
             ));
+            if let Some(reference) = &destination.previous_hmac_sha256_key_ref {
+                references.push((
+                    format!("destinations.hooks.{id}.previousHmacSha256KeyRef"),
+                    reference.as_str(),
+                ));
+            }
         }
         for (field, reference) in references {
             if let Err(error) = self.secret_providers.check_reference(&field, reference) {
@@ -1631,6 +1637,163 @@ pub(crate) mod tests {
             "/destinations/hooks/owning-system-events/hmacSha256KeyRef"
         );
         assert!(!findings[0].message.contains("OWNING_SYSTEM_EVENTS_HMAC"));
+    }
+
+    #[cfg(unix)]
+    fn activate_test_hook_keys(
+        text: &str,
+        keys: &[(&str, &[u8])],
+    ) -> Result<crate::hooks::ActivatedHooks, crate::hooks::HookActivationError> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        for (name, bytes) in keys {
+            let path = directory.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let configuration = parse(&text.replace(
+            "/run/secrets/registry-documents",
+            directory.path().to_str().unwrap(),
+        ))
+        .expect("the runtime document parses");
+        crate::hooks::ActivatedHooks::activate(
+            &[],
+            &configuration.destinations.hooks,
+            &configuration.secret_resolver().unwrap(),
+            crate::hooks::HookRuntimeIdentity {
+                project_id: "civil-registry-documents".to_owned(),
+                package_digest: format!("sha256:{}", "0".repeat(64)),
+                database_id: "documents-test".to_owned(),
+            },
+            "public".to_owned(),
+            std::time::Duration::from_secs(86400),
+        )
+    }
+
+    const CURRENT_HOOK_KEY_REF: &str = "hmacSha256KeyRef: secret:file/owning-system-events-hmac";
+    #[cfg(unix)]
+    const CURRENT_HOOK_KEY: &[u8] = b"synthetic-current-hook-key-123456";
+
+    fn rotating_hook_runtime() -> String {
+        STARTER_RUNTIME.replace(
+            CURRENT_HOOK_KEY_REF,
+            &format!(
+                "{CURRENT_HOOK_KEY_REF}\n      previousHmacSha256KeyRef: secret:file/previous"
+            ),
+        )
+    }
+
+    #[test]
+    fn hook_signing_keys_refuse_a_previous_reference_to_a_disabled_provider() {
+        let text =
+            rotating_hook_runtime().replace("secret:file/previous", "secret:env/PREVIOUS_HOOK_KEY");
+        let error = parse(&text).expect_err("a disabled secret provider is refused");
+        let RuntimeConfigError::Refused(findings) = error else {
+            panic!("a refused document");
+        };
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].pointer,
+            "/destinations/hooks/owning-system-events/previousHmacSha256KeyRef"
+        );
+        assert!(!findings[0].message.contains("PREVIOUS_HOOK_KEY"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_signing_keys_accept_a_distinct_previous_key() {
+        activate_test_hook_keys(
+            &rotating_hook_runtime(),
+            &[
+                ("owning-system-events-hmac", CURRENT_HOOK_KEY),
+                ("previous", &[b'p'; 32]),
+            ],
+        )
+        .expect("distinct current and previous keys activate");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_signing_keys_refuse_a_previous_key_equal_to_the_current_key() {
+        let error = activate_test_hook_keys(
+            &rotating_hook_runtime(),
+            &[
+                ("owning-system-events-hmac", CURRENT_HOOK_KEY),
+                ("previous", CURRENT_HOOK_KEY),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            error,
+            "destinations.hooks.owning-system-events.previousHmacSha256KeyRef holds the same bytes as destinations.hooks.owning-system-events.hmacSha256KeyRef. To rotate, write 32 new random bytes to the secret destinations.hooks.owning-system-events.hmacSha256KeyRef references and keep the old bytes behind destinations.hooks.owning-system-events.previousHmacSha256KeyRef."
+        );
+        assert!(!error.contains(std::str::from_utf8(CURRENT_HOOK_KEY).unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_signing_keys_report_length_and_trailing_newline() {
+        let mut key = [b'x'; 65];
+        key[64] = b'\n';
+        let error =
+            activate_test_hook_keys(STARTER_RUNTIME, &[("owning-system-events-hmac", &key)])
+                .unwrap_err()
+                .to_string();
+        for detail in [
+            "destinations.hooks.owning-system-events.hmacSha256KeyRef",
+            "65 bytes",
+            "trailing newline: true",
+            "Supply 32 to 64 exact key bytes.",
+        ] {
+            assert!(error.contains(detail), "{error}");
+        }
+        assert!(!error.contains("xxxxxxxx"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_signing_keys_refuse_previous_key_secret_text() {
+        let text = b"whsec_synthetic-secret-encoding";
+        let error = activate_test_hook_keys(
+            &rotating_hook_runtime(),
+            &[
+                ("owning-system-events-hmac", CURRENT_HOOK_KEY),
+                ("previous", text),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.starts_with("destinations.hooks.owning-system-events.previousHmacSha256KeyRef:")
+        );
+        assert!(error.contains("starts with whsec_"));
+        assert!(error.ends_with("Supply the exact key bytes without the whsec_ encoding."));
+        assert!(!error.contains(std::str::from_utf8(text).unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_signing_keys_report_both_destinations_when_their_keys_match() {
+        let text = STARTER_RUNTIME.replace(
+            "    owning-system-events:\n",
+            "    audit-mirror:\n      url: https://mirror.example.test/documents\n      hmacSha256KeyRef: secret:file/mirror\n    owning-system-events:\n",
+        );
+        let error = activate_test_hook_keys(
+            &text,
+            &[
+                ("owning-system-events-hmac", CURRENT_HOOK_KEY),
+                ("mirror", CURRENT_HOOK_KEY),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            error,
+            "destinations.hooks.audit-mirror.hmacSha256KeyRef and destinations.hooks.owning-system-events.hmacSha256KeyRef resolve to the same key bytes. Give destinations.hooks.owning-system-events.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there."
+        );
+        assert!(!error.contains(std::str::from_utf8(CURRENT_HOOK_KEY).unwrap()));
     }
 
     #[test]

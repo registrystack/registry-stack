@@ -124,6 +124,23 @@ jobs:
         with:
           version: "0.11.16"
 
+      # Our signatures are what an independent Standard Webhooks receiver computes.
+      # Platform owns this gate. Remove it when the shared crate stops signing deliveries.
+      - name: Test Standard Webhooks signature vectors
+        run: uv run --no-project --with standardwebhooks==1.3.0 python -m unittest products/platform/scripts/test_standard_webhooks_vectors.py
+
+      # The public Go receiver example verifies the committed vectors, and the
+      # delivery signing page quotes its verifier.
+      # Platform owns this gate. Remove it when the delivery signing page drops the Go receiver example.
+      - name: Install Go for the receiver example
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: 1.27.2
+          cache: false
+
+      - name: Test the Go delivery receiver example
+        run: go -C products/platform/examples/delivery-receiver-go test ./...
+
       - name: Test CI classifier
         run: uv run --no-project --with PyYAML==6.0.2 python .github/scripts/test_ci_changes.py
 

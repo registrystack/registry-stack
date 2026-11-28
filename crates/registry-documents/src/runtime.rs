@@ -884,6 +884,19 @@ impl Prepared {
         self.hook_delivery.deliver_once().await
     }
 
+    /// Exercise the shared operator replay against a replay-enabled test delivery.
+    #[cfg(feature = "postgres-test")]
+    pub async fn replay_hook_for_test(
+        &self,
+        event_id: uuid::Uuid,
+        compiled_delivery_id: &str,
+        generation: i64,
+    ) -> Result<i64, registry_platform_hooks::delivery::DeliveryError> {
+        self.hook_delivery
+            .replay_for_test(event_id, compiled_delivery_id, generation)
+            .await
+    }
+
     /// One drain of the content verification worker per call, stopping
     /// early once `stopped` turns true.
     fn drain(

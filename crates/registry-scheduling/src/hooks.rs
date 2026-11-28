@@ -51,7 +51,6 @@ use crate::store::{activation_layout, ClaimRow, PostgresStore};
 const DESTINATION_BINDING_SCHEMA: &str = "registry.scheduling-hook-destinations/v1";
 const COMPILED_HOOK_SCHEMA: &str = "registry.scheduling-hooks/v1";
 const DATA_SCHEMA_BINDING: &str = "registry.scheduling-hook-data/v1";
-const IDEMPOTENCY_DOMAIN: &[u8] = b"scheduling-hook-idempotency-v1";
 const ENTITY_ID: &str = "appointment";
 /// The refusal code retained with a delivery whose destination answered with
 /// a proposal. Each dotted segment is lowercase kebab-case.
@@ -533,7 +532,6 @@ impl ActivatedHooks {
                 seams,
                 DeliveryConfig {
                     schema: self.schema.clone(),
-                    idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
                     delivery_source: self.delivery_source.clone(),
                 },
             ),
@@ -571,7 +569,9 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
             HookActivationError::DeliveryBudgetWidening
         }
         UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
-        UrlHookActivationError::InvalidSigningMaterial => {
+        UrlHookActivationError::SigningKeyUnavailable { .. }
+        | UrlHookActivationError::InvalidSigningKey { .. }
+        | UrlHookActivationError::RepeatedSigningKey { .. } => {
             HookActivationError::InvalidSigningMaterial
         }
     }
@@ -1195,6 +1195,7 @@ mod tests {
             url: Url::new("https://events.example.test/scheduling").expect("the test URL"),
             hmac_sha256_key_ref: SecretReference::parse("secret:file/hook-key")
                 .expect("the test key reference"),
+            previous_hmac_sha256_key_ref: None,
             attempt_timeout_milliseconds: timeout,
             maximum_attempts: attempts,
         };

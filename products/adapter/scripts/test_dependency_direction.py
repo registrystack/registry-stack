@@ -135,6 +135,7 @@ def metadata(**changes: list) -> dict:
         ],
         "signed-coordinator-event": [
             "dep:registry-adapter-connectors",
+            "dep:registry-platform-crypto",
             "dep:registry-platform-httputil",
             "registry-adapter-connectors/coordinator-event",
         ],
